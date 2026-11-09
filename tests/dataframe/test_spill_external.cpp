@@ -92,8 +92,8 @@ class Hooked : public Source {
         Rows(std::int64_t morsels, std::int64_t rows,
              dstd::SharedPtr<Hook> hook)
             : morsels_(morsels), rows_(rows), hook_(std::move(hook)) {}
-        coro::CoroTask<dstd::Optional<Morsel>> next(std::int64_t) override {
-            if (at_ >= morsels_) co_return dstd::nullopt;
+        coro::CoroTask<MorselResult> next(std::int64_t) override {
+            if (at_ >= morsels_) co_return MorselResult(dstd::nullopt);
             if (*hook_) (*hook_)(at_);
             dstd::Vector<std::int64_t> k(static_cast<std::size_t>(rows_)),
                 v(static_cast<std::size_t>(rows_));
@@ -109,7 +109,7 @@ class Hooked : public Source {
             m.rows = rows_;
             m.columns.push_back(Series::flat_i64(k.data(), rows_));
             m.columns.push_back(Series::flat_i64(v.data(), rows_));
-            co_return m;
+            co_return MorselResult(std::move(m));
         }
 
        private:
@@ -173,11 +173,11 @@ TEST_CASE("spill bytes show as external") {
         reserved = pool->try_reserve(free_budget / 2).status();
     });
     {
-        const DataFrame out =
+        const DataFrame out = dftu_utils_test::ok(
             dftu_utils_test::run_here(LazyFrame::scan(source)
                                           .sort_by("k")
                                           .memory_budget(SORT_BUDGET)
-                                          .collect());
+                                          .collect()));
         CHECK(out.num_rows() == MORSELS * ROWS);
     }
 
@@ -203,10 +203,11 @@ TEST_CASE("merged sort runs leave the spill slot before the query ends") {
     });
     // The small budget cuts about 64 runs and merges them four at a time, so
     // two merge passes run before the first row comes out.
-    dstd::UniquePtr<Cursor> cursor = LazyFrame::scan(source)
-                                         .sort_by("k")
-                                         .memory_budget(SMALL_SORT_BUDGET)
-                                         .open_cursor();
+    dstd::UniquePtr<Cursor> cursor =
+        dftu_utils_test::ok(LazyFrame::scan(source)
+                                .sort_by("k")
+                                .memory_budget(SMALL_SORT_BUDGET)
+                                .open_cursor());
     dstd::Optional<Morsel> first = dftu_utils_test::ok(
         dftracer::utils::default_runtime().submit(cursor->next(ROWS)).get());
     REQUIRE(first.has_value());

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/field_ref.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/channel.h>
@@ -168,7 +169,7 @@ coro::CoroTask<HttpResponse> handle_viz_calltree(const HttpRequest& req,
     const dstd::Vector<dstd::String> group_args(group.begin(), group.end());
     dataframe::LazyResult<dstd::String> partial = v.flamegraph_partial(
         partition, ts_field, dur_field, name_field, group_args);
-    dstd::String blob = co_await partial.collect();
+    dstd::String blob = common::unwrap(co_await partial.collect());
     if (cancel.cancelled()) co_return HttpResponse::ok(CANCELLED_TREE);
 
     const double dur_us =

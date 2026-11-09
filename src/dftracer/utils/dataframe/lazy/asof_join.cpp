@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dataframe/internal/errors.h>
 #include <dftracer/utils/dataframe/kernels/order.h>
 #include <dftracer/utils/dataframe/lazy/cursors.h>
 #include <dftracer/utils/dataframe/ops/ops_common.h>
@@ -68,50 +69,46 @@ const Field* field_named(const dstd::Vector<Field>& fs, const dstd::String& n) {
 
 // The type checks of the eager ops, over the fields both plans declare. A type
 // that is not known yet (Unknown) is checked when the first morsels arrive.
-void check_field_types(const dstd::Vector<Field>& lf,
-                       const dstd::Vector<Field>& rf, const dstd::String& who,
-                       const dstd::String& lt_name, const dstd::String& rt_name,
-                       const dstd::Vector<dstd::String>& by,
-                       const dstd::Vector<dstd::String>& right_also) {
+dstd::Result<void> check_field_types(
+    const dstd::Vector<Field>& lf, const dstd::Vector<Field>& rf,
+    const dstd::String& who, const dstd::String& lt_name,
+    const dstd::String& rt_name, const dstd::Vector<dstd::String>& by,
+    const dstd::Vector<dstd::String>& right_also) {
     const auto known = [](const Field* f) {
         return f && f->type.id != TypeId::Unknown;
     };
     const Field* lt = field_named(lf, lt_name);
     const Field* rt = field_named(rf, rt_name);
     if (known(lt) && known(rt) && lt->type.id != rt->type.id)
-        throw std::invalid_argument(
-            (who + ": point/ts column types differ").c_str());
+        return invalid_argument<"{}: point/ts column types differ">(who);
     for (const dstd::String& n : right_also) {
         const Field* f = field_named(rf, n);
         if (known(lt) && known(f) && f->type.id != lt->type.id)
-            throw std::invalid_argument(
-                (who + ": point/lo/hi types differ").c_str());
+            return invalid_argument<"{}: point/lo/hi types differ">(who);
     }
     for (const dstd::String& n : by) {
         const Field* l = field_named(lf, n);
         const Field* r = field_named(rf, n);
         if (known(l) && known(r) && l->type.id != r->type.id)
-            throw std::invalid_argument(
-                (who + ": equi column types differ").c_str());
+            return invalid_argument<"{}: equi column types differ">(who);
         for (const Field* f : {l, r})
             if (known(f) && !ColumnView::supports(f->type.id))
-                throw std::invalid_argument(
-                    (who + ": column '" + n + "' of type " +
-                     dstd::String(type_name(f->type.id)) + " has no order")
-                        .c_str());
+                return invalid_argument<
+                    "{}: column '{}' of type {} has no order">(
+                    who, n, dstd::String(type_name(f->type.id)));
     }
     if (known(lt) &&
         (!ColumnView::supports(lt->type.id) || is_bytes_type(lt->type.id)))
-        throw std::invalid_argument(
-            (who + ": time columns must be numeric").c_str());
+        return invalid_argument<"{}: time columns must be numeric">(who);
+    return {};
 }
 
 // The names of the left columns, then of the right columns not in `skip`; a
-// right name that is taken gets "_right", and a second clash throws.
-dstd::Vector<dstd::String> joined_names(const dstd::Vector<dstd::String>& left,
-                                        const dstd::Vector<dstd::String>& right,
-                                        const dstd::Vector<dstd::String>& skip,
-                                        const dstd::String& who) {
+// right name that is taken gets "_right", and a second clash is an error.
+dstd::Result<dstd::Vector<dstd::String>> joined_names(
+    const dstd::Vector<dstd::String>& left,
+    const dstd::Vector<dstd::String>& right,
+    const dstd::Vector<dstd::String>& skip, const dstd::String& who) {
     dstd::Vector<dstd::String> out = left;
     const auto taken = [&](const dstd::String& n) {
         return std::find(out.begin(), out.end(), n) != out.end();
@@ -122,8 +119,8 @@ dstd::Vector<dstd::String> joined_names(const dstd::Vector<dstd::String>& left,
         if (taken(name)) {
             name += "_right";
             if (taken(name))
-                throw std::invalid_argument(
-                    (who + ": output column name collision: " + name).c_str());
+                return invalid_argument<"{}: output column name collision: {}">(
+                    who, name);
         }
         out.push_back(std::move(name));
     }
@@ -137,18 +134,25 @@ class RightFeed {
               dstd::Vector<dstd::String> rsch)
         : plan_(std::move(sorted)), lay_(lay), rsch_(std::move(rsch)) {}
 
-    coro::CoroTask<bool> fill(std::int64_t max_rows) {
+    coro::CoroTask<dstd::Result<bool>> fill(std::int64_t max_rows) {
         while (!seg_ || i_ >= seg_->rows) {
             if (done_) co_return false;
             if (!gen_) gen_.emplace(plan_.stream(max_rows));
-            auto df = co_await gen_->next();
-            if (!df) {
+            auto next_df = co_await gen_->next();
+            if (!next_df) {
                 done_ = true;
                 seg_.reset();
-                if (proto_.empty()) empty_proto();
+                if (proto_.empty()) {
+                    auto proto = empty_proto();
+                    if (!proto) co_return proto.error();
+                }
                 co_return false;
             }
-            dstd::Vector<Series> cols = ordered(*df);
+            if (!*next_df) co_return next_df->error();
+            const DataFrame* df = &**next_df;
+            auto ordered_cols = ordered(*df);
+            if (!ordered_cols) co_return ordered_cols.error();
+            dstd::Vector<Series> cols = std::move(*ordered_cols);
             if (proto_.empty()) {
                 for (std::size_t c : lay_.rout)
                     proto_.push_back(
@@ -172,14 +176,14 @@ class RightFeed {
     }
 
    private:
-    dstd::Vector<Series> ordered(const DataFrame& df) {
+    dstd::Result<dstd::Vector<Series>> ordered(const DataFrame& df) {
         if (map_.empty()) {
             for (const dstd::String& n : rsch_) {
                 const int at = column_index_of(df.names, n);
                 if (at < 0)
-                    throw std::runtime_error(
-                        ("asof: the right plan has no '" + n + "' column")
-                            .c_str());
+                    return common::make_error<
+                        "asof: the right plan has no '{}' column">(
+                        common::ErrorCode::Internal, n);
                 map_.push_back(static_cast<std::size_t>(at));
             }
         }
@@ -203,17 +207,21 @@ class RightFeed {
         return s;
     }
 
-    void empty_proto() {
-        for (std::size_t c : lay_.rout)
-            proto_.push_back(null_column_of(lay_.rfields[c], 0, "asof",
-                                            "the right side has no rows"));
+    dstd::Result<void> empty_proto() {
+        for (std::size_t c : lay_.rout) {
+            auto column = null_column_of(lay_.rfields[c], 0, "asof",
+                                         "the right side has no rows");
+            if (!column) return column.error();
+            proto_.push_back(std::move(*column));
+        }
+        return {};
     }
 
     LazyFrame plan_;
     Layout lay_;
     dstd::Vector<dstd::String> rsch_;
     dstd::Vector<std::size_t> map_;
-    dstd::Optional<coro::AsyncGenerator<DataFrame>> gen_;
+    dstd::Optional<coro::AsyncGenerator<dstd::Result<DataFrame>>> gen_;
     SegPtr seg_;
     dstd::Vector<Series> proto_;
     std::int64_t i_ = 0;
@@ -236,12 +244,13 @@ class OrderedJoin : public Cursor {
           budget_(budget),
           who_(std::move(who)) {}
 
-    coro::CoroTask<dstd::Optional<Morsel>> next(
-        std::int64_t max_rows) override {
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
         max_rows_ = max_rows;
         for (;;) {
             if (lb_ && (busy() || li_ < lb_->m.rows) && !full()) {
-                co_await step();
+                auto stepping = step();
+                auto stepped = co_await std::move(stepping);
+                if (!stepped) co_return stepped.error();
                 continue;
             }
             if (!out_left_.empty()) co_return flush();
@@ -249,8 +258,10 @@ class OrderedJoin : public Cursor {
                 lb_.reset();
                 continue;
             }
-            const auto load_left_ok = co_await load_left();
-            if (!load_left_ok) co_return dstd::nullopt;
+            auto loading = load_left();
+            const auto load_left_ok = co_await std::move(loading);
+            if (!load_left_ok.has_value()) co_return load_left_ok.error();
+            if (!load_left_ok.value()) co_return MorselResult(dstd::nullopt);
         }
     }
 
@@ -259,21 +270,22 @@ class OrderedJoin : public Cursor {
     }
 
    protected:
-    virtual coro::CoroTask<void> step() = 0;
+    virtual coro::CoroTask<dstd::Result<void>> step() = 0;
     virtual bool busy() const { return false; }
     virtual bool full() const { return out_left_.size() >= row_cap_; }
-    virtual void after_flush() {}
+    virtual dstd::Result<void> after_flush() { return {}; }
 
     // Whether left row `r` starts a new by-group; if so the right side moves
     // to the first row whose group is not before it.
-    coro::CoroTask<bool> enter_group(std::int64_t r) {
+    coro::CoroTask<dstd::Result<bool>> enter_group(std::int64_t r) {
         const LeftBlock& L = *lb_;
         if (rep_ && ops::compare_keys(L.by, r, rep_->by, rep_row_) == 0)
             co_return false;
         rep_ = lb_;
         rep_row_ = r;
         for (;;) {
-            const auto fill_ok = co_await feed_.fill(max_rows_);
+            auto filling = feed_.fill(max_rows_);
+            const auto fill_ok = co_await std::move(filling).or_fail();
             if (!fill_ok) break;
             const Seg& s = *feed_.seg();
             if (ops::compare_keys(L.by, r, s.keys, feed_.i()) <= 0) break;
@@ -302,9 +314,10 @@ class OrderedJoin : public Cursor {
         pinned_bytes_ += seg->bytes;
     }
 
-    coro::CoroTask<bool> load_left() {
+    coro::CoroTask<dstd::Result<bool>> load_left() {
         for (;;) {
-            auto m = co_await left_->next(max_rows_);
+            auto task = left_->next(max_rows_);
+            auto m = co_await std::move(task).or_fail();
             if (!m) co_return false;
             if (m->rows == 0) continue;
             auto b = dstd::make_shared<LeftBlock>();
@@ -314,9 +327,13 @@ class OrderedJoin : public Cursor {
             lb_ = std::move(b);
             li_ = 0;
             bool filled = false;
-            if (!checked_) filled = co_await feed_.fill(max_rows_);
+            if (!checked_) {
+                auto filling = feed_.fill(max_rows_);
+                filled = co_await std::move(filling).or_fail();
+            }
             if (filled) {
-                check_types(*lb_, *feed_.seg());
+                auto typed = check_types(*lb_, *feed_.seg());
+                if (!typed) co_return typed.error();
                 checked_ = true;
             }
             const std::uint64_t lrow = spill::columns_bytes(lb_->m.columns) /
@@ -330,20 +347,18 @@ class OrderedJoin : public Cursor {
         }
     }
 
-    void check_types(const LeftBlock& L, const Seg& s) const {
+    dstd::Result<void> check_types(const LeftBlock& L, const Seg& s) const {
         if (L.t->type() != s.t->type())
-            throw std::invalid_argument(
-                (who_ + ": point/ts column types differ").c_str());
+            return invalid_argument<"{}: point/ts column types differ">(who_);
         for (std::size_t k = 0; k < L.by.size(); ++k)
             if (L.by[k].type() != s.keys[k].type())
-                throw std::invalid_argument(
-                    (who_ + ": equi column types differ").c_str());
+                return invalid_argument<"{}: equi column types differ">(who_);
         if (L.t->is_bytes())
-            throw std::invalid_argument(
-                (who_ + ": time columns must be numeric").c_str());
+            return invalid_argument<"{}: time columns must be numeric">(who_);
+        return {};
     }
 
-    Morsel flush() {
+    MorselResult flush() {
         const std::size_t n = out_left_.size();
         Morsel out;
         out.rows = static_cast<std::int64_t>(n);
@@ -355,17 +370,20 @@ class OrderedJoin : public Cursor {
             for (const Series& c : lm.columns)
                 out.columns.push_back(c.take(out_left_));
         }
-        for (Series& c : gather()) out.columns.push_back(std::move(c));
+        auto gathered = gather();
+        if (!gathered) return gathered.error();
+        for (Series& c : *gathered) out.columns.push_back(std::move(c));
         out_left_.clear();
         out_ref_.clear();
         pinned_.clear();
         pinned_bytes_ = 0;
         left_contig_ = true;
-        after_flush();
-        return out;
+        auto flushed = after_flush();
+        if (!flushed) return flushed.error();
+        return MorselResult(std::move(out));
     }
 
-    dstd::Vector<Series> gather() const {
+    dstd::Result<dstd::Vector<Series>> gather() const {
         const std::size_t n = out_ref_.size();
         dstd::Vector<const Seg*> segs;
         dstd::Vector<std::int64_t> which(n, -1);
@@ -419,7 +437,9 @@ class OrderedJoin : public Cursor {
                 pieces.push_back(segs[s]->cols[lay_.rout[k]].take(per[s]));
             dstd::Vector<const Series*> ptrs;
             for (const Series& p : pieces) ptrs.push_back(&p);
-            out.push_back(common::unwrap(concat_columns(ptrs)).take(perm));
+            auto joined = concat_columns(ptrs);
+            if (!joined) return joined.error();
+            out.push_back(joined->take(perm));
         }
         return out;
     }
@@ -467,21 +487,23 @@ class AsofCursor : public OrderedJoin {
         return out_left_.size() >= row_cap_ || pinned_bytes_ > pin_cap_;
     }
 
-    coro::CoroTask<void> step() override {
+    coro::CoroTask<dstd::Result<void>> step() override {
         const LeftBlock& L = *lb_;
         const std::int64_t r = li_++;
-        const auto enter_group_ok = co_await enter_group(r);
+        auto entering = enter_group(r);
+        const auto enter_group_ok = co_await std::move(entering).or_fail();
         if (enter_group_ok) {
             have_back_ = false;
             back_first_ = back_last_ = Held{};
         }
         if (L.t->is_missing(r)) {
             push_row(r, Ref{});
-            co_return;
+            co_return dstd::Result<void>{};
         }
         const ColumnView& lt = *L.t;
         for (;;) {
-            const auto fill_ok = co_await feed_.fill(max_rows_);
+            auto filling = feed_.fill(max_rows_);
+            const auto fill_ok = co_await std::move(filling).or_fail();
             if (!fill_ok) break;
             const SegPtr& s = feed_.seg();
             const std::int64_t j = feed_.i();
@@ -501,7 +523,8 @@ class AsofCursor : public OrderedJoin {
                 back_last_.seg->t->compare(back_last_.i, lt, r) == 0) {
                 fwd = back_first_;
             } else {
-                const bool filled = co_await feed_.fill(max_rows_);
+                auto filling = feed_.fill(max_rows_);
+                const bool filled = co_await std::move(filling).or_fail();
                 if (filled) {
                     const SegPtr& s = feed_.seg();
                     const std::int64_t j = feed_.i();
@@ -532,6 +555,7 @@ class AsofCursor : public OrderedJoin {
         } else {
             push_row(r, Ref{});
         }
+        co_return dstd::Result<void>{};
     }
 
    private:
@@ -566,21 +590,23 @@ class IntervalCursor : public OrderedJoin {
                (!out_left_.empty() && left_bytes_ > pin_cap_);
     }
 
-    void after_flush() override { sweep(); }
+    dstd::Result<void> after_flush() override { return sweep(); }
 
-    coro::CoroTask<void> step() override {
+    coro::CoroTask<dstd::Result<void>> step() override {
         if (busy()) {
             emit_more();
-            co_return;
+            co_return dstd::Result<void>{};
         }
         if (out_left_.empty() &&
             (chunks_.size() > sweep_at_ || left_bytes_ > pin_cap_)) {
-            sweep();
+            auto swept = sweep();
+            if (!swept) co_return swept;
             sweep_at_ = 2 * chunks_.size() + 64;
         }
         const LeftBlock& L = *lb_;
         const std::int64_t r = li_++;
-        const auto enter_group_ok = co_await enter_group(r);
+        auto entering = enter_group(r);
+        const auto enter_group_ok = co_await std::move(entering).or_fail();
         track_left();
         if (enter_group_ok) {
             for (const Entry& e : active_) --e.seg->live;
@@ -590,7 +616,9 @@ class IntervalCursor : public OrderedJoin {
         }
         const bool has_point = !L.t->is_missing(r);
         if (has_point) {
-            co_await admit(L, r);
+            auto admitting = admit(L, r);
+            auto admitted = co_await std::move(admitting);
+            if (!admitted) co_return admitted;
             track_left();
             while (!active_.empty() && active_.front().seg->hi->compare(
                                            active_.front().i, *L.t, r) < 0) {
@@ -602,7 +630,7 @@ class IntervalCursor : public OrderedJoin {
         }
         if (!has_point || active_.empty()) {
             if (outer_) push_row(r, Ref{});
-            co_return;
+            co_return dstd::Result<void>{};
         }
         if (dirty_) {
             ordered_ = active_;
@@ -620,6 +648,7 @@ class IntervalCursor : public OrderedJoin {
         emit_pos_ = 0;
         emitting_ = true;
         emit_more();
+        co_return dstd::Result<void>{};
     }
 
    private:
@@ -654,24 +683,26 @@ class IntervalCursor : public OrderedJoin {
     }
 
     // Runs only with no pending pairs.
-    void sweep() {
+    dstd::Result<void> sweep() {
         chunks_.erase(
             std::remove_if(chunks_.begin(), chunks_.end(),
                            [](const SegPtr& c) { return c->live == 0; }),
             chunks_.end());
-        copy_active();
+        auto copied = copy_active();
+        if (!copied) return copied;
         left_at_ = nullptr;
         track_left();
+        return {};
     }
 
     // Copies the active rows of the morsels the feed left, and of mostly dead
     // copies, into one copy.
-    void copy_active() {
+    dstd::Result<void> copy_active() {
         dstd::Vector<const Seg*> from;
         for (const SegPtr& c : chunks_)
             if (c != feed_.seg() && (!c->copy || 2 * c->live < c->rows))
                 from.push_back(c.get());
-        if (from.empty()) return;
+        if (from.empty()) return {};
         const auto slot = [&](const Seg* s) {
             const auto it = std::find(from.begin(), from.end(), s);
             return it == from.end()
@@ -708,7 +739,9 @@ class IntervalCursor : public OrderedJoin {
             }
             dstd::Vector<const Series*> ptrs;
             for (const Series& p : pieces) ptrs.push_back(&p);
-            c->cols[col] = common::unwrap(concat_columns(ptrs));
+            auto joined = concat_columns(ptrs);
+            if (!joined) return joined.error();
+            c->cols[col] = std::move(*joined);
         }
         c->t.emplace(c->cols[lay_.rt]);
         c->hi.emplace(c->cols[lay_.rhi]);
@@ -736,12 +769,15 @@ class IntervalCursor : public OrderedJoin {
                            [&](const SegPtr& x) { return slot(x.get()) >= 0; }),
             chunks_.end());
         chunks_.push_back(std::move(c));
+        return {};
     }
 
     // Moves every right row with lo <= the point into the active set.
-    coro::CoroTask<void> admit(const LeftBlock& L, std::int64_t r) {
+    coro::CoroTask<dstd::Result<void>> admit(const LeftBlock& L,
+                                             std::int64_t r) {
         for (;;) {
-            const auto fill_ok = co_await feed_.fill(max_rows_);
+            auto filling = feed_.fill(max_rows_);
+            const auto fill_ok = co_await std::move(filling).or_fail();
             if (!fill_ok) break;
             const SegPtr& s = feed_.seg();
             const std::int64_t j = feed_.i();
@@ -759,6 +795,7 @@ class IntervalCursor : public OrderedJoin {
             }
             feed_.advance();
         }
+        co_return dstd::Result<void>{};
     }
 
     bool outer_;
@@ -783,16 +820,15 @@ constexpr const char* INTERVAL_WHO = "interval";
 
 namespace lazy_internal {
 
-dstd::UniquePtr<Cursor> make_ordered_join(dstd::UniquePtr<Cursor>& in,
-                                          const dstd::Vector<dstd::String>& sch,
-                                          const dstd::String& name,
-                                          const OwnedFrameOpArgs& args_ref,
-                                          const LazyFrame& other,
-                                          std::uint64_t budget) {
+CursorResult make_ordered_join(dstd::UniquePtr<Cursor>& in,
+                               const dstd::Vector<dstd::String>& sch,
+                               const dstd::String& name,
+                               const OwnedFrameOpArgs& args_ref,
+                               const LazyFrame& other, std::uint64_t budget) {
     const OwnedFrameOpArgs* args = &args_ref;
-    if (sch.empty() || has_rest(sch)) return nullptr;
+    if (sch.empty() || has_rest(sch)) return no_cursor();
     const dstd::Vector<dstd::String> rsch = other.schema();
-    if (rsch.empty() || has_rest(rsch)) return nullptr;
+    if (rsch.empty() || has_rest(rsch)) return no_cursor();
 
     const bool asof = name == ASOF_OP;
     const char* who = asof ? ASOF_WHO : INTERVAL_WHO;
@@ -817,27 +853,42 @@ dstd::UniquePtr<Cursor> make_ordered_join(dstd::UniquePtr<Cursor>& in,
         lay.has_hi = true;
     }
     for (const dstd::String& n : by) {
-        lay.lby.push_back(static_cast<std::size_t>(require_col(sch, n, who)));
-        lay.rby.push_back(static_cast<std::size_t>(require_col(rsch, n, who)));
+        auto left_at = require_col(sch, n, who);
+        if (!left_at) return left_at.error();
+        lay.lby.push_back(static_cast<std::size_t>(*left_at));
+        auto right_at = require_col(rsch, n, who);
+        if (!right_at) return right_at.error();
+        lay.rby.push_back(static_cast<std::size_t>(*right_at));
     }
-    lay.lt = static_cast<std::size_t>(require_col(sch, ltime, who));
-    lay.rt = static_cast<std::size_t>(require_col(rsch, rtime, who));
-    if (lay.has_hi)
-        lay.rhi = static_cast<std::size_t>(require_col(rsch, rhi, who));
+    auto time_at = require_col(sch, ltime, who);
+    if (!time_at) return time_at.error();
+    lay.lt = static_cast<std::size_t>(*time_at);
+    auto rtime_at = require_col(rsch, rtime, who);
+    if (!rtime_at) return rtime_at.error();
+    lay.rt = static_cast<std::size_t>(*rtime_at);
+    if (lay.has_hi) {
+        auto hi_at = require_col(rsch, rhi, who);
+        if (!hi_at) return hi_at.error();
+        lay.rhi = static_cast<std::size_t>(*hi_at);
+    }
     for (std::size_t c = 0; c < rsch.size(); ++c)
         if (std::find(skip.begin(), skip.end(), rsch[c]) == skip.end())
             lay.rout.push_back(c);
     lay.rfields = other.output_schema().fields;
-    if (lay.rfields.size() != rsch.size()) return nullptr;
-    const dstd::Vector<dstd::String> names = joined_names(sch, rsch, skip, who);
+    if (lay.rfields.size() != rsch.size()) return no_cursor();
+    auto joined = joined_names(sch, rsch, skip, who);
+    if (!joined) return joined.error();
+    const dstd::Vector<dstd::String> names = std::move(*joined);
 
     lkeys = by;
     lkeys.push_back(ltime);
     rkeys = by;
     rkeys.push_back(rtime);
-    dstd::UniquePtr<Cursor> sorted_left =
+    auto sorted_made =
         make_sort_merge(std::move(in), sch, lkeys,
                         dstd::Vector<bool>(lkeys.size(), false), budget);
+    if (!sorted_made) return sorted_made.error();
+    dstd::UniquePtr<Cursor> sorted_left = std::move(*sorted_made);
     LazyFrame sorted_right =
         other.sort_by_multi(rkeys, dstd::Vector<bool>(rkeys.size(), false));
     if (asof) {
@@ -854,29 +905,36 @@ dstd::UniquePtr<Cursor> make_ordered_join(dstd::UniquePtr<Cursor>& in,
         budget, args->i32_at(6) != 0);
 }
 
-LazyFrame compose_asof(const LazyFrame& left, LazyFrame other,
-                       const dstd::String& on,
-                       const dstd::Vector<dstd::String>& by,
-                       AsofDirection direction,
-                       dstd::Optional<double> tolerance) {
+dstd::Result<LazyFrame> compose_asof(const LazyFrame& left, LazyFrame other,
+                                     const dstd::String& on,
+                                     const dstd::Vector<dstd::String>& by,
+                                     AsofDirection direction,
+                                     dstd::Optional<double> tolerance) {
     if (tolerance && !(*tolerance >= 0))
-        throw std::invalid_argument("asof: tolerance must not be negative");
+        return invalid_argument<"asof: tolerance must not be negative">();
     const dstd::Vector<dstd::String> lnames = left.schema();
     const dstd::Vector<dstd::String> rnames = other.schema();
     dstd::Vector<dstd::String> skip = by;
     skip.push_back(on);
     dstd::Vector<dstd::String> names;
     if (!lnames.empty() && !rnames.empty()) {
-        require_col(lnames, on, ASOF_WHO);
-        require_col(rnames, on, ASOF_WHO);
+        auto left_on = require_col(lnames, on, ASOF_WHO);
+        if (!left_on) return left_on.error();
+        auto right_on = require_col(rnames, on, ASOF_WHO);
+        if (!right_on) return right_on.error();
         for (const dstd::String& n : by) {
-            require_col(lnames, n, ASOF_WHO);
-            require_col(rnames, n, ASOF_WHO);
+            auto left_by = require_col(lnames, n, ASOF_WHO);
+            if (!left_by) return left_by.error();
+            auto right_by = require_col(rnames, n, ASOF_WHO);
+            if (!right_by) return right_by.error();
         }
-        check_field_types(left.output_schema().fields,
-                          other.output_schema().fields, ASOF_WHO, on, on, by,
-                          {});
-        names = joined_names(lnames, rnames, skip, ASOF_WHO);
+        auto typed = check_field_types(left.output_schema().fields,
+                                       other.output_schema().fields, ASOF_WHO,
+                                       on, on, by, {});
+        if (!typed) return typed.error();
+        auto joined = joined_names(lnames, rnames, skip, ASOF_WHO);
+        if (!joined) return joined.error();
+        names = std::move(*joined);
     }
     dstd::Vector<const char*> by_ptrs;
     for (const dstd::String& n : by) by_ptrs.push_back(n.c_str());
@@ -885,14 +943,18 @@ LazyFrame compose_asof(const LazyFrame& left, LazyFrame other,
         .strlist(3, by_ptrs.data(), static_cast<std::int32_t>(by_ptrs.size()))
         .i32(4, static_cast<std::int32_t>(direction))
         .f64(5, tolerance ? *tolerance : -1.0);
-    return left.frame_op(ASOF_OP, std::move(args), {std::move(other)},
-                         std::move(names));
+    LazyFrame out = left.frame_op(ASOF_OP, std::move(args), {std::move(other)},
+                                  std::move(names));
+    if (auto built = out.status(); !built) return built.error();
+    return out;
 }
 
-LazyFrame compose_interval(const LazyFrame& left, LazyFrame other,
-                           const dstd::String& point, const dstd::String& lo,
-                           const dstd::String& hi,
-                           const dstd::Vector<dstd::String>& by, bool outer) {
+dstd::Result<LazyFrame> compose_interval(const LazyFrame& left, LazyFrame other,
+                                         const dstd::String& point,
+                                         const dstd::String& lo,
+                                         const dstd::String& hi,
+                                         const dstd::Vector<dstd::String>& by,
+                                         bool outer) {
     const dstd::Vector<dstd::String> lnames = left.schema();
     const dstd::Vector<dstd::String> rnames = other.schema();
     dstd::Vector<dstd::String> skip = by;
@@ -900,17 +962,25 @@ LazyFrame compose_interval(const LazyFrame& left, LazyFrame other,
     skip.push_back(hi);
     dstd::Vector<dstd::String> names;
     if (!lnames.empty() && !rnames.empty()) {
-        require_col(lnames, point, INTERVAL_WHO);
-        require_col(rnames, lo, INTERVAL_WHO);
-        require_col(rnames, hi, INTERVAL_WHO);
+        auto point_at = require_col(lnames, point, INTERVAL_WHO);
+        if (!point_at) return point_at.error();
+        auto lo_at = require_col(rnames, lo, INTERVAL_WHO);
+        if (!lo_at) return lo_at.error();
+        auto hi_at = require_col(rnames, hi, INTERVAL_WHO);
+        if (!hi_at) return hi_at.error();
         for (const dstd::String& n : by) {
-            require_col(lnames, n, INTERVAL_WHO);
-            require_col(rnames, n, INTERVAL_WHO);
+            auto left_by = require_col(lnames, n, INTERVAL_WHO);
+            if (!left_by) return left_by.error();
+            auto right_by = require_col(rnames, n, INTERVAL_WHO);
+            if (!right_by) return right_by.error();
         }
-        check_field_types(left.output_schema().fields,
-                          other.output_schema().fields, INTERVAL_WHO, point, lo,
-                          by, {hi});
-        names = joined_names(lnames, rnames, skip, INTERVAL_WHO);
+        auto typed = check_field_types(left.output_schema().fields,
+                                       other.output_schema().fields,
+                                       INTERVAL_WHO, point, lo, by, {hi});
+        if (!typed) return typed.error();
+        auto joined = joined_names(lnames, rnames, skip, INTERVAL_WHO);
+        if (!joined) return joined.error();
+        names = std::move(*joined);
     }
     dstd::Vector<const char*> by_ptrs;
     for (const dstd::String& n : by) by_ptrs.push_back(n.c_str());
@@ -920,8 +990,10 @@ LazyFrame compose_interval(const LazyFrame& left, LazyFrame other,
         .str(4, hi.c_str())
         .strlist(5, by_ptrs.data(), static_cast<std::int32_t>(by_ptrs.size()))
         .i32(6, outer ? 1 : 0);
-    return left.frame_op(INTERVAL_OP, std::move(args), {std::move(other)},
-                         std::move(names));
+    LazyFrame out = left.frame_op(INTERVAL_OP, std::move(args),
+                                  {std::move(other)}, std::move(names));
+    if (auto built = out.status(); !built) return built.error();
+    return out;
 }
 
 }  // namespace lazy_internal

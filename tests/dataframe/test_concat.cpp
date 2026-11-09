@@ -31,7 +31,7 @@ using namespace dftracer::utils::dataframe;
 
 namespace {
 
-DataFrame run(coro::CoroTask<DataFrame> t) {
+DataFrame run(coro::CoroTask<dstd::Result<DataFrame>> t) {
     return dftu_utils_test::ok(
         dftracer::utils::default_runtime().submit(std::move(t)).get());
 }
@@ -331,18 +331,24 @@ TEST_SUITE("dataframe concat") {
         retyped.names = {"k", "s"};
         retyped.columns.push_back(Series::strings({"1"}));
         retyped.columns.push_back(Series::strings({"q"}));
-        CHECK_THROWS_WITH_AS(
+        dftu_utils_test::expect_error(
             la.concat(LazyFrame::scan(
-                dstd::make_shared<InMemorySource>(std::move(fewer)))),
-            "concat: column count differs (2 vs 1)", std::invalid_argument);
-        CHECK_THROWS_WITH_AS(
-            la.concat(LazyFrame::scan(
-                dstd::make_shared<InMemorySource>(std::move(renamed)))),
-            "concat: column 1 is 's' vs 't'", std::invalid_argument);
-        CHECK_THROWS_WITH_AS(
-            la.concat(LazyFrame::scan(
-                dstd::make_shared<InMemorySource>(std::move(retyped)))),
-            "concat: column 'k' type differs", std::invalid_argument);
+                          dstd::make_shared<InMemorySource>(std::move(fewer))))
+                .status(),
+            dftracer::utils::common::ErrorCode::InvalidArgument,
+            "concat: column count differs (2 vs 1)");
+        dftu_utils_test::expect_error(
+            la.concat(LazyFrame::scan(dstd::make_shared<InMemorySource>(
+                          std::move(renamed))))
+                .status(),
+            dftracer::utils::common::ErrorCode::InvalidArgument,
+            "concat: column 1 is 's' vs 't'");
+        dftu_utils_test::expect_error(
+            la.concat(LazyFrame::scan(dstd::make_shared<InMemorySource>(
+                          std::move(retyped))))
+                .status(),
+            dftracer::utils::common::ErrorCode::InvalidArgument,
+            "concat: column 'k' type differs");
     }
 
     TEST_CASE("C ABI: concat, concat2, union and lazy concat") {

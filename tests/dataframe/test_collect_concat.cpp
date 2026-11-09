@@ -41,8 +41,8 @@ class PartsCursor : public Cursor {
     explicit PartsCursor(dstd::SharedPtr<const dstd::Vector<DataFrame>> parts)
         : parts_(std::move(parts)) {}
 
-    coro::CoroTask<dstd::Optional<Morsel>> next(std::int64_t) override {
-        if (next_ >= parts_->size()) co_return dstd::nullopt;
+    coro::CoroTask<MorselResult> next(std::int64_t) override {
+        if (next_ >= parts_->size()) co_return MorselResult(dstd::nullopt);
         const DataFrame& df = (*parts_)[next_++];
         Morsel m;
         m.rows = df.num_rows();
@@ -52,7 +52,7 @@ class PartsCursor : public Cursor {
             m.columns.push_back(df.columns[c].share());
             dyn.name_ids.push_back(intern_->get_or_insert(df.names[c]));
         }
-        co_return m;
+        co_return MorselResult(std::move(m));
     }
 
    private:
@@ -94,11 +94,16 @@ class PartsSource : public Source {
     std::size_t leading_;
 };
 
-DataFrame collect(const dstd::Vector<DataFrame>& parts, std::size_t leading) {
+dstd::Result<DataFrame> collect_result(const dstd::Vector<DataFrame>& parts,
+                                       std::size_t leading) {
     auto source = dstd::make_shared<PartsSource>(parts, leading);
-    return dftu_utils_test::ok(dftracer::utils::default_runtime()
-                                   .submit(LazyFrame::scan(source).collect())
-                                   .get());
+    return dftracer::utils::default_runtime()
+        .submit(LazyFrame::scan(source).collect())
+        .get();
+}
+
+DataFrame collect(const dstd::Vector<DataFrame>& parts, std::size_t leading) {
+    return dftu_utils_test::ok(collect_result(parts, leading));
 }
 
 DataFrame serial(const dstd::Vector<DataFrame>& parts, ConcatHow how) {
@@ -230,12 +235,9 @@ TEST_CASE("an error in one column fails the collect") {
     REQUIRE(!serial_result.has_value());
     const dstd::String serial_error = serial_result.error().c_str();
     REQUIRE_FALSE(serial_error.empty());
-    try {
-        (void)collect(parts, 1);
-        FAIL("the collect must fail");
-    } catch (const std::exception& e) {
-        CHECK(dstd::String(e.what()) == serial_error);
-    }
+    const auto collected = collect_result(parts, 1);
+    REQUIRE_FALSE(collected.has_value());
+    CHECK(dstd::String(collected.error().c_str()) == serial_error);
 }
 
 TEST_CASE("ConcatPlan columns equal the serial concat, column by column") {

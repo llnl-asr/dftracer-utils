@@ -122,7 +122,7 @@ std::int64_t row_of(const DataFrame& d, std::int64_t key) {
     return -1;
 }
 
-DataFrame run(dftracer::utils::coro::CoroTask<DataFrame> t) {
+DataFrame run(dftracer::utils::coro::CoroTask<dstd::Result<DataFrame>> t) {
     return dftu_utils_test::ok(
         dftracer::utils::default_runtime().submit(std::move(t)).get());
 }

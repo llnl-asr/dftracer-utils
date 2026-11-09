@@ -11,6 +11,7 @@
 #include <dftracer/utils/dataframe/parallel.h>              // parallel_for
 #include <dftracer/utils/dstd/concurrent_queue.h>
 #include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>  // row hashing
 #include <dftracer/utils/dstd/hash/xxh3.h>        // string key hashing
@@ -184,7 +185,11 @@ dstd::Optional<DataFrame> stitch_in_first_seen_order(
         dstd::Vector<const DataFrame*> ptrs;
         ptrs.reserve(ones.size());
         for (const DataFrame& one : ones) ptrs.push_back(&one);
-        DataFrame cat = common::unwrap(concat(ptrs, ConcatHow::Vertical));
+        auto joined = concat(ptrs, ConcatHow::Vertical);
+        if (!joined)
+            dstd::fatal("group_by: partition columns differ in type",
+                        joined.error().c_str());
+        DataFrame cat = std::move(*joined);
         ones.clear();
         DataFrame ordered = take(cat, order);
         out.names.push_back(std::move(ordered.names[0]));
@@ -784,11 +789,11 @@ dstd::Result<dstd::Optional<DataFrame>> group_agg_by_key_hash(
 
     DataFrame src;  // the key and value columns, shared, not copied
     for (const Series* c : keys) {
-        src.names.push_back("k" + dstd::to_string(src.columns.size()));
+        src.names.push_back(dstd::fmt<"k{}">(src.columns.size()));
         src.columns.push_back(c->share());
     }
     for (const Series* c : values) {
-        src.names.push_back("v" + dstd::to_string(src.columns.size()));
+        src.names.push_back(dstd::fmt<"v{}">(src.columns.size()));
         src.columns.push_back(c->share());
     }
     dstd::Vector<AggStatePtr> states(PARTITIONS);

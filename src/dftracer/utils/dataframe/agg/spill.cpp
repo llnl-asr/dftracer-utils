@@ -6,6 +6,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/spill.h>  // spill::Dir
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/budget.h>
@@ -15,7 +16,6 @@
 #include <limits>
 #include <memory>
 #include <numeric>
-#include <stdexcept>
 #include <utility>
 
 namespace dftracer::utils::dataframe {
@@ -41,18 +41,26 @@ class GroupSource {
     virtual ~GroupSource() = default;
     virtual bool valid() const = 0;
     virtual const AggState& state() const = 0;
-    virtual void advance() = 0;
+    virtual dstd::Result<void> advance() = 0;
 };
 
 class RunSource : public GroupSource {
    public:
-    explicit RunSource(const dstd::String& path) : reader_(path) {}
-    bool valid() const override { return reader_.valid(); }
-    const AggState& state() const override { return reader_.state(); }
-    void advance() override { reader_.advance(); }
+    static dstd::Result<dstd::UniquePtr<GroupSource>> open(
+        const dstd::String& path) {
+        auto reader = spill::AggRunReader::open(path);
+        if (!reader) return reader.error();
+        return dstd::UniquePtr<GroupSource>(
+            dstd::make_unique<RunSource>(std::move(*reader)));
+    }
+    explicit RunSource(dstd::UniquePtr<spill::AggRunReader> reader)
+        : reader_(std::move(reader)) {}
+    bool valid() const override { return reader_->valid(); }
+    const AggState& state() const override { return reader_->state(); }
+    dstd::Result<void> advance() override { return reader_->advance(); }
 
    private:
-    spill::AggRunReader reader_;
+    dstd::UniquePtr<spill::AggRunReader> reader_;
 };
 
 // The still-live state, read in key order without mutating (and so without
@@ -66,11 +74,17 @@ class LiveSource : public GroupSource {
                   [&](std::int64_t a, std::int64_t b) {
                       return agg_key_cmp(live, a, live, b) < 0;
                   });
-        advance();
+        step();
     }
     bool valid() const override { return valid_; }
     const AggState& state() const override { return *cur_; }
-    void advance() override {
+    dstd::Result<void> advance() override {
+        step();
+        return {};
+    }
+
+   private:
+    void step() {
         if (at_ >= order_.size()) {
             valid_ = false;
             return;
@@ -79,7 +93,6 @@ class LiveSource : public GroupSource {
         valid_ = true;
     }
 
-   private:
     const AggState* live_;
     dstd::Vector<std::int64_t> order_;
     std::size_t at_ = 0;
@@ -95,8 +108,12 @@ struct AggSpiller::Impl {
     dstd::Vector<dstd::String> runs;
     int next_id = 0;
 
-    const dstd::String& new_run_path() {
-        if (dirs.empty()) dirs.push_back(dstd::make_shared<spill::Dir>());
+    dstd::Result<dstd::String> new_run_path() {
+        if (dirs.empty()) {
+            auto dir = spill::Dir::create();
+            if (!dir) return dir.error();
+            dirs.push_back(std::move(*dir));
+        }
         runs.push_back(dirs.back()->run_path(next_id++));
         return runs.back();
     }
@@ -112,11 +129,18 @@ AggSpiller& AggSpiller::operator=(AggSpiller&&) noexcept = default;
 
 std::size_t AggSpiller::runs() const { return impl_->runs.size(); }
 
-bool AggSpiller::maybe_spill(AggStatePtr& state) {
+dstd::Result<bool> AggSpiller::maybe_spill(AggStatePtr& state) {
     if (!state || impl_->budget == memory::NO_SPILL_BUDGET) return false;
     if (agg_approx_bytes(*state) <= impl_->budget) return false;
     dstd::Vector<AggSpec> specs = agg_specs(*state);
-    spill::write_agg_run(*state, impl_->new_run_path());
+    auto path = impl_->new_run_path();
+    if (!path) return path.error();
+    auto written = spill::write_agg_run(*state, *path);
+    if (!written) {
+        impl_->dirs.back()->remove_run(impl_->runs.back());
+        impl_->runs.pop_back();
+        return written.error();
+    }
     DFTRACER_UTILS_LOG_DEBUG(
         "Aggregation spilled run %d (%lld groups) past the %llu byte budget",
         impl_->next_id - 1, static_cast<long long>(agg_group_count(*state)),
@@ -134,8 +158,8 @@ void AggSpiller::adopt(AggSpiller& other) {
     impl_->next_id = static_cast<int>(impl_->runs.size());
 }
 
-DataFrame AggSpiller::drain(const AggState& live,
-                            const dstd::Vector<dstd::String>& key_names) const {
+dstd::Result<DataFrame> AggSpiller::drain(
+    const AggState& live, const dstd::Vector<dstd::String>& key_names) const {
     if (impl_->runs.empty()) return agg_finalize(live, key_names);
 
     const dstd::Vector<AggSpec> specs = agg_specs(live);
@@ -147,8 +171,11 @@ DataFrame AggSpiller::drain(const AggState& live,
 
     dstd::Vector<dstd::UniquePtr<GroupSource>> sources;
     sources.reserve(impl_->runs.size() + 1);
-    for (const dstd::String& path : impl_->runs)
-        sources.push_back(dstd::make_unique<RunSource>(path));
+    for (const dstd::String& path : impl_->runs) {
+        auto source = RunSource::open(path);
+        if (!source) return source.error();
+        sources.push_back(std::move(*source));
+    }
     sources.push_back(dstd::make_unique<LiveSource>(live));
 
     dstd::Vector<DataFrame> parts;
@@ -173,7 +200,8 @@ DataFrame AggSpiller::drain(const AggState& live,
             if (!src->valid()) continue;
             if (agg_key_cmp(src->state(), 0, *win, 0) != 0) continue;
             agg_merge(*merged, src->state());
-            src->advance();
+            auto advanced = src->advance();
+            if (!advanced) return advanced.error();
         }
         if (++in_chunk >= chunk) {
             parts.push_back(agg_finalize(*merged, key_names));
@@ -188,7 +216,7 @@ DataFrame AggSpiller::drain(const AggState& live,
     dstd::Vector<const DataFrame*> refs;
     refs.reserve(parts.size());
     for (const DataFrame& p : parts) refs.push_back(&p);
-    return common::unwrap(concat(refs));
+    return concat(refs);
 }
 
 }  // namespace dftracer::utils::dataframe

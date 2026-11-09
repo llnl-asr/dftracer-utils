@@ -329,7 +329,7 @@ TEST_SUITE("PluginAttachHandle") {
 
         Runtime rt(4);
         auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-            co_await plan.collect();
+            dftu_utils_test::ok(co_await plan.collect());
             co_return;
         });
         dftu_utils_test::ok(
@@ -387,8 +387,9 @@ TEST_SUITE("PluginAttachHandle") {
         dftracer::utils::dataframe::DataFrame all;
         Runtime rt(4);
         auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-            all = std::get<1>(co_await dftracer::utils::dataframe::collect_all(
-                plugin_plan, all_plan));
+            all = std::get<1>(dftu_utils_test::ok(
+                co_await dftracer::utils::dataframe::collect_all(plugin_plan,
+                                                                 all_plan)));
             co_return;
         });
         dftu_utils_test::ok(

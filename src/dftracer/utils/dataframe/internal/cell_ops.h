@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -200,25 +201,64 @@ inline bool try_row_key(const dstd::Vector<Series>& cols, std::int64_t i,
     return true;
 }
 
-// The lazy cursors still report a column with no per-row key by throwing; the
-// eager ops use the try_ forms above and return an error.
-[[noreturn]] inline void throw_cell_key_error(TypeId refused) {
-    throw std::invalid_argument(
-        dstd::fmt<"column type '{}' has no per-row value to key on">(
-            type_name(refused))
-            .c_str());
-}
+/// The first column type a key build refused. A loop over rows builds keys
+/// with the slot forms below and reads this once after the loop, so a row
+/// costs no result check. One per call, never shared across threads.
+class KeyRefusal {
+   public:
+    void set(TypeId t) noexcept {
+        if (!refused_) {
+            refused_ = true;
+            type_ = t;
+        }
+    }
+    bool refused() const noexcept { return refused_; }
+    /// Keeps the refusal of `other` unless this one holds one.
+    void merge(const KeyRefusal& other) noexcept {
+        if (other.refused_) set(other.type_);
+    }
+    /// The error for the first refusal; only after @ref refused is true.
+    dstd::Unexpected<dstd::Error> error() const {
+        return cell_key_error(type_);
+    }
 
-inline void append_cell(dstd::String& key, const Series& c, std::int64_t i) {
+   private:
+    TypeId type_ = TypeId::Unknown;
+    bool refused_ = false;
+};
+
+/// A @ref KeyRefusal that the chunks of one parallel loop report into: each
+/// chunk keeps its own @ref KeyRefusal and merges it here once, only when it
+/// holds a refusal. The caller reads @ref get after the loop.
+class ConcurrentKeyRefusal {
+   public:
+    void merge(const KeyRefusal& chunk) {
+        if (!chunk.refused()) return;
+        std::lock_guard<std::mutex> lock(mu_);
+        slot_.merge(chunk);
+    }
+    const KeyRefusal& get() const noexcept { return slot_; }
+
+   private:
+    std::mutex mu_;
+    KeyRefusal slot_;
+};
+
+/// @ref try_append_cell with the refusal kept in `refusal`; `key` is then
+/// unfinished and the caller must not use it.
+inline void append_cell(dstd::String& key, const Series& c, std::int64_t i,
+                        KeyRefusal& refusal) {
     TypeId refused = TypeId::Unknown;
-    if (!try_append_cell(key, c, i, refused)) throw_cell_key_error(refused);
+    if (!try_append_cell(key, c, i, refused)) refusal.set(refused);
 }
 
-/// Exact dedupe key of row `i` across `cols` (already FLAT).
-inline dstd::String row_key(const dstd::Vector<Series>& cols, std::int64_t i) {
+/// Exact dedupe key of row `i` across `cols` (already FLAT). A column with no
+/// per-row key is recorded in `refusal` and the key is unfinished.
+inline dstd::String row_key(const dstd::Vector<Series>& cols, std::int64_t i,
+                            KeyRefusal& refusal) {
     dstd::String k;
     TypeId refused = TypeId::Unknown;
-    if (!try_row_key(cols, i, k, refused)) throw_cell_key_error(refused);
+    if (!try_row_key(cols, i, k, refused)) refusal.set(refused);
     return k;
 }
 

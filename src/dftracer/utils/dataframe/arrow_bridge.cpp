@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/arrow_bridge.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/vector.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
@@ -456,7 +457,7 @@ void export_array(const dftu_series& col, ArrowArray* array) {
     if (col.is_chunked()) {
         Series joined{dftu_series_materialize(&col)};
         if (!joined.valid())
-            throw std::runtime_error("to_arrow: cannot join a chunked column");
+            dstd::fatal("to_arrow: cannot join a chunked column");
         export_array(*joined.handle(), array);
         return;
     }
@@ -616,22 +617,15 @@ dstd::Vector<ArrowArray> to_arrow_batches(const Series& st,
     }
     build_schema(*c, schema);
     out.reserve(nchunks);
-    try {
-        for (std::size_t k = 0; k < nchunks; ++k) {
-            dftu_series batch;
-            batch.type = TypeId::Struct;
-            batch.length = c->nested[0].series->nested[k].series->length;
-            for (std::size_t i = 0; i < c->num_fields(); ++i)
-                batch.nested.push_back(
-                    {c->nested[i].series->nested[k].series, c->nested[i].name});
-            out.emplace_back();
-            export_struct(batch, &out.back());
-        }
-    } catch (...) {
-        for (auto& a : out)
-            if (a.release) a.release(&a);
-        if (schema->release) schema->release(schema);
-        throw;
+    for (std::size_t k = 0; k < nchunks; ++k) {
+        dftu_series batch;
+        batch.type = TypeId::Struct;
+        batch.length = c->nested[0].series->nested[k].series->length;
+        for (std::size_t i = 0; i < c->num_fields(); ++i)
+            batch.nested.push_back(
+                {c->nested[i].series->nested[k].series, c->nested[i].name});
+        out.emplace_back();
+        export_struct(batch, &out.back());
     }
     return out;
 }

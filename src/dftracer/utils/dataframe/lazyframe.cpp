@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/coro/scope.h>
@@ -14,6 +15,7 @@
 #include <dftracer/utils/dataframe/internal/column_read.h>
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>  // dataframe_handle_wrap/take
 #include <dftracer/utils/dataframe/internal/decimal.h>
+#include <dftracer/utils/dataframe/internal/errors.h>
 #include <dftracer/utils/dataframe/internal/expr_handle.h>  // expr_handle_wrap/unwrap
 #include <dftracer/utils/dataframe/internal/fingerprint.h>
 #include <dftracer/utils/dataframe/internal/float16.h>
@@ -23,6 +25,7 @@
 #include <dftracer/utils/dataframe/internal/lazyframe_handle.h>
 #include <dftracer/utils/dataframe/internal/native_transform.h>
 #include <dftracer/utils/dataframe/internal/node_registry.h>  // find_node
+#include <dftracer/utils/dataframe/internal/plugin_task.h>
 #include <dftracer/utils/dataframe/internal/rest_column.h>
 #include <dftracer/utils/dataframe/internal/schema_types.h>   // dftu_schema
 #include <dftracer/utils/dataframe/internal/spill.h>  // external-merge spill
@@ -35,6 +38,8 @@
 #include <dftracer/utils/dataframe/types.h>     // byte_width, buffer_bytes
 #include <dftracer/utils/dstd/algorithm.h>
 #include <dftracer/utils/dstd/deque.h>
+#include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/function_ref.h>
 #include <dftracer/utils/dstd/hash/hash.h>
@@ -116,16 +121,23 @@ class PartHolder {
    public:
     explicit PartHolder(std::uint64_t budget) : budget_(budget) {}
 
-    void add(DataFrame&& df) {
+    dstd::Result<void> add(DataFrame&& df) {
         if (budget_ != memory::NO_SPILL_BUDGET) {
             if (held_ > budget_) {
-                if (!file_) file_ = dstd::make_unique<spill::PartFile>();
-                df.columns = file_->append(df.columns);
+                if (!file_) {
+                    auto file = spill::PartFile::create();
+                    if (!file) return file.error();
+                    file_ = std::move(*file);
+                }
+                auto spilled = file_->append(df.columns);
+                if (!spilled) return spilled.error();
+                df.columns = std::move(*spilled);
             } else {
                 held_ += spill::new_buffer_bytes(df.columns, seen_);
             }
         }
         parts_.push_back(std::move(df));
+        return {};
     }
     dstd::Vector<DataFrame> take() { return std::move(parts_); }
 
@@ -140,7 +152,8 @@ class PartHolder {
 // The parts reach ConcatPlan as they arrived and it aligns them to the output
 // schema, so a part that needs a type conversion or a null fill is copied back
 // in memory for that column only. At least two parts.
-coro::CoroTask<DataFrame> join_parts(dstd::Vector<DataFrame> parts) {
+coro::CoroTask<dstd::Result<DataFrame>> join_parts(
+    dstd::Vector<DataFrame> parts) {
     bool uniform = true;
     for (std::size_t i = 1; i < parts.size() && uniform; ++i) {
         if (parts[i].names != parts[0].names ||
@@ -158,25 +171,37 @@ coro::CoroTask<DataFrame> join_parts(dstd::Vector<DataFrame> parts) {
     dstd::Vector<const DataFrame*> ptrs;
     ptrs.reserve(parts.size());
     for (const DataFrame& p : parts) ptrs.push_back(&p);
-    const ConcatPlan plan = common::unwrap(ConcatPlan::make(
-        ptrs, uniform ? ConcatHow::Vertical : ConcatHow::Diagonal));
+    auto made = ConcatPlan::make(
+        ptrs, uniform ? ConcatHow::Vertical : ConcatHow::Diagonal);
+    if (!made) co_return made.error();
+    const ConcatPlan& plan = *made;
     DataFrame out;
     out.names = plan.names();
     out.columns.resize(out.names.size());
-    co_await each_column(out.columns.size(), [&plan, &out](std::size_t c) {
-        out.columns[c] = common::unwrap(chunked_column(plan.chunks(c)));
-    });
+    dstd::Vector<dstd::Optional<dstd::Error>> failed(out.columns.size());
+    co_await each_column(out.columns.size(),
+                         [&plan, &out, &failed](std::size_t c) {
+                             auto column = chunked_column(plan.chunks(c));
+                             if (column)
+                                 out.columns[c] = std::move(*column);
+                             else
+                                 failed[c] = column.error();
+                         });
+    for (auto& f : failed)
+        if (f) co_return *f;
     co_return out;
 }
 
-coro::CoroTask<DataFrame> drain_stream(
-    coro::AsyncGenerator<DataFrame> gen,
+coro::CoroTask<dstd::Result<DataFrame>> drain_stream(
+    coro::AsyncGenerator<dstd::Result<DataFrame>> gen,
     std::uint64_t budget = memory::NO_SPILL_BUDGET) {
     PartHolder holder(budget);
     for (;;) {
         auto df = co_await gen.next();
         if (!df) break;
-        holder.add(std::move(*df));
+        if (!*df) co_return df->error();
+        auto added = holder.add(std::move(**df));
+        if (!added) co_return added.error();
     }
     dstd::Vector<DataFrame> parts = holder.take();
     if (parts.empty()) co_return DataFrame{};
@@ -191,18 +216,20 @@ coro::CoroTask<DataFrame> drain_stream(
 // sort_by_multi) whose eager op has no incremental form and needs every row at
 // once. An input with no morsel is typed from `fields`, the plan's schema at
 // this point, matched by name.
-coro::CoroTask<DataFrame> drain_cursor(
+coro::CoroTask<dstd::Result<DataFrame>> drain_cursor(
     Cursor& c, dstd::Vector<dstd::String> sch,
     const dstd::Vector<Field>& fields, std::int64_t max_rows, const char* who,
     std::uint64_t budget = memory::NO_SPILL_BUDGET) {
     PartHolder holder(budget);
     for (;;) {
-        auto m = co_await c.next(max_rows);
+        auto next = c.next(max_rows);
+        auto m = co_await std::move(next).or_fail();
         if (!m) break;
         DataFrame df;
         df.names = sch;
         df.columns = std::move(m->columns);
-        holder.add(std::move(df));
+        auto added = holder.add(std::move(df));
+        if (!added) co_return added.error();
     }
     dstd::Vector<DataFrame> parts = holder.take();
     if (parts.empty()) {
@@ -216,10 +243,12 @@ coro::CoroTask<DataFrame> drain_cursor(
             const auto f =
                 std::find_if(fields.begin(), fields.end(),
                              [&](const Field& x) { return x.name == name; });
-            e.columns.push_back(null_column_of(
+            auto empty = null_column_of(
                 f != fields.end() ? *f
                                   : Field{name, scalar(TypeId::Unknown), true},
-                0, who, "the input has no rows"));
+                0, who, "the input has no rows");
+            if (!empty) co_return empty.error();
+            e.columns.push_back(std::move(*empty));
         }
         e.names = std::move(sch);
         co_return e;
@@ -228,29 +257,29 @@ coro::CoroTask<DataFrame> drain_cursor(
     co_return co_await join_parts(std::move(parts));
 }
 
-void unpack_rest(DataFrame& f) {
+dstd::Result<void> unpack_rest(DataFrame& f) {
     const int at = column_index_of(f.names, dstd::String(REST_COLUMN));
-    if (at < 0) return;
+    if (at < 0) return {};
     const Series rest = std::move(f.columns[static_cast<std::size_t>(at)]);
     f.names.erase(f.names.begin() + at);
     f.columns.erase(f.columns.begin() + at);
     DataFrame fields = rest_fields(rest);
     for (std::size_t i = 0; i < fields.names.size(); ++i) {
         if (column_index_of(f.names, fields.names[i]) >= 0)
-            throw std::invalid_argument(
-                ("column '" + fields.names[i] +
-                 "' is both a plan column and a column the scan returned "
-                 "beyond the plan's schema; rename or drop one of them")
-                    .c_str());
+            return invalid_argument<
+                "column '{}' is both a plan column and a column the scan "
+                "returned beyond the plan's schema; rename or drop one of "
+                "them">(fields.names[i]);
         f.names.push_back(std::move(fields.names[i]));
         f.columns.push_back(std::move(fields.columns[i]));
     }
+    return {};
 }
 
 // Build one standalone DataFrame from a morsel. Names come from the morsel's
 // own schema (streaming, self-describing), else the cursor's data-dependent
 // out_names(), else the static plan schema.
-DataFrame frame_from_morsel(
+dstd::Result<DataFrame> frame_from_morsel(
     Morsel&& m, const dstd::Vector<dstd::String>& static_names,
     const dstd::Optional<dstd::Vector<dstd::String>>& out_names) {
     DataFrame out;
@@ -264,7 +293,8 @@ DataFrame frame_from_morsel(
     } else {
         out.names = static_names;
     }
-    unpack_rest(out);
+    auto unpacked = unpack_rest(out);
+    if (!unpacked) return unpacked.error();
     return out;
 }
 
@@ -273,13 +303,13 @@ class FilterCursor : public Cursor {
     FilterCursor(dstd::UniquePtr<Cursor> in, Expr pred)
         : in_(std::move(in)), pred_(std::move(pred)) {}
 
-    coro::CoroTask<dstd::Optional<Morsel>> next(
-        std::int64_t max_rows) override {
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
         for (;;) {
-            auto m = co_await in_->next(max_rows);
+            auto task = in_->next(max_rows);
+            auto m = co_await std::move(task).or_fail();
             if (!m) break;
-            dstd::Optional<Morsel> filtered = apply(std::move(*m));
-            if (filtered) co_return filtered;
+            MorselResult filtered = apply(std::move(*m));
+            if (!filtered || *filtered) co_return filtered;
         }
         co_return dstd::nullopt;
     }
@@ -291,16 +321,16 @@ class FilterCursor : public Cursor {
     // does not depend on which path pulled it. Returns false the moment
     // upstream cannot answer synchronously, leaving nothing consumed-but-
     // unaccounted-for behind.
-    bool try_next(std::int64_t max_rows, dstd::Optional<Morsel>& out) override {
+    bool try_next(std::int64_t max_rows, MorselResult& out) override {
         for (;;) {
-            dstd::Optional<Morsel> m;
+            MorselResult m;
             if (!in_->try_next(max_rows, m)) return false;
-            if (!m) {
-                out.reset();
+            if (!m || !*m) {
+                out = std::move(m);
                 return true;
             }
-            dstd::Optional<Morsel> filtered = apply(std::move(*m));
-            if (filtered) {
+            MorselResult filtered = apply(std::move(**m));
+            if (!filtered || *filtered) {
                 out = std::move(filtered);
                 return true;
             }
@@ -311,8 +341,10 @@ class FilterCursor : public Cursor {
     // Dropping rows can only shrink the surviving set of an already-ordered
     // column - it cannot move one kept row before another - so a ByColumn
     // claim on the input survives filtering unchanged.
-    dstd::Optional<Morsel> apply(Morsel&& m) {
-        Series mask = common::unwrap(eval(pred_, column_ptrs(m.columns)));
+    MorselResult apply(Morsel&& m) {
+        auto evaluated = eval(pred_, column_ptrs(m.columns));
+        if (!evaluated) return evaluated.error();
+        Series mask = std::move(*evaluated);
         DataFrame tmp;
         tmp.names.assign(m.columns.size(), dstd::String());
         for (Series& c : m.columns) tmp.columns.push_back(c.share());
@@ -322,7 +354,7 @@ class FilterCursor : public Cursor {
         for (const Series& c : kept.columns)
             out.columns.push_back(c.materialize());
         out.rows = out.columns.empty() ? 0 : out.columns.front().length();
-        if (out.rows == 0) return dstd::nullopt;
+        if (out.rows == 0) return dstd::Optional<Morsel>{};
         out.ordering = m.ordering;
         out.ordered_column = m.ordered_column;
         out.ordered_descending = m.ordered_descending;
@@ -350,13 +382,13 @@ class FilterMaskCursor : public Cursor {
         : in_(std::move(in)),
           mask_(mask.is_flat() ? std::move(mask) : mask.materialize()) {}
 
-    coro::CoroTask<dstd::Optional<Morsel>> next(
-        std::int64_t max_rows) override {
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
         for (;;) {
-            auto m = co_await in_->next(max_rows);
+            auto task = in_->next(max_rows);
+            auto m = co_await std::move(task).or_fail();
             if (!m) break;
-            dstd::Optional<Morsel> filtered = apply(std::move(*m));
-            if (filtered) co_return filtered;
+            MorselResult filtered = apply(std::move(*m));
+            if (!filtered || *filtered) co_return filtered;
         }
         co_return dstd::nullopt;
     }
@@ -364,16 +396,16 @@ class FilterMaskCursor : public Cursor {
     // Same argument as FilterCursor::try_next: `off_` advances in lockstep
     // with whichever morsels were actually consumed, sync or async, and an
     // empty-after-mask morsel contributes nothing either way.
-    bool try_next(std::int64_t max_rows, dstd::Optional<Morsel>& out) override {
+    bool try_next(std::int64_t max_rows, MorselResult& out) override {
         for (;;) {
-            dstd::Optional<Morsel> m;
+            MorselResult m;
             if (!in_->try_next(max_rows, m)) return false;
-            if (!m) {
-                out.reset();
+            if (!m || !*m) {
+                out = std::move(m);
                 return true;
             }
-            dstd::Optional<Morsel> filtered = apply(std::move(*m));
-            if (filtered) {
+            MorselResult filtered = apply(std::move(**m));
+            if (!filtered || *filtered) {
                 out = std::move(filtered);
                 return true;
             }
@@ -381,10 +413,10 @@ class FilterMaskCursor : public Cursor {
     }
 
    private:
-    dstd::Optional<Morsel> apply(Morsel&& m) {
+    MorselResult apply(Morsel&& m) {
         const std::int64_t n = m.rows;
         if (off_ + n > mask_.length())
-            throw std::out_of_range("filter_mask: mask shorter than input");
+            return invalid_argument<"filter_mask: mask shorter than input">();
         // Series::slice only supports byte-per-element FLAT types, not the
         // bit-packed Bool layout, so the sub-mask is re-packed by hand
         // instead (same bit math as IsDupCursor's mask build).
@@ -408,7 +440,7 @@ class FilterMaskCursor : public Cursor {
         for (const Series& c : kept.columns)
             out.columns.push_back(c.materialize());
         out.rows = out.columns.empty() ? 0 : out.columns.front().length();
-        if (out.rows == 0) return dstd::nullopt;
+        if (out.rows == 0) return dstd::Optional<Morsel>{};
         // Same argument as FilterCursor::apply: dropping rows cannot break a
         // sortedness claim on the survivors.
         out.ordering = m.ordering;
@@ -436,17 +468,18 @@ class SelectCursor : public Cursor {
           idx_(std::move(idx)),
           rest_drop_(std::move(rest_drop)) {}
 
-    coro::CoroTask<dstd::Optional<Morsel>> next(
-        std::int64_t max_rows) override {
-        auto m = co_await in_->next(max_rows);
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
+        auto task = in_->next(max_rows);
+        auto m = co_await std::move(task).or_fail();
         if (!m) co_return dstd::nullopt;
         co_return apply(std::move(*m));
     }
 
-    bool try_next(std::int64_t max_rows, dstd::Optional<Morsel>& out) override {
-        dstd::Optional<Morsel> m;
+    bool try_next(std::int64_t max_rows, MorselResult& out) override {
+        MorselResult m;
         if (!in_->try_next(max_rows, m)) return false;
-        out = m ? dstd::Optional<Morsel>(apply(std::move(*m))) : dstd::nullopt;
+        out = map_morsel(std::move(m),
+                         [&](Morsel&& x) { return apply(std::move(x)); });
         return true;
     }
 
@@ -512,17 +545,21 @@ class RenameRestCursor : public Cursor {
           map_(std::move(map)),
           plan_out_(std::move(plan_out)) {}
 
-    coro::CoroTask<dstd::Optional<Morsel>> next(
-        std::int64_t max_rows) override {
-        auto m = co_await in_->next(max_rows);
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
+        auto task = in_->next(max_rows);
+        auto m = co_await std::move(task).or_fail();
         if (!m) co_return dstd::nullopt;
-        apply(*m);
+        auto applied = apply(*m);
+        if (!applied) co_return applied.error();
         co_return std::move(m);
     }
 
-    bool try_next(std::int64_t max_rows, dstd::Optional<Morsel>& out) override {
+    bool try_next(std::int64_t max_rows, MorselResult& out) override {
         if (!in_->try_next(max_rows, out)) return false;
-        if (out) apply(*out);
+        if (out && *out) {
+            auto applied = apply(**out);
+            if (!applied) out = applied.error();
+        }
         return true;
     }
 
@@ -531,21 +568,21 @@ class RenameRestCursor : public Cursor {
     }
 
    private:
-    void apply(Morsel& m) const {
+    dstd::Result<void> apply(Morsel& m) const {
         DataFrame fields = rest_fields(m.columns.back());
         dstd::HashSet<dstd::String> seen;
         for (dstd::String& n : fields.names) {
             auto it = map_.find(n);
             if (it != map_.end()) n = it->second;
             if (plan_out_.count(n) || !seen.insert(n).second)
-                throw std::invalid_argument(
-                    ("rename_columns: column name '" + n +
-                     "' is used by two columns after the rename")
-                        .c_str());
+                return invalid_argument<
+                    "rename_columns: column name '{}' is used by two columns "
+                    "after the rename">(n);
         }
         m.columns.back() =
             struct_of_length(std::move(fields.names), std::move(fields.columns),
                              m.columns.back().length());
+        return {};
     }
 
     dstd::UniquePtr<Cursor> in_;
@@ -565,22 +602,27 @@ class AlignCursor : public Cursor {
                 bool rest)
         : in_(std::move(in)), fields_(std::move(fields)), rest_(rest) {}
 
-    coro::CoroTask<dstd::Optional<Morsel>> next(
-        std::int64_t max_rows) override {
-        auto m = co_await in_->next(max_rows);
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
+        auto task = in_->next(max_rows);
+        auto m = co_await std::move(task).or_fail();
         if (!m) co_return dstd::nullopt;
         co_return apply(std::move(*m));
     }
 
-    bool try_next(std::int64_t max_rows, dstd::Optional<Morsel>& out) override {
-        dstd::Optional<Morsel> m;
+    bool try_next(std::int64_t max_rows, MorselResult& out) override {
+        MorselResult m;
         if (!in_->try_next(max_rows, m)) return false;
-        out = m ? dstd::Optional<Morsel>(apply(std::move(*m))) : dstd::nullopt;
+        out = map_morsel(std::move(m),
+                         [&](Morsel&& x) { return apply(std::move(x)); });
         return true;
     }
 
     coro::CoroTask<bool> narrow(const Expr& predicate) override {
         co_return co_await in_->narrow(predicate);
+    }
+
+    coro::CoroTask<std::uint64_t> reclaim(std::uint64_t want) override {
+        co_return co_await in_->reclaim(want);
     }
 
    private:
@@ -654,17 +696,18 @@ class WithColumnCursor : public Cursor {
           width_(width),
           rest_(rest) {}
 
-    coro::CoroTask<dstd::Optional<Morsel>> next(
-        std::int64_t max_rows) override {
-        auto m = co_await in_->next(max_rows);
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
+        auto task = in_->next(max_rows);
+        auto m = co_await std::move(task).or_fail();
         if (!m) co_return dstd::nullopt;
         co_return apply(std::move(*m));
     }
 
-    bool try_next(std::int64_t max_rows, dstd::Optional<Morsel>& out) override {
-        dstd::Optional<Morsel> m;
+    bool try_next(std::int64_t max_rows, MorselResult& out) override {
+        MorselResult m;
         if (!in_->try_next(max_rows, m)) return false;
-        out = m ? dstd::Optional<Morsel>(apply(std::move(*m))) : dstd::nullopt;
+        out = map_morsel(std::move(m),
+                         [&](Morsel&& x) { return apply(std::move(x)); });
         return true;
     }
 
@@ -673,8 +716,10 @@ class WithColumnCursor : public Cursor {
     // leaves row order and every other column's position untouched. Replacing
     // the ordered column itself invalidates the claim: the new values have no
     // known relation to it.
-    Morsel apply(Morsel&& m) {
-        Series nc = common::unwrap(eval(expr_, column_ptrs(m.columns)));
+    MorselResult apply(Morsel&& m) {
+        auto evaluated = eval(expr_, column_ptrs(m.columns));
+        if (!evaluated) return evaluated.error();
+        Series nc = std::move(*evaluated);
         Morsel out;
         out.rows = m.rows;
         out.batch_index = m.batch_index;
@@ -727,10 +772,10 @@ class SliceCursor : public Cursor {
                    ? std::numeric_limits<std::int64_t>::max()
                    : offset + len) {}
 
-    coro::CoroTask<dstd::Optional<Morsel>> next(
-        std::int64_t max_rows) override {
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
         while (emitted_ < len_) {
-            auto m = co_await in_->next(max_rows);
+            auto task = in_->next(max_rows);
+            auto m = co_await std::move(task).or_fail();
             if (!m) co_return dstd::nullopt;
             dstd::Optional<Morsel> windowed = apply(*m);
             if (windowed) co_return windowed;
@@ -742,21 +787,21 @@ class SliceCursor : public Cursor {
     // of which advance identically whether a morsel arrived via try_next or
     // next(); a morsel entirely outside [offset_, offset_+len_) is skipped
     // (loop continues) with no output either way, exactly like FilterCursor.
-    bool try_next(std::int64_t max_rows, dstd::Optional<Morsel>& out) override {
+    bool try_next(std::int64_t max_rows, MorselResult& out) override {
         while (emitted_ < len_) {
-            dstd::Optional<Morsel> m;
+            MorselResult m;
             if (!in_->try_next(max_rows, m)) return false;
-            if (!m) {
-                out.reset();
+            if (!m || !*m) {
+                out = std::move(m);
                 return true;
             }
-            dstd::Optional<Morsel> windowed = apply(*m);
+            dstd::Optional<Morsel> windowed = apply(**m);
             if (windowed) {
                 out = std::move(windowed);
                 return true;
             }
         }
-        out.reset();
+        out = dstd::Optional<Morsel>{};
         return true;
     }
 
@@ -783,15 +828,15 @@ class TailCursor : public Cursor {
     TailCursor(dstd::UniquePtr<Cursor> in, std::int64_t n)
         : in_(std::move(in)), n_(n) {}
 
-    coro::CoroTask<dstd::Optional<Morsel>> next(
-        std::int64_t max_rows) override {
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
         if (done_) co_return dstd::nullopt;
         if (n_ <= 0) {
             done_ = true;
             co_return dstd::nullopt;
         }
         for (;;) {
-            auto m = co_await in_->next(max_rows);
+            auto task = in_->next(max_rows);
+            auto m = co_await std::move(task).or_fail();
             if (!m) break;
             accumulate(std::move(*m));
         }
@@ -806,21 +851,25 @@ class TailCursor : public Cursor {
     // exactly the state next() would have reached pulling the same prefix via
     // co_await, and next() (or another try_next call) resumes the same fold
     // from there - never a re-drain, never a skipped morsel.
-    bool try_next(std::int64_t max_rows, dstd::Optional<Morsel>& out) override {
+    bool try_next(std::int64_t max_rows, MorselResult& out) override {
         if (done_) {
-            out.reset();
+            out = dstd::Optional<Morsel>{};
             return true;
         }
         if (n_ <= 0) {
             done_ = true;
-            out.reset();
+            out = dstd::Optional<Morsel>{};
             return true;
         }
         for (;;) {
-            dstd::Optional<Morsel> m;
+            MorselResult m;
             if (!in_->try_next(max_rows, m)) return false;
-            if (!m) break;
-            accumulate(std::move(*m));
+            if (!m) {
+                out = std::move(m);
+                return true;
+            }
+            if (!*m) break;
+            accumulate(std::move(**m));
         }
         done_ = true;
         out = finish();
@@ -837,8 +886,8 @@ class TailCursor : public Cursor {
         }
     }
 
-    dstd::Optional<Morsel> finish() {
-        if (buf_.empty()) return dstd::nullopt;
+    MorselResult finish() {
+        if (buf_.empty()) return dstd::Optional<Morsel>{};
         const std::size_t ncols = buf_.front().columns.size();
         Morsel out;
         out.rows = total_;
@@ -847,7 +896,9 @@ class TailCursor : public Cursor {
             dstd::Vector<const Series*> parts;
             parts.reserve(buf_.size());
             for (Morsel& m : buf_) parts.push_back(&m.columns[c]);
-            out.columns.push_back(common::unwrap(concat_columns(parts)));
+            auto joined = concat_columns(parts);
+            if (!joined) return joined.error();
+            out.columns.push_back(std::move(*joined));
         }
         if (total_ > n_) return slice_morsel(out, total_ - n_, n_);
         return out;
@@ -879,10 +930,10 @@ Morsel map_frame(Morsel&& m, Fn&& fn) {
 class DropNullsCursor : public Cursor {
    public:
     explicit DropNullsCursor(dstd::UniquePtr<Cursor> in) : in_(std::move(in)) {}
-    coro::CoroTask<dstd::Optional<Morsel>> next(
-        std::int64_t max_rows) override {
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
         for (;;) {
-            auto m = co_await in_->next(max_rows);
+            auto task = in_->next(max_rows);
+            auto m = co_await std::move(task).or_fail();
             if (!m) break;
             Morsel out = map_frame(std::move(*m),
                                    [](DataFrame f) { return f.drop_nulls(); });
@@ -893,16 +944,16 @@ class DropNullsCursor : public Cursor {
 
     // A morsel dropped to zero rows contributes nothing, same argument as
     // FilterCursor::try_next.
-    bool try_next(std::int64_t max_rows, dstd::Optional<Morsel>& out) override {
+    bool try_next(std::int64_t max_rows, MorselResult& out) override {
         for (;;) {
-            dstd::Optional<Morsel> m;
+            MorselResult m;
             if (!in_->try_next(max_rows, m)) return false;
-            if (!m) {
-                out.reset();
+            if (!m || !*m) {
+                out = std::move(m);
                 return true;
             }
             Morsel filtered = map_frame(
-                std::move(*m), [](DataFrame f) { return f.drop_nulls(); });
+                std::move(**m), [](DataFrame f) { return f.drop_nulls(); });
             if (filtered.rows > 0) {
                 out = std::move(filtered);
                 return true;
@@ -923,17 +974,18 @@ class FillNullCursor : public Cursor {
    public:
     FillNullCursor(dstd::UniquePtr<Cursor> in, dftu_scalar value, bool rest)
         : in_(std::move(in)), value_(value), rest_(rest) {}
-    coro::CoroTask<dstd::Optional<Morsel>> next(
-        std::int64_t max_rows) override {
-        auto m = co_await in_->next(max_rows);
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
+        auto task = in_->next(max_rows);
+        auto m = co_await std::move(task).or_fail();
         if (!m) co_return dstd::nullopt;
         co_return apply(std::move(*m));
     }
 
-    bool try_next(std::int64_t max_rows, dstd::Optional<Morsel>& out) override {
-        dstd::Optional<Morsel> m;
+    bool try_next(std::int64_t max_rows, MorselResult& out) override {
+        MorselResult m;
         if (!in_->try_next(max_rows, m)) return false;
-        out = m ? dstd::Optional<Morsel>(apply(std::move(*m))) : dstd::nullopt;
+        out = map_morsel(std::move(m),
+                         [&](Morsel&& x) { return apply(std::move(x)); });
         return true;
     }
 
@@ -977,17 +1029,18 @@ class WithRowIndexCursor : public Cursor {
    public:
     explicit WithRowIndexCursor(dstd::UniquePtr<Cursor> in)
         : in_(std::move(in)) {}
-    coro::CoroTask<dstd::Optional<Morsel>> next(
-        std::int64_t max_rows) override {
-        auto m = co_await in_->next(max_rows);
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
+        auto task = in_->next(max_rows);
+        auto m = co_await std::move(task).or_fail();
         if (!m) co_return dstd::nullopt;
         co_return apply(std::move(*m));
     }
 
-    bool try_next(std::int64_t max_rows, dstd::Optional<Morsel>& out) override {
-        dstd::Optional<Morsel> m;
+    bool try_next(std::int64_t max_rows, MorselResult& out) override {
+        MorselResult m;
         if (!in_->try_next(max_rows, m)) return false;
-        out = m ? dstd::Optional<Morsel>(apply(std::move(*m))) : dstd::nullopt;
+        out = map_morsel(std::move(m),
+                         [&](Morsel&& x) { return apply(std::move(x)); });
         return true;
     }
 
@@ -1034,19 +1087,20 @@ class WithRowIndexCursor : public Cursor {
 class NullCountCursor : public Cursor {
    public:
     explicit NullCountCursor(dstd::UniquePtr<Cursor> in) : in_(std::move(in)) {}
-    coro::CoroTask<dstd::Optional<Morsel>> next(
-        std::int64_t max_rows) override {
-        if (done_) co_return dstd::nullopt;
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
+        if (done_) co_return MorselResult(dstd::nullopt);
         done_ = true;
         dstd::Vector<std::int64_t> counts;
         for (;;) {
-            auto m = co_await in_->next(max_rows);
-            if (!m) break;
-            if (counts.empty()) counts.assign(m->columns.size(), 0);
-            for (std::size_t i = 0; i < m->columns.size(); ++i)
-                counts[i] += m->columns[i].null_count();
+            auto task = in_->next(max_rows);
+            auto m = co_await std::move(task);
+            if (!m) co_return m.error();
+            if (!*m) break;
+            if (counts.empty()) counts.assign((*m)->columns.size(), 0);
+            for (std::size_t i = 0; i < (*m)->columns.size(); ++i)
+                counts[i] += (*m)->columns[i].null_count();
         }
-        if (counts.empty()) co_return dstd::nullopt;
+        if (counts.empty()) co_return MorselResult(dstd::nullopt);
         Morsel out;
         out.rows = 1;
         out.columns.reserve(counts.size());
@@ -1063,15 +1117,17 @@ class NullCountCursor : public Cursor {
 // Wrap a morsel's columns in a DataFrame with real `names`, apply `fn`, return
 // the result materialized FLAT.
 template <class Fn>
-Morsel frame_op(Morsel&& m, const dstd::Vector<dstd::String>& names, Fn&& fn) {
+MorselResult frame_op(Morsel&& m, const dstd::Vector<dstd::String>& names,
+                      Fn&& fn) {
     DataFrame tmp;
     tmp.names = names;
     for (Series& c : m.columns) tmp.columns.push_back(std::move(c));
-    DataFrame r = common::unwrap(fn(std::move(tmp)));
+    auto r = fn(std::move(tmp));
+    if (!r) return r.error();
     Morsel out;
-    out.rows = r.num_rows();
-    out.columns.reserve(r.columns.size());
-    for (const Series& c : r.columns) out.columns.push_back(c.materialize());
+    out.rows = r->num_rows();
+    out.columns.reserve(r->columns.size());
+    for (const Series& c : r->columns) out.columns.push_back(c.materialize());
     return out;
 }
 
@@ -1085,16 +1141,18 @@ class UnnestCursor : public Cursor {
           sch_(std::move(sch)),
           column_(std::move(column)),
           keep_empty_(keep_empty) {}
-    coro::CoroTask<dstd::Optional<Morsel>> next(
-        std::int64_t max_rows) override {
-        auto m = co_await in_->next(max_rows);
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
+        auto task = in_->next(max_rows);
+        auto m = co_await std::move(task).or_fail();
         if (!m) co_return dstd::nullopt;
         co_return apply(std::move(*m));
     }
-    bool try_next(std::int64_t max_rows, dstd::Optional<Morsel>& out) override {
-        dstd::Optional<Morsel> m;
+
+    bool try_next(std::int64_t max_rows, MorselResult& out) override {
+        MorselResult m;
         if (!in_->try_next(max_rows, m)) return false;
-        out = m ? dstd::Optional<Morsel>(apply(std::move(*m))) : dstd::nullopt;
+        out = map_morsel(std::move(m),
+                         [&](Morsel&& x) { return apply(std::move(x)); });
         return true;
     }
     dstd::Optional<dstd::Vector<dstd::String>> out_names() const override {
@@ -1102,11 +1160,12 @@ class UnnestCursor : public Cursor {
     }
 
    private:
-    Morsel apply(Morsel m) {
+    MorselResult apply(Morsel m) {
         DataFrame f = frame_of(std::move(m.columns), sch_);
-        DataFrame r = common::unwrap(f.unnest(column_, keep_empty_));
-        out_names_ = r.names;
-        return morsel_of(std::move(r));
+        auto r = f.unnest(column_, keep_empty_);
+        if (!r) return r.error();
+        out_names_ = r->names;
+        return morsel_of(std::move(*r));
     }
     dstd::UniquePtr<Cursor> in_;
     dstd::Vector<dstd::String> sch_;
@@ -1126,23 +1185,23 @@ class ExplodeCursor : public Cursor {
           column_(std::move(column)),
           budget_(budget),
           ci_(column_index_of(sch_, column_)) {}
-    coro::CoroTask<dstd::Optional<Morsel>> next(
-        std::int64_t max_rows) override {
-        const auto fill_ok = co_await feed_.fill(*in_, max_rows);
-        if (!fill_ok) co_return dstd::nullopt;
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
+        auto fill_task = feed_.fill(*in_, max_rows);
+        const auto filled = co_await std::move(fill_task).or_fail();
+        if (!filled) co_return dstd::nullopt;
         co_return frame_op(feed_.take(rows_to_explode(max_rows)), sch_,
                            [&](DataFrame f) { return f.explode(column_); });
     }
 
     // Without a budget a morsel is exploded whole, as before.
-    bool try_next(std::int64_t max_rows, dstd::Optional<Morsel>& out) override {
+    bool try_next(std::int64_t max_rows, MorselResult& out) override {
         if (has_cap(budget_) || feed_.remaining() > 0) return false;
-        dstd::Optional<Morsel> m;
+        MorselResult m;
         if (!in_->try_next(max_rows, m)) return false;
-        out = m ? dstd::Optional<Morsel>(
-                      frame_op(std::move(*m), sch_,
-                               [&](DataFrame f) { return f.explode(column_); }))
-                : dstd::nullopt;
+        out = map_morsel(std::move(m), [&](Morsel&& x) {
+            return frame_op(std::move(x), sch_,
+                            [&](DataFrame f) { return f.explode(column_); });
+        });
         return true;
     }
 
@@ -1207,23 +1266,23 @@ class UnpivotCursor : public Cursor {
           id_(std::move(id)),
           val_(std::move(val)),
           budget_(budget) {}
-    coro::CoroTask<dstd::Optional<Morsel>> next(
-        std::int64_t max_rows) override {
-        const auto fill_ok = co_await feed_.fill(*in_, max_rows);
-        if (!fill_ok) co_return dstd::nullopt;
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
+        auto fill_task = feed_.fill(*in_, max_rows);
+        const auto filled = co_await std::move(fill_task).or_fail();
+        if (!filled) co_return dstd::nullopt;
         co_return frame_op(feed_.take(rows_to_unpivot(max_rows)), sch_,
                            [&](DataFrame f) { return f.unpivot(id_, val_); });
     }
 
     // Without a budget a morsel is unpivoted whole, as before.
-    bool try_next(std::int64_t max_rows, dstd::Optional<Morsel>& out) override {
+    bool try_next(std::int64_t max_rows, MorselResult& out) override {
         if (has_cap(budget_) || feed_.remaining() > 0) return false;
-        dstd::Optional<Morsel> m;
+        MorselResult m;
         if (!in_->try_next(max_rows, m)) return false;
-        out = m ? dstd::Optional<Morsel>(frame_op(
-                      std::move(*m), sch_,
-                      [&](DataFrame f) { return f.unpivot(id_, val_); }))
-                : dstd::nullopt;
+        out = map_morsel(std::move(m), [&](Morsel&& x) {
+            return frame_op(std::move(x), sch_,
+                            [&](DataFrame f) { return f.unpivot(id_, val_); });
+        });
         return true;
     }
 
@@ -1264,12 +1323,11 @@ class ReplayCursor : public Cursor {
     ReplayCursor(Morsel first, dstd::UniquePtr<Cursor> in)
         : first_(std::move(first)), in_(std::move(in)) {}
 
-    coro::CoroTask<dstd::Optional<Morsel>> next(
-        std::int64_t max_rows) override {
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
         if (first_) {
             dstd::Optional<Morsel> m = std::move(first_);
             first_.reset();
-            co_return m;
+            co_return std::move(m);
         }
         co_return co_await in_->next(max_rows);
     }
@@ -1296,15 +1354,15 @@ class TopkCursor : public Cursor {
           largest_(largest),
           budget_(budget) {}
 
-    coro::CoroTask<dstd::Optional<Morsel>> next(
-        std::int64_t max_rows) override {
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
         if (sorted_) co_return co_await sorted_->next(max_rows);
         if (done_) co_return dstd::nullopt;
         done_ = true;
         DataFrame best;
         bool has = false;
         for (;;) {
-            auto m = co_await in_->next(max_rows);
+            auto task = in_->next(max_rows);
+            auto m = co_await std::move(task).or_fail();
             if (!m) break;
             const std::uint64_t held =
                 (has ? spill::columns_bytes(best.columns) : 0) +
@@ -1316,27 +1374,37 @@ class TopkCursor : public Cursor {
                 Morsel first = std::move(*m);
                 if (has) {
                     DataFrame cur = frame_of(std::move(first.columns), sch_);
-                    first = morsel_of(common::unwrap(concat({&best, &cur})));
+                    auto joined = concat({&best, &cur});
+                    if (!joined) co_return joined.error();
+                    first = morsel_of(std::move(*joined));
                     best = DataFrame{};
                 }
                 gov_.spilled(0);
-                sorted_ = dstd::make_unique<SliceCursor>(
+                auto merged =
                     make_sort_merge(dstd::make_unique<ReplayCursor>(
                                         std::move(first), std::move(in_)),
                                     sch_, dstd::Vector<dstd::String>{name_},
-                                    dstd::Vector<bool>{largest_}, budget_),
-                    0, k_);
-                co_return co_await sorted_->next(max_rows);
+                                    dstd::Vector<bool>{largest_}, budget_);
+                if (!merged) co_return merged.error();
+                sorted_ =
+                    dstd::make_unique<SliceCursor>(std::move(*merged), 0, k_);
+                auto sorted_next = sorted_->next(max_rows);
+                co_return co_await std::move(sorted_next);
             }
             DataFrame cur;
             cur.names = sch_;
             for (Series& c : m->columns) cur.columns.push_back(std::move(c));
             if (!has) {
-                best = common::unwrap(cur.topk(name_, k_, largest_));
+                auto top = cur.topk(name_, k_, largest_);
+                if (!top) co_return top.error();
+                best = std::move(*top);
                 has = true;
             } else {
-                DataFrame u = common::unwrap(concat({&best, &cur}));
-                best = common::unwrap(u.topk(name_, k_, largest_));
+                auto joined = concat({&best, &cur});
+                if (!joined) co_return joined.error();
+                auto top = joined->topk(name_, k_, largest_);
+                if (!top) co_return top.error();
+                best = std::move(*top);
             }
         }
         if (!has) co_return dstd::nullopt;
@@ -1392,8 +1460,7 @@ class SampleCursor : public Cursor {
           n_(std::max<std::int64_t>(n, 0)),
           seed_(seed) {}
 
-    coro::CoroTask<dstd::Optional<Morsel>> next(
-        std::int64_t max_rows) override {
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
         if (done_) co_return dstd::nullopt;
         done_ = true;
         DataFrame best;                    // <= n_ rows
@@ -1401,14 +1468,19 @@ class SampleCursor : public Cursor {
         dstd::Vector<std::int64_t> idx;    // original global row indices
         std::int64_t off = 0;
         for (;;) {
-            auto m = co_await in_->next(max_rows);
+            auto task = in_->next(max_rows);
+            auto m = co_await std::move(task).or_fail();
             if (!m) break;
             const std::int64_t mrows = m->rows;
             DataFrame mf = frame_of(std::move(m->columns), sch_);
-            DataFrame combined =
-                best.num_rows() == 0
-                    ? std::move(mf)
-                    : common::unwrap(concat({&best, &mf}, ConcatHow::Vertical));
+            DataFrame combined;
+            if (best.num_rows() == 0) {
+                combined = std::move(mf);
+            } else {
+                auto joined = concat({&best, &mf}, ConcatHow::Vertical);
+                if (!joined) co_return joined.error();
+                combined = std::move(*joined);
+            }
             keys.reserve(keys.size() + static_cast<std::size_t>(mrows));
             idx.reserve(idx.size() + static_cast<std::size_t>(mrows));
             for (std::int64_t i = 0; i < mrows; ++i) {
@@ -1478,8 +1550,7 @@ class DescribeCursor : public Cursor {
     DescribeCursor(dstd::UniquePtr<Cursor> in, dstd::Vector<dstd::String> sch)
         : in_(std::move(in)), sch_(std::move(sch)) {}
 
-    coro::CoroTask<dstd::Optional<Morsel>> next(
-        std::int64_t max_rows) override {
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
         if (done_) co_return dstd::nullopt;
         done_ = true;
         // Per-morsel SIMD reduction into one mergeable FieldStat per numeric
@@ -1490,7 +1561,8 @@ class DescribeCursor : public Cursor {
         std::int64_t total_rows = 0;
         bool first = true;
         for (;;) {
-            auto m = co_await in_->next(max_rows);
+            auto task = in_->next(max_rows);
+            auto m = co_await std::move(task).or_fail();
             if (!m) break;
             if (first) {
                 first = false;
@@ -1564,25 +1636,39 @@ class HostCursorBridge {
     void* self() { return this; }
 
    private:
+    void fail(const dstd::Error& error, ::dftu_result_frame* out) {
+        last_error_ = error.c_str();
+        out->ok = 0;
+        out->u.err =
+            ::dftu_error{0, 0, DFTU_COND_INTERNAL, last_error_.c_str()};
+    }
+
+    // Writes one read of cursor_ into *out: a frame, end of stream or error.
+    void answer(MorselResult&& read, ::dftu_result_frame* out) {
+        if (!read) {
+            fail(read.error(), out);
+            return;
+        }
+        if (!*read) {
+            out->ok = 1;
+            out->u.value = nullptr;
+            return;
+        }
+        auto df =
+            frame_from_morsel(std::move(**read), schema_, cursor_->out_names());
+        if (!df) {
+            fail(df.error(), out);
+            return;
+        }
+        out->ok = 1;
+        out->u.value = dataframe_handle_wrap(std::move(*df));
+    }
+
     coro::CoroTask<void> next_task(std::int64_t max_rows,
                                    ::dftu_result_frame* out) {
-        try {
-            dstd::Optional<Morsel> m = co_await cursor_->next(max_rows);
-            if (!m) {
-                out->ok = 1;
-                out->u.value = nullptr;
-                co_return;
-            }
-            DataFrame df =
-                frame_from_morsel(std::move(*m), schema_, cursor_->out_names());
-            out->ok = 1;
-            out->u.value = dataframe_handle_wrap(std::move(df));
-        } catch (const std::exception& e) {
-            last_error_ = e.what();
-            out->ok = 0;
-            out->u.err =
-                ::dftu_error{0, 0, DFTU_COND_INTERNAL, last_error_.c_str()};
-        }
+        auto task = cursor_->next(max_rows);
+        MorselResult read = co_await std::move(task);
+        answer(std::move(read), out);
     }
 
     // Fills *out and returns true when cursor_->try_next answered without
@@ -1591,25 +1677,9 @@ class HostCursorBridge {
     // exactly, so a plugin node cannot tell which path answered it apart
     // from the NULL return.
     bool try_next_sync(std::int64_t max_rows, ::dftu_result_frame* out) {
-        dstd::Optional<Morsel> m;
-        try {
-            if (!cursor_->try_next(max_rows, m)) return false;
-        } catch (const std::exception& e) {
-            last_error_ = e.what();
-            out->ok = 0;
-            out->u.err =
-                ::dftu_error{0, 0, DFTU_COND_INTERNAL, last_error_.c_str()};
-            return true;
-        }
-        if (!m) {
-            out->ok = 1;
-            out->u.value = nullptr;
-            return true;
-        }
-        DataFrame df =
-            frame_from_morsel(std::move(*m), schema_, cursor_->out_names());
-        out->ok = 1;
-        out->u.value = dataframe_handle_wrap(std::move(df));
+        MorselResult read;
+        if (!cursor_->try_next(max_rows, read)) return false;
+        answer(std::move(read), out);
         return true;
     }
 
@@ -1624,12 +1694,7 @@ class HostCursorBridge {
     }
 
     coro::CoroTask<void> narrow_task(Expr predicate, std::int32_t* out) {
-        bool applied = false;
-        try {
-            applied = co_await cursor_->narrow(predicate);
-        } catch (const std::exception&) {
-            applied = false;
-        }
+        const bool applied = co_await cursor_->narrow(predicate);
         *out = applied ? 1 : 0;
     }
     static ::dftu_task* narrow_thunk(void* self, const ::dftu_expr* predicate,
@@ -1645,12 +1710,8 @@ class HostCursorBridge {
     }
     static std::uint64_t reclaim_thunk(void* self, std::uint64_t want) {
         auto* self_ = static_cast<HostCursorBridge*>(self);
-        try {
-            auto reclaimed = self_->cursor_->reclaim(want).get();
-            return reclaimed ? *reclaimed : 0;
-        } catch (const std::exception&) {
-            return 0;
-        }
+        auto reclaimed = self_->cursor_->reclaim(want).get();
+        return reclaimed ? *reclaimed : 0;
     }
 
     dstd::UniquePtr<Cursor> cursor_;
@@ -1666,10 +1727,17 @@ class HostCursorBridge {
 // rather than corrupting whatever the optimizer built on the declaration.
 class NodeCursor final : public Cursor {
    public:
-    NodeCursor(const NodeOp& node, dstd::UniquePtr<Cursor> in,
-               dstd::Vector<dstd::String> in_schema, Schema declared_out,
-               std::uint64_t budget)
-        : name_(node.name), declared_(std::move(declared_out)) {
+    NodeCursor(dstd::String name, Schema declared_out)
+        : name_(std::move(name)), declared_(std::move(declared_out)) {}
+
+    // Opens the node over `in`, or says why it did not. A node that fails to
+    // open leaves the input cursor to be destroyed with its bridge.
+    static dstd::Result<dstd::UniquePtr<Cursor>> make(
+        const NodeOp& node, dstd::UniquePtr<Cursor> in,
+        dstd::Vector<dstd::String> in_schema, Schema declared_out,
+        std::uint64_t budget) {
+        auto cursor =
+            dstd::make_unique<NodeCursor>(node.name, std::move(declared_out));
         auto bridge = dstd::make_unique<HostCursorBridge>(std::move(in),
                                                           std::move(in_schema));
         void* out_self = nullptr;
@@ -1678,15 +1746,16 @@ class NodeCursor final : public Cursor {
             node.vt.open(node.self, bridge->self(), HostCursorBridge::vt(),
                          &node.args, budget, &out_self, &out_vt);
         if (!ok || !out_vt)
-            throw std::runtime_error(
-                ("lazy op '" + name_ + "': open() failed").c_str());
+            return common::make_error<"lazy op '{}': open() failed">(
+                common::ErrorCode::Internal, node.name);
         // The node took ownership of the input cursor on success: it (not us)
         // now owns destroying it, via out_vt_->destroy eventually reaching
         // HostCursorBridge::destroy_thunk.
         bridge.release();
-        out_self_ = out_self;
-        out_vt_ = out_vt;
-        gov_.emplace(out_vt_);
+        cursor->out_self_ = out_self;
+        cursor->out_vt_ = out_vt;
+        cursor->gov_.emplace(out_vt);
+        return dstd::UniquePtr<Cursor>(std::move(cursor));
     }
 
     ~NodeCursor() override {
@@ -1696,18 +1765,17 @@ class NodeCursor final : public Cursor {
     NodeCursor(const NodeCursor&) = delete;
     NodeCursor& operator=(const NodeCursor&) = delete;
 
-    coro::CoroTask<dstd::Optional<Morsel>> next(
-        std::int64_t max_rows) override {
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
         ::dftu_result_frame out{};
         if (::dftu_task* t = out_vt_->next(out_self_, max_rows, &out)) {
-            auto task = task_from_abi(t);
-            co_await *task;
+            auto awaiting = await_plugin_task(t);
+            auto awaited = co_await std::move(awaiting);
+            if (!awaited) co_return awaited.error();
         }
         if (!DFTU_RESULT_OK(out))
-            throw std::runtime_error(
-                ("lazy op '" + name_ +
-                 "': " + describe_dftu_error(DFTU_RESULT_ERROR(out)))
-                    .c_str());
+            co_return common::make_error<"lazy op '{}': {}">(
+                common::ErrorCode::Internal, name_,
+                describe_dftu_error(DFTU_RESULT_ERROR(out)));
 
         ::dftu_dataframe* frame = DFTU_RESULT_VALUE(out);
         if (!frame) co_return dstd::nullopt;
@@ -1715,17 +1783,16 @@ class NodeCursor final : public Cursor {
         DataFrame df = dataframe_handle_take(frame);
         if (!declared_.fields.empty() &&
             df.columns.size() != declared_.fields.size())
-            throw std::runtime_error(("lazy op '" + name_ + "': produced " +
-                                      dstd::to_string(df.columns.size()) +
-                                      " columns but output_schema declared " +
-                                      dstd::to_string(declared_.fields.size()))
-                                         .c_str());
+            co_return common::make_error<
+                "lazy op '{}': produced {} columns but output_schema "
+                "declared {}">(common::ErrorCode::Internal, name_,
+                               df.columns.size(), declared_.fields.size());
 
         Morsel m;
         m.rows = df.num_rows();
         m.columns = std::move(df.columns);
         gov_->at_morsel(out_vt_, out_self_);
-        co_return m;
+        co_return std::move(m);
     }
 
     coro::CoroTask<bool> narrow(const Expr& predicate) override {
@@ -1733,12 +1800,17 @@ class NodeCursor final : public Cursor {
         std::int32_t applied = 0;
         ::dftu_expr* h = expr_handle_wrap(predicate);
         ::dftu_task* t = out_vt_->narrow(out_self_, h, &applied);
+        bool awaited_ok = true;
         if (t) {
-            auto task = task_from_abi(t);
-            co_await *task;
+            auto awaiting = await_plugin_task(t);
+            auto awaited = co_await std::move(awaiting);
+            awaited_ok = awaited.has_value();
+            if (!awaited_ok)
+                DFTRACER_UTILS_LOG_WARN("plugin node narrow failed: %s",
+                                        awaited.error().c_str());
         }
         ::dftu_expr_free(h);
-        co_return applied != 0;
+        co_return awaited_ok&& applied != 0;
     }
     std::uint64_t resident_bytes() const override {
         return out_vt_->bytes ? out_vt_->bytes(out_self_) : 0;
@@ -1759,13 +1831,15 @@ class RowKeyCursor : public Cursor {
    public:
     explicit RowKeyCursor(dstd::UniquePtr<Cursor> in) : in_(std::move(in)) {}
 
-    coro::CoroTask<dstd::Optional<Morsel>> next(
-        std::int64_t max_rows) override {
-        auto m = co_await in_->next(max_rows);
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
+        auto task = in_->next(max_rows);
+        auto m = co_await std::move(task).or_fail();
         if (!m) co_return dstd::nullopt;
         dstd::Vector<dstd::String> keys(static_cast<std::size_t>(m->rows));
+        KeyRefusal refusal;
         for (std::int64_t i = 0; i < m->rows; ++i)
-            keys[static_cast<std::size_t>(i)] = row_key(m->columns, i);
+            keys[static_cast<std::size_t>(i)] = row_key(m->columns, i, refusal);
+        if (refusal.refused()) co_return refusal.error();
         Morsel out;
         out.rows = m->rows;
         out.columns.push_back(Series::strings(keys));
@@ -1785,12 +1859,12 @@ class RunFlagCursor : public Cursor {
     RunFlagCursor(dstd::UniquePtr<Cursor> in, bool unique)
         : in_(std::move(in)), unique_(unique) {}
 
-    coro::CoroTask<dstd::Optional<Morsel>> next(
-        std::int64_t max_rows) override {
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
         dstd::Vector<std::int64_t> idx;
         dstd::Vector<bool> dup;
         while (!eof_ && static_cast<std::int64_t>(idx.size()) < max_rows) {
-            auto m = co_await in_->next(max_rows);
+            auto task = in_->next(max_rows);
+            auto m = co_await std::move(task).or_fail();
             if (!m) {
                 eof_ = true;
                 if (has_prev_ && !prev_emitted_) {
@@ -1871,35 +1945,48 @@ class IsDupCursor : public Cursor {
 
     std::uint64_t resident_bytes() const override { return gov_.reserved(); }
 
-    coro::CoroTask<dstd::Optional<Morsel>> next(
-        std::int64_t max_rows) override {
-        if (!counted_) co_await count(max_rows);
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
+        if (!counted_) {
+            auto counting = count(max_rows);
+            auto counted = co_await std::move(counting);
+            if (!counted) co_return counted.error();
+        }
         if (external_) co_return co_await external_->next(max_rows);
         for (;;) {
-            auto m = co_await pass2_->next(max_rows);
+            auto task = pass2_->next(max_rows);
+            auto m = co_await std::move(task).or_fail();
             if (!m) break;
             const std::int64_t n = m->rows;
             const std::int64_t nbytes = (n + 7) / 8;
             dstd::Vector<std::uint8_t> bits(static_cast<std::size_t>(nbytes),
                                             0);
             const dstd::Vector<Series>& cols = m->columns;
-            parallel_for(nbytes, std::int64_t{1} << 10,
-                         [&](std::int64_t bb, std::int64_t be) {
-                             for (std::int64_t byte = bb; byte < be; ++byte) {
-                                 const std::int64_t base = byte * 8;
-                                 const std::int64_t lim = std::min(base + 8, n);
-                                 std::uint8_t v = 0;
-                                 for (std::int64_t i = base; i < lim; ++i) {
-                                     auto it = counts_.find(row_key(cols, i));
-                                     const std::int64_t c =
-                                         it != counts_.end() ? it->second : 0;
-                                     if (unique_ ? c == 1 : c > 1)
-                                         v |= static_cast<std::uint8_t>(
-                                             1u << (i - base));
-                                 }
-                                 bits[static_cast<std::size_t>(byte)] = v;
-                             }
-                         });
+            KeyRefusal refusal;
+            std::mutex refusal_mutex;
+            parallel_for(
+                nbytes, std::int64_t{1} << 10,
+                [&](std::int64_t bb, std::int64_t be) {
+                    KeyRefusal local;
+                    for (std::int64_t byte = bb; byte < be; ++byte) {
+                        const std::int64_t base = byte * 8;
+                        const std::int64_t lim = std::min(base + 8, n);
+                        std::uint8_t v = 0;
+                        for (std::int64_t i = base; i < lim; ++i) {
+                            auto it = counts_.find(row_key(cols, i, local));
+                            const std::int64_t c =
+                                it != counts_.end() ? it->second : 0;
+                            if (unique_ ? c == 1 : c > 1)
+                                v |=
+                                    static_cast<std::uint8_t>(1u << (i - base));
+                        }
+                        bits[static_cast<std::size_t>(byte)] = v;
+                    }
+                    if (local.refused()) {
+                        std::lock_guard<std::mutex> lock(refusal_mutex);
+                        refusal.merge(local);
+                    }
+                });
+            if (refusal.refused()) co_return refusal.error();
             Morsel out;
             out.rows = n;
             out.columns.push_back(Series::flat(TypeId::Bool, bits.data(), n));
@@ -1909,28 +1996,38 @@ class IsDupCursor : public Cursor {
     }
 
    private:
-    coro::CoroTask<void> count(std::int64_t max_rows) {
+    coro::CoroTask<dstd::Result<void>> count(std::int64_t max_rows) {
         dstd::Vector<AggSpec> specs(1);
         specs[0].op = AggOp::Count;
         specs[0].out = "count";
         AggStatePtr state = agg_new(specs);
-        auto key_series = [](const Morsel& m) {
+        auto key_series = [](const Morsel& m) -> dstd::Result<Series> {
             dstd::Vector<dstd::String> keys(static_cast<std::size_t>(m.rows));
+            KeyRefusal refusal;
             for (std::int64_t i = 0; i < m.rows; ++i)
-                keys[static_cast<std::size_t>(i)] = row_key(m.columns, i);
+                keys[static_cast<std::size_t>(i)] =
+                    row_key(m.columns, i, refusal);
+            if (refusal.refused()) return refusal.error();
             return Series::strings(keys);
         };
         std::uint64_t state_bytes = 0;
         std::uint64_t batch_bytes = 0;
         bool asked = false;
-        co_await accumulate_batches(
+        auto accumulating = accumulate_batches(
             *first_, max_rows, budget_, state, [&] { return agg_new(specs); },
-            [&](AggState& st, const Morsel& m, std::int64_t) {
-                common::unwrap(agg_accumulate(st, key_series(m), {}));
+            [&](AggState& st, const Morsel& m,
+                std::int64_t) -> dstd::Result<void> {
+                auto keys = key_series(m);
+                if (!keys) return keys.error();
+                return agg_accumulate(st, *keys, {});
             },
-            [&](dstd::Vector<Morsel>& batch, AggStatePtr& st) {
-                for (auto& m : batch) spool_.add(std::move(m.columns), m.rows);
-                if (budget_ == 0) return;
+            [&](dstd::Vector<Morsel>& batch,
+                AggStatePtr& st) -> dstd::Result<void> {
+                for (auto& m : batch) {
+                    auto added = spool_.add(std::move(m.columns), m.rows);
+                    if (!added) return added;
+                }
+                if (budget_ == 0) return {};
                 std::uint64_t agg = st ? agg_approx_bytes(*st) : 0;
                 asked = asked || (has_cap(budget_) &&
                                   gov_.check(agg + spool_.memory_bytes()) != 0);
@@ -1941,11 +2038,13 @@ class IsDupCursor : public Cursor {
                     agg = 0;
                 }
                 if (asked) {
-                    spool_.spill();
+                    auto freed = spool_.spill();
+                    if (!freed) return freed.error();
                     gov_.spilled(agg + spool_.memory_bytes());
                     asked = false;
                 }
                 state_bytes = agg;
+                return {};
             },
             [&] { return !spilled_; },
             [&](const dstd::Vector<Morsel>& batch) {
@@ -1956,9 +2055,13 @@ class IsDupCursor : public Cursor {
                                    batch_bytes) != 0;
                 return asked;
             });
+        auto accumulated = co_await std::move(accumulating);
+        if (!accumulated) co_return accumulated.error();
         first_.reset();
         if (spilled_) {
-            auto keyed = dstd::make_unique<RowKeyCursor>(spool_.reader());
+            auto spooled = spool_.reader();
+            if (!spooled) co_return spooled.error();
+            auto keyed = dstd::make_unique<RowKeyCursor>(std::move(*spooled));
             auto numbered =
                 dstd::make_unique<WithRowIndexCursor>(std::move(keyed));
             auto by_key =
@@ -1967,17 +2070,19 @@ class IsDupCursor : public Cursor {
                                 dstd::Vector<dstd::String>{"key", "row_index"},
                                 dstd::Vector<bool>{false, false},
                                 budget_ / share::CHAINED_SORT);
+            if (!by_key) co_return by_key.error();
             auto flagged =
-                dstd::make_unique<RunFlagCursor>(std::move(by_key), unique_);
+                dstd::make_unique<RunFlagCursor>(std::move(*by_key), unique_);
             auto by_row = make_sort_merge(
                 std::move(flagged),
                 dstd::Vector<dstd::String>{"row_index", "flag"},
                 dstd::Vector<dstd::String>{"row_index"},
                 dstd::Vector<bool>{false}, budget_ / share::CHAINED_SORT);
-            external_ = dstd::make_unique<SelectCursor>(std::move(by_row),
+            if (!by_row) co_return by_row.error();
+            external_ = dstd::make_unique<SelectCursor>(std::move(*by_row),
                                                         dstd::Vector<int>{1});
             counted_ = true;
-            co_return;
+            co_return dstd::Result<void>{};
         }
         DataFrame r = agg_finalize(*state, "key");
         const Series& kc = r.columns[0];
@@ -1999,8 +2104,11 @@ class IsDupCursor : public Cursor {
         for (std::int64_t i = 0; i < d; ++i)
             counts_.emplace(dstd::String(kc.string_at(i)),
                             cc.data<std::int64_t>()[i]);
-        pass2_ = spool_.reader();
+        auto replay = spool_.reader();
+        if (!replay) co_return replay.error();
+        pass2_ = std::move(*replay);
         counted_ = true;
+        co_return dstd::Result<void>{};
     }
 
     // The counts never leave the cursor, so they live in its Scratch pool. A
@@ -2040,11 +2148,15 @@ class ToDummiesCursor : public Cursor {
           sch_(std::move(sch)),
           column_(std::move(column)) {}
 
-    coro::CoroTask<dstd::Optional<Morsel>> next(
-        std::int64_t max_rows) override {
-        if (!built_) co_await build(max_rows);
-        const auto fill_ok = co_await feed_.fill(*pass2_, max_rows);
-        if (!fill_ok) co_return dstd::nullopt;
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
+        if (!built_) {
+            auto building = build(max_rows);
+            auto built = co_await std::move(building);
+            if (!built) co_return built.error();
+        }
+        auto fill_task = feed_.fill(*pass2_, max_rows);
+        const auto filled = co_await std::move(fill_task).or_fail();
+        if (!filled) co_return dstd::nullopt;
         // A morsel of dummy columns is as wide as the distinct values, so it
         // gets fewer rows the more there are: its bytes (built once, then
         // copied into the columns) stay within the output share.
@@ -2058,13 +2170,15 @@ class ToDummiesCursor : public Cursor {
         dstd::Vector<dstd::Vector<std::int8_t>> dummies(
             uniq_idx_.size(),
             dstd::Vector<std::int8_t>(static_cast<std::size_t>(n), 0));
+        KeyRefusal refusal;
         for (std::int64_t i = 0; i < n; ++i) {
             if (col.is_null(i)) continue;
-            auto it = uniq_idx_.find(row_key(one, i));
+            auto it = uniq_idx_.find(row_key(one, i, refusal));
             if (it != uniq_idx_.end())
                 dummies[static_cast<std::size_t>(it->second)]
                        [static_cast<std::size_t>(i)] = 1;
         }
+        if (refusal.refused()) co_return refusal.error();
         Morsel out;
         out.rows = n;
         for (std::size_t k = 0; k < m->columns.size(); ++k) {
@@ -2084,46 +2198,59 @@ class ToDummiesCursor : public Cursor {
     }
 
    private:
-    coro::CoroTask<void> build(std::int64_t max_rows) {
-        ci_ = require_col(sch_, column_, "to_dummies");
+    coro::CoroTask<dstd::Result<void>> build(std::int64_t max_rows) {
+        auto at = require_col(sch_, column_, "to_dummies");
+        if (!at) co_return at.error();
+        ci_ = *at;
 
         dstd::HashSet<dstd::String> seen;
         dstd::Vector<Series> chunks;
+        KeyRefusal refusal;
         for (;;) {
-            auto m = co_await first_->next(max_rows);
+            auto task = first_->next(max_rows);
+            auto m = co_await std::move(task).or_fail();
             if (!m) break;
             const Series& col = m->columns[static_cast<std::size_t>(ci_)];
             dstd::Vector<Series> one;
             one.push_back(col.share());
             dstd::Vector<std::int64_t> keep;
             for (std::int64_t i = 0; i < m->rows; ++i)
-                if (!col.is_null(i) && seen.insert(row_key(one, i)).second)
+                if (!col.is_null(i) &&
+                    seen.insert(row_key(one, i, refusal)).second)
                     keep.push_back(i);
+            if (refusal.refused()) co_return refusal.error();
             if (!keep.empty()) chunks.push_back(col.take(keep));
-            spool_.add(std::move(m->columns), m->rows);
+            auto added = spool_.add(std::move(m->columns), m->rows);
+            if (!added) co_return added.error();
         }
         first_.reset();
         // Distinct values, ascending (Series::unique sorts), matching eager.
         Series uniq;
-        if (!chunks.empty())
-            uniq = common::unwrap(concat_columns(column_ptrs(chunks)))
-                       .unique()
-                       .materialize();
+        if (!chunks.empty()) {
+            auto joined = concat_columns(column_ptrs(chunks));
+            if (!joined) co_return joined.error();
+            uniq = joined->unique().materialize();
+        }
         const std::int64_t d = uniq.length();
         dstd::Vector<Series> one;
         one.push_back(uniq.share());
         for (std::int64_t u = 0; u < d; ++u)
-            uniq_idx_.emplace(row_key(one, u), static_cast<int>(u));
+            uniq_idx_.emplace(row_key(one, u, refusal), static_cast<int>(u));
+        if (refusal.refused()) co_return refusal.error();
         for (std::size_t k = 0; k < sch_.size(); ++k) {
             if (static_cast<int>(k) != ci_) {
                 produced_.push_back(sch_[k]);
                 continue;
             }
             for (std::int64_t u = 0; u < d; ++u)
-                produced_.push_back(column_ + "_" + cell_to_string(uniq, u));
+                produced_.push_back(
+                    dstd::fmt<"{}_{}">(column_, cell_to_string(uniq, u)));
         }
-        pass2_ = spool_.reader();
+        auto replay = spool_.reader();
+        if (!replay) co_return replay.error();
+        pass2_ = std::move(*replay);
         built_ = true;
+        co_return dstd::Result<void>{};
     }
 
     dstd::UniquePtr<Cursor> first_, pass2_;
@@ -2154,12 +2281,13 @@ class TakeCursor : public Cursor {
                           });
     }
 
-    coro::CoroTask<dstd::Optional<Morsel>> next(
-        std::int64_t max_rows) override {
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
         if (!done_) {
             done_ = true;
-            auto result = co_await gather(max_rows);
-            if (result) chunks_.set(std::move(*result));
+            auto gathering = gather(max_rows);
+            auto result = co_await std::move(gathering);
+            if (!result) co_return result.error();
+            if (*result) chunks_.set(std::move(**result));
         }
         if (chunks_.empty()) co_return dstd::nullopt;
         co_return chunks_.next(max_rows, output_share(budget_));
@@ -2167,13 +2295,14 @@ class TakeCursor : public Cursor {
 
    private:
     // Every taken row, in the order of the indices, as one morsel.
-    coro::CoroTask<dstd::Optional<Morsel>> gather(std::int64_t max_rows) {
+    coro::CoroTask<MorselResult> gather(std::int64_t max_rows) {
         dstd::Vector<dstd::Vector<Series>> pieces;
         dstd::Vector<std::int64_t> where;
         std::size_t at = 0;
         std::int64_t base = 0;
         for (;;) {
-            auto m = co_await in_->next(max_rows);
+            auto task = in_->next(max_rows);
+            auto m = co_await std::move(task).or_fail();
             if (!m) break;
             const std::int64_t end = base + m->rows;
             dstd::Vector<std::int64_t> local;
@@ -2193,7 +2322,7 @@ class TakeCursor : public Cursor {
         }
         in_.reset();
         if (where.size() != indices_.size())
-            throw std::out_of_range("take: index out of range");
+            co_return invalid_argument<"take: index out of range">();
         if (pieces.empty()) co_return dstd::nullopt;
         dstd::Vector<std::int64_t> back(where.size());
         for (std::size_t j = 0; j < where.size(); ++j)
@@ -2205,10 +2334,11 @@ class TakeCursor : public Cursor {
             dstd::Vector<const Series*> parts;
             parts.reserve(pieces.size());
             for (auto& pc : pieces) parts.push_back(&pc[c]);
-            out.columns.push_back(
-                common::unwrap(concat_columns(parts)).take(back));
+            auto joined = concat_columns(parts);
+            if (!joined) co_return joined.error();
+            out.columns.push_back(joined->take(back));
         }
-        co_return out;
+        co_return std::move(out);
     }
 
     dstd::UniquePtr<Cursor> in_;
@@ -2230,21 +2360,31 @@ bool can_carry_rest(const LazyFrame& lf);
 
 // The plan `other` as a cursor whose morsels end in a rest column when
 // `rest`, and carry none when not.
-dstd::UniquePtr<Cursor> concat_side(const LazyFrame& other, bool rest);
+CursorResult concat_side(const LazyFrame& other, bool rest);
 
 // The right side's rest column while it passes through a join, apart from
 // the left one's.
 constexpr dstd::StringView RIGHT_REST_COLUMN = "__rest_right";
 
+// A stream that gives `error` and ends.
+coro::AsyncGenerator<dstd::Result<DataFrame>> failed_stream(dstd::Error error) {
+    co_yield dstd::Result<DataFrame>(std::move(error));
+}
+
 // `cursor`'s morsels as frames named `names`.
-coro::AsyncGenerator<DataFrame> named_frames(dstd::UniquePtr<Cursor> cursor,
-                                             dstd::Vector<dstd::String> names,
-                                             std::int64_t rows) {
+coro::AsyncGenerator<dstd::Result<DataFrame>> named_frames(
+    dstd::UniquePtr<Cursor> cursor, dstd::Vector<dstd::String> names,
+    std::int64_t rows) {
     for (;;) {
-        auto m = co_await cursor->next(rows);
-        if (!m) break;
-        DataFrame f = frame_of(std::move(m->columns), names);
-        co_yield std::move(f);
+        auto task = cursor->next(rows);
+        auto m = co_await std::move(task);
+        if (!m) {
+            co_yield dstd::Result<DataFrame>(m.error());
+            break;
+        }
+        if (!*m) break;
+        DataFrame f = frame_of(std::move((*m)->columns), names);
+        co_yield dstd::Result<DataFrame>(std::move(f));
     }
 }
 
@@ -2279,15 +2419,25 @@ class JoinCursor : public Cursor {
         return governor_.reserved();
     }
 
-    coro::CoroTask<dstd::Optional<Morsel>> next(
-        std::int64_t max_rows) override {
-        if (!join_ && !grace_ && !cross_) co_await build(max_rows);
-        if (grace_) co_return co_await next_spilled(max_rows);
-        if (cross_) co_return co_await next_cross(max_rows);
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
+        if (!join_ && !grace_ && !cross_) {
+            auto building = build(max_rows);
+            auto built = co_await std::move(building);
+            if (!built) co_return built.error();
+        }
+        if (grace_) {
+            auto spilled = next_spilled(max_rows);
+            co_return co_await std::move(spilled);
+        }
+        if (cross_) {
+            auto crossing = next_cross(max_rows);
+            co_return co_await std::move(crossing);
+        }
         // A left morsel can match many right rows, so the probe takes as many
         // left rows as the output share allows from what the last ones made.
         while (in_) {
-            const auto fill_ok = co_await feed_.fill(*in_, max_rows);
+            auto fill_task = feed_.fill(*in_, max_rows);
+            const auto fill_ok = co_await std::move(fill_task).or_fail();
             if (!fill_ok) {
                 in_.reset();
                 break;
@@ -2297,20 +2447,29 @@ class JoinCursor : public Cursor {
             if (templates_.empty())
                 for (const Series& c : left.columns)
                     templates_.push_back(c.share());
-            DataFrame out = join_->probe(left);
+            auto probed = join_->probe(left);
+            if (!probed) co_return probed.error();
+            DataFrame out = std::move(*probed);
             gov_.observe(part.rows, out.num_rows(),
                          spill::columns_bytes(flat_columns(out)));
-            if (out.num_rows() > 0) co_return morsel_of(finish(std::move(out)));
+            if (out.num_rows() > 0) co_return finish_morsel(std::move(out));
         }
         if (!flushed_) {
             flushed_ = true;
-            if (templates_.empty()) templates_ = null_templates();
+            if (templates_.empty()) {
+                auto made = null_templates();
+                if (!made) co_return made.error();
+                templates_ = std::move(*made);
+            }
             DataFrame rest = join_->flush(sch_, templates_);
-            if (rest.num_rows() > 0)
-                flush_.set(morsel_of(finish(std::move(rest))));
+            if (rest.num_rows() > 0) {
+                auto done = finish_morsel(std::move(rest));
+                if (!done) co_return done.error();
+                flush_.set(std::move(**done));
+            }
         }
-        if (flush_.empty()) co_return dstd::nullopt;
-        co_return flush_.next(max_rows, output_share(budget_));
+        if (flush_.empty()) co_return MorselResult(dstd::nullopt);
+        co_return MorselResult(flush_.next(max_rows, output_share(budget_)));
     }
 
    private:
@@ -2318,19 +2477,27 @@ class JoinCursor : public Cursor {
     // the budget.
     // The right plan's frames. With a right rest column they keep it, as
     // RIGHT_REST_COLUMN, so every frame has the same columns.
-    coro::AsyncGenerator<DataFrame> right_frames(std::int64_t max_rows) const {
+    coro::AsyncGenerator<dstd::Result<DataFrame>> right_frames(
+        std::int64_t max_rows) const {
         if (!right_rest_) return other_.stream(max_rows);
         dstd::Vector<dstd::String> names = other_.schema();
         names.emplace_back(RIGHT_REST_COLUMN);
-        return named_frames(concat_side(other_, true), std::move(names),
-                            max_rows);
+        auto side = concat_side(other_, true);
+        if (!side) return failed_stream(side.error());
+        return named_frames(std::move(*side), std::move(names), max_rows);
     }
 
     // A join output with the right rest fields moved into the rest column. A
     // right field gets the join suffix when the left can carry undeclared
     // columns (any batch may hold one of that name), else when a left plan
     // column has its name; a name that is still taken is an error.
-    DataFrame finish(DataFrame f) const {
+    MorselResult finish_morsel(DataFrame f) const {
+        auto done = finish(std::move(f));
+        if (!done) return done.error();
+        return MorselResult(morsel_of(std::move(*done)));
+    }
+
+    dstd::Result<DataFrame> finish(DataFrame f) const {
         if (!right_rest_) return rest_to_back(std::move(f));
         const int r = column_index_of(f.names, dstd::String(RIGHT_REST_COLUMN));
         if (r < 0) return rest_to_back(std::move(f));
@@ -2352,10 +2519,9 @@ class JoinCursor : public Cursor {
                 std::find(sch_.begin(), sch_.end(), name) != sch_.end())
                 name += sfx;
             if (taken(name))
-                throw std::invalid_argument(
-                    ("join: column '" + name +
-                     "' is taken on the left; rename or drop one of them")
-                        .c_str());
+                return invalid_argument<
+                    "join: column '{}' is taken on the left; rename or drop "
+                    "one of them">(name);
             fields.names.push_back(std::move(name));
             fields.columns.push_back(right.columns[i].share());
         }
@@ -2365,16 +2531,17 @@ class JoinCursor : public Cursor {
         return rest_to_back(std::move(f));
     }
 
-    coro::CoroTask<void> build(std::int64_t max_rows) {
+    coro::CoroTask<dstd::Result<void>> build(std::int64_t max_rows) {
         if (how_ == JoinHow::Cross && has_cap(budget_) && !right_rest_) {
-            co_await build_cross(max_rows);
-            co_return;
+            auto crossing = build_cross(max_rows);
+            co_return co_await std::move(crossing);
         }
         if (!right_rest_ &&
             (budget_ == memory::NO_SPILL_BUDGET || how_ == JoinHow::Cross)) {
-            DataFrame right = co_await other_.collect();
-            co_await start_in_memory(std::move(right));
-            co_return;
+            auto collecting = other_.collect();
+            DataFrame right = co_await std::move(collecting).or_fail();
+            auto starting = start_in_memory(std::move(right));
+            co_return co_await std::move(starting);
         }
         const bool spill =
             budget_ != memory::NO_SPILL_BUDGET && how_ != JoinHow::Cross;
@@ -2382,36 +2549,53 @@ class JoinCursor : public Cursor {
         std::uint64_t bytes = 0;
         auto gen = right_frames(max_rows);
         for (;;) {
-            auto df = co_await gen.next();
-            if (!df) break;
+            auto next_df = co_await gen.next();
+            if (!next_df) break;
+            if (!*next_df) co_return next_df->error();
+            DataFrame* df = &**next_df;
             if (grace_) {
-                grace_->add_right(*df);
+                auto added = grace_->add_right(*df);
+                if (!added) co_return added;
                 continue;
             }
             bytes += spill::columns_bytes(flat_columns(*df));
             parts.push_back(std::move(*df));
             if (!spill || (bytes <= budget_ && governor_.check(bytes) == 0))
                 continue;
-            grace_ = dstd::make_unique<GraceJoin>(
-                sch_, parts.front().names, left_on_, right_on_, how_, suffix_,
-                budget_, nulls_equal_);
-            for (const DataFrame& p : parts) grace_->add_right(p);
+            auto made =
+                GraceJoin::make(sch_, parts.front().names, left_on_, right_on_,
+                                how_, suffix_, budget_, nulls_equal_);
+            if (!made) co_return made.error();
+            grace_ = std::move(*made);
+            for (const DataFrame& p : parts) {
+                auto added = grace_->add_right(p);
+                if (!added) co_return added;
+            }
             parts.clear();
             governor_.spilled(0);
         }
-        if (grace_) co_return;
-        if (parts.empty()) parts.push_back(empty_right());
-        co_await start_in_memory(merge_morsels(parts));
+        if (grace_) co_return dstd::Result<void>{};
+        if (parts.empty()) {
+            auto empty = empty_right();
+            if (!empty) co_return empty.error();
+            parts.push_back(std::move(*empty));
+        }
+        auto merged = merge_morsels(parts);
+        if (!merged) co_return merged.error();
+        auto starting = start_in_memory(std::move(*merged));
+        co_return co_await std::move(starting);
     }
 
     // The right side of no rows, typed from the right plan, for a right plan
     // that sent no frame to take the columns from.
-    DataFrame empty_right() const {
+    dstd::Result<DataFrame> empty_right() const {
         DataFrame f;
         for (const Field& field : other_.output_schema().fields) {
             f.names.push_back(field.name);
-            f.columns.push_back(null_column_of(
-                field, 0, "join", "the right side produced no rows"));
+            auto column = null_column_of(field, 0, "join",
+                                         "the right side produced no rows");
+            if (!column) return column.error();
+            f.columns.push_back(std::move(*column));
         }
         if (right_rest_) {
             f.names.emplace_back(RIGHT_REST_COLUMN);
@@ -2435,7 +2619,7 @@ class JoinCursor : public Cursor {
     // chunk at a time, in slices of the block that make an output share. The
     // spool is read once per block, so the rows of a block come out by right
     // chunk, not by left row.
-    coro::CoroTask<void> build_cross(std::int64_t max_rows) {
+    coro::CoroTask<dstd::Result<void>> build_cross(std::int64_t max_rows) {
         const std::uint64_t chunk_bytes =
             std::max<std::uint64_t>(budget_ / share::SPOOL, 1);
         dstd::Vector<DataFrame> parts;
@@ -2443,8 +2627,10 @@ class JoinCursor : public Cursor {
         std::int64_t rows = 0;
         auto gen = other_.stream(max_rows);
         for (;;) {
-            auto df = co_await gen.next();
-            if (!df) break;
+            auto next_df = co_await gen.next();
+            if (!next_df) break;
+            if (!*next_df) co_return next_df->error();
+            DataFrame* df = &**next_df;
             bytes += spill::columns_bytes(flat_columns(*df));
             rows += df->num_rows();
             if (!cross_) {
@@ -2459,49 +2645,62 @@ class JoinCursor : public Cursor {
                 for (DataFrame& p : parts) {
                     g_cross_spooled_rows.fetch_add(p.num_rows(),
                                                    std::memory_order_relaxed);
-                    cross_right_->add(flat_columns(p), p.num_rows());
+                    auto added =
+                        cross_right_->add(flat_columns(p), p.num_rows());
+                    if (!added) co_return added;
                 }
                 parts.clear();
                 continue;
             }
             g_cross_spooled_rows.fetch_add(df->num_rows(),
                                            std::memory_order_relaxed);
-            cross_right_->add(flat_columns(*df), df->num_rows());
+            auto added = cross_right_->add(flat_columns(*df), df->num_rows());
+            if (!added) co_return added;
         }
         if (!cross_) {
-            if (parts.empty()) parts.push_back(empty_right());
-            co_await start_in_memory(merge_morsels(parts));
-            co_return;
+            if (parts.empty()) {
+                auto empty = empty_right();
+                if (!empty) co_return empty.error();
+                parts.push_back(std::move(*empty));
+            }
+            auto merged = merge_morsels(parts);
+            if (!merged) co_return merged.error();
+            auto starting = start_in_memory(std::move(*merged));
+            co_return co_await std::move(starting);
         }
         const std::uint64_t right_row =
             bytes / static_cast<std::uint64_t>(std::max<std::int64_t>(rows, 1));
         gov_.seed(static_cast<double>(std::max<std::uint64_t>(
                       chunk_bytes / std::max<std::uint64_t>(right_row, 1), 1)),
                   2 * right_row + 64);
+        co_return dstd::Result<void>{};
     }
 
     // The next chunk of the spooled right side, or none past its end.
-    coro::CoroTask<dstd::Optional<DataFrame>> next_right_chunk(
-        std::int64_t max_rows) {
+    coro::CoroTask<FrameResult> next_right_chunk(std::int64_t max_rows) {
         dstd::Vector<DataFrame> parts;
         std::uint64_t bytes = 0;
         while (bytes <= cross_chunk_bytes_) {
-            auto m = co_await right_reader_->next(max_rows);
+            auto task = right_reader_->next(max_rows);
+            auto m = co_await std::move(task).or_fail();
             if (!m) break;
             parts.push_back(frame_of(std::move(m->columns), cross_names_));
             bytes += spill::columns_bytes(flat_columns(parts.back()));
         }
         if (parts.empty()) co_return dstd::nullopt;
-        co_return merge_morsels(parts);
+        auto merged = merge_morsels(parts);
+        if (!merged) co_return merged.error();
+        co_return dstd::Optional<DataFrame>(std::move(*merged));
     }
 
     // The next block of the left, or false at its end.
-    coro::CoroTask<bool> next_left_block(std::int64_t max_rows) {
+    coro::CoroTask<dstd::Result<bool>> next_left_block(std::int64_t max_rows) {
         dstd::Vector<DataFrame> parts;
         std::uint64_t bytes = 0;
         for (;;) {
             if (bytes >= cross_block_bytes_ || !in_) break;
-            const bool filled = co_await feed_.fill(*in_, max_rows);
+            auto fill_task = feed_.fill(*in_, max_rows);
+            const bool filled = co_await std::move(fill_task).or_fail();
             if (!filled) break;
             Morsel part = feed_.take(feed_.remaining());
             parts.push_back(frame_of(std::move(part.columns), sch_));
@@ -2511,60 +2710,79 @@ class JoinCursor : public Cursor {
             in_.reset();
             co_return false;
         }
-        block_ = merge_morsels(parts);
+        auto merged = merge_morsels(parts);
+        if (!merged) co_return merged.error();
+        block_ = std::move(*merged);
         block_at_ = 0;
         co_return true;
     }
 
-    coro::CoroTask<dstd::Optional<Morsel>> next_cross(std::int64_t max_rows) {
+    coro::CoroTask<MorselResult> next_cross(std::int64_t max_rows) {
         while (true) {
             if (pair_ && block_at_ < block_->num_rows()) {
                 const std::int64_t k = std::min(gov_.rows(max_rows),
                                                 block_->num_rows() - block_at_);
                 const DataFrame slice = block_->slice(block_at_, k);
                 block_at_ += k;
-                DataFrame out = pair_->probe(slice);
+                auto probed = pair_->probe(slice);
+                if (!probed) co_return probed.error();
+                DataFrame out = std::move(*probed);
                 gov_.observe(k, out.num_rows(),
                              spill::columns_bytes(flat_columns(out)));
-                if (out.num_rows() > 0)
-                    co_return morsel_of(finish(std::move(out)));
+                if (out.num_rows() > 0) co_return finish_morsel(std::move(out));
                 continue;
             }
             // The block is through with this chunk: the next chunk, or, past
             // the last one, the next block.
             if (block_ && right_reader_) {
+                auto chunk_task = next_right_chunk(max_rows);
                 dstd::Optional<DataFrame> chunk =
-                    co_await next_right_chunk(max_rows);
+                    co_await std::move(chunk_task).or_fail();
                 if (chunk) {
-                    pair_.emplace(std::move(*chunk), left_on_, right_on_, how_,
-                                  suffix_, nulls_equal_);
+                    auto pair =
+                        HashJoin::make(std::move(*chunk), left_on_, right_on_,
+                                       how_, suffix_, nulls_equal_);
+                    if (!pair) co_return pair.error();
+                    pair_.emplace(std::move(*pair));
                     block_at_ = 0;
                     continue;
                 }
             }
             pair_.reset();
-            const auto next_left_block_ok = co_await next_left_block(max_rows);
-            if (!next_left_block_ok) co_return dstd::nullopt;
-            right_reader_ = cross_right_->reader();
+            auto block_task = next_left_block(max_rows);
+            const auto next_left_block_ok = co_await std::move(block_task);
+            if (!next_left_block_ok.has_value())
+                co_return next_left_block_ok.error();
+            if (!next_left_block_ok.value()) co_return dstd::nullopt;
+            auto reader = cross_right_->reader();
+            if (!reader) co_return reader.error();
+            right_reader_ = std::move(*reader);
         }
     }
 
-    coro::CoroTask<void> start_in_memory(DataFrame right) {
-        if (dstd::Optional<Expr> pred = build_side_predicate(right))
-            co_await in_->narrow(*pred);
+    coro::CoroTask<dstd::Result<void>> start_in_memory(DataFrame right) {
+        auto predicate = build_side_predicate(right);
+        if (!predicate) co_return predicate.error();
+        if (dstd::Optional<Expr> pred = std::move(*predicate)) {
+            auto narrowing = in_->narrow(*pred);
+            co_await std::move(narrowing);
+        }
         if (how_ == JoinHow::Cross && has_cap(budget_) && right.num_rows() > 0)
             gov_.seed(static_cast<double>(right.num_rows()),
                       2 * (spill::columns_bytes(flat_columns(right)) /
                            static_cast<std::uint64_t>(right.num_rows())) +
                           64);
-        join_.emplace(std::move(right), left_on_, right_on_, how_, suffix_,
-                      nulls_equal_);
-        co_return;
+        auto made = HashJoin::make(std::move(right), left_on_, right_on_, how_,
+                                   suffix_, nulls_equal_);
+        if (!made) co_return made.error();
+        join_.emplace(std::move(*made));
+        co_return dstd::Result<void>{};
     }
 
-    coro::CoroTask<dstd::Optional<Morsel>> next_spilled(std::int64_t max_rows) {
+    coro::CoroTask<MorselResult> next_spilled(std::int64_t max_rows) {
         while (in_) {
-            auto m = co_await in_->next(max_rows);
+            auto task = in_->next(max_rows);
+            auto m = co_await std::move(task).or_fail();
             if (!m) {
                 in_.reset();
                 break;
@@ -2573,18 +2791,24 @@ class JoinCursor : public Cursor {
             if (templates_.empty())
                 for (const Series& c : left.columns)
                     templates_.push_back(c.share());
-            grace_->add_left(left);
+            auto added = grace_->add_left(left);
+            if (!added) co_return added.error();
         }
         if (!started_) {
             started_ = true;
-            if (templates_.empty()) templates_ = null_templates();
+            if (templates_.empty()) {
+                auto made = null_templates();
+                if (!made) co_return made.error();
+                templates_ = std::move(*made);
+            }
             dstd::Vector<Series> shared;
             for (const Series& t : templates_) shared.push_back(t.share());
             grace_->start(std::move(shared));
         }
-        auto out = co_await grace_->next(max_rows);
-        if (!out) co_return dstd::nullopt;
-        co_return morsel_of(finish(std::move(*out)));
+        auto grace_task = grace_->next(max_rows);
+        auto out = co_await std::move(grace_task).or_fail();
+        if (!out) co_return MorselResult(dstd::nullopt);
+        co_return finish_morsel(std::move(*out));
     }
 
     // A left row whose key is not on the build side is dropped by an Inner,
@@ -2595,10 +2819,11 @@ class JoinCursor : public Cursor {
     // names it in its error. Nothing is offered when null keys match: the
     // build keys leave out their nulls, and a left row with a null key must
     // still reach the probe.
-    dstd::Optional<Expr> build_side_predicate(const DataFrame& right) const {
+    dstd::Result<dstd::Optional<Expr>> build_side_predicate(
+        const DataFrame& right) const {
         if (nulls_equal_ || (how_ != JoinHow::Inner && how_ != JoinHow::Right &&
                              how_ != JoinHow::Semi))
-            return dstd::nullopt;
+            return dstd::Optional<Expr>(dstd::nullopt);
         dstd::Optional<Expr> pred;
         for (std::size_t i = 0; i < left_on_.size() && i < right_on_.size();
              ++i) {
@@ -2616,10 +2841,13 @@ class JoinCursor : public Cursor {
             if (values.length() <= NARROW_MAX_KEYS) {
                 one = expr_is_in(col, std::move(values));
             } else if (is_numeric_dispatchable(keys.type())) {
-                one = expr_logical(
-                    LogicalOp::And,
-                    expr_cmp(CmpOp::Ge, col, common::unwrap(values.min())),
-                    expr_cmp(CmpOp::Le, col, common::unwrap(values.max())));
+                auto lo = values.min();
+                if (!lo) return lo.error();
+                auto hi = values.max();
+                if (!hi) return hi.error();
+                one =
+                    expr_logical(LogicalOp::And, expr_cmp(CmpOp::Ge, col, *lo),
+                                 expr_cmp(CmpOp::Le, col, *hi));
             } else {
                 continue;
             }
@@ -2632,12 +2860,15 @@ class JoinCursor : public Cursor {
     // A typed empty column per left field, for a flush with no left morsel to
     // borrow types from. Refuses a type it cannot rebuild rather than emit a
     // column that has silently lost its parameters.
-    dstd::Vector<Series> null_templates() const {
+    dstd::Result<dstd::Vector<Series>> null_templates() const {
         dstd::Vector<Series> out;
         out.reserve(left_fields_.size());
-        for (const Field& f : left_fields_)
-            out.push_back(
-                null_column_of(f, 1, "join", "the left side produced no rows"));
+        for (const Field& f : left_fields_) {
+            auto column =
+                null_column_of(f, 1, "join", "the left side produced no rows");
+            if (!column) return column.error();
+            out.push_back(std::move(*column));
+        }
         if (has_rest(sch_)) out.push_back(struct_of_length({}, {}, 1));
         return out;
     }
@@ -2683,25 +2914,28 @@ class ConcatCursor : public Cursor {
     ConcatCursor(dstd::UniquePtr<Cursor> in, LazyFrame other, bool rest)
         : in_(std::move(in)), other_(std::move(other)), rest_(rest) {}
 
-    coro::CoroTask<dstd::Optional<Morsel>> next(
-        std::int64_t max_rows) override {
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
         if (in_) {
-            auto m = co_await in_->next(max_rows);
+            auto task = in_->next(max_rows);
+            auto m = co_await std::move(task).or_fail();
             if (m) {
                 m->ordering = Ordering::Unordered;
-                co_return m;
+                co_return MorselResult(std::move(m));
             }
             in_.reset();
-            right_ = concat_side(other_, rest_);
+            auto side = concat_side(other_, rest_);
+            if (!side) co_return side.error();
+            right_ = std::move(*side);
         }
-        if (!right_) co_return dstd::nullopt;
-        auto m = co_await right_->next(max_rows);
+        if (!right_) co_return MorselResult(dstd::nullopt);
+        auto right_task = right_->next(max_rows);
+        auto m = co_await std::move(right_task).or_fail();
         if (!m) {
             right_.reset();
-            co_return dstd::nullopt;
+            co_return MorselResult(dstd::nullopt);
         }
         m->ordering = Ordering::Unordered;
-        co_return m;
+        co_return MorselResult(std::move(m));
     }
 
    private:
@@ -2719,14 +2953,17 @@ class TapCursor : public Cursor {
               const dstd::SharedPtr<const detail::Tap>& tap)
         : in_(std::move(in)), sch_(std::move(sch)), run_(tap->open()) {}
 
-    coro::CoroTask<dstd::Optional<Morsel>> next(
-        std::int64_t max_rows) override {
-        if (!in_) co_return dstd::nullopt;
-        auto m = co_await in_->next(max_rows);
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
+        if (!in_) co_return MorselResult(dstd::nullopt);
+        auto task = in_->next(max_rows);
+        auto m = co_await std::move(task).or_fail();
         if (!m) {
             in_.reset();
-            if (run_.end) run_.end();
-            co_return dstd::nullopt;
+            if (run_.end) {
+                auto ended = run_.end();
+                if (!ended) co_return ended.error();
+            }
+            co_return MorselResult(dstd::nullopt);
         }
         if (run_.rows) {
             DataFrame f;
@@ -2737,10 +2974,12 @@ class TapCursor : public Cursor {
                     f.names.emplace_back(m->dyn->intern->resolve(id));
             }
             for (const Series& c : m->columns) f.columns.push_back(c.share());
-            unpack_rest(f);
-            run_.rows(f);
+            auto unpacked = unpack_rest(f);
+            if (!unpacked) co_return unpacked.error();
+            auto shown = run_.rows(f);
+            if (!shown) co_return shown.error();
         }
-        co_return m;
+        co_return MorselResult(std::move(m));
     }
 
    private:
@@ -2773,27 +3012,29 @@ class FrameOpCursor : public Cursor {
     // The registry op takes its input as one frame. The parts of the input
     // past a quarter of the budget are mapped from a spill file, so the op
     // sees one frame the system can page out; the result is held whole.
-    coro::CoroTask<dstd::Optional<Morsel>> next(
-        std::int64_t max_rows) override {
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
         if (per_morsel_) {
             // The op's rows depend only on their own row: one morsel in, one
             // morsel out, nothing held.
-            auto m = co_await in_->next(max_rows);
-            if (!m) co_return dstd::nullopt;
+            auto task = in_->next(max_rows);
+            auto m = co_await std::move(task).or_fail();
+            if (!m) co_return MorselResult(dstd::nullopt);
             dstd::Vector<dstd::String> names = sch_;
             if (auto produced = in_->out_names();
                 produced && !produced->empty())
                 names = std::move(*produced);
             DataFrame in = frame_of(std::move(m->columns), names);
-            DataFrame out =
-                co_await run_frame_op(op_, *args_, std::move(in), name_, names);
+            auto running =
+                run_frame_op(op_, *args_, std::move(in), name_, names);
+            DataFrame out = co_await std::move(running).or_fail();
             out_names_ = out.names;
-            co_return morsel_of(std::move(out));
+            co_return MorselResult(morsel_of(std::move(out)));
         }
         if (!done_) {
             done_ = true;
-            DataFrame primary = co_await drain_cursor(
-                *in_, sch_, in_fields_, max_rows, name_.c_str(), hold_);
+            auto draining = drain_cursor(*in_, sch_, in_fields_, max_rows,
+                                         name_.c_str(), hold_);
+            DataFrame primary = co_await std::move(draining).or_fail();
             // A plan whose columns are only known once it runs has no static
             // schema; its cursor names them.
             dstd::Vector<dstd::String> names = sch_;
@@ -2802,13 +3043,14 @@ class FrameOpCursor : public Cursor {
                 names = std::move(*produced);
             in_.reset();
             primary.names = names;
-            DataFrame out = co_await run_frame_op(
-                op_, *args_, std::move(primary), name_, names);
+            auto running =
+                run_frame_op(op_, *args_, std::move(primary), name_, names);
+            DataFrame out = co_await std::move(running).or_fail();
             out_names_ = out.names;
             chunks_.set(morsel_of(std::move(out)));
         }
-        if (chunks_.empty()) co_return dstd::nullopt;
-        co_return chunks_.next(max_rows, memory::NO_SPILL_BUDGET);
+        if (chunks_.empty()) co_return MorselResult(dstd::nullopt);
+        co_return MorselResult(chunks_.next(max_rows, memory::NO_SPILL_BUDGET));
     }
 
     dstd::Optional<dstd::Vector<dstd::String>> out_names() const override {
@@ -3034,7 +3276,18 @@ struct PlanAccess {
                           std::uint64_t memory_budget) {
         return LazyFrame(std::move(source), std::move(ops), memory_budget);
     }
-    static coro::CoroTask<DataFrame> run_in_memory(
+    static LazyFrame failed(const LazyFrame& lf, dstd::Error error) {
+        return lf.failed(std::move(error));
+    }
+    static LazyFrame with_error_of(const LazyFrame& lf,
+                                   const LazyFrame& other) {
+        return lf.with_error_of(other);
+    }
+    static const dstd::SharedPtr<const dstd::Error>& error(
+        const LazyFrame& lf) {
+        return lf.error_;
+    }
+    static coro::CoroTask<dstd::Result<DataFrame>> run_in_memory(
         DataFrame df, dstd::Vector<dstd::SharedPtr<const LazyOp>> ops) {
         return LazyFrame::run_ops_in_memory(std::move(df), std::move(ops));
     }
@@ -3106,7 +3359,7 @@ dstd::HashMap<dstd::String, dstd::String> rename_map(
 
 // The names after a by-name rename. Two columns left sharing a name is an
 // error, not a silent overwrite.
-dstd::Vector<dstd::String> renamed_names(
+dstd::Result<dstd::Vector<dstd::String>> renamed_names(
     dstd::Vector<dstd::String> in,
     const dstd::HashMap<dstd::String, dstd::String>& map) {
     dstd::HashSet<dstd::String> seen;
@@ -3114,12 +3367,21 @@ dstd::Vector<dstd::String> renamed_names(
         auto it = map.find(n);
         if (it != map.end()) n = it->second;
         if (!seen.insert(n).second)
-            throw std::invalid_argument(
-                ("rename_columns: column name '" + n +
-                 "' is used by two columns after the rename")
-                    .c_str());
+            return invalid_argument<
+                "rename_columns: column name '{}' is used by two columns "
+                "after the rename">(n);
     }
     return in;
+}
+
+// The names after a rename for a schema, which keeps them when two columns
+// would share one: the rename fails when it runs, and the builder has
+// already refused it.
+dstd::Vector<dstd::String> renamed_names_or_same(
+    dstd::Vector<dstd::String> in,
+    const dstd::HashMap<dstd::String, dstd::String>& map) {
+    auto renamed = renamed_names(in, map);
+    return renamed ? std::move(*renamed) : std::move(in);
 }
 
 dstd::Vector<dstd::String> dropped_names(
@@ -3154,7 +3416,8 @@ dstd::Vector<dstd::String> out_schema(const LazyOp& op,
                 return dropped_names(std::move(in), o.names);
             },
             [&](const RenameColumnsOp& o) {
-                return renamed_names(std::move(in), rename_map(o.from, o.to));
+                return renamed_names_or_same(std::move(in),
+                                             rename_map(o.from, o.to));
             },
             [&](const WithColumnOp& o) {
                 if (std::find(in.begin(), in.end(), o.name) == in.end())
@@ -3205,8 +3468,9 @@ dstd::Vector<dstd::String> out_schema(const LazyOp& op,
             [&](const FilterMaskOp&) { return in; },
             [&](const SortByMultiOp&) { return in; },
             [&](const JoinOp& o) {
-                return join_out_names(in, o.other.schema(), o.left_on,
-                                      o.right_on, o.how, o.suffix);
+                auto joined = join_out_names(in, o.other.schema(), o.left_on,
+                                             o.right_on, o.how, o.suffix);
+                return joined ? std::move(*joined) : in;
             },
             [&](const ConcatOp&) { return in; },
             [&](const TapOp&) { return in; },
@@ -3256,7 +3520,7 @@ dstd::Vector<Field> group_agg_fields(const Schema& in,
 // Mirrors dfops::unpivot's value-column type resolution (batch_ops.cpp):
 // value_vars sharing one type keep it exactly (params included); otherwise,
 // if every value_var is numeric, the common type is Int64 unless any is a
-// float, else the plan is invalid and collect() will throw (report Unknown).
+// float, else the plan is invalid and collect() will fail (report Unknown).
 DataType unpivot_value_type(const Schema& in,
                             const dstd::Vector<dstd::String>& value_vars) {
     if (value_vars.empty()) return scalar(TypeId::Unknown);
@@ -3323,8 +3587,8 @@ Schema out_types(const LazyOp& op, Schema in) {
                 dstd::Vector<dstd::String> names;
                 names.reserve(in.fields.size());
                 for (const Field& f : in.fields) names.push_back(f.name);
-                names =
-                    renamed_names(std::move(names), rename_map(o.from, o.to));
+                names = renamed_names_or_same(std::move(names),
+                                              rename_map(o.from, o.to));
                 for (std::size_t i = 0; i < names.size(); ++i)
                     in.fields[i].name = std::move(names[i]);
                 return in;
@@ -3333,7 +3597,9 @@ Schema out_types(const LazyOp& op, Schema in) {
                 dstd::Vector<DataType> types;
                 types.reserve(in.fields.size());
                 for (const Field& f : in.fields) types.push_back(f.type);
-                DataType t = common::unwrap(infer_type(o.expr, types));
+                auto inferred = infer_type(o.expr, types);
+                DataType t =
+                    inferred ? std::move(*inferred) : scalar(TypeId::Unknown);
                 auto it = std::find_if(
                     in.fields.begin(), in.fields.end(),
                     [&](const Field& f) { return f.name == o.name; });
@@ -3417,9 +3683,11 @@ Schema out_types(const LazyOp& op, Schema in) {
             [&](const SortByMultiOp&) { return in; },
             [&](const JoinOp& o) {
                 Schema out;
-                out.fields =
+                auto joined =
                     join_out_fields(in.fields, o.other.output_schema().fields,
                                     o.left_on, o.right_on, o.how, o.suffix);
+                if (!joined) return in;
+                out.fields = std::move(*joined);
                 return out;
             },
             [&](const ConcatOp&) { return in; },
@@ -3472,71 +3740,80 @@ dstd::String describe_op(const LazyOp& op) {
         Overloaded{
             [](const FilterOp&) { return dstd::String("filter"); },
             [](const SelectOp& o) {
-                return "select [" + join_names(o.names) + "]";
+                return dstd::fmt<"select [{}]">(join_names(o.names));
             },
             [](const DropOp& o) {
-                return "drop [" + join_names(o.names) + "]";
+                return dstd::fmt<"drop [{}]">(join_names(o.names));
             },
             [](const RenameColumnsOp& o) {
-                return "rename_columns [" + join_names(o.from) + "] -> [" +
-                       join_names(o.to) + "]";
+                return dstd::fmt<"rename_columns [{}] -> [{}]">(
+                    join_names(o.from), join_names(o.to));
             },
-            [](const WithColumnOp& o) { return "with_column " + o.name; },
+            [](const WithColumnOp& o) {
+                return dstd::fmt<"with_column {}">(o.name);
+            },
             [](const RenameOp& o) {
-                return "rename [" + join_names(o.names) + "]";
+                return dstd::fmt<"rename [{}]">(join_names(o.names));
             },
             [](const SliceOp&) { return dstd::String("slice"); },
             [](const TailOp&) { return dstd::String("tail"); },
             [](const DropNullsOp&) { return dstd::String("drop_nulls"); },
             [](const FillNullOp&) { return dstd::String("fill_null"); },
-            [](const WithRowIndexOp& o) { return "with_row_index " + o.name; },
+            [](const WithRowIndexOp& o) {
+                return dstd::fmt<"with_row_index {}">(o.name);
+            },
             [](const NullCountOp&) { return dstd::String("null_count"); },
-            [](const ExplodeOp& o) { return "explode " + o.column; },
+            [](const ExplodeOp& o) {
+                return dstd::fmt<"explode {}">(o.column);
+            },
             [](const UnpivotOp&) { return dstd::String("unpivot"); },
-            [](const TopkOp& o) { return "topk " + o.name; },
-            [](const GroupByOp& o) { return "group_by " + join_names(o.keys); },
-            [](const SortByOp& o) { return "sort_by " + o.name; },
+            [](const TopkOp& o) { return dstd::fmt<"topk {}">(o.name); },
+            [](const GroupByOp& o) {
+                return dstd::fmt<"group_by {}">(join_names(o.keys));
+            },
+            [](const SortByOp& o) { return dstd::fmt<"sort_by {}">(o.name); },
             [](const UniqueOp& o) {
                 return o.subset.empty()
                            ? dstd::String("unique")
-                           : "unique [" + join_names(o.subset) + "]";
+                           : dstd::fmt<"unique [{}]">(join_names(o.subset));
             },
             [](const SampleOp&) { return dstd::String("sample"); },
             [](const HeadByOp& o) {
-                return "head_by [" + join_names(o.keys) + "] " +
-                       dstd::to_string(o.n);
+                return dstd::fmt<"head_by [{}] {}">(join_names(o.keys), o.n);
             },
             [](const IsDupOp& o) {
                 return dstd::String(o.unique ? "is_unique" : "is_duplicated");
             },
             [](const GroupByDynamicOp& o) {
-                return "group_by_dynamic " + o.time_col;
+                return dstd::fmt<"group_by_dynamic {}">(o.time_col);
             },
-            [](const PivotOp& o) { return "pivot on " + o.on; },
-            [](const ToDummiesOp& o) { return "to_dummies " + o.column; },
+            [](const PivotOp& o) { return dstd::fmt<"pivot on {}">(o.on); },
+            [](const ToDummiesOp& o) {
+                return dstd::fmt<"to_dummies {}">(o.column);
+            },
             [](const DescribeOp&) { return dstd::String("describe"); },
             [](const ReverseOp&) { return dstd::String("reverse"); },
             [](const TakeOp& o) {
-                return "take [" + dstd::to_string(o.indices.size()) + "]";
+                return dstd::fmt<"take [{}]">(o.indices.size());
             },
             [](const FilterMaskOp&) { return dstd::String("filter_mask"); },
             [](const SortByMultiOp& o) {
-                return "sort_by_multi [" + join_names(o.by) + "]";
+                return dstd::fmt<"sort_by_multi [{}]">(join_names(o.by));
             },
             [](const JoinOp& o) {
-                return "join " + dstd::String(join_how_name(o.how)) + " [" +
-                       join_names(o.left_on) + "] = [" +
-                       join_names(o.right_on) + "]" +
-                       (o.nulls_equal ? " nulls_equal" : "");
+                return dstd::fmt<"join {} [{}] = [{}]{}">(
+                    join_how_name(o.how), join_names(o.left_on),
+                    join_names(o.right_on),
+                    o.nulls_equal ? " nulls_equal" : "");
             },
             [](const ConcatOp&) { return dstd::String("concat"); },
             [](const TapOp&) { return dstd::String("tap"); },
             [](const UnnestOp& o) {
-                return "unnest " + o.column +
-                       (o.keep_empty ? " keep_empty" : "");
+                return dstd::fmt<"unnest {}{}">(
+                    o.column, o.keep_empty ? " keep_empty" : "");
             },
-            [](const FrameOp& o) { return "frame_op " + o.name; },
-            [](const NodeOp& o) { return "op " + o.name; }},
+            [](const FrameOp& o) { return dstd::fmt<"frame_op {}">(o.name); },
+            [](const NodeOp& o) { return dstd::fmt<"op {}">(o.name); }},
         op.node);
 }
 
@@ -3978,14 +4255,15 @@ PlanParts absorb_into_source(const dstd::Vector<dstd::String>& source_names,
     auto accept = [&](SourceApplication app, const LazyOp& op,
                       bool schema_changing) {
         if (!app.source || app.source == source)
-            throw std::logic_error(("source planning hook accepted '" +
-                                    describe_op(op) + "' without a new source")
-                                       .c_str());
+            dstd::fatal(
+                "source planning hook accepted an op without a new "
+                "source",
+                describe_op(op).c_str());
         if (schema_changing && app.status != ApplyStatus::Exact)
-            throw std::logic_error(("source planning hook accepted '" +
-                                    describe_op(op) +
-                                    "' as inexact, but it changes the schema")
-                                       .c_str());
+            dstd::fatal(
+                "source planning hook accepted an op as inexact, but "
+                "it changes the schema",
+                describe_op(op).c_str());
         source = std::move(app.source);
         if (schema_changing) names = source->names();
         return app.status;
@@ -4056,7 +4334,7 @@ PlanParts optimize_parts(dstd::SharedPtr<const Source> source,
 // only the columns the outputs read, one CSE-fused eval_many - no intermediate
 // frame. nullopt for any other shape, or a with_column that replaces a column
 // or reads another with_column; the caller then runs op-by-op.
-dstd::Optional<DataFrame> try_fuse_map(
+dstd::Result<dstd::Optional<DataFrame>> try_fuse_map(
     const DataFrame& src,
     const dstd::Vector<dstd::SharedPtr<const LazyOp>>& ops) {
     dstd::Vector<const FilterOp*> filters;
@@ -4122,18 +4400,23 @@ dstd::Optional<DataFrame> try_fuse_map(
     if (!filters.empty()) {
         // A trivial `col <cmp> scalar` filter runs as a direct Series kernel;
         // only a compound predicate goes through the expression compiler.
-        auto mask_of = [&](const Expr& p) -> Series {
+        auto mask_of = [&](const Expr& p) -> dstd::Result<Series> {
             std::int32_t c;
             CmpOp op;
             Scalar rhs;
             if (expr_as_col_cmp(p, &c, &op, &rhs))
                 return src.columns[static_cast<std::size_t>(c)].compare(op,
                                                                         rhs);
-            return common::unwrap(eval(p, column_ptrs(src.columns)));
+            return eval(p, column_ptrs(src.columns));
         };
-        Series mask = mask_of(filters[0]->pred);
-        for (std::size_t i = 1; i < filters.size(); ++i)
-            mask = mask & mask_of(filters[i]->pred);
+        auto first = mask_of(filters[0]->pred);
+        if (!first) return first.error();
+        Series mask = std::move(*first);
+        for (std::size_t i = 1; i < filters.size(); ++i) {
+            auto more = mask_of(filters[i]->pred);
+            if (!more) return more.error();
+            mask = mask & *more;
+        }
         sub = sub.filter(mask);
     }
 
@@ -4146,10 +4429,12 @@ dstd::Optional<DataFrame> try_fuse_map(
         if (expr_col_index(e) < 0 && !expr_as_col_binary(e, &op, &a, &b))
             computed.push_back(expr_remap_cols(e, old_to_new));
     }
-    dstd::Vector<Series> comp =
-        computed.empty()
-            ? dstd::Vector<Series>{}
-            : common::unwrap(eval_many(computed, column_ptrs(sub.columns)));
+    dstd::Vector<Series> comp;
+    if (!computed.empty()) {
+        auto evaluated = eval_many(computed, column_ptrs(sub.columns));
+        if (!evaluated) return evaluated.error();
+        comp = std::move(*evaluated);
+    }
     DataFrame out;
     out.names = sel->names;
     out.columns.reserve(outs.size());
@@ -4183,23 +4468,22 @@ dstd::Optional<DataFrame> try_fuse_map(
             out.columns.push_back(std::move(comp[ci++]));
         }
     }
-    return out;
+    return dstd::Optional<DataFrame>(std::move(out));
 }
 
 // Build the cursor for one op over `in`, resolving names against `sch` (the
 // op's input schema).
 // `own_rest`: the rest column of `sch` comes from the input, not from a
 // partner plan of `op`.
-dstd::UniquePtr<Cursor> make_cursor(const LazyOp& op,
-                                    dstd::UniquePtr<Cursor> in,
-                                    const dstd::Vector<dstd::String>& sch,
-                                    std::uint64_t budget, bool own_rest) {
+CursorResult make_cursor(const LazyOp& op, dstd::UniquePtr<Cursor> in,
+                         const dstd::Vector<dstd::String>& sch,
+                         std::uint64_t budget, bool own_rest) {
     return std::visit(
         Overloaded{
-            [&](const FilterOp& o) -> dstd::UniquePtr<Cursor> {
+            [&](const FilterOp& o) -> CursorResult {
                 return dstd::make_unique<FilterCursor>(std::move(in), o.pred);
             },
-            [&](const SelectOp& o) -> dstd::UniquePtr<Cursor> {
+            [&](const SelectOp& o) -> CursorResult {
                 dstd::Vector<int> idx;
                 idx.reserve(o.names.size());
                 for (const dstd::String& nm : without_rest(o.names))
@@ -4209,16 +4493,16 @@ dstd::UniquePtr<Cursor> make_cursor(const LazyOp& op,
                 return dstd::make_unique<SelectCursor>(std::move(in),
                                                        std::move(idx));
             },
-            [&](const WithColumnOp& o) -> dstd::UniquePtr<Cursor> {
+            [&](const WithColumnOp& o) -> CursorResult {
                 const bool rest = has_rest(sch);
                 return dstd::make_unique<WithColumnCursor>(
                     std::move(in), o.expr, col_index(sch, o.name),
                     sch.size() - (rest ? 1 : 0), rest);
             },
-            [&](const RenameOp&) -> dstd::UniquePtr<Cursor> {
+            [&](const RenameOp&) -> CursorResult {
                 return std::move(in);  // names-only; data passes through
             },
-            [&](const DropOp& o) -> dstd::UniquePtr<Cursor> {
+            [&](const DropOp& o) -> CursorResult {
                 const bool rest = has_rest(sch);
                 dstd::Vector<int> idx;
                 for (std::size_t i = 0; i + (rest ? 1 : 0) < sch.size(); ++i)
@@ -4234,83 +4518,85 @@ dstd::UniquePtr<Cursor> make_cursor(const LazyOp& op,
                     dstd::HashSet<dstd::String>(o.names.begin(),
                                                 o.names.end()));
             },
-            [&](const RenameColumnsOp& o) -> dstd::UniquePtr<Cursor> {
+            [&](const RenameColumnsOp& o) -> CursorResult {
                 if (!has_rest(sch)) return std::move(in);
                 auto map = rename_map(o.from, o.to);
-                dstd::Vector<dstd::String> out = renamed_names(
+                auto out = renamed_names(
                     dstd::Vector<dstd::String>(sch.begin(), sch.end() - 1),
                     map);
+                if (!out) return out.error();
                 return dstd::make_unique<RenameRestCursor>(
                     std::move(in), std::move(map),
-                    dstd::HashSet<dstd::String>(out.begin(), out.end()));
+                    dstd::HashSet<dstd::String>(out->begin(), out->end()));
             },
-            [&](const SliceOp& o) -> dstd::UniquePtr<Cursor> {
+            [&](const SliceOp& o) -> CursorResult {
                 return dstd::make_unique<SliceCursor>(std::move(in), o.offset,
                                                       o.len);
             },
-            [&](const TailOp& o) -> dstd::UniquePtr<Cursor> {
+            [&](const TailOp& o) -> CursorResult {
                 return dstd::make_unique<TailCursor>(std::move(in), o.n);
             },
-            [&](const DropNullsOp&) -> dstd::UniquePtr<Cursor> {
+            [&](const DropNullsOp&) -> CursorResult {
                 return dstd::make_unique<DropNullsCursor>(std::move(in));
             },
-            [&](const FillNullOp& o) -> dstd::UniquePtr<Cursor> {
+            [&](const FillNullOp& o) -> CursorResult {
                 return dstd::make_unique<FillNullCursor>(std::move(in), o.value,
                                                          has_rest(sch));
             },
-            [&](const WithRowIndexOp&) -> dstd::UniquePtr<Cursor> {
+            [&](const WithRowIndexOp&) -> CursorResult {
                 return dstd::make_unique<WithRowIndexCursor>(std::move(in));
             },
-            [&](const NullCountOp&) -> dstd::UniquePtr<Cursor> {
+            [&](const NullCountOp&) -> CursorResult {
                 return dstd::make_unique<NullCountCursor>(std::move(in));
             },
-            [&](const ExplodeOp& o) -> dstd::UniquePtr<Cursor> {
+            [&](const ExplodeOp& o) -> CursorResult {
                 return dstd::make_unique<ExplodeCursor>(std::move(in), sch,
                                                         o.column, budget);
             },
-            [&](const UnpivotOp& o) -> dstd::UniquePtr<Cursor> {
+            [&](const UnpivotOp& o) -> CursorResult {
                 return dstd::make_unique<UnpivotCursor>(
                     std::move(in), sch, o.id_vars, o.value_vars, budget);
             },
-            [&](const TopkOp& o) -> dstd::UniquePtr<Cursor> {
+            [&](const TopkOp& o) -> CursorResult {
                 return dstd::make_unique<TopkCursor>(std::move(in), sch, o.name,
                                                      o.k, o.largest, budget);
             },
-            [&](const GroupByOp& o) -> dstd::UniquePtr<Cursor> {
+            [&](const GroupByOp& o) -> CursorResult {
                 return make_group_by(std::move(in), sch, o.keys, o.aggs, budget,
                                      o.dyn, o.dyn_prefix);
             },
-            [&](const SortByOp& o) -> dstd::UniquePtr<Cursor> {
+            [&](const SortByOp& o) -> CursorResult {
                 return make_sort_merge(
                     std::move(in), sch, dstd::Vector<dstd::String>{o.name},
                     dstd::Vector<bool>{o.descending}, budget);
             },
-            [&](const SortByMultiOp& o) -> dstd::UniquePtr<Cursor> {
+            [&](const SortByMultiOp& o) -> CursorResult {
                 return make_sort_merge(std::move(in), sch, o.by, o.descending,
                                        budget);
             },
-            [&](const ReverseOp&) -> dstd::UniquePtr<Cursor> {
+            [&](const ReverseOp&) -> CursorResult {
                 dstd::Vector<dstd::String> numbered{"row_index"};
                 numbered.insert(numbered.end(), sch.begin(), sch.end());
                 dstd::Vector<int> keep(sch.size());
                 std::iota(keep.begin(), keep.end(), 1);
-                return dstd::make_unique<SelectCursor>(
-                    make_sort_merge(
-                        dstd::make_unique<WithRowIndexCursor>(std::move(in)),
-                        std::move(numbered),
-                        dstd::Vector<dstd::String>{"row_index"},
-                        dstd::Vector<bool>{true}, budget),
-                    std::move(keep));
+                auto sorted = make_sort_merge(
+                    dstd::make_unique<WithRowIndexCursor>(std::move(in)),
+                    std::move(numbered),
+                    dstd::Vector<dstd::String>{"row_index"},
+                    dstd::Vector<bool>{true}, budget);
+                if (!sorted) return sorted.error();
+                return dstd::make_unique<SelectCursor>(std::move(*sorted),
+                                                       std::move(keep));
             },
-            [&](const TakeOp& o) -> dstd::UniquePtr<Cursor> {
+            [&](const TakeOp& o) -> CursorResult {
                 return dstd::make_unique<TakeCursor>(std::move(in), o.indices,
                                                      budget);
             },
-            [&](const FilterMaskOp& o) -> dstd::UniquePtr<Cursor> {
+            [&](const FilterMaskOp& o) -> CursorResult {
                 return dstd::make_unique<FilterMaskCursor>(std::move(in),
                                                            o.mask.share());
             },
-            [&](const JoinOp& o) -> dstd::UniquePtr<Cursor> {
+            [&](const JoinOp& o) -> CursorResult {
                 // The right plan runs under the budget of this plan unless it
                 // sets its own.
                 LazyFrame other = o.other;
@@ -4322,18 +4608,18 @@ dstd::UniquePtr<Cursor> make_cursor(const LazyOp& op,
                     o.left_on, o.right_on, o.how, o.suffix, budget,
                     o.nulls_equal, own_rest);
             },
-            [&](const ConcatOp& o) -> dstd::UniquePtr<Cursor> {
+            [&](const ConcatOp& o) -> CursorResult {
                 return dstd::make_unique<ConcatCursor>(std::move(in), o.other,
                                                        has_rest(sch));
             },
-            [&](const TapOp& o) -> dstd::UniquePtr<Cursor> {
+            [&](const TapOp& o) -> CursorResult {
                 return dstd::make_unique<TapCursor>(std::move(in), sch, o.tap);
             },
-            [&](const UnnestOp& o) -> dstd::UniquePtr<Cursor> {
+            [&](const UnnestOp& o) -> CursorResult {
                 return dstd::make_unique<UnnestCursor>(std::move(in), sch,
                                                        o.column, o.keep_empty);
             },
-            [&](const FrameOp& o) -> dstd::UniquePtr<Cursor> {
+            [&](const FrameOp& o) -> CursorResult {
                 if (o.name == GROUP_TRANSFORM_OP)
                     return make_native_transform(std::move(in), sch, *o.args,
                                                  o.out_names, o.out_types,
@@ -4358,19 +4644,19 @@ dstd::UniquePtr<Cursor> make_cursor(const LazyOp& op,
                     LazyFrame other = o.args->frames().front();
                     if (detail::PlanAccess::memory_budget(other) == 0)
                         other = other.memory_budget(budget);
-                    if (auto joined = make_ordered_join(in, sch, o.name,
-                                                        *o.args, other, budget))
-                        return joined;
+                    auto joined = make_ordered_join(in, sch, o.name, *o.args,
+                                                    other, budget);
+                    if (!joined || *joined) return joined;
                 }
                 if (budget != memory::NO_SPILL_BUDGET && budget > 0) {
-                    dstd::UniquePtr<Cursor> streamed;
+                    CursorResult streamed{dstd::UniquePtr<Cursor>{}};
                     if (o.name == COLUMN_OP)
                         streamed =
                             make_column_scan(in, sch, o.in_fields, *o.args);
                     else if (o.name == WITH_COLUMN_OP)
                         streamed =
                             make_series_column(in, sch, o.in_fields, *o.args);
-                    if (streamed) return streamed;
+                    if (!streamed || *streamed) return streamed;
                 }
                 const bool elementwise =
                     o.name == COLUMN_OP &&
@@ -4379,49 +4665,55 @@ dstd::UniquePtr<Cursor> make_cursor(const LazyOp& op,
                     std::move(in), sch, o.in_fields, o.name, o.op, o.args,
                     budget, elementwise);
             },
-            [&](const UniqueOp& o) -> dstd::UniquePtr<Cursor> {
+            [&](const UniqueOp& o) -> CursorResult {
                 dstd::Vector<std::int64_t> key_idx;
-                for (const dstd::String& name : o.subset)
-                    key_idx.push_back(require_col(sch, name, "unique"));
+                for (const dstd::String& name : o.subset) {
+                    auto at = require_col(sch, name, "unique");
+                    if (!at) return at.error();
+                    key_idx.push_back(*at);
+                }
                 return make_unique_rows(std::move(in), sch, std::move(key_idx),
                                         budget);
             },
-            [&](const SampleOp& o) -> dstd::UniquePtr<Cursor> {
+            [&](const SampleOp& o) -> CursorResult {
                 return dstd::make_unique<SampleCursor>(std::move(in), sch, o.n,
                                                        o.seed);
             },
-            [&](const HeadByOp& o) -> dstd::UniquePtr<Cursor> {
+            [&](const HeadByOp& o) -> CursorResult {
                 dstd::Vector<std::int64_t> key_idx;
                 key_idx.reserve(o.keys.size());
-                for (const dstd::String& name : o.keys)
-                    key_idx.push_back(require_col(sch, name, "head_by"));
+                for (const dstd::String& name : o.keys) {
+                    auto at = require_col(sch, name, "head_by");
+                    if (!at) return at.error();
+                    key_idx.push_back(*at);
+                }
                 return make_head_by(std::move(in), std::move(key_idx), o.n,
                                     budget);
             },
-            [&](const IsDupOp& o) -> dstd::UniquePtr<Cursor> {
+            [&](const IsDupOp& o) -> CursorResult {
                 return dstd::make_unique<IsDupCursor>(std::move(in), budget,
                                                       o.unique);
             },
-            [&](const GroupByDynamicOp& o) -> dstd::UniquePtr<Cursor> {
+            [&](const GroupByDynamicOp& o) -> CursorResult {
                 return make_group_by_dynamic(std::move(in), sch, o.time_col,
                                              o.every, o.period, o.aggs,
                                              o.origin, o.origin_min, budget);
             },
-            [&](const PivotOp& o) -> dstd::UniquePtr<Cursor> {
+            [&](const PivotOp& o) -> CursorResult {
                 return make_pivot(std::move(in), budget, sch, o.index, o.on,
                                   o.values, o.agg);
             },
-            [&](const ToDummiesOp& o) -> dstd::UniquePtr<Cursor> {
+            [&](const ToDummiesOp& o) -> CursorResult {
                 return dstd::make_unique<ToDummiesCursor>(std::move(in), budget,
                                                           sch, o.column);
             },
-            [&](const DescribeOp&) -> dstd::UniquePtr<Cursor> {
+            [&](const DescribeOp&) -> CursorResult {
                 return dstd::make_unique<DescribeCursor>(std::move(in), sch);
             },
-            [&](const NodeOp& o) -> dstd::UniquePtr<Cursor> {
+            [&](const NodeOp& o) -> CursorResult {
                 Schema declared = call_node_output_schema(o, sch);
-                return dstd::make_unique<NodeCursor>(
-                    o, std::move(in), sch, std::move(declared), budget);
+                return NodeCursor::make(o, std::move(in), sch,
+                                        std::move(declared), budget);
             }},
         op.node);
 }
@@ -4465,89 +4757,109 @@ ScanResult InMemorySource::scan(const ScanRequest& req) const {
 // Whole-column execution over a resident frame (map plans fuse via
 // try_fuse_map): an op with an eager form runs it; any other runs its own
 // cursor over the frame as one morsel, never spilling.
-coro::CoroTask<DataFrame> LazyFrame::run_ops_in_memory(
+coro::CoroTask<dstd::Result<DataFrame>> LazyFrame::run_ops_in_memory(
     DataFrame df, dstd::Vector<dstd::SharedPtr<const LazyOp>> ops) {
-    if (auto fused = try_fuse_map(df, ops)) co_return std::move(*fused);
+    auto fused = try_fuse_map(df, ops);
+    if (!fused) co_return fused.error();
+    if (*fused) co_return std::move(**fused);
     for (const auto& op : ops) {
         bool ok = true;
-        DataFrame next = std::visit(
+        dstd::Result<DataFrame> next = std::visit(
             Overloaded{
-                [&](const FilterOp& o) {
-                    return df.filter(
-                        common::unwrap(eval(o.pred, column_ptrs(df.columns))));
+                [&](const FilterOp& o) -> dstd::Result<DataFrame> {
+                    auto mask = eval(o.pred, column_ptrs(df.columns));
+                    if (!mask) return mask.error();
+                    return df.filter(*mask);
                 },
-                [&](const WithColumnOp& o) {
-                    return df.with_column(
-                        o.name,
-                        common::unwrap(eval(o.expr, column_ptrs(df.columns))));
+                [&](const WithColumnOp& o) -> dstd::Result<DataFrame> {
+                    auto column = eval(o.expr, column_ptrs(df.columns));
+                    if (!column) return column.error();
+                    return df.with_column(o.name, *column);
                 },
                 [&](const SelectOp& o) {
-                    return common::unwrap(df.select(without_rest(o.names)));
+                    return df.select(without_rest(o.names));
                 },
-                [&](const RenameOp& o) {
-                    return common::unwrap(df.rename(o.names));
-                },
+                [&](const RenameOp& o) { return df.rename(o.names); },
                 [&](const DropOp& o) {
-                    return common::unwrap(
-                        df.select(dropped_names(df.names, o.names)));
+                    return df.select(dropped_names(df.names, o.names));
                 },
-                [&](const RenameColumnsOp& o) {
-                    return common::unwrap(df.rename(
-                        renamed_names(df.names, rename_map(o.from, o.to))));
+                [&](const RenameColumnsOp& o) -> dstd::Result<DataFrame> {
+                    auto names =
+                        renamed_names(df.names, rename_map(o.from, o.to));
+                    if (!names) return names.error();
+                    return df.rename(*names);
                 },
-                [&](const SliceOp& o) { return df.slice(o.offset, o.len); },
-                [&](const TailOp& o) { return df.tail(o.n); },
-                [&](const DropNullsOp&) { return df.drop_nulls(); },
-                [&](const FillNullOp& o) { return df.fill_null(o.value); },
+                [&](const SliceOp& o) -> dstd::Result<DataFrame> {
+                    return df.slice(o.offset, o.len);
+                },
+                [&](const TailOp& o) -> dstd::Result<DataFrame> {
+                    return df.tail(o.n);
+                },
+                [&](const DropNullsOp&) -> dstd::Result<DataFrame> {
+                    return df.drop_nulls();
+                },
+                [&](const FillNullOp& o) -> dstd::Result<DataFrame> {
+                    return df.fill_null(o.value);
+                },
                 [&](const SortByOp& o) {
-                    return common::unwrap(df.sort_by(o.name, o.descending));
+                    return df.sort_by(o.name, o.descending);
                 },
                 [&](const SortByMultiOp& o) {
-                    return common::unwrap(df.sort_by_multi(o.by, o.descending));
+                    return df.sort_by_multi(o.by, o.descending);
                 },
-                [&](const ReverseOp&) { return df.reverse(); },
-                [&](const TakeOp& o) { return df.take(o.indices); },
-                [&](const FilterMaskOp& o) { return df.filter(o.mask); },
-                [&](const UniqueOp& o) {
-                    return common::unwrap(df.unique(o.subset));
+                [&](const ReverseOp&) -> dstd::Result<DataFrame> {
+                    return df.reverse();
                 },
-                [&](const SampleOp& o) { return df.sample(o.n, o.seed); },
+                [&](const TakeOp& o) -> dstd::Result<DataFrame> {
+                    return df.take(o.indices);
+                },
+                [&](const FilterMaskOp& o) -> dstd::Result<DataFrame> {
+                    return df.filter(o.mask);
+                },
+                [&](const UniqueOp& o) { return df.unique(o.subset); },
+                [&](const SampleOp& o) -> dstd::Result<DataFrame> {
+                    return df.sample(o.n, o.seed);
+                },
                 [&](const TopkOp& o) {
-                    return common::unwrap(df.topk(o.name, o.k, o.largest));
+                    return df.topk(o.name, o.k, o.largest);
                 },
-                [&](const WithRowIndexOp& o) {
+                [&](const WithRowIndexOp& o) -> dstd::Result<DataFrame> {
                     return df.with_row_index(o.name);
                 },
-                [&](const NullCountOp&) { return df.null_count(); },
-                [&](const GroupByDynamicOp& o) {
-                    return common::unwrap(
-                        df.group_by_dynamic(o.time_col, o.every, o.period,
-                                            o.aggs, o.origin, o.origin_min));
+                [&](const NullCountOp&) -> dstd::Result<DataFrame> {
+                    return df.null_count();
                 },
-                [&](const GroupByOp& o) {
-                    if (o.dyn.empty())
-                        return common::unwrap(df.group_by(o.keys, o.aggs));
+                [&](const GroupByDynamicOp& o) {
+                    return df.group_by_dynamic(o.time_col, o.every, o.period,
+                                               o.aggs, o.origin, o.origin_min);
+                },
+                [&](const GroupByOp& o) -> dstd::Result<DataFrame> {
+                    if (o.dyn.empty()) return df.group_by(o.keys, o.aggs);
                     // DataFrame::group_by drops the dyn side-channel; run the
                     // same AggState path the streaming cursor uses.
                     LoweredGroupAggs lowered = lower_group_aggs(o.aggs);
                     AggStatePtr state = agg_new(lowered.specs, o.dyn);
-                    agg_accumulate_chunk(*state, df, o.keys,
-                                         lowered.value_names, o.dyn_prefix);
+                    auto accumulated = agg_accumulate_chunk(
+                        *state, df, o.keys, lowered.value_names, o.dyn_prefix);
+                    if (!accumulated) return accumulated.error();
                     return agg_finalize(*state, o.keys);
                 },
-                [&](const auto&) {
+                [&](const auto&) -> dstd::Result<DataFrame> {
                     ok = false;
                     return DataFrame{};
                 }},
             op->node);
+        if (!next) co_return next.error();
         if (!ok) {
             const std::int64_t rows = std::max<std::int64_t>(df.num_rows(), 1);
             const LazyFrame whole(
                 dstd::make_shared<InMemorySource>(std::move(df)), {op},
                 memory::NO_SPILL_BUDGET);
-            next = co_await drain_stream(whole.stream(rows));
+            auto draining = drain_stream(whole.stream(rows));
+            next = co_await std::move(draining);
+            if (!next) co_return next.error();
         }
-        df = std::move(next);
+        df = std::move(*next);
     }
     co_return df;
 }
@@ -4593,8 +4905,14 @@ LazyFrame LazyFrame::drop(dstd::Vector<dstd::String> names) const {
 LazyFrame LazyFrame::rename_columns(dstd::Vector<dstd::String> from,
                                     dstd::Vector<dstd::String> to) const {
     if (from.size() != to.size())
-        throw std::invalid_argument(
-            "rename_columns: from and to differ in length");
+        return failed(
+            invalid_argument<"rename_columns: from and to differ in length">()
+                .error());
+    if (dstd::Vector<dstd::String> names = schema(); !names.empty())
+        if (auto renamed =
+                renamed_names(std::move(names), rename_map(from, to));
+            !renamed)
+            return failed(renamed.error());
     auto ops = ops_;
     ops.push_back(dstd::make_shared<LazyOp>(
         LazyOp{RenameColumnsOp{std::move(from), std::move(to)}}));
@@ -4700,7 +5018,7 @@ LazyFrame LazyFrame::group_by(dstd::Vector<dstd::String> keys,
     return with_ops(std::move(ops));
 }
 
-dstd::Vector<GroupAgg> LazyFrame::reduce_specs(
+dstd::Result<dstd::Vector<GroupAgg>> LazyFrame::reduce_specs(
     Agg agg, const dstd::Vector<dstd::String>& keys) const {
     const Schema in = output_schema();
     dstd::Vector<dstd::String> names;
@@ -4711,12 +5029,17 @@ dstd::Vector<GroupAgg> LazyFrame::reduce_specs(
         names.push_back(f.name);
         types.push_back(f.type.id);
     }
-    for (const dstd::String& k : keys) require_col(names, k, "reduce");
-    return common::unwrap(dataframe::reduce_specs(names, types, agg, keys));
+    for (const dstd::String& k : keys) {
+        auto at = require_col(names, k, "reduce");
+        if (!at) return at.error();
+    }
+    return dataframe::reduce_specs(names, types, agg, keys);
 }
 
 LazyFrame LazyFrame::reduce(Agg agg) const {
-    return group_by(dstd::Vector<dstd::String>{}, reduce_specs(agg));
+    auto specs = reduce_specs(agg);
+    if (!specs) return failed(specs.error());
+    return group_by(dstd::Vector<dstd::String>{}, std::move(*specs));
 }
 
 LazyGroupBy LazyFrame::group_by(dstd::Vector<dstd::String> keys) const {
@@ -4727,7 +5050,13 @@ LazyGroupBy::LazyGroupBy(LazyFrame plan, dstd::Vector<dstd::String> keys)
     : plan_(std::move(plan)), keys_(std::move(keys)) {
     const dstd::Vector<dstd::String> names = plan_.schema();
     if (!names.empty())
-        for (const dstd::String& k : keys_) require_col(names, k, "group_by");
+        for (const dstd::String& k : keys_) {
+            auto at = require_col(names, k, "group_by");
+            if (!at) {
+                plan_ = detail::PlanAccess::failed(plan_, at.error());
+                break;
+            }
+        }
 }
 
 LazyFrame LazyGroupBy::agg(dstd::Vector<GroupAgg> aggs) const {
@@ -4735,7 +5064,9 @@ LazyFrame LazyGroupBy::agg(dstd::Vector<GroupAgg> aggs) const {
 }
 
 LazyFrame LazyGroupBy::reduce(Agg agg) const {
-    return plan_.group_by(keys_, plan_.reduce_specs(agg, keys_));
+    auto specs = plan_.reduce_specs(agg, keys_);
+    if (!specs) return detail::PlanAccess::failed(plan_, specs.error());
+    return plan_.group_by(keys_, std::move(*specs));
 }
 
 LazyFrame LazyGroupBy::size() const {
@@ -4756,8 +5087,7 @@ LazyFrame desugar_expr_group_by(const LazyFrame& self, dstd::Vector<Expr> keys,
         const std::int32_t idx = expr_col_index(e);
         if (idx >= 0 && static_cast<std::size_t>(idx) < sch.size())
             return sch[static_cast<std::size_t>(idx)];
-        dstd::String name =
-            dstd::String("__gb_") + prefix + dstd::to_string(tmp++);
+        dstd::String name = dstd::fmt<"__gb_{}{}">(prefix, tmp++);
         lf = lf.with_column(name, e);
         sch.push_back(name);
         return name;
@@ -4771,7 +5101,8 @@ LazyFrame desugar_expr_group_by(const LazyFrame& self, dstd::Vector<Expr> keys,
             key_names.push_back(sch[static_cast<std::size_t>(idx)]);
             continue;
         }
-        dstd::String name = single_key ? "key" : "key" + dstd::to_string(k);
+        dstd::String name =
+            single_key ? dstd::String("key") : dstd::fmt<"key{}">(k);
         lf = lf.with_column(name, keys[k]);
         sch.push_back(name);
         key_names.push_back(std::move(name));
@@ -4827,7 +5158,10 @@ LazyFrame LazyFrame::sort_by_multi(dstd::Vector<dstd::String> by,
 LazyFrame LazyFrame::unique(dstd::Vector<dstd::String> subset) const {
     const dstd::Vector<dstd::String> names = schema();
     if (!names.empty())
-        for (const dstd::String& s : subset) require_col(names, s, "unique");
+        for (const dstd::String& s : subset) {
+            auto at = require_col(names, s, "unique");
+            if (!at) return failed(at.error());
+        }
     auto ops = ops_;
     ops.push_back(
         dstd::make_shared<LazyOp>(LazyOp{UniqueOp{std::move(subset)}}));
@@ -4848,7 +5182,10 @@ LazyFrame LazyFrame::head_by(dstd::Vector<dstd::String> keys,
                              std::int64_t n) const {
     const dstd::Vector<dstd::String> names = schema();
     if (!names.empty())
-        for (const dstd::String& k : keys) require_col(names, k, "head_by");
+        for (const dstd::String& k : keys) {
+            auto at = require_col(names, k, "head_by");
+            if (!at) return failed(at.error());
+        }
     auto ops = ops_;
     ops.push_back(
         dstd::make_shared<LazyOp>(LazyOp{HeadByOp{std::move(keys), n}}));
@@ -4887,25 +5224,37 @@ LazyFrame LazyFrame::melt(dstd::Vector<dstd::String> id_vars,
 LazyFrame LazyFrame::join(LazyFrame other, dstd::Vector<dstd::String> left_on,
                           dstd::Vector<dstd::String> right_on, JoinHow how,
                           dstd::String suffix, bool nulls_equal) const {
+    if (auto other_status = other.status(); !other_status)
+        return failed(other_status.error());
     if (!valid_join_how(how))
-        throw std::invalid_argument(("join: unknown join kind " +
-                                     dstd::to_string(static_cast<int>(how)))
-                                        .c_str());
+        return failed(invalid_argument<"join: unknown join kind {}">(
+                          static_cast<int>(how))
+                          .error());
     if (nulls_equal && (how == JoinHow::Cross || how == JoinHow::Lookup ||
                         how == JoinHow::Nest))
-        throw std::invalid_argument(
-            (dstd::String("join: nulls_equal does not apply to a ") +
-             join_how_name(how) + " join")
-                .c_str());
+        return failed(
+            invalid_argument<"join: nulls_equal does not apply to a {} join">(
+                join_how_name(how))
+                .error());
     if (how == JoinHow::Cross) {
         left_on.clear();
         right_on.clear();
     } else if (left_on.empty()) {
-        throw std::invalid_argument("join: no key columns");
+        return failed(invalid_argument<"join: no key columns">().error());
     }
     if (left_on.size() != right_on.size())
-        throw std::invalid_argument(
-            "join: left_on and right_on differ in length");
+        return failed(
+            invalid_argument<"join: left_on and right_on differ in length">()
+                .error());
+    {
+        const dstd::Vector<dstd::String> left_names = schema();
+        const dstd::Vector<dstd::String> right_names = other.schema();
+        if (!left_names.empty() && !right_names.empty())
+            if (auto names = join_out_names(left_names, right_names, left_on,
+                                            right_on, how, suffix);
+                !names)
+                return failed(names.error());
+    }
     auto ops = ops_;
     dstd::Vector<Field> left_fields = output_schema().fields;
     ops.push_back(dstd::make_shared<LazyOp>(LazyOp{
@@ -4939,8 +5288,9 @@ LazyFrame LazyFrame::unnest(dstd::String column, bool keep_empty) const {
         if (f.type.id == TypeId::Unknown) {
             known = false;
         } else if (!is_list) {
-            throw std::invalid_argument(
-                ("unnest: " + column + " is not a List column").c_str());
+            return failed(
+                invalid_argument<"unnest: {} is not a List column">(column)
+                    .error());
         } else if (!f.type.fields.empty() &&
                    f.type.fields.front().type.id == TypeId::Struct) {
             for (const Field& sf : f.type.fields.front().type.fields)
@@ -4952,7 +5302,7 @@ LazyFrame LazyFrame::unnest(dstd::String column, bool keep_empty) const {
         }
     }
     if (!found && !in.fields.empty())
-        throw std::out_of_range(("unnest: no column named " + column).c_str());
+        return failed(not_found<"unnest: no column named {}">(column).error());
     if (!known || in.fields.empty()) names.clear();
     auto ops = ops_;
     ops.push_back(dstd::make_shared<LazyOp>(
@@ -4989,8 +5339,8 @@ const dftu_op_desc* native_twin(const dstd::String& name,
         std::end(NATIVE_TWINS))
         return nullptr;
     const dstd::StringView lazy_base = base == "filter" ? "filter_mask" : base;
-    const dftu_op_desc* lazy = dftu_op_find(
-        (dstd::String("dftu.lazy.") + dstd::String(lazy_base)).c_str());
+    const dftu_op_desc* lazy =
+        dftu_op_find(dstd::fmt<"dftu.lazy.{}">(lazy_base).c_str());
     if (!lazy || dftu_op_kind_of(lazy->sig) != DFTU_OP_KIND_LAZY)
         return nullptr;
     if (dftu_op_arity(lazy->sig) != 1 + others) return nullptr;
@@ -5015,15 +5365,21 @@ const dftu_op_desc* native_twin(const dstd::String& name,
 LazyFrame LazyFrame::frame_op(dstd::String name, OpArgs args,
                               dstd::Vector<LazyFrame> others,
                               dstd::Vector<dstd::String> out_names) const {
+    for (const LazyFrame& other : others)
+        if (auto other_status = other.status(); !other_status)
+            return failed(other_status.error());
     const dftu_op_desc* op = dftu_op_find(name.c_str());
     if (!op)
-        throw std::invalid_argument(
-            ("lazy frame op '" + name + "': no op registered under this name")
-                .c_str());
+        return failed(
+            invalid_argument<
+                "lazy frame op '{}': no op registered under this name">(name)
+                .error());
     if (dftu_op_kind_of(op->sig) != DFTU_OP_KIND_FRAME ||
         DFTU_OP_SIG_ARG(op->sig, 0) != DFTU_TOK_FRAME)
-        throw std::invalid_argument(
-            ("lazy frame op '" + name + "': not a table -> table op").c_str());
+        return failed(
+            invalid_argument<"lazy frame op '{}': not a table -> table op">(
+                name)
+                .error());
     if (name == "dftu.frame.sort_by_multi_per_col" && others.empty()) {
         const auto& names = args.raw().args[1].list;
         const auto& flags = args.raw().args[2].i32list;
@@ -5051,13 +5407,13 @@ LazyFrame LazyFrame::frame_op(dstd::String name, OpArgs args,
             return result;
         }
     }
-    auto owned =
-        dstd::make_shared<const OwnedFrameOpArgs>(*op, args, std::move(others));
+    auto owned = OwnedFrameOpArgs::make(*op, args, std::move(others));
+    if (!owned) return failed(owned.error());
     auto ops = ops_;
     ops.push_back(
         dstd::make_shared<LazyOp>(LazyOp{FrameOp{std::move(name),
                                                  op,
-                                                 std::move(owned),
+                                                 std::move(*owned),
                                                  std::move(out_names),
                                                  {},
                                                  output_schema().fields}}));
@@ -5131,19 +5487,24 @@ dstd::Optional<LazyFrame> native_group_transform(
         .i64(3, n)
         .i32(4, 0)
         .i32(5, 1);
-    auto owned = dstd::make_shared<const OwnedFrameOpArgs>(
-        *op, args, dstd::Vector<LazyFrame>{});
+    auto owned = OwnedFrameOpArgs::make(*op, args, dstd::Vector<LazyFrame>{});
+    if (!owned) return dstd::nullopt;
     auto ops = detail::PlanAccess::ops(plan);
     ops.push_back(dstd::make_shared<LazyOp>(LazyOp{
-        FrameOp{GROUP_TRANSFORM_OP, op, std::move(owned), std::move(out_names),
+        FrameOp{GROUP_TRANSFORM_OP, op, std::move(*owned), std::move(out_names),
                 std::move(out_types), in.fields}}));
-    return detail::PlanAccess::make(detail::PlanAccess::source_ptr(plan),
-                                    std::move(ops),
-                                    detail::PlanAccess::memory_budget(plan));
+    return detail::PlanAccess::with_error_of(
+        detail::PlanAccess::make(detail::PlanAccess::source_ptr(plan),
+                                 std::move(ops),
+                                 detail::PlanAccess::memory_budget(plan)),
+        plan);
 }
 
 LazyFrame LazyFrame::compare_agg(LazyFrame variant, std::int64_t n_key) const {
-    if (n_key < 1) throw std::invalid_argument("compare_agg: n_key < 1");
+    if (auto variant_status = variant.status(); !variant_status)
+        return failed(variant_status.error());
+    if (n_key < 1)
+        return failed(invalid_argument<"compare_agg: n_key < 1">().error());
     const dstd::Vector<Field> lhs = output_schema().fields;
     const dstd::Vector<Field> rhs = variant.output_schema().fields;
     const auto nk = static_cast<std::size_t>(n_key);
@@ -5160,36 +5521,49 @@ LazyFrame LazyFrame::compare_agg(LazyFrame variant, std::int64_t n_key) const {
         args.i64(2, n_key);
         return frame_op("dftu.frame.compare_agg", args, {std::move(variant)});
     }
-    return compose_compare_agg(*this, variant, lhs, rhs, nk);
+    auto composed = compose_compare_agg(*this, variant, lhs, rhs, nk);
+    if (!composed) return failed(composed.error());
+    return std::move(*composed);
 }
 
 LazyFrame LazyFrame::asof(LazyFrame other, dstd::String on,
                           dstd::Vector<dstd::String> by,
                           AsofDirection direction,
                           dstd::Optional<double> tolerance) const {
-    return compose_asof(*this, std::move(other), on, by, direction, tolerance);
+    if (auto other_status = other.status(); !other_status)
+        return failed(other_status.error());
+    auto composed =
+        compose_asof(*this, std::move(other), on, by, direction, tolerance);
+    if (!composed) return failed(composed.error());
+    return std::move(*composed);
 }
 
 LazyFrame LazyFrame::interval(LazyFrame other, dstd::String point,
                               dstd::String lo, dstd::String hi,
                               dstd::Vector<dstd::String> by, bool outer) const {
-    return compose_interval(*this, std::move(other), point, lo, hi, by, outer);
+    if (auto other_status = other.status(); !other_status)
+        return failed(other_status.error());
+    auto composed =
+        compose_interval(*this, std::move(other), point, lo, hi, by, outer);
+    if (!composed) return failed(composed.error());
+    return std::move(*composed);
 }
 
 LazyFrame LazyFrame::concat(LazyFrame other) const {
+    if (auto other_status = other.status(); !other_status)
+        return failed(other_status.error());
     const dstd::Vector<Field> lhs = output_schema().fields;
     const dstd::Vector<Field> rhs = other.output_schema().fields;
     if (lhs.size() != rhs.size())
-        throw std::invalid_argument(("concat: column count differs (" +
-                                     dstd::to_string(lhs.size()) + " vs " +
-                                     dstd::to_string(rhs.size()) + ")")
-                                        .c_str());
+        return failed(
+            invalid_argument<"concat: column count differs ({} vs {})">(
+                lhs.size(), rhs.size())
+                .error());
     for (std::size_t i = 0; i < lhs.size(); ++i) {
         if (lhs[i].name != rhs[i].name)
-            throw std::invalid_argument(
-                ("concat: column " + dstd::to_string(i) + " is '" +
-                 lhs[i].name + "' vs '" + rhs[i].name + "'")
-                    .c_str());
+            return failed(invalid_argument<"concat: column {} is '{}' vs '{}'">(
+                              i, lhs[i].name, rhs[i].name)
+                              .error());
         // String and LargeString concatenate (the eager kernel widens).
         const auto text = [](TypeId x) {
             return x == TypeId::String || x == TypeId::LargeString;
@@ -5197,8 +5571,9 @@ LazyFrame LazyFrame::concat(LazyFrame other) const {
         if (lhs[i].type.id != TypeId::Unknown &&
             rhs[i].type.id != TypeId::Unknown && lhs[i].type != rhs[i].type &&
             !(text(lhs[i].type.id) && text(rhs[i].type.id)))
-            throw std::invalid_argument(
-                ("concat: column '" + lhs[i].name + "' type differs").c_str());
+            return failed(invalid_argument<"concat: column '{}' type differs">(
+                              lhs[i].name)
+                              .error());
     }
     auto ops = ops_;
     ops.push_back(
@@ -5243,27 +5618,44 @@ dstd::Vector<dstd::String> LazyFrame::schema() const {
 
 dstd::String LazyFrame::explain() const {
     const PlanParts plan = optimize_parts(source_, ops_);
-    dstd::String s = "scan [" + join_names(plan.source->names()) + "]";
-    for (const auto& op : plan.ops) s += "\n" + describe_op(*op);
+    dstd::String s = dstd::fmt<"scan [{}]">(join_names(plan.source->names()));
+    for (const auto& op : plan.ops) s += dstd::fmt<"\n{}">(describe_op(*op));
     return s;
 }
 
 LazyFrame LazyFrame::memory_budget(std::uint64_t bytes) const {
-    return LazyFrame(source_, ops_, bytes);
+    return LazyFrame(source_, ops_, bytes, error_);
 }
 
 LazyFrame LazyFrame::auto_spill() const {
     // Same policy as the default (0) and as View: ~1/3 of available
     // memory.
-    return LazyFrame(source_, ops_, memory::resolve_spill_budget(0));
+    return LazyFrame(source_, ops_, memory::resolve_spill_budget(0), error_);
+}
+
+dstd::Result<void> LazyFrame::status() const {
+    if (error_) return *error_;
+    return {};
+}
+
+LazyFrame LazyFrame::failed(dstd::Error error) const {
+    if (error_) return *this;
+    return LazyFrame(source_, ops_, memory_budget_,
+                     dstd::make_shared<const dstd::Error>(std::move(error)));
+}
+
+LazyFrame LazyFrame::with_error_of(const LazyFrame& other) const {
+    if (error_ || !other.error_) return *this;
+    return LazyFrame(source_, ops_, memory_budget_, other.error_);
 }
 
 LazyFrame LazyFrame::op(dstd::String name, OpArgs args) const {
     dstd::Optional<NodeEntry> entry = find_node(name.c_str());
     if (!entry)
-        throw std::invalid_argument(
-            ("lazy op '" + name + "': no node registered under this name")
-                .c_str());
+        return failed(
+            invalid_argument<
+                "lazy op '{}': no node registered under this name">(name)
+                .error());
     auto ops = ops_;
     ops.push_back(dstd::make_shared<LazyOp>(
         LazyOp{NodeOp{std::move(name), entry->vt, entry->self, args.raw()}}));
@@ -5284,10 +5676,65 @@ struct CursorChain {
     dstd::Vector<dstd::String> schema;
 };
 
+// A cursor a source handed out, which may throw from next(), narrow() or
+// reclaim(): a throw through a frame built without exceptions aborts, so each
+// task is awaited through coro::settle. A throw becomes an error result (or
+// nothing done, for the advisory calls) and a stop ends the caller as stopped.
+class GuardCursor final : public Cursor {
+   public:
+    explicit GuardCursor(dstd::UniquePtr<Cursor> in) : in_(std::move(in)) {}
+
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
+        auto task = in_->next(max_rows);
+        auto settled = co_await coro::settle(std::move(task));
+        if (settled.stopped) co_await coro::stop_here();
+        if (settled.exception)
+            co_return common::error_of_exception(settled.exception);
+        co_return std::move(*settled.value);
+    }
+
+    bool try_next(std::int64_t max_rows, MorselResult& out) override {
+        return in_->try_next(max_rows, out);
+    }
+
+    dstd::Optional<dstd::Vector<dstd::String>> out_names() const override {
+        return in_->out_names();
+    }
+
+    coro::CoroTask<bool> narrow(const Expr& predicate) override {
+        auto task = in_->narrow(predicate);
+        auto settled = co_await coro::settle(std::move(task));
+        if (settled.stopped) co_await coro::stop_here();
+        if (settled.exception)
+            DFTRACER_UTILS_LOG_WARN(
+                "source narrow failed: %s",
+                common::error_of_exception(settled.exception).c_str());
+        co_return settled.value.has_value() && *settled.value;
+    }
+
+    std::uint64_t resident_bytes() const override {
+        return in_->resident_bytes();
+    }
+
+    coro::CoroTask<std::uint64_t> reclaim(std::uint64_t want) override {
+        auto task = in_->reclaim(want);
+        auto settled = co_await coro::settle(std::move(task));
+        if (settled.stopped) co_await coro::stop_here();
+        if (settled.exception)
+            DFTRACER_UTILS_LOG_WARN(
+                "source reclaim failed: %s",
+                common::error_of_exception(settled.exception).c_str());
+        co_return settled.value.has_value() ? *settled.value : 0;
+    }
+
+   private:
+    dstd::UniquePtr<Cursor> in_;
+};
+
 // Lower `ops` onto `source`: push a leading projection and the contiguous run
 // of filters after it into the scan, then stack every op the source did not
 // apply exactly. This is the plan's lowering (b); the driver below runs it.
-CursorChain lower_cursor_chain(
+dstd::Result<CursorChain> lower_cursor_chain(
     dstd::SharedPtr<const Source> source_ptr,
     const dstd::Vector<dstd::SharedPtr<const LazyOp>>& ops,
     std::uint64_t budget) {
@@ -5368,7 +5815,7 @@ CursorChain lower_cursor_chain(
 
     CursorChain chain;
     chain.source = std::move(source_ptr);
-    chain.cursor = std::move(r.cursor);
+    chain.cursor = dstd::make_unique<GuardCursor>(std::move(r.cursor));
     chain.schema = projection.empty() ? names : projection;
     if (!chain.schema.empty() &&
         std::find(drop.begin(), drop.end(), false) != drop.end()) {
@@ -5400,11 +5847,10 @@ CursorChain lower_cursor_chain(
         const RestRule rule =
             rest ? rest_rule(*ops[i], chain.schema) : RestRule::Moves;
         if (rule == RestRule::None)
-            throw std::invalid_argument(
-                ("'" + describe_op(*ops[i]) +
-                 "' has no rule for the columns the scan returns beyond the "
-                 "plan's schema; select the columns it needs first")
-                    .c_str());
+            return invalid_argument<
+                "'{}' has no rule for the columns the scan returns beyond the "
+                "plan's schema; select the columns it needs first">(
+                describe_op(*ops[i]));
         const auto* group = std::get_if<GroupByOp>(&ops[i]->node);
         if (rule == RestRule::Omits && !(group && !group->dyn.empty())) {
             dstd::Vector<int> idx(chain.schema.size() - 1);
@@ -5413,8 +5859,10 @@ CursorChain lower_cursor_chain(
                 std::move(chain.cursor), std::move(idx));
             chain.schema.pop_back();
         }
-        chain.cursor = make_cursor(*ops[i], std::move(chain.cursor),
-                                   chain.schema, budget, own_rest);
+        auto made = make_cursor(*ops[i], std::move(chain.cursor), chain.schema,
+                                budget, own_rest);
+        if (!made) return made.error();
+        chain.cursor = std::move(*made);
         chain.schema = has_rest(chain.schema)
                            ? rest_out_schema(*ops[i], chain.schema)
                            : out_schema(*ops[i], std::move(chain.schema));
@@ -5426,14 +5874,21 @@ CursorChain lower_cursor_chain(
 // must wait co_awaits inside next(), so the worker is never parked. Abandoning
 // this generator drops the chain, and dropping the source cursor is the scan
 // early-out (~StreamViewCursor stops and wakes the producer).
-coro::AsyncGenerator<DataFrame> drive_cursor_chain(CursorChain chain,
-                                                   std::int64_t rows) {
+coro::AsyncGenerator<dstd::Result<DataFrame>> drive_cursor_chain(
+    CursorChain chain, std::int64_t rows) {
     for (;;) {
-        auto m = co_await chain.cursor->next(rows);
-        if (!m) break;
-        DataFrame out = frame_from_morsel(std::move(*m), chain.schema,
-                                          chain.cursor->out_names());
+        auto task = chain.cursor->next(rows);
+        auto m = co_await std::move(task);
+        if (!m) {
+            co_yield dstd::Result<DataFrame>(m.error());
+            break;
+        }
+        if (!*m) break;
+        auto out = frame_from_morsel(std::move(**m), chain.schema,
+                                     chain.cursor->out_names());
+        const bool failed = !out;
         co_yield std::move(out);
+        if (failed) break;
     }
 }
 
@@ -5441,9 +5896,8 @@ coro::AsyncGenerator<DataFrame> drive_cursor_chain(CursorChain chain,
 
 namespace {
 
-coro::AsyncGenerator<DataFrame> stream_plan(PlanParts plan,
-                                            std::uint64_t memory_budget,
-                                            std::int64_t morsel_rows) {
+coro::AsyncGenerator<dstd::Result<DataFrame>> stream_plan(
+    PlanParts plan, std::uint64_t memory_budget, std::int64_t morsel_rows) {
     // 0 resolves to auto (~1/3 RAM), same policy as View.
     const std::uint64_t budget = memory::resolve_spill_budget(memory_budget);
     const std::int64_t eff_rows =
@@ -5456,8 +5910,9 @@ coro::AsyncGenerator<DataFrame> stream_plan(PlanParts plan,
     memory::PoolHandle pool = memory::detail::Manager::get().root().child(
         "query", memory::PoolKind::Results);
     memory::detail::Scope scope{pool ? *pool : memory::detail::current_pool()};
-    CursorChain chain =
-        lower_cursor_chain(std::move(plan.source), plan.ops, budget);
+    auto lowered = lower_cursor_chain(std::move(plan.source), plan.ops, budget);
+    if (!lowered) return failed_stream(lowered.error());
+    CursorChain chain = std::move(*lowered);
     chain.pool = std::move(pool);
     // Returned, not re-yielded through: an extra coroutine layer around a
     // parallel drain has miscompiled frames before (project_coro_threadlocal_
@@ -5468,15 +5923,16 @@ coro::AsyncGenerator<DataFrame> stream_plan(PlanParts plan,
 
 }  // namespace
 
-coro::AsyncGenerator<DataFrame> LazyFrame::stream(
+coro::AsyncGenerator<dstd::Result<DataFrame>> LazyFrame::stream(
     std::int64_t morsel_rows) const {
+    if (error_) return failed_stream(*error_);
     return stream_plan(optimize_parts(source_, ops_), memory_budget_,
                        morsel_rows);
 }
 
 namespace {
 
-CursorChain open_chain(const LazyFrame& lf) {
+dstd::Result<CursorChain> open_chain(const LazyFrame& lf) {
     PlanParts plan = optimize_parts(detail::PlanAccess::source_ptr(lf),
                                     detail::PlanAccess::ops(lf));
     return lower_cursor_chain(
@@ -5484,7 +5940,7 @@ CursorChain open_chain(const LazyFrame& lf) {
         memory::resolve_spill_budget(detail::PlanAccess::memory_budget(lf)));
 }
 
-dstd::UniquePtr<Cursor> without_rest_column(CursorChain chain) {
+CursorResult without_rest_column(CursorChain chain) {
     if (!has_rest(chain.schema)) return std::move(chain.cursor);
     dstd::Vector<int> idx(chain.schema.size() - 1);
     std::iota(idx.begin(), idx.end(), 0);
@@ -5492,8 +5948,10 @@ dstd::UniquePtr<Cursor> without_rest_column(CursorChain chain) {
                                            std::move(idx));
 }
 
-dstd::UniquePtr<Cursor> concat_side(const LazyFrame& other, bool rest) {
-    CursorChain chain = open_chain(other);
+CursorResult concat_side(const LazyFrame& other, bool rest) {
+    auto opened = open_chain(other);
+    if (!opened) return opened.error();
+    CursorChain chain = std::move(*opened);
     if (!rest) return without_rest_column(std::move(chain));
     if (has_rest(chain.schema)) return std::move(chain.cursor);
     return dstd::make_unique<AlignCursor>(std::move(chain.cursor),
@@ -5502,8 +5960,11 @@ dstd::UniquePtr<Cursor> concat_side(const LazyFrame& other, bool rest) {
 
 }  // namespace
 
-dstd::UniquePtr<Cursor> LazyFrame::open_cursor() const {
-    return without_rest_column(open_chain(*this));
+dstd::Result<dstd::UniquePtr<Cursor>> LazyFrame::open_cursor() const {
+    if (error_) return *error_;
+    auto opened = open_chain(*this);
+    if (!opened) return opened.error();
+    return without_rest_column(std::move(*opened));
 }
 
 namespace {
@@ -5538,9 +5999,8 @@ bool may_expand(const LazyOp& op) {
            std::holds_alternative<NodeOp>(op.node);
 }
 
-coro::CoroTask<DataFrame> collect_plan(PlanParts plan,
-                                       std::uint64_t memory_budget,
-                                       std::int64_t morsel_rows) {
+coro::CoroTask<dstd::Result<DataFrame>> collect_plan(
+    PlanParts plan, std::uint64_t memory_budget, std::int64_t morsel_rows) {
     // A resident source runs whole-column, matching eager, unless an op can
     // make more than it reads or the frame is past half the automatic budget
     // (a sort or a group-by holds about its input again). An explicit
@@ -5550,13 +6010,16 @@ coro::CoroTask<DataFrame> collect_plan(PlanParts plan,
                      [](const auto& op) { return may_expand(*op); })) {
         if (const DataFrame* f = plan.source->as_frame();
             f && spill::columns_bytes(f->columns) <=
-                     memory::resolve_spill_budget(0) / share::SPILL_STATE)
-            co_return co_await detail::PlanAccess::run_in_memory(
+                     memory::resolve_spill_budget(0) / share::SPILL_STATE) {
+            auto running = detail::PlanAccess::run_in_memory(
                 share_frame(*f), std::move(plan.ops));
+            co_return co_await std::move(running);
+        }
     }
     const std::uint64_t budget = memory::resolve_spill_budget(memory_budget);
-    co_return co_await drain_stream(
+    auto draining = drain_stream(
         stream_plan(std::move(plan), memory_budget, morsel_rows), budget);
+    co_return co_await std::move(draining);
 }
 
 }  // namespace
@@ -5619,15 +6082,14 @@ class OpenedSource final : public Source {
             for (const dstd::String& n : req.projection) {
                 const auto it = std::find(all.begin(), all.end(), n);
                 if (it == all.end())
-                    throw std::logic_error(
+                    dstd::fatal(
                         "a batch-opened source cannot project a column it "
                         "does not declare");
                 pick.push_back(static_cast<int>(it - all.begin()));
             }
         }
         std::lock_guard<std::mutex> lock(mu_);
-        if (!cursor_)
-            throw std::logic_error("a batch-opened source was scanned twice");
+        if (!cursor_) dstd::fatal("a batch-opened source was scanned twice");
         ScanResult r;
         r.filters.assign(req.filters.size(), Pushed::No);
         r.cursor = std::move(cursor_);
@@ -5679,14 +6141,14 @@ class CollectedSource final : public Source {
               ids_(std::move(ids)),
               intern_(std::move(intern)) {}
 
-        coro::CoroTask<dstd::Optional<Morsel>> next(
-            std::int64_t max_rows) override {
-            auto m = co_await in_->next(max_rows);
+        coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
+            auto task = in_->next(max_rows);
+            auto m = co_await std::move(task).or_fail();
             if (m) {
                 m->dyn_state().name_ids = ids_;
                 m->dyn->intern = intern_;
             }
-            co_return m;
+            co_return MorselResult(std::move(m));
         }
 
        private:
@@ -5740,7 +6202,7 @@ PlanParts finish_tree(PlannedTree t) {
 // then drain those roots concurrently; the rest of the group reads through
 // Source::collect_batch(), each leaf then scanning its result from memory.
 // Either way a leaf keeps its remaining ops above its source.
-coro::CoroTask<void> batch_leaves(
+coro::CoroTask<dstd::Result<void>> batch_leaves(
     dstd::Vector<PlannedTree*> leaves,
     const dstd::Vector<PlannedTree*>& roots = {}) {
     struct Group {
@@ -5782,18 +6244,19 @@ coro::CoroTask<void> batch_leaves(
         for (PlannedTree* m : members) out.push_back(m->parts.source);
         return out;
     };
-    auto collect_buffered =
-        [&sources_of](
-            dstd::Vector<PlannedTree*> members) -> coro::CoroTask<void> {
+    auto collect_buffered = [&sources_of](dstd::Vector<PlannedTree*> members)
+        -> coro::CoroTask<dstd::Result<void>> {
         auto sources = sources_of(members);
-        dstd::Vector<DataFrame> frames =
-            co_await sources.front()->collect_batch(sources);
+        auto collecting = sources.front()->collect_batch(sources);
+        auto settled = co_await coro::settle(std::move(collecting));
+        if (settled.stopped) co_await coro::stop_here();
+        if (settled.exception)
+            co_return common::error_of_exception(settled.exception);
+        dstd::Vector<DataFrame> frames = std::move(*settled.value);
         if (frames.size() != members.size())
-            throw std::logic_error(
-                ("Source::collect_batch returned " +
-                 dstd::to_string(frames.size()) + " frames for " +
-                 dstd::to_string(members.size()) + " members")
-                    .c_str());
+            dstd::fatal(
+                "Source::collect_batch returned a frame count that differs "
+                "from its member count");
         for (std::size_t k = 0; k < members.size(); ++k)
             members[k]->parts.source =
                 sources[k]->undeclared_columns()
@@ -5801,6 +6264,7 @@ coro::CoroTask<void> batch_leaves(
                           dstd::make_shared<CollectedSource>(
                               sources[k]->schema(), std::move(frames[k])))
                     : dstd::make_shared<InMemorySource>(std::move(frames[k]));
+        co_return dstd::Result<void>{};
     };
     // Members that stream share one opened read; the rest of their group
     // share a buffered one. Fewer than two that stream read the whole group
@@ -5819,8 +6283,11 @@ coro::CoroTask<void> batch_leaves(
             buffered = g.members;
             stream.clear();
         }
-        if (buffered.size() >= 2)
-            co_await collect_buffered(std::move(buffered));
+        if (buffered.size() >= 2) {
+            auto buffering = collect_buffered(std::move(buffered));
+            auto buffered_ok = co_await std::move(buffering);
+            if (!buffered_ok) co_return buffered_ok;
+        }
         if (!stream.empty()) to_open.push_back(std::move(stream));
     }
     for (dstd::Vector<PlannedTree*>& members : to_open) {
@@ -5829,60 +6296,81 @@ coro::CoroTask<void> batch_leaves(
             memory::resolve_spill_budget(members.front()->memory_budget);
         if (auto cursors = sources.front()->open_batch(sources, budget)) {
             if (cursors->size() != members.size())
-                throw std::logic_error(
-                    ("Source::open_batch returned " +
-                     dstd::to_string(cursors->size()) + " cursors for " +
-                     dstd::to_string(members.size()) + " members")
-                        .c_str());
+                dstd::fatal(
+                    "Source::open_batch returned a cursor count that differs "
+                    "from its member count");
             for (std::size_t k = 0; k < members.size(); ++k)
                 members[k]->parts.source = dstd::make_shared<OpenedSource>(
                     sources[k]->schema(), std::move((*cursors)[k]),
                     sources[k]->undeclared_columns());
             continue;
         }
-        co_await collect_buffered(std::move(members));
+        auto buffering = collect_buffered(std::move(members));
+        auto buffered_ok = co_await std::move(buffering);
+        if (!buffered_ok) co_return buffered_ok;
     }
+    co_return dstd::Result<void>{};
 }
 
 }  // namespace
 
 namespace {
 
-coro::CoroTask<DataFrame> collect_owned(LazyFrame plan, std::uint64_t budget,
-                                        std::int64_t morsel_rows) {
+coro::CoroTask<dstd::Result<DataFrame>> collect_owned(
+    LazyFrame plan, std::uint64_t budget, std::int64_t morsel_rows) {
     PlannedTree tree = plan_tree(plan);
     if (!tree.children.empty()) {
         dstd::Vector<PlannedTree*> leaves;
         tree_leaves(tree, leaves);
-        co_await batch_leaves(std::move(leaves));
+        auto batching = batch_leaves(std::move(leaves));
+        auto batched = co_await std::move(batching);
+        if (!batched) co_return batched.error();
     }
-    co_return co_await collect_plan(finish_tree(std::move(tree)), budget,
-                                    morsel_rows);
+    auto collecting =
+        collect_plan(finish_tree(std::move(tree)), budget, morsel_rows);
+    co_return co_await std::move(collecting);
+}
+
+// A task that ends with `error`, for a terminal on a plan that failed to
+// build.
+template <class T>
+coro::CoroTask<dstd::Result<T>> failed_task(dstd::Error error) {
+    co_return dstd::Result<T>(std::move(error));
 }
 
 }  // namespace
 
-coro::CoroTask<DataFrame> join_chunks(DataFrame f) {
-    co_await each_column(f.columns.size(), [&f](std::size_t c) {
-        if (f.columns[c].encoding() == Encoding::Chunked)
-            f.columns[c] = common::unwrap(join_chunks(f.columns[c]));
+coro::CoroTask<dstd::Result<DataFrame>> join_chunks(DataFrame f) {
+    dstd::Vector<dstd::Optional<dstd::Error>> failed(f.columns.size());
+    co_await each_column(f.columns.size(), [&f, &failed](std::size_t c) {
+        if (f.columns[c].encoding() != Encoding::Chunked) return;
+        auto joined = join_chunks(f.columns[c]);
+        if (joined)
+            f.columns[c] = std::move(*joined);
+        else
+            failed[c] = joined.error();
     });
+    for (auto& e : failed)
+        if (e) co_return *e;
     co_return f;
 }
 
-coro::CoroTask<DataFrame> LazyFrame::collect(std::int64_t morsel_rows) const {
+coro::CoroTask<dstd::Result<DataFrame>> LazyFrame::collect(
+    std::int64_t morsel_rows) const {
+    if (error_) return failed_task<DataFrame>(*error_);
     return collect_owned(*this, memory_budget_, morsel_rows);
 }
 
 coro::CoroTask<dstd::Vector<DataFrame>> Source::collect_batch(
     dstd::Vector<dstd::SharedPtr<const Source>>) const {
-    throw std::logic_error(
+    dstd::fatal(
         "Source::collect_batch: a source with a batch_key() must override it");
-    co_return {};
 }
 
-coro::CoroTask<dstd::Vector<DataFrame>> collect_all(
+coro::CoroTask<dstd::Result<dstd::Vector<DataFrame>>> collect_all(
     dstd::Vector<LazyFrame> plans) {
+    for (const LazyFrame& lf : plans)
+        if (auto status = lf.status(); !status) co_return status.error();
     dstd::Vector<PlannedTree> trees;
     trees.reserve(plans.size());
     for (const LazyFrame& lf : plans) trees.push_back(plan_tree(lf));
@@ -5892,20 +6380,27 @@ coro::CoroTask<dstd::Vector<DataFrame>> collect_all(
         roots.push_back(&t);
         tree_leaves(t, leaves);
     }
-    co_await batch_leaves(std::move(leaves), roots);
+    auto batching = batch_leaves(std::move(leaves), roots);
+    auto batched = co_await std::move(batching);
+    if (!batched) co_return batched.error();
 
     // Drained together: a streamed batch feeds every root from one read, so
     // the roots run at once and split each one's spill budget between them.
-    dstd::Vector<coro::CoroTask<DataFrame>> runs;
+    dstd::Vector<coro::CoroTask<dstd::Result<DataFrame>>> runs;
     runs.reserve(trees.size());
     for (PlannedTree& t : trees) {
         const std::uint64_t budget =
             common::share_spill_budget(t.memory_budget, trees.size());
         runs.push_back(collect_plan(finish_tree(std::move(t)), budget, 0));
     }
-    auto frames = co_await coro::when_all(std::move(runs));
-    co_return dstd::Vector<DataFrame>(std::make_move_iterator(frames.begin()),
-                                      std::make_move_iterator(frames.end()));
+    auto results = co_await coro::when_all(std::move(runs));
+    dstd::Vector<DataFrame> frames;
+    frames.reserve(results.size());
+    for (auto& r : results) {
+        if (!r) co_return r.error();
+        frames.push_back(std::move(*r));
+    }
+    co_return frames;
 }
 
 LoweredGroupAggs lower_group_aggs(const dstd::Vector<GroupAgg>& aggs) {
@@ -5933,42 +6428,42 @@ LoweredGroupAggs lower_group_aggs(const dstd::Vector<GroupAgg>& aggs) {
     return out;
 }
 
-void agg_accumulate_chunk(AggState& state, const DataFrame& frame,
-                          const dstd::Vector<dstd::String>& keys,
-                          const dstd::Vector<dstd::String>& value_names,
-                          const dstd::String& dyn_prefix) {
+dstd::Result<void> agg_accumulate_chunk(
+    AggState& state, const DataFrame& frame,
+    const dstd::Vector<dstd::String>& keys,
+    const dstd::Vector<dstd::String>& value_names,
+    const dstd::String& dyn_prefix) {
     dstd::Vector<const Series*> kcols;
     kcols.reserve(keys.size());
     for (const dstd::String& k : keys) {
-        const std::int64_t ki = require_col(frame.names, k, "group_by");
-        kcols.push_back(&frame.columns[static_cast<std::size_t>(ki)]);
+        auto ki = require_col(frame.names, k, "group_by");
+        if (!ki) return ki.error();
+        kcols.push_back(&frame.columns[static_cast<std::size_t>(*ki)]);
     }
     dstd::Vector<const Series*> vcols;
     vcols.reserve(value_names.size());
     for (const dstd::String& v : value_names) {
-        const std::int64_t vi = require_col(frame.names, v, "group_by");
-        vcols.push_back(&frame.columns[static_cast<std::size_t>(vi)]);
+        auto vi = require_col(frame.names, v, "group_by");
+        if (!vi) return vi.error();
+        vcols.push_back(&frame.columns[static_cast<std::size_t>(*vi)]);
     }
     // Pass the row count explicitly: an empty key list (a global reduce to one
     // group) carries no key column to infer the length from.
-    if (dyn_prefix.empty()) {
-        common::unwrap(
-            agg_accumulate(state, kcols, vcols, 0, frame.num_rows()));
-        return;
-    }
+    if (dyn_prefix.empty())
+        return agg_accumulate(state, kcols, vcols, 0, frame.num_rows());
     dstd::Vector<AggDynInput> dcols;
     for (std::size_t i = 0; i < frame.names.size(); ++i)
         if (frame.names[i].rfind(dyn_prefix, 0) == 0)
             dcols.push_back(
                 {frame.names[i].substr(dyn_prefix.size()), &frame.columns[i]});
-    common::unwrap(
-        agg_accumulate(state, kcols, vcols, dcols, 0, frame.num_rows()));
+    return agg_accumulate(state, kcols, vcols, dcols, 0, frame.num_rows());
 }
 
-coro::CoroTask<AggStatePtr> LazyFrame::collect_group_state(
+coro::CoroTask<dstd::Result<AggStatePtr>> LazyFrame::collect_group_state(
     dstd::Vector<dstd::String> keys, dstd::Vector<GroupAgg> aggs,
     dstd::Vector<AggDynSpec> dyn, dstd::String dyn_prefix,
     std::int64_t morsel_rows) const {
+    if (error_) co_return *error_;
     LoweredGroupAggs lowered = lower_group_aggs(aggs);
     AggStatePtr state = agg_new(lowered.specs, dyn);
     auto gen = stream(morsel_rows);
@@ -5976,12 +6471,15 @@ coro::CoroTask<AggStatePtr> LazyFrame::collect_group_state(
     for (;;) {
         auto df = co_await gen.next();
         if (!df) break;
+        if (!*df) co_return df->error();
         agg_set_row_base(*state, rows_seen);
-        rows_seen += df->num_rows();
-        agg_accumulate_chunk(*state, *df, keys, lowered.value_names,
-                             dyn.empty() ? dstd::String() : dyn_prefix);
+        rows_seen += (*df)->num_rows();
+        auto accumulated =
+            agg_accumulate_chunk(*state, **df, keys, lowered.value_names,
+                                 dyn.empty() ? dstd::String() : dyn_prefix);
+        if (!accumulated) co_return accumulated.error();
     }
-    co_return state;
+    co_return std::move(state);
 }
 
 LazyFrame DataFrame::lazy() const {
@@ -6014,8 +6512,10 @@ const char* plan_rule_name(PlanRule rule) noexcept {
 namespace {
 
 LazyFrame rebuild(const LazyFrame& lf, PlanParts plan) {
-    return PlanAccess::make(std::move(plan.source), std::move(plan.ops),
-                            PlanAccess::memory_budget(lf));
+    return PlanAccess::with_error_of(
+        PlanAccess::make(std::move(plan.source), std::move(plan.ops),
+                         PlanAccess::memory_budget(lf)),
+        lf);
 }
 
 }  // namespace
@@ -6217,13 +6717,17 @@ const dstd::SharedPtr<const Source>& plan_source(const LazyFrame& lf) {
 LazyFrame tap(const LazyFrame& lf, dstd::SharedPtr<const Tap> tap) {
     auto ops = PlanAccess::ops(lf);
     ops.push_back(dstd::make_shared<LazyOp>(LazyOp{TapOp{std::move(tap)}}));
-    return PlanAccess::make(PlanAccess::source_ptr(lf), std::move(ops),
-                            PlanAccess::memory_budget(lf));
+    return PlanAccess::with_error_of(
+        PlanAccess::make(PlanAccess::source_ptr(lf), std::move(ops),
+                         PlanAccess::memory_budget(lf)),
+        lf);
 }
 
 LazyFrame rebase(const LazyFrame& lf, dstd::SharedPtr<const Source> source) {
-    return PlanAccess::make(std::move(source), PlanAccess::ops(lf),
-                            PlanAccess::memory_budget(lf));
+    return PlanAccess::with_error_of(
+        PlanAccess::make(std::move(source), PlanAccess::ops(lf),
+                         PlanAccess::memory_budget(lf)),
+        lf);
 }
 
 dstd::Optional<dstd::String> first_non_filter_op(const LazyFrame& lf) {

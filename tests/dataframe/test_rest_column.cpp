@@ -87,9 +87,10 @@ class PartsCursor : public dataframe::Cursor {
     PartsCursor(dstd::Vector<Part> parts, bool with_list)
         : parts_(std::move(parts)), with_list_(with_list) {}
 
-    dftracer::utils::coro::CoroTask<dstd::Optional<dataframe::Morsel>> next(
+    dftracer::utils::coro::CoroTask<dataframe::MorselResult> next(
         std::int64_t) override {
-        if (next_ >= parts_.size()) co_return dstd::nullopt;
+        if (next_ >= parts_.size())
+            co_return dataframe::MorselResult(dstd::nullopt);
         const Part& p = parts_[next_];
         dataframe::Morsel m;
         m.batch_index = static_cast<std::int64_t>(next_++);
@@ -104,7 +105,7 @@ class PartsCursor : public dataframe::Cursor {
             d.name_ids.push_back(intern_->get_or_insert("l"));
             m.columns.push_back(list_column(m.rows));
         }
-        co_return m;
+        co_return dataframe::MorselResult(std::move(m));
     }
 
    private:
@@ -378,8 +379,12 @@ TEST_SUITE("rest column") {
             LazyFrame::scan(
                 dstd::make_shared<dataframe::InMemorySource>(std::move(side))),
             {"a"}, dataframe::JoinHow::Left);
-        CHECK_THROWS_WITH_AS(run(joined), doctest::Contains("'x'"),
-                             std::invalid_argument);
+        const auto collected =
+            dftracer::utils::default_runtime().submit(joined.collect()).get();
+        dftu_utils_test::expect_error(
+            collected, dftracer::utils::common::ErrorCode::InvalidArgument);
+        CHECK(dstd::String(collected.error().c_str()).find("'x'") !=
+              dstd::String::npos);
     }
 
     TEST_CASE("a concat keeps the undeclared columns of either side") {
@@ -469,10 +474,18 @@ TEST_SUITE("rest column") {
         vt.output_schema = node_schema;
         vt.open = node_open;
         REQUIRE(dftu_node_register("test.rest.node", &vt, nullptr) == 0);
-        CHECK_THROWS_WITH_AS(run(rest_scan().sort_by("a").op(
-                                 "test.rest.node", dataframe::OpArgs())),
-                             doctest::Contains("op test.rest.node"),
-                             std::invalid_argument);
+        const auto collected =
+            dftracer::utils::default_runtime()
+                .submit(rest_scan()
+                            .sort_by("a")
+                            .op("test.rest.node", dataframe::OpArgs())
+                            .collect())
+                .get();
+        dftu_utils_test::expect_error(
+            collected, dftracer::utils::common::ErrorCode::InvalidArgument);
+        CHECK(
+            dstd::String(collected.error().c_str()).find("op test.rest.node") !=
+            dstd::String::npos);
         CHECK(dftu_node_unregister("test.rest.node") == 0);
     }
 

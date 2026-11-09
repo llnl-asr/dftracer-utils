@@ -71,6 +71,11 @@ T run(coro::CoroTask<T> t) {
     return common::unwrap(default_runtime().submit(std::move(t)).get());
 }
 
+template <class T>
+T run(coro::CoroTask<dstd::Result<T>> t) {
+    return common::unwrap(default_runtime().submit(std::move(t)).get());
+}
+
 // A multi-member trace: POSIX/STDIO reads and writes across pids with a
 // string and a numeric arg, one gzip member per ~1 MB of lines.
 dstd::String write_trace(const dstd::String& dir, std::int64_t events) {

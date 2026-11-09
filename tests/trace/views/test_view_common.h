@@ -33,6 +33,12 @@ T run(dftracer::utils::coro::CoroTask<T> task) {
         dftracer::utils::default_runtime().submit(std::move(task)).get());
 }
 
+template <class T>
+T run(dftracer::utils::coro::CoroTask<dftracer::utils::dstd::Result<T>> task) {
+    return dftu_utils_test::ok(
+        dftracer::utils::default_runtime().submit(std::move(task)).get());
+}
+
 // A trace mixing POSIX and STDIO events so filters have something to cut.
 inline dftracer::utils::dstd::String create_mixed_trace(
     dftu_utils_test::TestEnvironment& env, int posix_n, int stdio_n) {

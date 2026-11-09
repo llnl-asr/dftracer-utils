@@ -252,26 +252,29 @@ struct DataFrame {
     /// rows keep this frame's order; Right / Outer append the unmatched right
     /// rows. Semi / Anti return this frame's columns only; Cross ignores the
     /// keys. Lookup and Nest keep each row of this frame once and compare keys
-    /// by value (dftu_join_how); Nest names its list column `suffix`. Throws
-    /// std::out_of_range on an absent key, std::invalid_argument on an empty
+    /// by value (dftu_join_how); Nest names its list column `suffix`. A
+    /// NotFound error on an absent key; an InvalidArgument one on an empty
     /// or uneven key list, a key type mismatch (not for Lookup or Nest), or a
     /// Lookup key whose right rows differ or whose filled left cell holds a
     /// value.
-    DataFrame join(const DataFrame& other,
-                   const dstd::Vector<dstd::String>& left_on,
-                   const dstd::Vector<dstd::String>& right_on,
-                   JoinHow how = JoinHow::Inner,
-                   const dstd::String& suffix = "_right",
-                   bool nulls_equal = false) const;
+    dstd::Result<DataFrame> join(const DataFrame& other,
+                                 const dstd::Vector<dstd::String>& left_on,
+                                 const dstd::Vector<dstd::String>& right_on,
+                                 JoinHow how = JoinHow::Inner,
+                                 const dstd::String& suffix = "_right",
+                                 bool nulls_equal = false) const;
     /// Join on the same-named key columns `on`.
-    DataFrame join(const DataFrame& other, const dstd::Vector<dstd::String>& on,
-                   JoinHow how = JoinHow::Inner,
-                   const dstd::String& suffix = "_right",
-                   bool nulls_equal = false) const;
+    dstd::Result<DataFrame> join(const DataFrame& other,
+                                 const dstd::Vector<dstd::String>& on,
+                                 JoinHow how = JoinHow::Inner,
+                                 const dstd::String& suffix = "_right",
+                                 bool nulls_equal = false) const;
     /// Compare this aggregation result with `variant` on their first `n_key`
     /// key columns: keys, `l_<m>` / `r_<m>` per metric, then `delta_<m>` and
-    /// `pct_<m>` per numeric metric.
-    DataFrame compare_agg(const DataFrame& variant, std::int64_t n_key) const;
+    /// `pct_<m>` per numeric metric. An InvalidArgument error if `n_key < 1`,
+    /// exceeds a frame's width, or a key name differs.
+    dstd::Result<DataFrame> compare_agg(const DataFrame& variant,
+                                        std::int64_t n_key) const;
 
     /// Reshape wide -> long: keep `id_vars`, stack `value_vars` into a
     /// `variable`/`value` column pair. `melt` is an alias. The errors of
@@ -336,9 +339,9 @@ struct DataFrame {
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
     /// Serialize this frame to an Arrow IPC stream (schema message + one record
-    /// batch + EOS) as bytes any Arrow IPC reader can open - no pyarrow. Throws
-    /// std::runtime_error on an encode failure.
-    dstd::Vector<std::uint8_t> to_ipc() const;
+    /// batch + EOS) as bytes any Arrow IPC reader can open - no pyarrow. An
+    /// @ref common::ErrorCode::Internal error result on an encode failure.
+    dstd::Result<dstd::Vector<std::uint8_t>> to_ipc() const;
 #endif
 
     /// Import a STRUCT Arrow array (viewed through `schema`) as a @ref

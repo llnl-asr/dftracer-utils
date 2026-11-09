@@ -43,7 +43,9 @@ namespace {
 // Drives a LazyFrame::collect() coroutine to completion on the default
 // runtime; the bench installs its own thread backend but the runtime itself
 // is single-threaded here, so this just blocks for the result.
-DataFrame run(dftracer::utils::coro::CoroTask<DataFrame> t) {
+DataFrame run(
+    dftracer::utils::coro::CoroTask<dftracer::utils::dstd::Result<DataFrame>>
+        t) {
     auto result = dftracer::utils::default_runtime().submit(std::move(t)).get();
     if (!result.has_value()) {
         std::fprintf(stderr, "run: %s\n", result.error().c_str());

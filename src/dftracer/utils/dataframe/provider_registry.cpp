@@ -6,6 +6,8 @@
 // not plugin-scoped: a non-plugin C caller, or a future language binding,
 // registers and reads it the same way a plugin does.
 
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/task_abi.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/expr.h>
@@ -14,6 +16,7 @@
 #include <dftracer/utils/dataframe/internal/governor.h>
 #include <dftracer/utils/dataframe/internal/join_names.h>
 #include <dftracer/utils/dataframe/internal/lazyframe_handle.h>
+#include <dftracer/utils/dataframe/internal/plugin_task.h>
 #include <dftracer/utils/dataframe/internal/provider_source.h>
 #include <dftracer/utils/dataframe/internal/schema_types.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
@@ -191,12 +194,14 @@ class ProviderCursor final : public Cursor {
    public:
     ProviderCursor(const ::dftu_cursor_vt* vt, void* self,
                    dstd::Vector<dstd::String> expected_projection,
+                   dstd::Vector<TypeId> expected_types,
                    dftracer::utils::dstd::SharedPtr<const Source> source)
         : source_(std::move(source)),
           vt_(vt),
           self_(self),
           gov_(vt),
-          expected_projection_(std::move(expected_projection)) {}
+          expected_projection_(std::move(expected_projection)),
+          expected_types_(std::move(expected_types)) {}
 
     ~ProviderCursor() override {
         if (vt_->destroy) vt_->destroy(self_);
@@ -205,13 +210,14 @@ class ProviderCursor final : public Cursor {
     ProviderCursor(const ProviderCursor&) = delete;
     ProviderCursor& operator=(const ProviderCursor&) = delete;
 
-    coro::CoroTask<dftracer::utils::dstd::Optional<Morsel>> next(
-        std::int64_t max_rows) override {
-        dftracer::utils::dstd::Optional<Morsel> out;
-        if (try_next(max_rows, out)) co_return out;
-        auto task = task_from_abi(pending_task_);
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
+        MorselResult out;
+        if (try_next(max_rows, out)) co_return std::move(out);
+        ::dftu_task* pending = pending_task_;
         pending_task_ = nullptr;
-        co_await *task;
+        auto awaiting = await_plugin_task(pending);
+        auto awaited = co_await std::move(awaiting);
+        if (!awaited) co_return awaited.error();
         co_return finish(pending_result_);
     }
 
@@ -224,8 +230,7 @@ class ProviderCursor final : public Cursor {
     // for next() to await and finish. Callers must fall back to next()
     // immediately on a false return rather than calling try_next again,
     // exactly as the Cursor::try_next contract requires.
-    bool try_next(std::int64_t max_rows,
-                  dftracer::utils::dstd::Optional<Morsel>& out) override {
+    bool try_next(std::int64_t max_rows, MorselResult& out) override {
         pending_result_ = ::dftu_result_frame{};
         if (::dftu_task* t = vt_->next(self_, max_rows, &pending_result_)) {
             pending_task_ = t;
@@ -241,12 +246,18 @@ class ProviderCursor final : public Cursor {
         std::int32_t applied = 0;
         ::dftu_expr* h = expr_handle_wrap(predicate);
         ::dftu_task* t = vt_->narrow(self_, h, &applied);
+        bool awaited_ok = true;
         if (t) {
-            auto task = task_from_abi(t);
-            co_await *task;
+            auto awaiting = await_plugin_task(t);
+            auto awaited = co_await std::move(awaiting);
+            awaited_ok = awaited.has_value();
+            if (!awaited_ok)
+                DFTRACER_UTILS_LOG_WARN("provider narrow failed: %s",
+                                        awaited.error().c_str());
         }
         ::dftu_expr_free(h);
-        co_return applied != 0;
+        const bool narrowed = awaited_ok && applied != 0;
+        co_return narrowed;
     }
     std::uint64_t resident_bytes() const override {
         return vt_->bytes ? vt_->bytes(self_) : 0;
@@ -256,13 +267,13 @@ class ProviderCursor final : public Cursor {
     }
 
    private:
-    dftracer::utils::dstd::Optional<Morsel> finish(
-        const ::dftu_result_frame& out) {
+    MorselResult finish(const ::dftu_result_frame& out) {
         if (!DFTU_RESULT_OK(out))
-            throw std::runtime_error(describe(DFTU_RESULT_ERROR(out)).c_str());
+            return common::make_error<"{}">(common::ErrorCode::Internal,
+                                            describe(DFTU_RESULT_ERROR(out)));
 
         ::dftu_dataframe* frame = DFTU_RESULT_VALUE(out);
-        if (!frame) return dftracer::utils::dstd::nullopt;
+        if (!frame) return MorselResult(dftracer::utils::dstd::nullopt);
 
         DataFrame df = dataframe_handle_take(frame);
         // Checked on every morsel, not just the first: the check is
@@ -270,17 +281,29 @@ class ProviderCursor final : public Cursor {
         // the contract binds every dftu_dataframe the cursor produces, not
         // only its first.
         if (!expected_projection_.empty() && df.names != expected_projection_)
-            throw std::runtime_error(
-                ("provider scan: frame columns [" + join_names(df.names) +
-                 "] do not match the requested projection [" +
-                 join_names(expected_projection_) + "]")
-                    .c_str());
+            return common::make_error<
+                "provider scan: frame columns [{}] do not match the requested "
+                "projection [{}]">(common::ErrorCode::Internal,
+                                   join_names(df.names),
+                                   join_names(expected_projection_));
+
+        if (expected_types_.size() == df.columns.size())
+            for (std::size_t i = 0; i < expected_types_.size(); ++i) {
+                const TypeId want = expected_types_[i];
+                const TypeId got = df.columns[i].type();
+                if (want != TypeId::Unknown && got != want)
+                    return common::make_error<
+                        "provider scan: column {} is {} but the provider "
+                        "declared {}">(common::ErrorCode::InvalidArgument,
+                                       df.names[i], type_name(got),
+                                       type_name(want));
+            }
 
         Morsel m;
         m.rows = df.num_rows();
         m.columns = std::move(df.columns);
         gov_.at_morsel(vt_, self_);
-        return m;
+        return MorselResult(std::move(m));
     }
 
     // Released after the cursor itself: a derived source's destroy() runs
@@ -290,6 +313,7 @@ class ProviderCursor final : public Cursor {
     void* self_;
     PluginGovernor gov_;
     dstd::Vector<dstd::String> expected_projection_;
+    dstd::Vector<TypeId> expected_types_;
     ::dftu_result_frame pending_result_{};
     ::dftu_task* pending_task_ = nullptr;
 };
@@ -511,8 +535,22 @@ class ProviderSource final
 
         for (std::size_t i = 0; i < r.filters.size(); ++i)
             r.filters[i] = to_pushed(out_pushed[i]);
+        const Schema declared = schema();
+        dstd::Vector<TypeId> expected_types;
+        if (req.projection.empty()) {
+            for (const Field& f : declared.fields)
+                expected_types.push_back(f.type.id);
+        } else {
+            for (const dstd::String& name : req.projection) {
+                TypeId id = TypeId::Unknown;
+                for (const Field& f : declared.fields)
+                    if (f.name == name) id = f.type.id;
+                expected_types.push_back(id);
+            }
+        }
         r.cursor = dstd::make_unique<ProviderCursor>(
-            vt, cursor_self, req.projection, shared_from_this());
+            vt, cursor_self, req.projection, std::move(expected_types),
+            shared_from_this());
         return r;
     }
 

@@ -188,11 +188,12 @@ static dftu_task* src_next(void* self, int64_t max_rows,
     cur->done = 1;
     {
         static const int64_t n_vals[3] = {1, 2, 3};
-        static const int64_t amount_vals[3] = {100, 200, 300};
+        /* Decimal128 values, 16 bytes each, little-endian: 1.00 2.00 3.00 */
+        static const int64_t amount_vals[6] = {100, 0, 200, 0, 300, 0};
         dftu_series* n_col =
             dftu_series_new_flat(DFTU_TYPE_INT64, n_vals, 3, NULL);
         dftu_series* amount_col =
-            dftu_series_new_flat(DFTU_TYPE_INT64, amount_vals, 3, NULL);
+            dftu_series_new_flat(DFTU_TYPE_DECIMAL128, amount_vals, 3, NULL);
         dftu_series* cols[2];
         cols[0] = n_col;
         cols[1] = amount_col;

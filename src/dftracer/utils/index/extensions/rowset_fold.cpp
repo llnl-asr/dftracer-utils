@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/frame_native.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -320,7 +321,7 @@ void RowSetFold::write(index::FileBuild& build) const {
             f.columns.push_back(series_of(sealed_[r].columns[c]));
         }
         index::put_rowset(build, rowsets_[r].name,
-                          dataframe::frame_to_native(f));
+                          common::unwrap(dataframe::frame_to_native(f)));
     }
     build.finish(index::store::IndexExtension::Rowset, 0);
 }

@@ -21,6 +21,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <memory/fresh_process.h>
 #include <task_result.h>
 
 #include <cstdint>
@@ -34,7 +35,7 @@ using namespace dftracer::utils::dataframe;
 namespace {
 
 template <class T>
-T run(coro::CoroTask<T> t) {
+T run(coro::CoroTask<dstd::Result<T>> t) {
     T out = dftu_utils_test::ok(
         dftracer::utils::default_runtime().submit(std::move(t)).get());
     if constexpr (std::is_same_v<T, DataFrame>)
@@ -206,9 +207,10 @@ class SmartSource final : public Source,
         log_->offered.push_back(Kind::Join);
         const auto* other = dynamic_cast<const SmartSource*>(spec.other.get());
         if (!accepts(Kind::Join) || !other) return dstd::nullopt;
-        return derive(frame_.join(other->frame_, spec.left_on, spec.right_on,
-                                  spec.how, spec.suffix),
-                      ApplyStatus::Exact);
+        auto joined = frame_.join(other->frame_, spec.left_on, spec.right_on,
+                                  spec.how, spec.suffix);
+        if (!joined) return dstd::nullopt;
+        return derive(std::move(*joined), ApplyStatus::Exact);
     }
 
    private:
@@ -436,24 +438,39 @@ TEST_SUITE("source_hooks") {
         CHECK(left.log->offered == dstd::Vector<Kind>{Kind::Join});
     }
 
-    TEST_CASE("a hook returning the same handle is a contract error") {
+    TEST_CASE("a hook returning the same handle ends the process" *
+              doctest::skip()) {
+        fresh_process::announce_abort();
         Policy p{all_kinds()};
         p.return_same_handle = true;
         Smart s = smart(p);
-        CHECK_THROWS_AS(dataframe::detail::apply_plan_rule(
-                            s.lf.filter(col(0) > std::int64_t{1}),
-                            dataframe::detail::PlanRule::SourceAbsorption),
-                        std::logic_error);
+        (void)dataframe::detail::apply_plan_rule(
+            s.lf.filter(col(0) > std::int64_t{1}),
+            dataframe::detail::PlanRule::SourceAbsorption);
     }
 
-    TEST_CASE("an inexact schema change is a contract error") {
+    TEST_CASE("a hook returning the same handle is fatal") {
+        auto result = fresh_process::run(
+            "a hook returning the same handle ends the process");
+        CHECK(result.aborted_with(
+            "source planning hook accepted an op without a new source"));
+    }
+
+    TEST_CASE("an inexact schema change ends the process" * doctest::skip()) {
+        fresh_process::announce_abort();
         Policy p{all_kinds()};
         p.projection_inexact = true;
         Smart s = smart(p);
-        CHECK_THROWS_AS(dataframe::detail::apply_plan_rule(
-                            s.lf.select({"a"}),
-                            dataframe::detail::PlanRule::SourceAbsorption),
-                        std::logic_error);
+        (void)dataframe::detail::apply_plan_rule(
+            s.lf.select({"a"}), dataframe::detail::PlanRule::SourceAbsorption);
+    }
+
+    TEST_CASE("an inexact schema change is fatal") {
+        auto result =
+            fresh_process::run("an inexact schema change ends the process");
+        CHECK(result.aborted_with(
+            "source planning hook accepted an op as inexact, but it changes "
+            "the schema"));
     }
 }
 
@@ -623,7 +640,7 @@ TEST_SUITE("source_hooks_c_abi") {
         dstd::UniquePtr<dftracer::utils::dataframe::Cursor> cur;
         {
             LazyFrame lf = c_frame(fx).slice(0, 4);
-            cur = lf.open_cursor();
+            cur = dftu_utils_test::ok(lf.open_cursor());
         }
         CHECK(fx.derived_alive == 1);
         cur.reset();
@@ -677,7 +694,7 @@ TEST_SUITE("source_hooks_c_abi") {
             LazyFrame right = c_frame(fx).slice(0, 5);
             LazyFrame lf = c_frame(fx).join(
                 right, {"id"}, dftracer::utils::dataframe::JoinHow::Left, "_r");
-            cur = lf.open_cursor();
+            cur = dftu_utils_test::ok(lf.open_cursor());
         }
         CHECK(fx.join_is_ours);
         CHECK(fx.join_on == dstd::Vector<dstd::String>{"id=id"});
@@ -705,6 +722,7 @@ TEST_SUITE("source_hooks_c_abi") {
 namespace {
 
 struct BatchLog {
+    bool throw_batch = false;
     int opened = 0;
     int scans = 0;
     int batches = 0;
@@ -746,6 +764,7 @@ class KeyedSource final : public Source {
     coro::CoroTask<dstd::Vector<DataFrame>> collect_batch(
         dstd::Vector<dstd::SharedPtr<const Source>> members) const override {
         ++log_->batches;
+        if (log_->throw_batch) throw std::runtime_error("batch boom");
         log_->last_members = members.size();
         dstd::Vector<DataFrame> out;
         for (const auto& m : members)
@@ -876,5 +895,221 @@ TEST_SUITE("batched leaves") {
         CHECK(log->scans == 1);
         CHECK(out[0].num_rows() == 6);
         CHECK(out[1].num_rows() == 2);
+    }
+}
+
+namespace {
+
+enum class BatchFault { NoCollect, ShortCollect, ShortOpen };
+
+// A keyed source that breaks the batch contract the way `fault` says: it keeps
+// the default collect_batch, returns too few frames, or opens too few cursors.
+class FaultBatchSource final : public Source {
+   public:
+    FaultBatchSource(DataFrame df, BatchFault fault)
+        : inner_(share(df)), frame_(std::move(df)), fault_(fault) {}
+
+    Schema schema() const override { return inner_.schema(); }
+    ScanResult scan(const ScanRequest& req) const override {
+        return inner_.scan(req);
+    }
+    dstd::Optional<dstd::String> batch_key() const override { return "k"; }
+    bool streams_in_batch() const override {
+        return fault_ == BatchFault::ShortOpen;
+    }
+    dstd::Optional<
+        dstd::Vector<dstd::UniquePtr<dftracer::utils::dataframe::Cursor>>>
+    open_batch(dstd::Vector<dstd::SharedPtr<const Source>>,
+               std::uint64_t) const override {
+        if (fault_ != BatchFault::ShortOpen) return dstd::nullopt;
+        dstd::Vector<dstd::UniquePtr<dftracer::utils::dataframe::Cursor>> out;
+        out.push_back(inner_.scan(ScanRequest{}).cursor);
+        return out;
+    }
+    coro::CoroTask<dstd::Vector<DataFrame>> collect_batch(
+        dstd::Vector<dstd::SharedPtr<const Source>> members) const override {
+        if (fault_ == BatchFault::NoCollect) {
+            auto base = Source::collect_batch(std::move(members));
+            co_return co_await std::move(base);
+        }
+        dstd::Vector<DataFrame> out;
+        out.push_back(share(frame_));
+        co_return out;
+    }
+
+   private:
+    InMemorySource inner_;
+    DataFrame frame_;
+    BatchFault fault_;
+};
+
+void collect_faulty_batch(BatchFault fault) {
+    auto leaf = [&] {
+        return LazyFrame::scan(
+            dstd::make_shared<FaultBatchSource>(make_df(), fault));
+    };
+    (void)dftracer::utils::default_runtime()
+        .submit(dftracer::utils::dataframe::collect_all({leaf(), leaf()}))
+        .get();
+}
+
+}  // namespace
+
+TEST_SUITE("batch contract") {
+    TEST_CASE("a batch source without collect_batch ends the process" *
+              doctest::skip()) {
+        fresh_process::announce_abort();
+        collect_faulty_batch(BatchFault::NoCollect);
+    }
+
+    TEST_CASE("a batch source without collect_batch is fatal") {
+        auto result = fresh_process::run(
+            "a batch source without collect_batch ends the process");
+        CHECK(result.aborted_with(
+            "Source::collect_batch: a source with a batch_key() must "
+            "override it"));
+    }
+
+    TEST_CASE("a collect_batch with too few frames ends the process" *
+              doctest::skip()) {
+        fresh_process::announce_abort();
+        collect_faulty_batch(BatchFault::ShortCollect);
+    }
+
+    TEST_CASE("a collect_batch with too few frames is fatal") {
+        auto result = fresh_process::run(
+            "a collect_batch with too few frames ends the process");
+        CHECK(result.aborted_with(
+            "Source::collect_batch returned a frame count that differs from "
+            "its member count"));
+    }
+
+    TEST_CASE("an open_batch with too few cursors ends the process" *
+              doctest::skip()) {
+        fresh_process::announce_abort();
+        collect_faulty_batch(BatchFault::ShortOpen);
+    }
+
+    TEST_CASE("an open_batch with too few cursors is fatal") {
+        auto result = fresh_process::run(
+            "an open_batch with too few cursors ends the process");
+        CHECK(result.aborted_with(
+            "Source::open_batch returned a cursor count that differs from "
+            "its member count"));
+    }
+}
+
+namespace {
+
+enum class SourceFault { Throw, Stop };
+
+class FaultyCursor final : public dftracer::utils::dataframe::Cursor {
+   public:
+    explicit FaultyCursor(SourceFault fault) : fault_(fault) {}
+    coro::CoroTask<MorselResult> next(std::int64_t) override {
+        if (fault_ == SourceFault::Throw)
+            throw std::runtime_error("source boom");
+        co_await coro::stop_here();
+        co_return MorselResult(dstd::nullopt);
+    }
+
+   private:
+    SourceFault fault_;
+};
+
+// A source from outside the dataframe library: its task throws or stops.
+class FaultySource final : public Source {
+   public:
+    explicit FaultySource(SourceFault fault) : fault_(fault) {}
+    Schema schema() const override {
+        return {{dftracer::utils::dataframe::Field{
+            "a", dftracer::utils::dataframe::scalar(TypeId::Int64), true}}};
+    }
+    ScanResult scan(const ScanRequest& req) const override {
+        ScanResult r;
+        r.cursor = dstd::make_unique<FaultyCursor>(fault_);
+        r.filters.assign(req.filters.size(),
+                         dftracer::utils::dataframe::Pushed::No);
+        return r;
+    }
+
+   private:
+    SourceFault fault_;
+};
+
+LazyFrame faulty(SourceFault fault) {
+    return LazyFrame::scan(dstd::make_shared<FaultySource>(fault));
+}
+
+}  // namespace
+
+TEST_SUITE("source that fails") {
+    TEST_CASE("a source whose task throws ends the collect with an error") {
+        const auto collected = dftracer::utils::default_runtime()
+                                   .submit(faulty(SourceFault::Throw).collect())
+                                   .get();
+        REQUIRE_FALSE(collected.has_value());
+        CHECK(dstd::String(collected.error().c_str()).find("source boom") !=
+              dstd::String::npos);
+    }
+
+    TEST_CASE("a source whose task throws fails the ops over it the same way") {
+        const auto filtered = dftracer::utils::default_runtime()
+                                  .submit(faulty(SourceFault::Throw)
+                                              .filter(col(0) > std::int64_t{1})
+                                              .head(3)
+                                              .collect())
+                                  .get();
+        REQUIRE_FALSE(filtered.has_value());
+        CHECK(dstd::String(filtered.error().c_str()).find("source boom") !=
+              dstd::String::npos);
+        const auto joined = dftracer::utils::default_runtime()
+                                .submit(faulty(SourceFault::Throw)
+                                            .join(make_df().lazy(), {"a"})
+                                            .collect())
+                                .get();
+        REQUIRE_FALSE(joined.has_value());
+        CHECK(dstd::String(joined.error().c_str()).find("source boom") !=
+              dstd::String::npos);
+    }
+
+    TEST_CASE("a source whose task throws ends the stream with an error") {
+        auto stream_error =
+            [](LazyFrame lf) -> coro::CoroTask<dstd::Result<void>> {
+            auto g = lf.stream();
+            while (auto df = co_await g.next())
+                if (!*df) co_return df->error();
+            co_return dstd::Result<void>();
+        };
+        const auto result =
+            dftracer::utils::default_runtime()
+                .submit(stream_error(faulty(SourceFault::Throw)))
+                .get();
+        REQUIRE_FALSE(result.has_value());
+        CHECK(dstd::String(result.error().c_str()).find("source boom") !=
+              dstd::String::npos);
+    }
+
+    TEST_CASE("a collect_batch that throws ends the collect with an error") {
+        auto log = dstd::make_shared<BatchLog>();
+        log->throw_batch = true;
+        const auto collected =
+            dftracer::utils::default_runtime()
+                .submit(keyed("k", log)
+                            .join(keyed("k", log).select({"a", "g"}), {"a"})
+                            .collect())
+                .get();
+        CHECK(log->batches == 1);
+        REQUIRE_FALSE(collected.has_value());
+        CHECK(dstd::String(collected.error().c_str()).find("batch boom") !=
+              dstd::String::npos);
+    }
+
+    TEST_CASE("a source that stops ends the collect stopped") {
+        const auto collected = dftracer::utils::default_runtime()
+                                   .submit(faulty(SourceFault::Stop).collect())
+                                   .get();
+        REQUIRE_FALSE(collected.has_value());
+        CHECK(collected.error().condition() == dstd::Condition::Cancelled);
     }
 }

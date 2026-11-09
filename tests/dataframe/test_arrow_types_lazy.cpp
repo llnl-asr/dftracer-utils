@@ -34,13 +34,8 @@ using namespace dftracer::utils::dataframe::test_types;
 
 namespace {
 
-DataFrame run(dftracer::utils::coro::CoroTask<DataFrame> t) {
-    return dftu_utils_test::ok(
-        dftracer::utils::default_runtime().submit(std::move(t)).get());
-}
-
-dstd::Optional<Morsel> run(
-    dftracer::utils::coro::CoroTask<dstd::Optional<Morsel>> t) {
+template <class T>
+T run(dftracer::utils::coro::CoroTask<dstd::Result<T>> t) {
     return dftu_utils_test::ok(
         dftracer::utils::default_runtime().submit(std::move(t)).get());
 }
@@ -218,18 +213,19 @@ dstd::Optional<Morsel> spill_round_trip(const Series& col, spill::Dir& dir,
     dstd::Vector<Series> cols;
     cols.push_back(col.share());
     const dstd::String path = dir.run_path(id);
-    spill::Writer w(path);
-    w.write(cols, col.length());
-    w.close();
-    spill::Reader r(path);
-    return run(r.next(0));
+    auto w = dftu_utils_test::ok(spill::Writer::open(path));
+    dftu_utils_test::ok(w.write(cols, col.length()));
+    dftu_utils_test::ok(w.close());
+    auto r = dftu_utils_test::ok(spill::Reader::open(path));
+    return run(r->next(0));
 }
 
 }  // namespace
 
 TEST_SUITE("dataframe_arrow_types_lazy") {
     TEST_CASE("spill round-trips Float16, Decimal128/256 and FixedSizeBinary") {
-        spill::Dir dir;
+        const auto dir_owner = dftu_utils_test::ok(spill::Dir::create());
+        spill::Dir& dir = *dir_owner;
 
         {
             INFO("Float16");
@@ -288,7 +284,8 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
     TEST_CASE(
         "spill round-trips LargeString, LargeBinary and the temporal "
         "family") {
-        spill::Dir dir;
+        const auto dir_owner = dftu_utils_test::ok(spill::Dir::create());
+        spill::Dir& dir = *dir_owner;
         {
             INFO("LargeString");
             Series s = make_large_utf8({"hello", "", "world", "dftracer"});
@@ -374,7 +371,8 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
     }
 
     TEST_CASE("spill round-trips a LargeList") {
-        spill::Dir dir;
+        const auto dir_owner = dftu_utils_test::ok(spill::Dir::create());
+        spill::Dir& dir = *dir_owner;
         Series large_list = make_large_list_i64({{3}, {1, 2}, {}, {1}});
         auto m = spill_round_trip(large_list, dir, 0);
         REQUIRE(m.has_value());
@@ -387,7 +385,8 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
     }
 
     TEST_CASE("spill round-trips FixedSizeList and Map") {
-        spill::Dir dir;
+        const auto dir_owner = dftu_utils_test::ok(spill::Dir::create());
+        spill::Dir& dir = *dir_owner;
         Series fixed_list =
             make_fixed_size_list_i64({{3, 3}, {1, 1}, {2, 2}, {1, 1}});
         auto f = spill_round_trip(fixed_list, dir, 0);

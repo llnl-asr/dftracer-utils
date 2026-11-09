@@ -442,9 +442,9 @@ double join_inner(const Scale& s) {
     right.columns.push_back(Series::flat_i64(right_keys.data(), s.op_rows));
     right.columns.push_back(Series::flat_f64(rv.data(), s.op_rows));
     return repeat_op(s.join_reps, [&] {
-        DataFrame out = left.join(
+        DataFrame out = dftracer::utils::common::unwrap(left.join(
             right,
-            dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{"k"});
+            dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{"k"}));
         check(out.num_rows() == s.op_rows, "join rows");
     });
 }

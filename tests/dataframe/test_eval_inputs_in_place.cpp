@@ -159,7 +159,7 @@ void compare(const dstd::Vector<Series>& in, const dstd::Vector<Series>& flat,
 }
 
 dftracer::utils::dataframe::DataFrame run(
-    dftracer::utils::coro::CoroTask<DataFrame> t) {
+    dftracer::utils::coro::CoroTask<dstd::Result<DataFrame>> t) {
     return dftu_utils_test::ok(
         dftracer::utils::default_runtime().submit(std::move(t)).get());
 }

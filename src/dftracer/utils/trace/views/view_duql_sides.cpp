@@ -76,10 +76,12 @@ void persist(const CacheKey& key,
         for (const auto& p : parts) ptrs.push_back(&p);
         index::cache::persist_lookup(
             *db, key.sig,
-            ptrs.size() == 1
-                ? dataframe::frame_to_native(parts.front())
-                : dataframe::frame_to_native(common::unwrap(dataframe::concat(
-                      ptrs, dataframe::ConcatHow::Diagonal))));
+            common::unwrap(
+                ptrs.size() == 1
+                    ? dataframe::frame_to_native(parts.front())
+                    : dataframe::frame_to_native(
+                          common::unwrap(dataframe::concat(
+                              ptrs, dataframe::ConcatHow::Diagonal)))));
     } catch (const std::exception&) {
     }
 }
@@ -108,7 +110,7 @@ dstd::SharedPtr<const dataframe::DataFrame> Sides::probe(std::size_t i) const {
     dataframe::DataFrame f;
     common::unwrap(dftracer::utils::default_runtime().block_on(
         coro::named("duql_side_types", [&]() -> coro::CoroTask<void> {
-            f = co_await plan.collect();
+            f = common::unwrap(co_await plan.collect());
             co_return;
         }())));
     return dstd::make_shared<const dataframe::DataFrame>(std::move(f));
@@ -177,7 +179,8 @@ dstd::SharedPtr<const dataframe::DataFrame> Sides::distinct(std::size_t i) {
             for (;;) {
                 auto f = co_await gen.next();
                 if (!f) break;
-                dataframe::DataFrame part = duql::flat_frame(std::move(*f));
+                dataframe::DataFrame part =
+                    duql::flat_frame(common::unwrap(std::move(*f)));
                 dstd::Vector<std::int64_t> take;
                 for (std::int64_t r = 0; r < part.num_rows(); ++r) {
                     row_key.clear();
@@ -249,7 +252,7 @@ dstd::SharedPtr<const dataframe::DataFrame> Sides::run(std::size_t i) {
     dataframe::DataFrame f;
     common::unwrap(dftracer::utils::default_runtime().block_on(
         coro::named("duql_lookup_side", [&]() -> coro::CoroTask<void> {
-            f = co_await plan.collect();
+            f = common::unwrap(co_await plan.collect());
             co_return;
         }())));
     caps.check_rows(name, static_cast<std::uint64_t>(f.num_rows()));
@@ -301,7 +304,7 @@ class SideSource final : public dataframe::Source {
               side_(side),
               projection_(std::move(projection)) {}
 
-        coro::CoroTask<dstd::Optional<dataframe::Morsel>> next(
+        coro::CoroTask<dataframe::MorselResult> next(
             std::int64_t max_rows) override {
             if (!rows_) {
                 const auto frame = sides_->frame(side_);
@@ -313,7 +316,8 @@ class SideSource final : public dataframe::Source {
                     f = common::unwrap(f.select(projection_));
                 rows_ = dataframe::InMemorySource(std::move(f)).scan({}).cursor;
             }
-            co_return co_await rows_->next(max_rows);
+            auto next_task = rows_->next(max_rows);
+            co_return co_await std::move(next_task);
         }
 
        private:
@@ -354,8 +358,9 @@ dstd::SharedPtr<const dataframe::detail::Tap> side_tap(
         const dstd::Optional<CacheKey> key = s->keys[side];
         const LookupCaps caps = LookupCaps::read();
         dataframe::detail::TapRun run;
-        run.rows = [state, key, caps](const dataframe::DataFrame& f) {
-            if (state->over) return;
+        run.rows = [state, key,
+                    caps](const dataframe::DataFrame& f) -> dstd::Result<void> {
+            if (state->over) return {};
             state->rows += static_cast<std::uint64_t>(f.num_rows());
             dataframe::DataFrame part;
             part.names = f.names;
@@ -365,12 +370,14 @@ dstd::SharedPtr<const dataframe::detail::Tap> side_tap(
             if (caps.over(state->rows, state->bytes)) {
                 state->over = true;
                 state->parts.clear();
-                return;
+                return {};
             }
             if (key) state->parts.push_back(std::move(part));
+            return {};
         };
-        run.end = [state, key] {
+        run.end = [state, key]() -> dstd::Result<void> {
             if (key && !state->over) persist(*key, state->parts);
+            return {};
         };
         return run;
     };

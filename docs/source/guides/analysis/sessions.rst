@@ -174,8 +174,8 @@ inherits:
    df::LazyFrame delta =
        base.compare(trace.filter(Query::from_string("rank == 1").value()));
 
-   df::DataFrame joined_df = co_await joined.collect();
-   df::DataFrame diff = co_await delta.collect();
+   dstd::Result<df::DataFrame> joined_df = co_await joined.collect();
+   dstd::Result<df::DataFrame> diff = co_await delta.collect();
 
 Notes
 -----

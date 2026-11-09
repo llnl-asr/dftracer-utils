@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_ENGINE_AGG_FOLD_H
 #define DFTRACER_UTILS_TRACE_VIEWS_ENGINE_AGG_FOLD_H
 
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -88,9 +89,9 @@ class EngineAggFold : public Fold {
         if (keep.empty()) return;
         dftracer::utils::dataframe::DataFrame f =
             build_agg_input_frame(keep, *intern_, spec_, resolver_);
-        dftracer::utils::dataframe::agg_accumulate_chunk(
+        common::unwrap(dftracer::utils::dataframe::agg_accumulate_chunk(
             *state_, f, spec_.group_key_names, lowered_.value_names,
-            spec_.emit_dyn ? spec_.dyn_prefix : dstd::String());
+            spec_.emit_dyn ? spec_.dyn_prefix : dstd::String()));
     }
 
     void seal_unit(const ScanUnit&) override {}

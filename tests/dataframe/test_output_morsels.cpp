@@ -37,8 +37,24 @@ coro::CoroTask<dstd::Vector<DataFrame>> stream_all(LazyFrame lf,
                                                    std::int64_t max_rows) {
     dstd::Vector<DataFrame> out;
     auto g = lf.stream(max_rows);
-    while (auto df = co_await g.next()) out.push_back(std::move(*df));
+    while (auto df = co_await g.next())
+        out.push_back(dftu_utils_test::ok(std::move(*df)));
     co_return out;
+}
+
+dstd::String key_of(const dstd::Vector<Series>& cols, std::int64_t r) {
+    KeyRefusal refusal;
+    dstd::String key = row_key(cols, r, refusal);
+    REQUIRE_FALSE(refusal.refused());
+    return key;
+}
+
+coro::CoroTask<dstd::Result<void>> stream_status(LazyFrame lf,
+                                                 std::int64_t max_rows) {
+    auto g = lf.stream(max_rows);
+    while (auto df = co_await g.next())
+        if (!*df) co_return df->error();
+    co_return dstd::Result<void>();
 }
 
 dstd::Vector<DataFrame> morsels(const LazyFrame& lf,
@@ -58,7 +74,7 @@ void add_keys(const DataFrame& p, dstd::Vector<dstd::String>& keys) {
     dstd::Vector<Series> cols;
     for (const Series& c : p.columns) cols.push_back(c.materialize());
     for (std::int64_t r = 0; r < p.num_rows(); ++r)
-        keys.push_back(row_key(cols, r));
+        keys.push_back(key_of(cols, r));
 }
 
 // Every row of every morsel as a key, sorted: the rows, whatever their order.
@@ -93,7 +109,7 @@ void expect_same_rows(const DataFrame& got, const DataFrame& want) {
         x.push_back(got.columns[c].materialize());
         y.push_back(want.columns[c].materialize());
         for (std::int64_t r = 0; r < got.num_rows(); ++r)
-            REQUIRE(row_key(x, r) == row_key(y, r));
+            REQUIRE(key_of(x, r) == key_of(y, r));
     }
 }
 
@@ -140,8 +156,8 @@ class CountedTimes : public Source {
         Rows(std::int64_t morsels, std::int64_t rows,
              dstd::SharedPtr<std::int64_t> pulled)
             : morsels_(morsels), rows_(rows), pulled_(std::move(pulled)) {}
-        coro::CoroTask<dstd::Optional<Morsel>> next(std::int64_t) override {
-            if (*pulled_ >= morsels_) co_return dstd::nullopt;
+        coro::CoroTask<MorselResult> next(std::int64_t) override {
+            if (*pulled_ >= morsels_) co_return MorselResult(dstd::nullopt);
             dstd::Vector<std::int64_t> t(static_cast<std::size_t>(rows_)),
                 v(static_cast<std::size_t>(rows_), 1);
             for (std::int64_t i = 0; i < rows_; ++i)
@@ -151,7 +167,7 @@ class CountedTimes : public Source {
             m.rows = rows_;
             m.columns.push_back(Series::flat_i64(t.data(), rows_));
             m.columns.push_back(Series::flat_i64(v.data(), rows_));
-            co_return m;
+            co_return MorselResult(std::move(m));
         }
 
        private:
@@ -269,7 +285,8 @@ TEST_SUITE("output morsels") {
         const std::uint64_t before = cross_join_spooled_rows();
         const auto cut = morsels(left.lazy().memory_budget(64 << 10).join(
             right.lazy(), {}, JoinHow::Cross));
-        const DataFrame want = left.join(right, {}, JoinHow::Cross);
+        const DataFrame want =
+            dftu_utils_test::ok(left.join(right, {}, JoinHow::Cross));
         REQUIRE(want.num_rows() == 150000);
         CHECK(cross_join_spooled_rows() - before == 1500);
         CHECK(most_rows(cut) < 3000);
@@ -280,7 +297,8 @@ TEST_SUITE("output morsels") {
         const auto kept = morsels(left.lazy().memory_budget(64 << 10).join(
             small.lazy(), {}, JoinHow::Cross));
         CHECK(cross_join_spooled_rows() == mid);
-        CHECK(row_set(kept) == row_set(left.join(small, {}, JoinHow::Cross)));
+        CHECK(row_set(kept) == row_set(dftu_utils_test::ok(
+                                   left.join(small, {}, JoinHow::Cross))));
     }
 
     TEST_CASE(
@@ -316,12 +334,15 @@ TEST_SUITE("output morsels") {
             df.group_by_dynamic("t", 2, 4, aggs),
             dftracer::utils::common::ErrorCode::InvalidArgument,
             "group_by_dynamic: t must ascend, 4 follows 9");
-        CHECK_THROWS_WITH_AS(
-            morsels(df.lazy().memory_budget(1 << 20).group_by_dynamic("t", 2, 4,
+        dftu_utils_test::expect_error(
+            dftracer::utils::default_runtime()
+                .submit(stream_status(
+                    df.lazy().memory_budget(1 << 20).group_by_dynamic("t", 2, 4,
                                                                       aggs),
-                    2),
-            "group_by_dynamic: t must ascend, 4 follows 9",
-            std::invalid_argument);
+                    2))
+                .get(),
+            dftracer::utils::common::ErrorCode::InvalidArgument,
+            "group_by_dynamic: t must ascend, 4 follows 9");
     }
 
     TEST_CASE("an elementwise column op runs one morsel at a time") {

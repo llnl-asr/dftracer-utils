@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_TYPED_ROWS_H
 #define DFTRACER_UTILS_TRACE_VIEWS_TYPED_ROWS_H
 
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -159,7 +160,9 @@ dataframe::LazyResult<dstd::Vector<T>> rows(const View& view, Lazy) {
 
 template <typename T>
 coro::CoroTask<dstd::Vector<T>> rows(const View& view) {
-    co_return co_await rows<T>(view, LAZY).collect();
+    auto lazy = rows<T>(view, LAZY);
+    auto collecting = lazy.collect();
+    co_return common::unwrap(co_await std::move(collecting));
 }
 
 }  // namespace dftracer::utils::trace::views

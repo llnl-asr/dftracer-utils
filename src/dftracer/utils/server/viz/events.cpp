@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/field_ref.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/channel.h>
@@ -408,10 +409,11 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
     const std::uint64_t last = first + static_cast<std::uint64_t>(limit);
     auto morsels = sorted.stream();
     for (;;) {
-        auto part = co_await morsels.next();
-        if (!part) break;
+        auto next_part = co_await morsels.next();
+        if (!next_part) break;
+        auto part = common::unwrap(std::move(*next_part));
         const dataframe::DataFrame rows =
-            co_await dataframe::join_chunks(std::move(*part));
+            common::unwrap(co_await dataframe::join_chunks(std::move(part)));
         // The builder is per thread: no co_await until its text is out.
         auto& rb = scratch_json_builder();
         for (std::int64_t r = 0; r < rows.num_rows(); ++r, ++count) {

@@ -22,7 +22,7 @@ using namespace dftracer::utils::dataframe;
 
 namespace {
 
-DataFrame run(dftracer::utils::coro::CoroTask<DataFrame> t) {
+DataFrame run(dftracer::utils::coro::CoroTask<dstd::Result<DataFrame>> t) {
     DataFrame out = dftu_utils_test::ok(
         dftracer::utils::default_runtime().submit(std::move(t)).get());
     for (Series& c : out.columns) c = c.materialize();
@@ -75,17 +75,17 @@ TEST_CASE("columns that cannot compare fail with an error naming both types") {
     d.columns.push_back(
         Series::strings(dstd::Span<const dstd::StringView>(words)));
     d.columns.push_back(Series::flat_i64(ints.data(), 2));
-    try {
-        run(d.lazy()
-                .filter(expr_cmp_expr(CmpOp::Lt, col(0), col(1)))
-                .collect(2));
-        FAIL("a string column compared with an integer column did not fail");
-    } catch (const std::exception& e) {
-        const dstd::String msg = e.what();
-        CHECK(msg.find("string") != dstd::String::npos);
-        CHECK((msg.find("int64") != dstd::String::npos ||
-               msg.find("integer") != dstd::String::npos));
-    }
+    const auto collected =
+        dftracer::utils::default_runtime()
+            .submit(d.lazy()
+                        .filter(expr_cmp_expr(CmpOp::Lt, col(0), col(1)))
+                        .collect(2))
+            .get();
+    REQUIRE_FALSE(collected.has_value());
+    const dstd::String msg = collected.error().c_str();
+    CHECK(msg.find("string") != dstd::String::npos);
+    CHECK((msg.find("int64") != dstd::String::npos ||
+           msg.find("integer") != dstd::String::npos));
 }
 
 TEST_CASE("the lazy filter equals the eager filter of the same mask") {

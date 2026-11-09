@@ -19,6 +19,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   The Python `duql.load_path` still raises the same exception.
 - Build the json and duql libraries without exceptions.
 - Build the io library without exceptions.
+- Return a `dstd::Result` from `LazyFrame::collect`, `stream`, `open_cursor` and `reduce_specs`, from `collect_all` and `LazyResult::collect`, and from `DataFrame::join`, `compare_agg` and `to_ipc`, in place of raising.
+  A `LazyFrame` builder keeps its first error: `status()` reads it, and every terminal returns it.
+  `Cursor::next` gives a `MorselResult`.
+  `Cursor::try_next` is now `bool try_next(std::int64_t max_rows, MorselResult& out)` and does not throw.
+  A source that raises from `next` or `collect_batch` ends the collect with an error.
+  A source that raises from `narrow` or `reclaim` is logged, the call counts as nothing done and the collect goes on.
+  A source that breaks the batch or planning hook contract ends the process.
+  Python keeps its exception types.
+  `take` now raises `DFTUtilsValueError`, a subclass of `DFTUtilsError`, for a bad index.
 - Require a `noexcept` function for `dstd::add_shutdown_hook`, so a hook that can raise does not compile.
 - End a cancelled task at its wait, in place of resuming it with an exception: the frame is destroyed, and the stop moves up to the first scope or combinator.
   `coro::with_timeout`, `coro::with_deadline`, `JoinSet::next_within` and `coro::with_item_timeout` give a `dstd::Result` with `dstd::Condition::Timeout` in place of raising, and the `timeout` adaptor of a stage gives a `dstd::Result` of its output.

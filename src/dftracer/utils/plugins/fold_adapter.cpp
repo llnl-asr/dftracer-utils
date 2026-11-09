@@ -1456,7 +1456,7 @@ void PluginFold::merge(Fold& other) {
             // The worker's spilled runs are part of its aggregate, so the
             // master takes them over with the in-memory half.
             (*dst)->spiller.adopt(src->spiller);
-            (*dst)->spiller.maybe_spill((*dst)->state);
+            common::unwrap((*dst)->spiller.maybe_spill((*dst)->state));
         }
     }
 }

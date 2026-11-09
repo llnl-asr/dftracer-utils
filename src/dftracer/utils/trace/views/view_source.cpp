@@ -57,10 +57,11 @@ bool ViewCursor::has_nested_column() const {
     return *nested_;
 }
 
-coro::CoroTask<dstd::Optional<dftracer::utils::dataframe::Morsel>>
-ViewCursor::next(std::int64_t max_rows) {
+coro::CoroTask<dftracer::utils::dataframe::MorselResult> ViewCursor::next(
+    std::int64_t max_rows) {
     const std::int64_t nrows = buf_->num_rows();
-    if (offset_ >= nrows) co_return dstd::nullopt;
+    if (offset_ >= nrows)
+        co_return dftracer::utils::dataframe::MorselResult(dstd::nullopt);
 
     if (has_nested_column() || max_rows <= 0) {
         dftracer::utils::dataframe::Morsel m;
@@ -71,7 +72,7 @@ ViewCursor::next(std::int64_t max_rows) {
         offset_ = nrows;
         m.batch_index = next_index_++;
         m.ordering = dftracer::utils::dataframe::Ordering::Sequence;
-        co_return m;
+        co_return dftracer::utils::dataframe::MorselResult(std::move(m));
     }
 
     dftracer::utils::dataframe::DataFrame part = buf_->slice(offset_, max_rows);
@@ -81,7 +82,7 @@ ViewCursor::next(std::int64_t max_rows) {
     offset_ += m.rows;
     m.batch_index = next_index_++;
     m.ordering = dftracer::utils::dataframe::Ordering::Sequence;
-    co_return m;
+    co_return dftracer::utils::dataframe::MorselResult(std::move(m));
 }
 
 namespace {
@@ -457,7 +458,7 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
     // workers finish them. Without `gate_` they go out that way, Unordered;
     // with it they go out in unit order (see receive()), a Sequence.
     // batch_index is this cursor's own hand-out counter.
-    coro::CoroTask<dstd::Optional<dftracer::utils::dataframe::Morsel>> next(
+    coro::CoroTask<dftracer::utils::dataframe::MorselResult> next(
         std::int64_t max_rows) override {
         const auto ordering =
             gate_ ? dftracer::utils::dataframe::Ordering::Sequence
@@ -472,14 +473,15 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
             } else if (!producer_.get()) {
                 co_await coro::stop_here();
             }
-            co_return item;
+            co_return dftracer::utils::dataframe::MorselResult(std::move(item));
         }
 
         if (!pending_ || offset_ >= pending_->rows) {
             auto item = co_await receive(pending_bytes_);
             if (!item) {
                 if (!producer_.get()) co_await coro::stop_here();
-                co_return dstd::nullopt;
+                co_return dftracer::utils::dataframe::MorselResult(
+                    dstd::nullopt);
             }
             pending_ = std::move(item);
             offset_ = 0;
@@ -495,7 +497,7 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
             budget_->release(pending_bytes_);
             pending_.reset();
         }
-        co_return out;
+        co_return dftracer::utils::dataframe::MorselResult(std::move(out));
     }
 
     // ADVISORY, like every other pushdown here: translate_pred decides what

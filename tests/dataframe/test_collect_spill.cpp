@@ -35,7 +35,7 @@ constexpr std::int64_t N = 3000;
 constexpr std::int64_t MORSEL = 100;
 constexpr const char* DIR_VAR = "DFTRACER_UTILS_SPILL_DIR";
 
-DataFrame run(dftracer::utils::coro::CoroTask<DataFrame> t) {
+DataFrame run(dftracer::utils::coro::CoroTask<dstd::Result<DataFrame>> t) {
     return dftu_utils_test::ok(
         dftracer::utils::default_runtime().submit(std::move(t)).get());
 }
@@ -198,13 +198,15 @@ TEST_SUITE("collect spill") {
     TEST_CASE("a spill file goes to the directory the variable names") {
         SpillDirVar var("dftu_cs_dir");
         const dstd::Path run_path = [] {
-            dftracer::utils::dataframe::spill::Dir d;
-            return dstd::Path(d.run_path(0));
+            const auto d = dftu_utils_test::ok(
+                dftracer::utils::dataframe::spill::Dir::create());
+            return dstd::Path(d->run_path(0));
         }();
         CHECK(run_path.str().rfind(var.dir.str(), 0) == 0);
         {
-            dftracer::utils::dataframe::spill::Dir d;
-            dstd::fs::write_file(dstd::PathView(d.run_path(0)), "x").discard();
+            const auto d = dftu_utils_test::ok(
+                dftracer::utils::dataframe::spill::Dir::create());
+            dstd::fs::write_file(dstd::PathView(d->run_path(0)), "x").discard();
             CHECK(var.entries() == 1);
         }
         CHECK(var.entries() == 0);
@@ -217,20 +219,18 @@ TEST_SUITE("collect spill") {
         const dstd::Path bad = blocker / "sub";
         ::setenv(DIR_VAR, bad.c_str(), 1);
         const DataFrame df = make_frame();
-        const auto msg_of = [](auto&& fn) {
-            try {
-                fn();
-            } catch (const std::exception& e) {
-                return dstd::String(e.what());
-            }
-            return dstd::String();
-        };
-        const dstd::String collect_msg =
-            msg_of([&] { run(lazy_of(df, 1).collect(MORSEL)); });
+        const auto collected = dftracer::utils::default_runtime()
+                                   .submit(lazy_of(df, 1).collect(MORSEL))
+                                   .get();
+        dftu_utils_test::expect_error(collected,
+                                      dftracer::utils::common::ErrorCode::Io);
+        const dstd::String collect_msg(collected.error().c_str());
         CHECK(collect_msg.find(bad.str()) != dstd::String::npos);
         CHECK(collect_msg.find(DIR_VAR) != dstd::String::npos);
-        const dstd::String dir_msg =
-            msg_of([] { dftracer::utils::dataframe::spill::Dir d; });
+        const auto dir = dftracer::utils::dataframe::spill::Dir::create();
+        dftu_utils_test::expect_error(dir,
+                                      dftracer::utils::common::ErrorCode::Io);
+        const dstd::String dir_msg(dir.error().c_str());
         CHECK(dir_msg.find(bad.str()) != dstd::String::npos);
         CHECK(dir_msg.find(DIR_VAR) != dstd::String::npos);
     }

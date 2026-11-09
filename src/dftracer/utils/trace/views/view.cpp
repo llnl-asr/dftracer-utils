@@ -435,7 +435,8 @@ Deferred<ExportStats> TraceSession::materialize(const View& tv) {
 coro::CoroTask<void> TraceSession::execute() {
     dstd::Vector<dataframe::DataFrame> frames;
     if (!plans_.empty())
-        frames = co_await dataframe::collect_all(std::move(plans_));
+        frames =
+            common::unwrap(co_await dataframe::collect_all(std::move(plans_)));
     plans_.clear();
     std::size_t at = 0;
     for (Pending& p : pending_) {
@@ -737,7 +738,9 @@ coro::CoroTask<TypedResult> View::collect_typed(int shard_begin, int shard_end,
 }
 
 coro::CoroTask<ExportStats> View::sink_json(ExportSink& sink) const {
-    return sink_json(sink, LAZY).collect();
+    auto lazy = sink_json(sink, LAZY);
+    auto collecting = lazy.collect();
+    co_return common::unwrap(co_await std::move(collecting));
 }
 
 dataframe::LazyResult<ExportStats> View::sink_json(ExportSink& sink,
@@ -754,7 +757,9 @@ dataframe::LazyResult<ExportStats> View::sink_json(
 }
 
 coro::CoroTask<ExportStats> View::sink_trace(TraceWriteOptions opts) const {
-    return sink_trace(std::move(opts), LAZY).collect();
+    auto lazy = sink_trace(std::move(opts), LAZY);
+    auto collecting = lazy.collect();
+    co_return common::unwrap(co_await std::move(collecting));
 }
 
 dataframe::LazyResult<ExportStats> View::sink_trace(TraceWriteOptions opts,
@@ -897,8 +902,10 @@ dstd::Optional<dataframe::DataFrame> View::reconstruct_if_cached() const {
 coro::CoroTask<ExportStats> View::materialize(std::uint64_t checkpoint_size,
                                               std::uint64_t part_size,
                                               ProgressFn progress) const {
-    return materialize(LAZY, checkpoint_size, part_size, std::move(progress))
-        .collect();
+    auto lazy =
+        materialize(LAZY, checkpoint_size, part_size, std::move(progress));
+    auto collecting = lazy.collect();
+    co_return common::unwrap(co_await std::move(collecting));
 }
 
 dataframe::LazyResult<ExportStats> View::materialize(

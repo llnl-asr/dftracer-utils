@@ -83,6 +83,7 @@ dftu_series* release_or_null(dftracer::utils::dstd::Result<Series>&& s) {
 }
 
 dftu_lazyframe* wrap_lazy(LazyFrame&& lf) {
+    if (!lf.status()) return nullptr;
     return new dftu_lazyframe{{}, std::move(lf)};
 }
 

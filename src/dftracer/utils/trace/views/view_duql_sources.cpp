@@ -78,13 +78,17 @@ class FinishSource final : public dataframe::Source {
               projection_(std::move(projection)),
               declared_(std::move(declared)) {}
 
-        coro::CoroTask<dstd::Optional<dataframe::Morsel>> next(
+        coro::CoroTask<dataframe::MorselResult> next(
             std::int64_t max_rows) override {
             if (!rows_) {
                 // GCC 12 destroys a temporary built inside co_await twice.
-                dataframe::DataFrame collected = co_await inner_.collect();
-                dataframe::DataFrame f = (*finish_)(
-                    co_await dataframe::join_chunks(std::move(collected)));
+                auto collecting = inner_.collect();
+                auto collected = co_await std::move(collecting);
+                if (!collected) co_return collected.error();
+                auto joining = dataframe::join_chunks(std::move(*collected));
+                auto joined = co_await std::move(joining);
+                if (!joined) co_return joined.error();
+                dataframe::DataFrame f = (*finish_)(std::move(*joined));
                 if (!projection_.empty())
                     f = common::unwrap(f.select(projection_));
                 intern_ =
@@ -92,10 +96,11 @@ class FinishSource final : public dataframe::Source {
                 ids_ = frame_ids(f, declared_, *intern_);
                 rows_ = dataframe::InMemorySource(std::move(f)).scan({}).cursor;
             }
-            auto m = co_await rows_->next(max_rows);
-            if (m) {
-                m->dyn_state().name_ids = ids_;
-                m->dyn->intern = intern_;
+            auto next_task = rows_->next(max_rows);
+            auto m = co_await std::move(next_task);
+            if (m && *m) {
+                (*m)->dyn_state().name_ids = ids_;
+                (*m)->dyn->intern = intern_;
             }
             co_return m;
         }
@@ -152,20 +157,23 @@ class MapSource final : public dataframe::Source {
               projection_(std::move(projection)),
               declared_(std::move(declared)) {}
 
-        coro::CoroTask<dstd::Optional<dataframe::Morsel>> next(
+        coro::CoroTask<dataframe::MorselResult> next(
             std::int64_t max_rows) override {
             for (;;) {
                 if (rows_) {
-                    auto m = co_await rows_->next(max_rows);
-                    if (m) {
-                        m->dyn_state().name_ids = ids_;
-                        m->dyn->intern = intern_;
+                    auto next_task = rows_->next(max_rows);
+                    auto m = co_await std::move(next_task);
+                    if (!m) co_return m.error();
+                    if (*m) {
+                        (*m)->dyn_state().name_ids = ids_;
+                        (*m)->dyn->intern = intern_;
                         co_return m;
                     }
                 }
                 auto batch = co_await batches_.next();
-                if (!batch) co_return dstd::nullopt;
-                dataframe::DataFrame f = (*map_)(std::move(*batch));
+                if (!batch) co_return dataframe::MorselResult(dstd::nullopt);
+                if (!*batch) co_return batch->error();
+                dataframe::DataFrame f = (*map_)(std::move(**batch));
                 if (!projection_.empty())
                     f = common::unwrap(f.select(projection_));
                 ids_ = frame_ids(f, declared_, *intern_);
@@ -177,7 +185,7 @@ class MapSource final : public dataframe::Source {
         dstd::SharedPtr<dftracer::utils::dstd::StringIntern> intern_ =
             dstd::make_shared<dftracer::utils::dstd::StringIntern>();
         dstd::Vector<std::uint32_t> ids_;
-        coro::AsyncGenerator<dataframe::DataFrame> batches_;
+        coro::AsyncGenerator<dstd::Result<dataframe::DataFrame>> batches_;
         dstd::SharedPtr<Map> map_;
         dstd::Vector<dstd::String> projection_;
         dstd::Vector<dstd::String> declared_;
@@ -263,13 +271,14 @@ class FoldSource final : public dataframe::Source {
             for (const auto& f : src.schema_.fields) names_.push_back(f.name);
         }
 
-        coro::CoroTask<dstd::Optional<dataframe::Morsel>> next(
+        coro::CoroTask<dataframe::MorselResult> next(
             std::int64_t max_rows) override {
             if (!rows_) {
                 for (;;) {
                     auto batch = co_await batches_.next();
                     if (!batch) break;
-                    common::unwrap(fold_.add(aligned(std::move(*batch), in_)));
+                    if (!*batch) co_return batch->error();
+                    common::unwrap(fold_.add(aligned(std::move(**batch), in_)));
                 }
                 dataframe::DataFrame f =
                     common::unwrap(fold_.finish(std::move(names_)));
@@ -277,11 +286,12 @@ class FoldSource final : public dataframe::Source {
                     f = common::unwrap(f.select(projection_));
                 rows_ = dataframe::InMemorySource(std::move(f)).scan({}).cursor;
             }
-            co_return co_await rows_->next(max_rows);
+            auto next_task = rows_->next(max_rows);
+            co_return co_await std::move(next_task);
         }
 
        private:
-        coro::AsyncGenerator<dataframe::DataFrame> batches_;
+        coro::AsyncGenerator<dstd::Result<dataframe::DataFrame>> batches_;
         duql::GroupFold fold_;
         dstd::Vector<dstd::Pair<dstd::String, dataframe::TypeId>> in_;
         dstd::Vector<dstd::String> names_;

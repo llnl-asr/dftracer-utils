@@ -91,7 +91,8 @@ coro::CoroTask<dstd::Vector<DataFrame>> stream_all(LazyFrame lf,
                                                    std::int64_t max_rows) {
     dstd::Vector<DataFrame> out;
     auto g = lf.stream(max_rows);
-    while (auto df = co_await g.next()) out.push_back(std::move(*df));
+    while (auto df = co_await g.next())
+        out.push_back(dftu_utils_test::ok(std::move(*df)));
     co_return out;
 }
 
@@ -106,8 +107,11 @@ dstd::Vector<dstd::String> row_keys(const DataFrame& d) {
     dstd::Vector<Series> cols;
     for (const Series& c : d.columns) cols.push_back(c.materialize());
     dstd::Vector<dstd::String> keys;
-    for (std::int64_t r = 0; r < d.num_rows(); ++r)
-        keys.push_back(dataframe::row_key(cols, r));
+    for (std::int64_t r = 0; r < d.num_rows(); ++r) {
+        dataframe::KeyRefusal refusal;
+        keys.push_back(dataframe::row_key(cols, r, refusal));
+        REQUIRE_FALSE(refusal.refused());
+    }
     return keys;
 }
 
@@ -260,21 +264,24 @@ TEST_CASE("asof with an empty side") {
 TEST_CASE("asof refuses what the eager op refuses") {
     const Inputs in = make_inputs(3, 10, 10, TimeKind::Int, false);
     const LazyFrame left = budgeted(in.left, SMALL_BUDGET);
-    CHECK_THROWS_AS(
-        left.asof(in.right.lazy(), "ts", {}, AsofDirection::Backward, -1.0),
-        std::invalid_argument);
-    CHECK_THROWS_AS(
-        left.asof(in.right.lazy(), "nope", {}, AsofDirection::Backward),
-        std::out_of_range);
+    dftu_utils_test::expect_error(
+        left.asof(in.right.lazy(), "ts", {}, AsofDirection::Backward, -1.0)
+            .status(),
+        dftracer::utils::common::ErrorCode::InvalidArgument);
+    dftu_utils_test::expect_error(
+        left.asof(in.right.lazy(), "nope", {}, AsofDirection::Backward)
+            .status(),
+        dftracer::utils::common::ErrorCode::NotFound);
     const Inputs fl = make_inputs(3, 10, 10, TimeKind::Float, false);
-    CHECK_THROWS_AS(
-        left.asof(fl.right.lazy(), "ts", {}, AsofDirection::Backward),
-        std::invalid_argument);
+    dftu_utils_test::expect_error(
+        left.asof(fl.right.lazy(), "ts", {}, AsofDirection::Backward).status(),
+        dftracer::utils::common::ErrorCode::InvalidArgument);
     const Inputs text = make_inputs(3, 10, 10, TimeKind::Int, true);
-    CHECK_THROWS_AS(
+    dftu_utils_test::expect_error(
         budgeted(text.left, SMALL_BUDGET)
-            .asof(text.right.lazy(), "g", {}, AsofDirection::Backward),
-        std::invalid_argument);
+            .asof(text.right.lazy(), "g", {}, AsofDirection::Backward)
+            .status(),
+        dftracer::utils::common::ErrorCode::InvalidArgument);
 }
 
 TEST_CASE("interval matches the eager op with overlaps, nulls and outer") {

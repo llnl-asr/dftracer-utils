@@ -27,7 +27,7 @@ using namespace dftracer::utils::dataframe;
 
 namespace {
 
-DataFrame run(coro::CoroTask<DataFrame> t) {
+DataFrame run(coro::CoroTask<dstd::Result<DataFrame>> t) {
     return dftu_utils_test::ok(
         dftracer::utils::default_runtime().submit(std::move(t)).get());
 }
@@ -150,7 +150,8 @@ void check_same(const DataFrame& a, const DataFrame& b) {
 
 TEST_SUITE("dataframe join") {
     TEST_CASE("inner: matched pairs in left order, chains in right order") {
-        DataFrame out = make_left().join(make_right(), {"k"});
+        DataFrame out =
+            dftu_utils_test::ok(make_left().join(make_right(), {"k"}));
         CHECK(out.names ==
               dstd::Vector<dstd::String>{"k", "v", "flag", "name", "v_right"});
         CHECK(i64_col(out, "k") == dstd::Vector<I>{2, 2, 2, 2});
@@ -162,7 +163,8 @@ TEST_SUITE("dataframe join") {
     }
 
     TEST_CASE("left: unmatched and null-keyed left rows keep null right") {
-        DataFrame out = make_left().join(make_right(), {"k"}, JoinHow::Left);
+        DataFrame out = dftu_utils_test::ok(
+            make_left().join(make_right(), {"k"}, JoinHow::Left));
         CHECK(i64_col(out, "k") == dstd::Vector<I>{1, 2, 2, 3, 2, 2, NI});
         CHECK(i64_col(out, "v") == dstd::Vector<I>{10, 20, 20, 30, 40, 40, 50});
         CHECK(str_col(out, "name") ==
@@ -174,7 +176,8 @@ TEST_SUITE("dataframe join") {
     }
 
     TEST_CASE("right: matches then unmatched right rows, key from the right") {
-        DataFrame out = make_left().join(make_right(), {"k"}, JoinHow::Right);
+        DataFrame out = dftu_utils_test::ok(
+            make_left().join(make_right(), {"k"}, JoinHow::Right));
         CHECK(i64_col(out, "k") == dstd::Vector<I>{2, 2, 2, 2, 4, NI});
         CHECK(i64_col(out, "v") == dstd::Vector<I>{20, 20, 40, 40, NI, NI});
         CHECK(bool_col(out, "flag") ==
@@ -186,7 +189,8 @@ TEST_SUITE("dataframe join") {
     }
 
     TEST_CASE("outer: both sides' unmatched rows") {
-        DataFrame out = make_left().join(make_right(), {"k"}, JoinHow::Outer);
+        DataFrame out = dftu_utils_test::ok(
+            make_left().join(make_right(), {"k"}, JoinHow::Outer));
         CHECK(i64_col(out, "k") ==
               dstd::Vector<I>{1, 2, 2, 3, 2, 2, NI, 4, NI});
         CHECK(i64_col(out, "v") ==
@@ -198,17 +202,20 @@ TEST_SUITE("dataframe join") {
     }
 
     TEST_CASE("semi and anti: left columns only, one row per left row") {
-        DataFrame semi = make_left().join(make_right(), {"k"}, JoinHow::Semi);
+        DataFrame semi = dftu_utils_test::ok(
+            make_left().join(make_right(), {"k"}, JoinHow::Semi));
         CHECK(semi.names == dstd::Vector<dstd::String>{"k", "v", "flag"});
         CHECK(i64_col(semi, "v") == dstd::Vector<I>{20, 40});
-        DataFrame anti = make_left().join(make_right(), {"k"}, JoinHow::Anti);
+        DataFrame anti = dftu_utils_test::ok(
+            make_left().join(make_right(), {"k"}, JoinHow::Anti));
         CHECK(anti.names == dstd::Vector<dstd::String>{"k", "v", "flag"});
         CHECK(i64_col(anti, "v") == dstd::Vector<I>{10, 30, 50});
         CHECK(i64_col(anti, "k") == dstd::Vector<I>{1, 3, NI});
     }
 
     TEST_CASE("cross: every pair, keys ignored") {
-        DataFrame out = make_left().join(make_right(), {}, JoinHow::Cross);
+        DataFrame out = dftu_utils_test::ok(
+            make_left().join(make_right(), {}, JoinHow::Cross));
         CHECK(out.num_rows() == 20);
         CHECK(out.names == dstd::Vector<dstd::String>{
                                "k", "v", "flag", "k_right", "name", "v_right"});
@@ -226,12 +233,13 @@ TEST_SUITE("dataframe join") {
     TEST_CASE("different key names keep both key columns") {
         DataFrame right =
             dftu_utils_test::ok(make_right().rename({"rk", "name", "rv"}));
-        DataFrame out = make_left().join(right, {"k"}, {"rk"});
+        DataFrame out =
+            dftu_utils_test::ok(make_left().join(right, {"k"}, {"rk"}));
         CHECK(out.names ==
               dstd::Vector<dstd::String>{"k", "v", "flag", "rk", "name", "rv"});
         CHECK(i64_col(out, "rk") == dstd::Vector<I>{2, 2, 2, 2});
-        DataFrame outer =
-            make_left().join(right, {"k"}, {"rk"}, JoinHow::Outer);
+        DataFrame outer = dftu_utils_test::ok(
+            make_left().join(right, {"k"}, {"rk"}, JoinHow::Outer));
         CHECK(i64_col(outer, "k") ==
               dstd::Vector<I>{1, 2, 2, 3, 2, 2, NI, NI, NI});
         CHECK(i64_col(outer, "rk") ==
@@ -239,8 +247,8 @@ TEST_SUITE("dataframe join") {
     }
 
     TEST_CASE("custom suffix") {
-        DataFrame out =
-            make_left().join(make_right(), {"k"}, JoinHow::Inner, "_r");
+        DataFrame out = dftu_utils_test::ok(
+            make_left().join(make_right(), {"k"}, JoinHow::Inner, "_r"));
         CHECK(out.names ==
               dstd::Vector<dstd::String>{"k", "v", "flag", "name", "v_r"});
     }
@@ -256,7 +264,7 @@ TEST_SUITE("dataframe join") {
         r.columns.push_back(i64s({1, 2, 1}));
         r.columns.push_back(Series::strings({"q", "p", "zz"}));
         r.columns.push_back(i64s({100, 200, 300}));
-        DataFrame out = l.join(r, {"a", "s"});
+        DataFrame out = dftu_utils_test::ok(l.join(r, {"a", "s"}));
         CHECK(out.names == dstd::Vector<dstd::String>{"a", "s", "x", "y"});
         CHECK(i64_col(out, "x") == dstd::Vector<I>{8, 9});
         CHECK(i64_col(out, "y") == dstd::Vector<I>{100, 200});
@@ -265,13 +273,19 @@ TEST_SUITE("dataframe join") {
     TEST_CASE("refusals name the problem") {
         DataFrame l = make_left();
         DataFrame r = make_right();
-        CHECK_THROWS_AS(l.join(r, {"nope"}), std::out_of_range);
-        CHECK_THROWS_AS(l.join(r, {"k"}, {"nope"}), std::out_of_range);
-        CHECK_THROWS_AS(l.join(r, {}), std::invalid_argument);
-        CHECK_THROWS_AS(l.join(r, {"k"}, {"k", "name"}), std::invalid_argument);
-        CHECK_THROWS_AS(l.join(r, {"k"}, {"name"}), std::invalid_argument);
-        CHECK_THROWS_AS(l.join(r, {"k"}, static_cast<JoinHow>(99)),
-                        std::invalid_argument);
+        using dftracer::utils::common::ErrorCode;
+        dftu_utils_test::expect_error(l.join(r, {"nope"}), ErrorCode::NotFound);
+        dftu_utils_test::expect_error(l.join(r, {"k"}, {"nope"}),
+                                      ErrorCode::NotFound);
+        dftu_utils_test::expect_error(l.join(r, {}),
+                                      ErrorCode::InvalidArgument);
+        dftu_utils_test::expect_error(l.join(r, {"k"}, {"k", "name"}),
+                                      ErrorCode::InvalidArgument);
+        dftu_utils_test::expect_error(l.join(r, {"k"}, {"name"}),
+                                      ErrorCode::InvalidArgument);
+        dftu_utils_test::expect_error(
+            l.join(r, {"k"}, static_cast<JoinHow>(99)),
+            ErrorCode::InvalidArgument);
     }
 
     TEST_CASE("lazy parity with eager under one and many morsels") {
@@ -279,11 +293,11 @@ TEST_SUITE("dataframe join") {
              {JoinHow::Inner, JoinHow::Left, JoinHow::Right, JoinHow::Outer,
               JoinHow::Semi, JoinHow::Anti, JoinHow::Cross}) {
             INFO("how " << static_cast<int>(how));
-            DataFrame eager = make_left().join(
+            DataFrame eager = dftu_utils_test::ok(make_left().join(
                 make_right(),
                 how == JoinHow::Cross ? dstd::Vector<dstd::String>{}
                                       : dstd::Vector<dstd::String>{"k"},
-                how);
+                how));
             check_same(lazy_join(how, 0), eager);
             check_same(lazy_join(how, 2), eager);
             check_same(lazy_join(how, 1), eager);
@@ -365,7 +379,7 @@ TEST_SUITE("dataframe join") {
         variant.names = {"k", "n"};
         variant.columns.push_back(i64s({1, 3}));
         variant.columns.push_back(i64s({15, 7}));
-        DataFrame out = base.compare_agg(variant, 1);
+        DataFrame out = dftu_utils_test::ok(base.compare_agg(variant, 1));
         CHECK(out.names == dstd::Vector<dstd::String>{"k", "l_n", "r_n",
                                                       "delta_n", "pct_n"});
         CHECK(i64_col(out, "k") == dstd::Vector<I>{1, 2, 3});
@@ -377,11 +391,15 @@ TEST_SUITE("dataframe join") {
         CHECK(pct.data<double>()[0] == doctest::Approx(-25.0));
         CHECK(pct.is_null(1));
         CHECK(pct.is_null(2));
-        CHECK_THROWS_AS(base.compare_agg(variant, 0), std::invalid_argument);
-        CHECK_THROWS_AS(base.compare_agg(variant, 3), std::invalid_argument);
-        CHECK_THROWS_AS(base.compare_agg(
-                            dftu_utils_test::ok(variant.rename({"j", "n"})), 1),
-                        std::invalid_argument);
+        using dftracer::utils::common::ErrorCode;
+        dftu_utils_test::expect_error(base.compare_agg(variant, 0),
+                                      ErrorCode::InvalidArgument);
+        dftu_utils_test::expect_error(base.compare_agg(variant, 3),
+                                      ErrorCode::InvalidArgument);
+        dftu_utils_test::expect_error(
+            base.compare_agg(dftu_utils_test::ok(variant.rename({"j", "n"})),
+                             1),
+            ErrorCode::InvalidArgument);
     }
 
     TEST_CASE(
@@ -407,7 +425,8 @@ TEST_SUITE("dataframe join") {
         };
         const dstd::Vector<dstd::String> xyy{"x", "y", "y"};
 
-        DataFrame out = left().join(right(xyy), {"k"}, {"k"}, JoinHow::Lookup);
+        DataFrame out = dftu_utils_test::ok(
+            left().join(right(xyy), {"k"}, {"k"}, JoinHow::Lookup));
         CHECK(out.names == dstd::Vector<dstd::String>{"k", "a", "b"});
         CHECK(i64_col(out, "k") == dstd::Vector<I>{1, 2, 3, 1, NI});
         CHECK(str_col(out, "a") == dstd::Vector<S>{"x", "y", NS, "x", NS});
@@ -422,25 +441,26 @@ TEST_SUITE("dataframe join") {
                        out);
         CHECK(ll.join(rl, {"k"}, JoinHow::Lookup).schema() == out.names);
 
-        try {
-            (void)left().join(right({"x", "y", "z"}), {"k"}, {"k"},
-                              JoinHow::Lookup);
-            FAIL("no conflict error");
-        } catch (const std::invalid_argument& e) {
-            const dstd::String what = e.what();
-            CHECK(what.find("key 2") != dstd::String::npos);
-            CHECK(what.find("'a'") != dstd::String::npos);
-        }
-        CHECK_THROWS_WITH_AS(
-            (void)left({"p", "q", "r", "s", "t"})
-                .join(right(xyy), {"k"}, {"k"}, JoinHow::Lookup),
-            doctest::Contains("fills 'a'"), std::invalid_argument);
+        const auto conflict =
+            left().join(right({"x", "y", "z"}), {"k"}, {"k"}, JoinHow::Lookup);
+        dftu_utils_test::expect_error(
+            conflict, dftracer::utils::common::ErrorCode::InvalidArgument);
+        const dstd::String what = conflict.error().c_str();
+        CHECK(what.find("key 2") != dstd::String::npos);
+        CHECK(what.find("'a'") != dstd::String::npos);
+        const auto fills = left({"p", "q", "r", "s", "t"})
+                               .join(right(xyy), {"k"}, {"k"}, JoinHow::Lookup);
+        dftu_utils_test::expect_error(
+            fills, dftracer::utils::common::ErrorCode::InvalidArgument);
+        CHECK(dstd::String(fills.error().c_str()).find("fills 'a'") !=
+              dstd::String::npos);
 
         // Strings never equal numbers.
         DataFrame text;
         text.names = {"k"};
         text.columns.push_back(Series::strings({"1", "2"}));
-        DataFrame none = text.join(right(xyy), {"k"}, {"k"}, JoinHow::Lookup);
+        DataFrame none = dftu_utils_test::ok(
+            text.join(right(xyy), {"k"}, {"k"}, JoinHow::Lookup));
         CHECK(str_col(none, "a") == dstd::Vector<S>{NS, NS});
     }
 
@@ -452,8 +472,8 @@ TEST_SUITE("dataframe join") {
             return df;
         };
         DataFrame left = keys();
-        DataFrame out =
-            left.join(make_right(), {"k"}, {"k"}, JoinHow::Nest, "m");
+        DataFrame out = dftu_utils_test::ok(
+            left.join(make_right(), {"k"}, {"k"}, JoinHow::Nest, "m"));
         CHECK(out.names == dstd::Vector<dstd::String>{"k", "m"});
         const Series m = out.column("m").materialize();
         REQUIRE(m.type() == TypeId::List);
@@ -467,9 +487,9 @@ TEST_SUITE("dataframe join") {
         CHECK(rows.field_name(1) == "name");
         CHECK(dstd::String(rows.child(1).materialize().string_at(0)) == "b");
         CHECK(dstd::String(rows.child(1).materialize().string_at(1)) == "bb");
-        CHECK_THROWS_AS(
-            (void)left.join(make_right(), {"k"}, {"k"}, JoinHow::Nest, ""),
-            std::invalid_argument);
+        dftu_utils_test::expect_error(
+            left.join(make_right(), {"k"}, {"k"}, JoinHow::Nest, ""),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
         LazyFrame ll =
             LazyFrame::scan(dstd::make_shared<InMemorySource>(keys()));
         LazyFrame rl =

@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dataframe/agg.h>
+#include <dftracer/utils/dataframe/agg_spill.h>
 #include <dftracer/utils/dataframe/internal/spill.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -13,8 +16,10 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
+#include <memory/fresh_process.h>
 #include <sys/stat.h>
 #include <task_result.h>
+#include <testing_utilities.h>
 #include <unistd.h>
 
 #include <atomic>
@@ -28,10 +33,32 @@ using namespace dftracer::utils;
 using namespace dftracer::utils::dataframe;
 
 namespace {
-dstd::Optional<Morsel> run(
-    dftracer::utils::coro::CoroTask<dstd::Optional<Morsel>> t) {
+dstd::Optional<Morsel> run(dftracer::utils::coro::CoroTask<MorselResult> t) {
     return dftu_utils_test::ok(
         dftracer::utils::default_runtime().submit(std::move(t)).get());
+}
+
+dstd::SharedPtr<spill::Dir> make_dir() {
+    return dftu_utils_test::ok(spill::Dir::create());
+}
+
+spill::Writer open_writer(const dstd::String& path) {
+    return dftu_utils_test::ok(spill::Writer::open(path));
+}
+
+dstd::UniquePtr<spill::Reader> open_reader(const dstd::String& path) {
+    return dftu_utils_test::ok(spill::Reader::open(path));
+}
+
+dstd::Result<void> drain_run(const dstd::String& path) {
+    auto reader = spill::Reader::open(path);
+    if (!reader) return reader.error();
+    for (;;) {
+        auto next =
+            dftracer::utils::default_runtime().submit((*reader)->next(0)).get();
+        if (!next) return next.error();
+        if (!*next) return {};
+    }
 }
 }  // namespace
 
@@ -47,18 +74,19 @@ TEST_SUITE("spill") {
         cols.push_back(Series::flat_f64(b.data(), 4));
         cols.push_back(Series::strings(s));
 
-        spill::Dir dir;
+        const auto dir_owner = make_dir();
+        spill::Dir& dir = *dir_owner;
         const dstd::String path = dir.run_path(0);
         {
-            spill::Writer w(path);
-            w.write(cols, 4);
-            w.write(cols, 4);  // two morsels in one run
-            w.close();
+            auto w = open_writer(path);
+            dftu_utils_test::ok(w.write(cols, 4));
+            dftu_utils_test::ok(w.write(cols, 4));  // two morsels in one run
+            dftu_utils_test::ok(w.close());
         }
 
-        spill::Reader r(path);
+        auto r = open_reader(path);
         int morsels = 0;
-        while (auto m = run(r.next(0))) {
+        while (auto m = run(r->next(0))) {
             ++morsels;
             REQUIRE(m->rows == 4);
             REQUIRE(m->columns.size() == 3);
@@ -104,18 +132,19 @@ TEST_SUITE("spill") {
 
         auto round_trip = [&](const char* mode, std::uintmax_t* bytes) {
             Env env(mode);
-            spill::Dir dir;
+            const auto dir_owner = make_dir();
+            spill::Dir& dir = *dir_owner;
             const dstd::String path = dir.run_path(0);
             {
-                spill::Writer w(path);
-                w.write(cols, N);
-                w.write(cols, N);
-                w.close();
+                auto w = open_writer(path);
+                dftu_utils_test::ok(w.write(cols, N));
+                dftu_utils_test::ok(w.write(cols, N));
+                dftu_utils_test::ok(w.close());
             }
             *bytes = dstd::fs::file_size(path).value();
-            spill::Reader r(path);
+            auto r = open_reader(path);
             int morsels = 0;
-            while (auto m = run(r.next(0))) {
+            while (auto m = run(r->next(0))) {
                 ++morsels;
                 REQUIRE(m->rows == N);
                 for (std::int64_t i = 0; i < N; ++i) {
@@ -134,14 +163,15 @@ TEST_SUITE("spill") {
     }
 
     TEST_CASE("empty run reads back as no morsels") {
-        spill::Dir dir;
+        const auto dir_owner = make_dir();
+        spill::Dir& dir = *dir_owner;
         const dstd::String path = dir.run_path(1);
         {
-            spill::Writer w(path);
-            w.close();
+            auto w = open_writer(path);
+            dftu_utils_test::ok(w.close());
         }
-        spill::Reader r(path);
-        CHECK_FALSE(run(r.next(0)).has_value());
+        auto r = open_reader(path);
+        CHECK_FALSE(run(r->next(0)).has_value());
     }
 
     TEST_CASE("a JSON column keeps its flag through a run file") {
@@ -149,15 +179,16 @@ TEST_SUITE("spill") {
         dstd::Vector<Series> cols;
         cols.push_back(text.as_json());
         cols.push_back(Series::strings(dstd::Vector<dstd::String>{"x", "y"}));
-        spill::Dir dir;
+        const auto dir_owner = make_dir();
+        spill::Dir& dir = *dir_owner;
         const dstd::String path = dir.run_path(0);
         {
-            spill::Writer w(path);
-            w.write(cols, 2);
-            w.close();
+            auto w = open_writer(path);
+            dftu_utils_test::ok(w.write(cols, 2));
+            dftu_utils_test::ok(w.close());
         }
-        spill::Reader r(path);
-        auto m = run(r.next(0));
+        auto r = open_reader(path);
+        auto m = run(r->next(0));
         REQUIRE(m);
         CHECK(m->columns[0].is_json());
         CHECK_FALSE(m->columns[1].is_json());
@@ -167,39 +198,88 @@ TEST_SUITE("spill") {
 
 TEST_SUITE("spill errors") {
     TEST_CASE("a run in a missing directory cannot be opened") {
-        CHECK_THROWS(spill::Writer("/dftu_no_such_dir/run0"));
-        CHECK_THROWS(spill::Reader("/dftu_no_such_dir/run0"));
-        CHECK_THROWS(spill::AggRunReader("/dftu_no_such_dir/run0"));
+        dftu_utils_test::expect_error(
+            spill::Writer::open("/dftu_no_such_dir/run0"),
+            common::ErrorCode::Io);
+        dftu_utils_test::expect_error(
+            spill::Reader::open("/dftu_no_such_dir/run0"),
+            common::ErrorCode::Io);
+        dftu_utils_test::expect_error(
+            spill::AggRunReader::open("/dftu_no_such_dir/run0"),
+            common::ErrorCode::Io);
+    }
+
+    TEST_CASE("a failed aggregate spill leaves no partial run behind") {
+        if (::geteuid() == 0) return;
+        const dstd::Path root = dstd::fs::temp_directory() /
+                                dstd::fmt<"dftu_agg_spill_fail_{}">(::getpid());
+        REQUIRE(dstd::fs::remove_all(root).has_value());
+        REQUIRE(dstd::fs::create_directories(root).has_value());
+        ::setenv("DFTRACER_UTILS_SPILL_DIR", root.c_str(), 1);
+
+        dstd::Vector<std::int64_t> keys{1, 2, 3};
+        dstd::Vector<std::int64_t> vals{4, 5, 6};
+        const Series k = Series::flat_i64(keys.data(), 3);
+        const Series v = Series::flat_i64(vals.data(), 3);
+        auto fill = []() { return agg_new({AggSpec{AggOp::Count, -1, "n"}}); };
+        AggStatePtr state = fill();
+        dftu_utils_test::ok(agg_accumulate(*state,
+                                           dstd::Vector<const Series*>{&k},
+                                           dstd::Vector<const Series*>{&v}));
+
+        AggSpiller spiller(1);
+        CHECK(dftu_utils_test::ok(spiller.maybe_spill(state)));
+        REQUIRE(spiller.runs() == 1);
+
+        dstd::Path sub;
+        for (const auto& e : dftu_utils_test::list_dir(root)) sub = e.path;
+        REQUIRE_FALSE(sub.empty());
+        REQUIRE(::chmod(sub.c_str(), 0500) == 0);
+
+        state = fill();
+        dftu_utils_test::ok(agg_accumulate(*state,
+                                           dstd::Vector<const Series*>{&k},
+                                           dstd::Vector<const Series*>{&v}));
+        dftu_utils_test::expect_error(spiller.maybe_spill(state),
+                                      common::ErrorCode::Io);
+        CHECK(spiller.runs() == 1);
+        CHECK(agg_group_count(*state) == 3);
+
+        ::chmod(sub.c_str(), 0700);
+        const auto drained =
+            spiller.drain(*state, dstd::Vector<dstd::String>{"k"});
+        CHECK(drained.has_value());
+
+        ::unsetenv("DFTRACER_UTILS_SPILL_DIR");
+        dstd::fs::remove_all(root).discard();
     }
 
     TEST_CASE("a truncated run is an error, not the end of the run") {
         dstd::Vector<std::int64_t> a{1, 2, 3, 4, 5, 6, 7, 8};
         dstd::Vector<Series> cols;
         cols.push_back(Series::flat_i64(a.data(), 8));
-        spill::Dir dir;
+        const auto dir_owner = make_dir();
+        spill::Dir& dir = *dir_owner;
         const dstd::String path = dir.run_path(0);
         {
-            spill::Writer w(path);
-            w.write(cols, 8);
-            w.write(cols, 8);
-            w.close();
+            auto w = open_writer(path);
+            dftu_utils_test::ok(w.write(cols, 8));
+            dftu_utils_test::ok(w.write(cols, 8));
+            dftu_utils_test::ok(w.close());
         }
         const std::uintmax_t full = dstd::fs::file_size(path).value();
-        auto drain = [&] {
-            spill::Reader r(path);
-            while (auto m = run(r.next(0))) {
-            }
-        };
-        CHECK_NOTHROW(drain());
+        CHECK(drain_run(path).has_value());
         // Cut inside the second morsel's payload, then inside its header.
-        dstd::fs::resize_file(path, full - 5).has_value();
-        CHECK_THROWS(drain());
+        REQUIRE(dstd::fs::resize_file(path, full - 5).has_value());
+        dftu_utils_test::expect_error(drain_run(path),
+                                      common::ErrorCode::Parse);
         REQUIRE(dstd::fs::resize_file(path, full / 2 + 5).has_value());
-        CHECK_THROWS(drain());
+        dftu_utils_test::expect_error(drain_run(path), common::ErrorCode::Io);
     }
 
     TEST_CASE("a truncated aggregate run is an error") {
-        spill::Dir dir;
+        const auto dir_owner = make_dir();
+        spill::Dir& dir = *dir_owner;
         const dstd::String path = dir.run_path(0);
         {
             dstd::String os;
@@ -208,23 +288,26 @@ TEST_SUITE("spill errors") {
             os.append("abcd", 4);
             dstd::fs::write_file(dstd::PathView(path), os).discard();
         }
-        CHECK_THROWS(spill::AggRunReader(path));
+        dftu_utils_test::expect_error(spill::AggRunReader::open(path),
+                                      common::ErrorCode::Parse);
         {
             dstd::String os;
             os.append("ab", 2);
             dstd::fs::write_file(dstd::PathView(path), os).discard();
         }
-        CHECK_THROWS(spill::AggRunReader(path));
+        dftu_utils_test::expect_error(spill::AggRunReader::open(path),
+                                      common::ErrorCode::Io);
         {
             dstd::String os;
             dstd::fs::write_file(dstd::PathView(path), os).discard();
         }
-        spill::AggRunReader empty(path);
-        CHECK_FALSE(empty.valid());
+        const auto empty = dftu_utils_test::ok(spill::AggRunReader::open(path));
+        CHECK_FALSE(empty->valid());
     }
 
     TEST_CASE("a morsel size that is not in the file is an error") {
-        spill::Dir dir;
+        const auto dir_owner = make_dir();
+        spill::Dir& dir = *dir_owner;
         const dstd::String path = dir.run_path(0);
         {
             dstd::String os;
@@ -234,63 +317,70 @@ TEST_SUITE("spill errors") {
             os.append("abcd", 4);
             dstd::fs::write_file(dstd::PathView(path), os).discard();
         }
-        spill::Reader big(path);
-        CHECK_THROWS(run(big.next(0)));
+        auto big = open_reader(path);
+        CHECK_FALSE(dftracer::utils::default_runtime()
+                        .submit(big->next(0))
+                        .get()
+                        .has_value());
         {
             dstd::String os;
             const std::int64_t sizes[2] = {-5, -5};
             os.append(reinterpret_cast<const char*>(sizes), sizeof(sizes));
             dstd::fs::write_file(dstd::PathView(path), os).discard();
         }
-        spill::Reader negative(path);
-        CHECK_THROWS(run(negative.next(0)));
+        auto negative = open_reader(path);
+        CHECK_FALSE(dftracer::utils::default_runtime()
+                        .submit(negative->next(0))
+                        .get()
+                        .has_value());
     }
 
     TEST_CASE("an aggregate state length past the file is an error") {
-        spill::Dir dir;
+        const auto dir_owner = make_dir();
+        spill::Dir& dir = *dir_owner;
         const dstd::String path = dir.run_path(0);
         dstd::String os;
         const std::uint32_t len = 0xFFFFFFF0u;
         os.append(reinterpret_cast<const char*>(&len), sizeof(len));
         os.append("abcdefgh", 8);
         dstd::fs::write_file(dstd::PathView(path), os).discard();
-        CHECK_THROWS(spill::AggRunReader(path));
+        dftu_utils_test::expect_error(spill::AggRunReader::open(path),
+                                      common::ErrorCode::Parse);
     }
 
     TEST_CASE("write_run with a zero morsel size still writes every row") {
         dstd::Vector<std::int64_t> a{1, 2, 3};
         dstd::Vector<Series> cols;
         cols.push_back(Series::flat_i64(a.data(), 3));
-        spill::Dir dir;
+        const auto dir_owner = make_dir();
+        spill::Dir& dir = *dir_owner;
         const dstd::String path = dir.run_path(0);
         std::uint64_t largest = 0;
         {
-            spill::Writer w(path);
-            largest = spill::write_run(w, cols, 3, 0);
-            w.close();
+            auto w = open_writer(path);
+            largest = dftu_utils_test::ok(spill::write_run(w, cols, 3, 0));
+            dftu_utils_test::ok(w.close());
         }
         CHECK(largest > 0);
-        spill::Reader r(path);
+        auto r = open_reader(path);
         std::int64_t rows = 0;
-        while (auto m = run(r.next(0))) rows += m->rows;
+        while (auto m = run(r->next(0))) rows += m->rows;
         CHECK(rows == 3);
     }
 
-    TEST_CASE("a spool takes no morsel after a reader, in memory or on disk") {
+    TEST_CASE(
+        "two readers of a spool each read every morsel, in memory or on disk") {
         for (const std::uint64_t budget :
              {std::uint64_t{1} << 20, std::uint64_t{1}}) {
             dstd::Vector<std::int64_t> a{1, 2, 3};
             spill::Spool spool(budget);
             dstd::Vector<Series> cols;
             cols.push_back(Series::flat_i64(a.data(), 3));
-            spool.add(std::move(cols), 3);
+            dftu_utils_test::ok(spool.add(std::move(cols), 3));
             dstd::UniquePtr<dftracer::utils::dataframe::Cursor> first =
-                spool.reader();
+                dftu_utils_test::ok(spool.reader());
             dstd::UniquePtr<dftracer::utils::dataframe::Cursor> second =
-                spool.reader();
-            dstd::Vector<Series> more;
-            more.push_back(Series::flat_i64(a.data(), 3));
-            CHECK_THROWS_AS(spool.add(std::move(more), 3), std::logic_error);
+                dftu_utils_test::ok(spool.reader());
             // Both readers read the three rows.
             for (auto* r : {first.get(), second.get()}) {
                 auto m = run(r->next(0));
@@ -298,6 +388,26 @@ TEST_SUITE("spill errors") {
                 CHECK(m->rows == 3);
             }
         }
+    }
+
+    TEST_CASE("a spool that takes a morsel after a reader ends the process" *
+              doctest::skip()) {
+        fresh_process::announce_abort();
+        dstd::Vector<std::int64_t> a{1, 2, 3};
+        spill::Spool spool(1);
+        dstd::Vector<Series> cols;
+        cols.push_back(Series::flat_i64(a.data(), 3));
+        dftu_utils_test::ok(spool.add(std::move(cols), 3));
+        auto reader = dftu_utils_test::ok(spool.reader());
+        dstd::Vector<Series> more;
+        more.push_back(Series::flat_i64(a.data(), 3));
+        (void)spool.add(std::move(more), 3);
+    }
+
+    TEST_CASE("a spool that takes a morsel after a reader is fatal") {
+        auto result = fresh_process::run(
+            "a spool that takes a morsel after a reader ends the process");
+        CHECK(result.aborted_with("spool: a morsel was added after a reader"));
     }
 
     TEST_CASE("a spool read backwards returns the morsels last first") {
@@ -310,10 +420,10 @@ TEST_SUITE("spill errors") {
                 dstd::Vector<std::int64_t> a{m * 10, m * 10 + 1, m * 10 + 2};
                 dstd::Vector<Series> cols;
                 cols.push_back(Series::flat_i64(a.data(), 3));
-                spool.add(std::move(cols), 3);
+                dftu_utils_test::ok(spool.add(std::move(cols), 3));
             }
             for (int pass = 0; pass < 2; ++pass) {
-                auto back = spool.reverse_reader();
+                auto back = dftu_utils_test::ok(spool.reverse_reader());
                 dstd::Vector<std::int64_t> firsts;
                 while (auto m = run(back->next(0))) {
                     REQUIRE(m->rows == 3);
@@ -329,7 +439,8 @@ TEST_SUITE("spill errors") {
 
     TEST_CASE(
         "opening a run file that blocks leaves the worker to other tasks") {
-        spill::Dir dir;
+        const auto dir_owner = make_dir();
+        spill::Dir& dir = *dir_owner;
         const dstd::String path = dir.run_path(0);
         REQUIRE(::mkfifo(path.c_str(), 0600) == 0);
 
@@ -339,8 +450,8 @@ TEST_SUITE("spill errors") {
         std::atomic<bool> opened{false};
         std::atomic<bool> other_ran{false};
         const auto open_task = [&]() -> dftracer::utils::coro::CoroTask<void> {
-            spill::Reader r(path);
-            opened.store(true);
+            const auto r = spill::Reader::open(path);
+            opened.store(r.has_value());
             co_return;
         };
         const auto other_task = [&]() -> dftracer::utils::coro::CoroTask<void> {

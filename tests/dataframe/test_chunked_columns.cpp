@@ -175,7 +175,7 @@ const Kind KINDS[] = {Kind::Int64,      Kind::Float64,    Kind::Bool,
                       Kind::StringFlat, Kind::StringView, Kind::StringDict,
                       Kind::StringMixed};
 
-DataFrame run(dftracer::utils::coro::CoroTask<DataFrame> t) {
+DataFrame run(dftracer::utils::coro::CoroTask<dstd::Result<DataFrame>> t) {
     return dftu_utils_test::ok(
         dftracer::utils::default_runtime().submit(std::move(t)).get());
 }
@@ -185,9 +185,8 @@ class PartsCursor : public Cursor {
     explicit PartsCursor(dstd::SharedPtr<const dstd::Vector<DataFrame>> parts)
         : parts_(std::move(parts)) {}
 
-    dftracer::utils::coro::CoroTask<dstd::Optional<Morsel>> next(
-        std::int64_t) override {
-        if (next_ >= parts_->size()) co_return dstd::nullopt;
+    dftracer::utils::coro::CoroTask<MorselResult> next(std::int64_t) override {
+        if (next_ >= parts_->size()) co_return MorselResult(dstd::nullopt);
         const DataFrame& df = (*parts_)[next_++];
         Morsel m;
         m.rows = df.num_rows();
@@ -197,7 +196,7 @@ class PartsCursor : public Cursor {
             dyn.name_ids.push_back(intern_->get_or_insert(df.names[c]));
             m.columns.push_back(df.columns[c].share());
         }
-        co_return m;
+        co_return MorselResult(std::move(m));
     }
 
    private:
@@ -369,16 +368,19 @@ TEST_SUITE("chunked columns") {
                 }
 
                 for (std::int64_t a = 0; a < N; ++a) {
+                    KeyRefusal refusal;
                     if (c.is_null(a)) {
                         dstd::String key_c, key_j;
-                        append_cell(key_c, c, a);
-                        append_cell(key_j, j, a);
+                        append_cell(key_c, c, a, refusal);
+                        append_cell(key_j, j, a, refusal);
+                        CHECK(!refusal.refused());
                         CHECK(key_c == key_j);
                         continue;
                     }
                     dstd::String key_c, key_j;
-                    append_cell(key_c, c, a);
-                    append_cell(key_j, j, a);
+                    append_cell(key_c, c, a, refusal);
+                    append_cell(key_j, j, a, refusal);
+                    CHECK(!refusal.refused());
                     CHECK(key_c == key_j);
                     CHECK(cell_to_string(c, a) == cell_to_string(j, a));
                     if (kind == Kind::Int64)

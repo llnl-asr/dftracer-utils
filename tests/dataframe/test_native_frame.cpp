@@ -66,7 +66,9 @@ DataFrame sample() {
     return f;
 }
 
-dstd::String bytes_of(const DataFrame& f) { return frame_to_native(f); }
+dstd::String bytes_of(const DataFrame& f) {
+    return dftu_utils_test::ok(frame_to_native(f));
+}
 
 }  // namespace
 
@@ -163,7 +165,8 @@ TEST_SUITE("native frame") {
         fl.handle()->set_fixed_size(2);
         fl.handle()->offsets = {};
         f.columns.push_back(std::move(fl));
-        const auto back = frame_from_native(frame_to_native(f));
+        const auto back =
+            frame_from_native(dftu_utils_test::ok(frame_to_native(f)));
         REQUIRE(back);
         CHECK(back->columns[0].type() == TypeId::Map);
         CHECK(back->columns[1].type() == TypeId::FixedSizeList);
@@ -181,7 +184,8 @@ TEST_SUITE("native frame") {
             f.group_by(dstd::String("k"), {GroupAgg{Agg::Sum, "v", "s"}}));
         REQUIRE(g.num_rows() == 2);
         CHECK(g.column("k").is_json());
-        const auto back = frame_from_native(frame_to_native(g));
+        const auto back =
+            frame_from_native(dftu_utils_test::ok(frame_to_native(g)));
         REQUIRE(back);
         CHECK(back->column("k").is_json());
     }

@@ -96,6 +96,11 @@ T run(coro::CoroTask<T> t) {
     return common::unwrap(default_runtime().submit(std::move(t)).get());
 }
 
+template <class T>
+T run(coro::CoroTask<dstd::Result<T>> t) {
+    return common::unwrap(default_runtime().submit(std::move(t)).get());
+}
+
 template <class Fn>
 void run_scoped(Fn fn) {
     common::unwrap(
@@ -520,9 +525,12 @@ Result measure(const Options& opt, const dstd::String& input,
             opt.warmups, opt.runs);
         const dataframe::DataFrame runs = dftracer::utils::common::unwrap(
             frame.group_by(dstd::Vector<dstd::String>{"run"}).size());
-        r.query_s["frame_join"] =
-            timed([&] { frame.join(runs, dstd::Vector<dstd::String>{"run"}); },
-                  opt.warmups, opt.runs);
+        r.query_s["frame_join"] = timed(
+            [&] {
+                common::unwrap(
+                    frame.join(runs, dstd::Vector<dstd::String>{"run"}));
+            },
+            opt.warmups, opt.runs);
         r.peak_rss = peak_rss_bytes();
         return r;
     }

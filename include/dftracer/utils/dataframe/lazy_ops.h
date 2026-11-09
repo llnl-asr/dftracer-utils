@@ -187,11 +187,16 @@ class LazyOps {
     dstd::Vector<dstd::String> schema() const { return lf().schema(); }
     Schema output_schema() const { return lf().output_schema(); }
     dstd::String explain() const { return lf().explain(); }
-    coro::AsyncGenerator<DataFrame> stream(std::int64_t morsel_rows = 0) const {
+    dstd::Result<void> status() const { return lf().status(); }
+    coro::AsyncGenerator<dstd::Result<DataFrame>> stream(
+        std::int64_t morsel_rows = 0) const {
         return lf().stream(morsel_rows);
     }
-    dstd::UniquePtr<Cursor> open_cursor() const { return lf().open_cursor(); }
-    coro::CoroTask<DataFrame> collect(std::int64_t morsel_rows = 0) const {
+    dstd::Result<dstd::UniquePtr<Cursor>> open_cursor() const {
+        return lf().open_cursor();
+    }
+    coro::CoroTask<dstd::Result<DataFrame>> collect(
+        std::int64_t morsel_rows = 0) const {
         return lf().collect(morsel_rows);
     }
 

@@ -121,6 +121,20 @@ dstd::String error_of(const dstd::Function<void()>& fn) {
     return {};
 }
 
+// The message of the error a view fails with, from building it or from running
+// it; empty when it does not fail.
+dstd::String error_of_frame(const dstd::Function<View()>& make) {
+    try {
+        const auto result = dftracer::utils::default_runtime()
+                                .submit(make().lazy().collect())
+                                .get();
+        if (!result.has_value()) return result.error().c_str();
+    } catch (const std::exception& e) {
+        return e.what();
+    }
+    return {};
+}
+
 bool has(dstd::StringView text, std::initializer_list<const char*> parts) {
     for (const char* p : parts)
         if (text.find(p) == dstd::StringView::npos) {
@@ -348,16 +362,15 @@ TEST_SUITE("View duql joins") {
         auto lines = runs_and_events();
         lines.push_back(R"({"type":"run","run":1,"app":"amg"})");
         const View dup = view_of(write_records(env, "dup", lines));
-        CHECK(has(error_of([&] {
-                      (void)frame(
-                          dup.duql(let + "derive app = run -> runs.app"));
+        CHECK(has(error_of_frame([&] {
+                      return dup.duql(let + "derive app = run -> runs.app");
                   }),
                   {"'runs'", "key 1"}));
-        CHECK(has(error_of([&] {
-                      (void)frame(dup.duql(
+        CHECK(has(error_of_frame([&] {
+                      return dup.duql(
                           let +
                           "where type == \"ev\" and ((run -> runs.app) "
-                          "?? \"\") == \"amg\""));
+                          "?? \"\") == \"amg\"");
                   }),
                   {"'runs'", "key 1"}));
         CHECK(has(dup.explain_duql(let + "where type == \"ev\" and ((run -> "
@@ -407,10 +420,10 @@ TEST_SUITE("View duql joins") {
         for (std::int64_t r = 0; r < f.num_rows(); ++r)
             total += bnum(f, r, "share");
         CHECK(total == doctest::Approx(1.0));
-        CHECK(has(error_of([&] {
-                      (void)frame(v.duql(
+        CHECK(has(error_of_frame([&] {
+                      return v.duql(
                           "derive x = (from data | where type == \"ev\" | "
-                          "select dur)"));
+                          "select dur)");
                   }),
                   {"__sub_0", "one row"}));
         const auto none = frame(v.duql(
@@ -449,16 +462,16 @@ TEST_SUITE("View duql joins") {
             "len(hs) | select n"));
         CHECK(column(empty, "n") == dstd::Vector<dstd::String>{"0", "0", "0"});
 
-        CHECK(has(error_of([&] {
-                      (void)frame(v.duql(
+        CHECK(has(error_of_frame([&] {
+                      return v.duql(
                           "let hosts = where type == \"host\" | select run, "
-                          "host; where type == \"ev\" | lookup hosts on run"));
+                          "host; where type == \"ev\" | lookup hosts on run");
                   }),
                   {"hosts", "key 1"}));
-        CHECK(has(error_of([&] {
-                      (void)frame(v.duql(
+        CHECK(has(error_of_frame([&] {
+                      return v.duql(
                           "let runs = where type == \"run\" | select run, "
-                          "type; where type == \"ev\" | lookup runs on run"));
+                          "type; where type == \"ev\" | lookup runs on run");
                   }),
                   {"'type'", "already"}));
         CHECK(has(error_of([&] {
@@ -549,11 +562,11 @@ TEST_SUITE("View duql joins") {
             frame(v.duql(let + ev + "lookup runs on run anti"));
         CHECK(all_cols.column_index("sapp") < 0);
 
-        CHECK(has(error_of([&] {
-                      (void)frame(v.duql(
+        CHECK(has(error_of_frame([&] {
+                      return v.duql(
                           "let runs = where type == \"run\" | select run, "
                           "type; " +
-                          ev + "lookup runs on run inner"));
+                          ev + "lookup runs on run inner");
                   }),
                   {"'type'", "already"}));
     }
@@ -945,12 +958,12 @@ TEST_SUITE("View duql joins") {
             ScopedEnv cap("DUQL_LOOKUP_MAX_ROWS", "10");
             const View planned = v.duql(q);
             (void)v.explain_duql(q);
-            CHECK(has(error_of([&] { (void)frame(planned); }),
+            CHECK(has(error_of_frame([&] { return planned; }),
                       {"'ks'", "11", "10", "DUQL_LOOKUP_MAX_ROWS"}));
-            CHECK(has(error_of([&] {
-                          (void)frame(v.duql(
+            CHECK(has(error_of_frame([&] {
+                          return v.duql(
                               "derive m = (from data | where k < ^.k | agg { "
-                              "m = max(k) })"));
+                              "m = max(k) })");
                       }),
                       {"__sub_0", "DUQL_LOOKUP_MAX_ROWS"}));
             // Sub-queries under 'in' and ones keyed by '==' have no cap.
@@ -974,7 +987,7 @@ TEST_SUITE("View duql joins") {
         }
         {
             ScopedEnv cap("DUQL_LOOKUP_MAX_BYTES", "16");
-            CHECK(has(error_of([&] { (void)frame(v.duql(q)); }),
+            CHECK(has(error_of_frame([&] { return v.duql(q); }),
                       {"'ks'", "DUQL_LOOKUP_MAX_BYTES", "16"}));
         }
         CHECK(frame(v.duql(q)).num_rows() == 11);
@@ -1557,10 +1570,10 @@ TEST_SUITE("View duql joins") {
         TestEnvironment env(10);
         const CorrelatedData d = correlated_data(60, 3);
         const View v = view_of(write_records(env, "ce", d.lines, 4096, 4096));
-        CHECK(has(error_of([&] {
-                      (void)frame(
-                          v.duql("derive x = (from data | where run == ^.run | "
-                                 "select dur)"));
+        CHECK(has(error_of_frame([&] {
+                      return v.duql(
+                          "derive x = (from data | where run == ^.run | "
+                          "select dur)");
                   }),
                   {"__sub_", "rows for key", "one row"}));
         CHECK(has(error_of([&] {
@@ -1581,10 +1594,10 @@ TEST_SUITE("View duql joins") {
                           "= first(dur) })");
                   }),
                   {"'first'", "count, count_if"}));
-        CHECK(has(error_of([&] {
-                      (void)frame(
-                          v.duql("derive x = (from data | where i < ^.i | "
-                                 "select dur)"));
+        CHECK(has(error_of_frame([&] {
+                      return v.duql(
+                          "derive x = (from data | where i < ^.i | "
+                          "select dur)");
                   }),
                   {"__sub_", "rows in the range", "one row"}));
         CHECK(has(v.explain_duql("derive m = (from data | where run == ^.run "
@@ -1673,7 +1686,7 @@ TEST_SUITE("View duql joins") {
                 const bool key_set =
                     c.query.find("| where g in") != dstd::String::npos;
                 if (key_set && cfg.budget) {
-                    CHECK(has(error_of([&] { (void)frame(v.duql(c.query)); }),
+                    CHECK(has(error_of_frame([&] { return v.duql(c.query); }),
                               {"memory budget", "__sub_"}));
                     continue;
                 }

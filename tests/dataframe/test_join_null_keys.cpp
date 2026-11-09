@@ -27,7 +27,7 @@ using namespace dftracer::utils::dataframe;
 
 namespace {
 
-DataFrame run(coro::CoroTask<DataFrame> t) {
+DataFrame run(coro::CoroTask<dstd::Result<DataFrame>> t) {
     return dftu_utils_test::ok(
         dftracer::utils::default_runtime().submit(std::move(t)).get());
 }
@@ -89,7 +89,7 @@ DataFrame right() {
 
 DataFrame join(const DataFrame& l, const DataFrame& r, JoinHow how,
                bool nulls_equal) {
-    return l.join(r, {"k"}, how, "_right", nulls_equal);
+    return dftu_utils_test::ok(l.join(r, {"k"}, how, "_right", nulls_equal));
 }
 
 LazyFrame lazy_of(const DataFrame& d, std::uint64_t budget = 0) {
@@ -164,12 +164,12 @@ TEST_SUITE("join null keys") {
                                   i64s({0, 1}, {0b10}), i64s({1, 2}));
         const DataFrame r =
             frame({"a", "b", "y"}, i64s({7}), i64s({0}, {0}), i64s({10}));
-        const DataFrame out =
-            l.join(r, {"a", "b"}, JoinHow::Inner, "_right", true);
+        const DataFrame out = dftu_utils_test::ok(
+            l.join(r, {"a", "b"}, JoinHow::Inner, "_right", true));
         CHECK(rows(out) == Rows{"7,null,1,10"});
-        CHECK(
-            l.join(r, {"a", "b"}, JoinHow::Inner, "_right", false).num_rows() ==
-            0);
+        CHECK(dftu_utils_test::ok(
+                  l.join(r, {"a", "b"}, JoinHow::Inner, "_right", false))
+                  .num_rows() == 0);
     }
 
     TEST_CASE("an integer key column with nulls") {
@@ -184,14 +184,15 @@ TEST_SUITE("join null keys") {
 
     TEST_CASE("cross, lookup and nest refuse the option") {
         for (JoinHow how : {JoinHow::Cross, JoinHow::Lookup, JoinHow::Nest}) {
-            CHECK_THROWS_AS(left().join(right(), {"k"}, how, "_right", true),
-                            std::invalid_argument);
+            dftu_utils_test::expect_error(
+                left().join(right(), {"k"}, how, "_right", true),
+                dftracer::utils::common::ErrorCode::InvalidArgument);
         }
-        try {
+        const auto crossed =
             left().join(right(), {"k"}, JoinHow::Cross, "_right", true);
-        } catch (const std::invalid_argument& e) {
-            CHECK(dstd::String(e.what()).find("cross") != dstd::String::npos);
-        }
+        REQUIRE_FALSE(crossed.has_value());
+        CHECK(dstd::String(crossed.error().c_str()).find("cross") !=
+              dstd::String::npos);
     }
 
     TEST_CASE("a lazy join gives the eager rows") {
@@ -206,9 +207,11 @@ TEST_SUITE("join null keys") {
     }
 
     TEST_CASE("a lazy join refuses the option for cross, lookup and nest") {
-        CHECK_THROWS_AS(lazy_of(left()).join(lazy_of(right()), {"k"},
-                                             JoinHow::Lookup, "_right", true),
-                        std::invalid_argument);
+        dftu_utils_test::expect_error(
+            lazy_of(left())
+                .join(lazy_of(right()), {"k"}, JoinHow::Lookup, "_right", true)
+                .status(),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
     }
 
     TEST_CASE("a spilled join gives the in-memory rows") {

@@ -27,8 +27,9 @@ dstd::Result<Series> chunked_column(dstd::Vector<Series> parts);
 dstd::Result<Series> join_chunks(const Series& c);
 /// `f` with every CHUNKED column joined by `join_chunks`, for a caller that
 /// reads one buffer per column. The columns are joined in parallel on the
-/// current executor, if any. Throws what @ref join_chunks returns as an error.
-coro::CoroTask<DataFrame> join_chunks(DataFrame f);
+/// current executor, if any. Gives the error of @ref join_chunks for a column
+/// that cannot be joined.
+coro::CoroTask<dstd::Result<DataFrame>> join_chunks(DataFrame f);
 
 /// Gather the rows of every column at `indices` into a new DataFrame (same
 /// names).
@@ -169,22 +170,24 @@ dstd::Result<dstd::Vector<DataFrame>> hash_partition(
 /// row with no left match); any other right column colliding with a left
 /// name gets `suffix` ("" = "_right"). Matched rows keep left order; a
 /// right-preserving `how` appends the unmatched right rows. Semi / Anti
-/// return left columns only; Cross ignores the keys. Throws std::out_of_range
-/// on an absent key column, std::invalid_argument on an empty or uneven key
-/// list, a key type mismatch, or an unknown `how`.
-DataFrame join(const DataFrame& left, const DataFrame& right,
-               const dstd::Vector<dstd::String>& left_on,
-               const dstd::Vector<dstd::String>& right_on, JoinHow how,
-               const dstd::String& suffix, bool nulls_equal = false);
+/// return left columns only; Cross ignores the keys. A NotFound error on an
+/// absent key column, an InvalidArgument one on an empty or uneven key list, a
+/// key type mismatch, or an unknown `how`.
+dstd::Result<DataFrame> join(const DataFrame& left, const DataFrame& right,
+                             const dstd::Vector<dstd::String>& left_on,
+                             const dstd::Vector<dstd::String>& right_on,
+                             JoinHow how, const dstd::String& suffix,
+                             bool nulls_equal = false);
 
 /// Compare two aggregation results that share their first `n_key` columns as
 /// group keys: outer-join on the keys (sorted ascending), keep every other
 /// column of `base` as `l_<m>` and of `variant` as `r_<m>`, then append
 /// `delta_<m>` (r - l) and `pct_<m>` (100 * delta / l, Float64) for each
-/// numeric metric `m` present on both sides. Throws std::invalid_argument if
+/// numeric metric `m` present on both sides. An InvalidArgument error if
 /// `n_key < 1`, exceeds a frame's width, or a key name differs.
-DataFrame compare_agg(const DataFrame& base, const DataFrame& variant,
-                      std::int64_t n_key);
+dstd::Result<DataFrame> compare_agg(const DataFrame& base,
+                                    const DataFrame& variant,
+                                    std::int64_t n_key);
 
 /// Drop every row that is null in ANY column (a combined not-null mask, then
 /// filter).

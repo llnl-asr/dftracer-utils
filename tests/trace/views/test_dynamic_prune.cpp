@@ -132,10 +132,10 @@ struct CountingCursor : dataframe::Cursor {
     CountingCursor(dstd::UniquePtr<dataframe::Cursor> in, std::size_t* r,
                    std::size_t* n)
         : inner(std::move(in)), rows(r), narrows(n) {}
-    coro::CoroTask<dstd::Optional<dataframe::Morsel>> next(
+    coro::CoroTask<dataframe::MorselResult> next(
         std::int64_t max_rows) override {
         auto m = co_await inner->next(max_rows);
-        if (m) *rows += static_cast<std::size_t>(m->rows);
+        if (m && *m) *rows += static_cast<std::size_t>((*m)->rows);
         co_return m;
     }
     coro::CoroTask<bool> narrow(const dataframe::Expr& predicate) override {

@@ -180,15 +180,20 @@ TEST_SUITE("GenericView") {
               dstd::String(dstd::String(determine_index_path(gz, "")))},
              {dstd::String(dft),
               dstd::String(dstd::String(determine_index_path(dft, "")))}});
+        dstd::String what;
+        bool threw = false;
         try {
-            dftu_utils_test::ok(v.collect().get());
-            FAIL("no error");
+            const auto collected = v.collect().get();
+            REQUIRE_FALSE(collected.has_value());
+            what = collected.error().c_str();
         } catch (const std::exception& e) {
-            const dstd::String what = e.what();
-            CAPTURE(what);
-            CHECK(what.find("dftracer") != dstd::String::npos);
-            CHECK(what.find("generic") != dstd::String::npos);
+            threw = true;
+            what = e.what();
         }
+        CAPTURE(what);
+        CHECK(threw == true);
+        CHECK(what.find("dftracer") != dstd::String::npos);
+        CHECK(what.find("generic") != dstd::String::npos);
     }
 
     TEST_CASE("from_directory finds JSON lines files") {
@@ -238,16 +243,11 @@ TEST_SUITE("GenericView") {
         TestEnvironment env(10);
         dftu_utils_test::FileOut(env.dir() + "/plain.jsonl.gz")
             << R"({"k":1})" << "\n";
-        try {
-            dftu_utils_test::ok(
-                run(View::from_directory(dstd::String(env.dir())))
-                    .collect()
-                    .get());
-            FAIL("no error");
-        } catch (const std::exception& e) {
-            CAPTURE(e.what());
-            CHECK(dstd::String(e.what()).find("plain.jsonl.gz is not gzip") !=
-                  dstd::String::npos);
-        }
+        const auto collected =
+            run(View::from_directory(dstd::String(env.dir()))).collect().get();
+        REQUIRE_FALSE(collected.has_value());
+        CAPTURE(collected.error().c_str());
+        CHECK(dstd::String(collected.error().c_str())
+                  .find("plain.jsonl.gz is not gzip") != dstd::String::npos);
     }
 }

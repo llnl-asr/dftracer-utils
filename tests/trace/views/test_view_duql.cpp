@@ -156,7 +156,25 @@ View base() {
     return View::from_file(dstd::String(s.gz), dstd::String(s.idx));
 }
 
-dataframe::DataFrame frame(const View& v) { return run(v.collect()); }
+dstd::Result<dataframe::DataFrame> frame_result(const View& v) {
+    return dftracer::utils::default_runtime().submit(v.collect()).get();
+}
+
+dataframe::DataFrame frame(const View& v) {
+    return dftu_utils_test::ok(frame_result(v));
+}
+
+// The message of the error a view fails with, from building it or from
+// running it; empty when it does not fail.
+dstd::String failure_of(const dstd::Function<View()>& make) {
+    try {
+        const auto result = frame_result(make());
+        if (!result.has_value()) return result.error().c_str();
+    } catch (const dftracer::utils::common::DFTUtilsException& e) {
+        return e.what();
+    }
+    return {};
+}
 
 dataframe::DataFrame pipe(const dstd::String& text,
                           const duql::Params& p = {}) {
@@ -218,18 +236,14 @@ dstd::String text(const dataframe::DataFrame& f) {
 }
 
 bool fails_with(const dstd::String& q, dstd::Vector<dstd::String> words) {
-    try {
-        (void)frame(base().duql(q));
-    } catch (const dftracer::utils::common::DFTUtilsException& e) {
-        const dstd::String what = e.what();
-        for (const auto& w : words)
-            if (what.find(w) == dstd::String::npos) {
-                MESSAGE(what);
-                return false;
-            }
-        return true;
-    }
-    return false;
+    const dstd::String what = failure_of([&] { return base().duql(q); });
+    if (what.empty()) return false;
+    for (const auto& w : words)
+        if (what.find(w) == dstd::String::npos) {
+            MESSAGE(what);
+            return false;
+        }
+    return true;
 }
 
 dstd::String event(int ts, const dstd::String& args, int dur = 10) {
@@ -1204,9 +1218,10 @@ TEST_SUITE("View duql aggregation") {
 
     TEST_CASE("fill stops at DUQL_FILL_MAX_ROWS") {
         ::setenv("DUQL_FILL_MAX_ROWS", "5", 1);
-        CHECK_THROWS_AS(
-            frame(base().duql("bucket 100us fill | agg { n = count() }")),
-            dftracer::utils::common::DFTUtilsException);
+        CHECK_FALSE(failure_of([&] {
+                        return base().duql(
+                            "bucket 100us fill | agg { n = count() }");
+                    }).empty());
         ::unsetenv("DUQL_FILL_MAX_ROWS");
     }
 
@@ -1333,10 +1348,11 @@ TEST_SUITE("View duql aggregation") {
             fails_with("bucket 1ms fill from 5ms to 2ms | agg { n = count() }",
                        {"lo <= hi"}));
         ::setenv("DUQL_FILL_MAX_ROWS", "5", 1);
-        CHECK_THROWS_AS(
-            frame(
-                v.duql("bucket 1ms fill from 0 to 8ms | agg { n = count() }")),
-            dftracer::utils::common::DFTUtilsException);
+        CHECK_FALSE(
+            failure_of([&] {
+                return v.duql(
+                    "bucket 1ms fill from 0 to 8ms | agg { n = count() }");
+            }).empty());
         ::unsetenv("DUQL_FILL_MAX_ROWS");
     }
 
@@ -1700,9 +1716,9 @@ TEST_SUITE("View duql quantifiers") {
             INFO(cond);
             CHECK(rows(frame(v.duql(both(cond).front()))) == want);
             // After the scan, elements of mixed types have no column kernel.
-            CHECK_THROWS_WITH_AS(frame(v.duql(both(cond).back())),
-                                 doctest::Contains("mix types"),
-                                 dftracer::utils::common::DFTUtilsException);
+            CHECK(failure_of([&] {
+                      return v.duql(both(cond).back());
+                  }).find("mix types") != dstd::String::npos);
         }
     }
 
@@ -1715,9 +1731,9 @@ TEST_SUITE("View duql quantifiers") {
             CHECK(rows(frame(v.duql(q))) == "1");
         }
         CHECK(rows(frame(v.duql(both("any(g[-1], . == 2)").front()))) == "2");
-        CHECK_THROWS_WITH_AS(frame(v.duql(both("any(g[-1], . == 2)").back())),
-                             doctest::Contains("negative index"),
-                             dftracer::utils::common::DFTUtilsException);
+        CHECK(failure_of([&] {
+                  return v.duql(both("any(g[-1], . == 2)").back());
+              }).find("negative index") != dstd::String::npos);
     }
 
     TEST_CASE("a quantifier in a derive") {
@@ -2373,12 +2389,8 @@ TEST_SUITE("View duql pivot and unpivot") {
             env, {line("io", 1, R"("m":"x")"), line("io", 2, R"("m":"y")"),
                   line("io", 3, R"("m":"z")")});
         setenv("DUQL_PIVOT_MAX_COLUMNS", "2", 1);
-        dstd::String what;
-        try {
-            (void)frame(v.duql("select m | pivot m { n = count() }"));
-        } catch (const dftracer::utils::common::DFTUtilsException& e) {
-            what = e.what();
-        }
+        const dstd::String what = failure_of(
+            [&] { return v.duql("select m | pivot m { n = count() }"); });
         unsetenv("DUQL_PIVOT_MAX_COLUMNS");
         CHECK(what.find("gives 3") != dstd::String::npos);
         CHECK(what.find("(2)") != dstd::String::npos);
@@ -2872,13 +2884,11 @@ TEST_SUITE("View duql array indexes and lists") {
         TestEnvironment env(10);
         const View v = arrays_view(env);
         CHECK_NOTHROW((void)frame(v.duql("where any(xs, . > 1)")));
-        try {
-            (void)frame(v.duql("derive z = 1 | where any(tags, xs[i] > 1)"));
-            FAIL("an index in a quantifier compiled");
-        } catch (const dftracer::utils::common::DFTUtilsException& e) {
-            CHECK(dstd::String(e.what()).find("call_column") !=
-                  dstd::String::npos);
-        }
+        const dstd::String what = failure_of([&] {
+            return v.duql("derive z = 1 | where any(tags, xs[i] > 1)");
+        });
+        REQUIRE_FALSE(what.empty());
+        CHECK(what.find("call_column") != dstd::String::npos);
     }
 }
 

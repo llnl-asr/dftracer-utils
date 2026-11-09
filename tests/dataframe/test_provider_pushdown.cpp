@@ -30,14 +30,21 @@ using namespace dftracer::utils::dataframe;
 
 namespace {
 
-DataFrame run(coro::CoroTask<DataFrame> t) {
+DataFrame run(coro::CoroTask<dstd::Result<DataFrame>> t) {
+    return dftu_utils_test::ok(
+        dftracer::utils::default_runtime().submit(std::move(t)).get());
+}
+
+DataFrame run_frame(coro::CoroTask<DataFrame> t) {
     return dftu_utils_test::ok(
         dftracer::utils::default_runtime().submit(std::move(t)).get());
 }
 
 coro::CoroTask<DataFrame> drain_cursor(dstd::UniquePtr<Cursor> cur) {
     DataFrame out;
-    while (auto m = co_await cur->next(1 << 20)) {
+    for (;;) {
+        auto m = dftu_utils_test::ok(co_await cur->next(1 << 20));
+        if (!m) break;
         out.columns = std::move(m->columns);
         out.names.assign(out.columns.size(), dstd::String());
     }
@@ -247,7 +254,7 @@ TEST_SUITE("provider pushdown") {
         ScanResult r = source->scan(req);
         REQUIRE(r.filters.size() == 1);
         CHECK(r.filters[0] == Pushed::No);
-        DataFrame raw = run(drain_cursor(std::move(r.cursor)));
+        DataFrame raw = run_frame(drain_cursor(std::move(r.cursor)));
         CHECK(raw.num_rows() == 10);  // unfiltered; the engine would re-apply
 
         DataFrame result = run(
@@ -287,10 +294,13 @@ TEST_SUITE("provider pushdown") {
         "downstream") {
         FixtureConfig cfg;
         cfg.honor_projection = false;
-        CHECK_THROWS_AS(run(LazyFrame::scan(make_fixture_source(cfg))
-                                .select({"val", "id"})
-                                .collect()),
-                        std::runtime_error);
+        dftu_utils_test::expect_error(
+            dftracer::utils::default_runtime()
+                .submit(LazyFrame::scan(make_fixture_source(cfg))
+                            .select({"val", "id"})
+                            .collect())
+                .get(),
+            dftracer::utils::common::ErrorCode::Internal);
     }
 
     TEST_CASE(
@@ -316,7 +326,7 @@ TEST_SUITE("provider pushdown") {
         honored.apply_limit = true;
         ScanRequest req1;
         req1.limit = 3;
-        DataFrame got1 = run(drain_cursor(
+        DataFrame got1 = run_frame(drain_cursor(
             std::move(make_fixture_source(honored)->scan(req1).cursor)));
         CHECK(got1.num_rows() == 3);
 
@@ -324,7 +334,7 @@ TEST_SUITE("provider pushdown") {
         ignored.apply_limit = false;
         ScanRequest req2;
         req2.limit = 3;
-        DataFrame got2 = run(drain_cursor(
+        DataFrame got2 = run_frame(drain_cursor(
             std::move(make_fixture_source(ignored)->scan(req2).cursor)));
         CHECK(got2.num_rows() == 10);
     }
@@ -358,8 +368,8 @@ class LimitRecordingSource : public dftracer::utils::dataframe::Source {
    private:
     struct OneShot : Cursor {
         bool done = false;
-        coro::CoroTask<dstd::Optional<Morsel>> next(std::int64_t) override {
-            if (done) co_return dstd::nullopt;
+        coro::CoroTask<MorselResult> next(std::int64_t) override {
+            if (done) co_return MorselResult(dstd::nullopt);
             done = true;
             dstd::Vector<std::int64_t> v{1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
             dftracer::utils::dataframe::Morsel m;
@@ -368,7 +378,7 @@ class LimitRecordingSource : public dftracer::utils::dataframe::Source {
                 dftracer::utils::dataframe::Series{dftu_series_new_flat(
                     DFTU_TYPE_INT64, v.data(),
                     static_cast<std::int64_t>(v.size()), nullptr)});
-            co_return m;
+            co_return MorselResult(std::move(m));
         }
     };
 };

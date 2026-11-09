@@ -420,8 +420,9 @@ TEST_SUITE("kernels keep layouts") {
             right.columns.push_back(Series::flat_i64(rk.data(), 4));
             right.columns.push_back(Series::flat_i64(rw.data(), 4));
             for (JoinHow how : {JoinHow::Inner, JoinHow::Left}) {
-                DataFrame j = df.join(right, {"key"}, how);
-                DataFrame jf = flat.join(right, {"key"}, how);
+                DataFrame j = dftu_utils_test::ok(df.join(right, {"key"}, how));
+                DataFrame jf =
+                    dftu_utils_test::ok(flat.join(right, {"key"}, how));
                 REQUIRE(j.num_rows() == jf.num_rows());
                 CHECK(rows_of(j.columns[0]) == rows_of(jf.columns[0]));
                 check_layout(c, j.columns[0]);

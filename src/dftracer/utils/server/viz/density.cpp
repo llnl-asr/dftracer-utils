@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/field_ref.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/channel.h>
@@ -719,7 +720,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     dataframe::LazyFrame p1 =
         fields.by_path ? capped(make_window_view(begin, end)).branch(pass1_path)
                        : capped(make_window_view(begin, end)).branch(pass1);
-    co_await p1.collect();
+    common::unwrap(co_await p1.collect());
 
     DensityMap dens = std::move(ev_out.dens);
     // Fold the counter blocks into the same density map (disjoint keys:
@@ -832,7 +833,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
         views::View back_view =
             make_window_view(std::min(agg_lo, enc_lo), begin);
         dataframe::LazyFrame lb = capped(back_view).branch(back);
-        co_await lb.collect();
+        common::unwrap(co_await lb.collect());
         for (auto& r : agg_back.agg) ag_out.agg.emplace_back(std::move(r));
         if (want_enc) {
             truncated = truncated || back_truncated;

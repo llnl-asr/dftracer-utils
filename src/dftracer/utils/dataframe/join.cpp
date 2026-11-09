@@ -3,10 +3,12 @@
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/internal/cell_ops.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
+#include <dftracer/utils/dataframe/internal/errors.h>
 #include <dftracer/utils/dataframe/internal/varwidth_offsets.h>
 #include <dftracer/utils/dataframe/join.h>
 #include <dftracer/utils/dataframe/kernels/filter.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/hash/hash_combine.h>
 #include <dftracer/utils/dstd/hasher.h>
@@ -94,10 +96,9 @@ struct KeyView {
     explicit KeyView(const Series& c) {
         const dftu_series& h = *c.handle();
         if (!is_orderable_type(h.type))
-            throw std::invalid_argument(
-                (dstd::String("join: key column type '") + type_name(h.type) +
-                 "' has no per-row value to key on")
-                    .c_str());
+            dstd::fatal(
+                "join: a key column with no per-row value reached a "
+                "probe");
         data = h.data.block() ? h.data.data() : nullptr;
         validity = h.validity.block() ? h.validity.data() : nullptr;
         const TypeId narrow = narrow_varwidth_type(h.type);
@@ -264,6 +265,46 @@ bool valid_join_how(JoinHow how) noexcept {
     return false;
 }
 
+dstd::Result<HashJoin> HashJoin::make(DataFrame right,
+                                      dstd::Vector<dstd::String> left_on,
+                                      dstd::Vector<dstd::String> right_on,
+                                      JoinHow how, dstd::String suffix,
+                                      bool nulls_equal) {
+    if (!valid_join_how(how))
+        return invalid_argument<"join: unknown join kind {}">(
+            static_cast<int>(how));
+    if (nulls_equal && (how == JoinHow::Cross || how == JoinHow::Lookup ||
+                        how == JoinHow::Nest))
+        return invalid_argument<
+            "join: nulls_equal does not apply to a {} join">(
+            how == JoinHow::Cross    ? "cross"
+            : how == JoinHow::Lookup ? "lookup"
+                                     : "nest");
+    if (how == JoinHow::Cross) {
+        left_on.clear();
+        right_on.clear();
+    } else {
+        if (left_on.empty()) return invalid_argument<"join: no key columns">();
+        if (left_on.size() != right_on.size())
+            return invalid_argument<
+                "join: left_on and right_on differ in length">();
+    }
+    if (how == JoinHow::Nest && suffix.empty())
+        return invalid_argument<
+            "join: a nest join names its list column with `suffix`">();
+    for (const dstd::String& k : right_on) {
+        const std::int64_t ri = index_of(right.names, k);
+        if (ri < 0) return not_found<"join: no right column named {}">(k);
+        const TypeId t = right.columns[static_cast<std::size_t>(ri)].type();
+        if (!is_orderable_type(t))
+            return invalid_argument<
+                "join: key column type '{}' has no per-row value to key on">(
+                type_name(t));
+    }
+    return HashJoin(std::move(right), std::move(left_on), std::move(right_on),
+                    how, std::move(suffix), nulls_equal);
+}
+
 HashJoin::HashJoin(DataFrame right, dstd::Vector<dstd::String> left_on,
                    dstd::Vector<dstd::String> right_on, JoinHow how,
                    dstd::String suffix, bool nulls_equal)
@@ -273,38 +314,9 @@ HashJoin::HashJoin(DataFrame right, dstd::Vector<dstd::String> left_on,
       how_(how),
       suffix_(suffix.empty() ? DEFAULT_SUFFIX : suffix),
       nulls_equal_(nulls_equal) {
-    if (!valid_join_how(how_))
-        throw std::invalid_argument(("join: unknown join kind " +
-                                     dstd::to_string(static_cast<int>(how_)))
-                                        .c_str());
-    if (nulls_equal_ && (how_ == JoinHow::Cross || how_ == JoinHow::Lookup ||
-                         how_ == JoinHow::Nest))
-        throw std::invalid_argument(
-            (dstd::String("join: nulls_equal does not apply to a ") +
-             (how_ == JoinHow::Cross    ? "cross"
-              : how_ == JoinHow::Lookup ? "lookup"
-                                        : "nest") +
-             " join")
-                .c_str());
-    if (how_ == JoinHow::Cross) {
-        left_on_.clear();
-        right_on_.clear();
-    } else {
-        if (left_on_.empty())
-            throw std::invalid_argument("join: no key columns");
-        if (left_on_.size() != right_on_.size())
-            throw std::invalid_argument(
-                "join: left_on and right_on differ in length");
-    }
-    if (how_ == JoinHow::Nest && suffix.empty())
-        throw std::invalid_argument(
-            "join: a nest join names its list column with `suffix`");
     right_keys_.reserve(right_on_.size());
     for (const dstd::String& k : right_on_) {
         const std::int64_t ri = index_of(right_.names, k);
-        if (ri < 0)
-            throw std::out_of_range(
-                ("join: no right column named " + k).c_str());
         right_keys_.push_back(
             flat(right_.columns[static_cast<std::size_t>(ri)]));
     }
@@ -371,15 +383,13 @@ HashJoin::HashJoin(DataFrame right, dstd::Vector<dstd::String> left_on,
     if (how_ == JoinHow::Lookup) typed_conflicts_ = conflicts(true);
 }
 
-dstd::Vector<std::int64_t> HashJoin::left_key_indices(
+dstd::Result<dstd::Vector<std::int64_t>> HashJoin::left_key_indices(
     const dstd::Vector<dstd::String>& left_names) const {
     dstd::Vector<std::int64_t> idx;
     idx.reserve(left_on_.size());
     for (const dstd::String& k : left_on_) {
         const std::int64_t li = index_of(left_names, k);
-        if (li < 0)
-            throw std::out_of_range(
-                ("join: no left column named " + k).c_str());
+        if (li < 0) return not_found<"join: no left column named {}">(k);
         idx.push_back(li);
     }
     return idx;
@@ -393,20 +403,19 @@ std::int64_t HashJoin::shared_key_of(
     return -1;
 }
 
-dstd::Vector<dstd::String> HashJoin::out_names(
+dstd::Result<dstd::Vector<dstd::String>> HashJoin::out_names(
     const dstd::Vector<dstd::String>& left_names) const {
     return join_out_names(left_names, right_.names, left_on_, right_on_, how_,
                           suffix_);
 }
 
-JoinRightLayout join_right_layout(const dstd::Vector<dstd::String>& left_names,
-                                  const dstd::Vector<dstd::String>& right_names,
-                                  const dstd::Vector<dstd::String>& left_on,
-                                  const dstd::Vector<dstd::String>& right_on,
-                                  JoinHow how, const dstd::String& suffix) {
-    if (left_on.size() != right_on.size())
-        throw std::invalid_argument(
-            "join: left_on and right_on differ in length");
+namespace {
+
+JoinRightLayout right_layout(const dstd::Vector<dstd::String>& left_names,
+                             const dstd::Vector<dstd::String>& right_names,
+                             const dstd::Vector<dstd::String>& left_on,
+                             const dstd::Vector<dstd::String>& right_on,
+                             JoinHow how, const dstd::String& suffix) {
     JoinRightLayout out;
     if (left_only(how)) return out;
     if (how == JoinHow::Nest) {
@@ -443,7 +452,22 @@ JoinRightLayout join_right_layout(const dstd::Vector<dstd::String>& left_names,
     return out;
 }
 
-dstd::Vector<dstd::String> join_out_names(
+}  // namespace
+
+dstd::Result<JoinRightLayout> join_right_layout(
+    const dstd::Vector<dstd::String>& left_names,
+    const dstd::Vector<dstd::String>& right_names,
+    const dstd::Vector<dstd::String>& left_on,
+    const dstd::Vector<dstd::String>& right_on, JoinHow how,
+    const dstd::String& suffix) {
+    if (left_on.size() != right_on.size())
+        return invalid_argument<
+            "join: left_on and right_on differ in length">();
+    return right_layout(left_names, right_names, left_on, right_on, how,
+                        suffix);
+}
+
+dstd::Result<dstd::Vector<dstd::String>> join_out_names(
     const dstd::Vector<dstd::String>& left_names,
     const dstd::Vector<dstd::String>& right_names,
     const dstd::Vector<dstd::String>& left_on,
@@ -451,39 +475,40 @@ dstd::Vector<dstd::String> join_out_names(
     const dstd::String& suffix) {
     for (const dstd::String& k : left_on)
         if (index_of(left_names, k) < 0)
-            throw std::out_of_range(
-                ("join: no left column named " + k).c_str());
+            return not_found<"join: no left column named {}">(k);
     for (const dstd::String& k : right_on)
         if (index_of(right_names, k) < 0)
-            throw std::out_of_range(
-                ("join: no right column named " + k).c_str());
+            return not_found<"join: no right column named {}">(k);
     dstd::Vector<dstd::String> out = left_names;
     if (how == JoinHow::Nest) {
         if (suffix.empty())
-            throw std::invalid_argument(
-                "join: a nest join names its list column with `suffix`");
+            return invalid_argument<
+                "join: a nest join names its list column with `suffix`">();
         out.push_back(suffix);
         return out;
     }
-    JoinRightLayout layout = join_right_layout(left_names, right_names, left_on,
-                                               right_on, how, suffix);
-    for (std::size_t i = 0; i < layout.names.size(); ++i)
-        if (layout.fills[i] < 0) out.push_back(layout.names[i]);
+    auto layout = join_right_layout(left_names, right_names, left_on, right_on,
+                                    how, suffix);
+    if (!layout) return layout.error();
+    for (std::size_t i = 0; i < layout->names.size(); ++i)
+        if (layout->fills[i] < 0) out.push_back(layout->names[i]);
     return out;
 }
 
-dstd::Vector<Field> join_out_fields(const dstd::Vector<Field>& left,
-                                    const dstd::Vector<Field>& right,
-                                    const dstd::Vector<dstd::String>& left_on,
-                                    const dstd::Vector<dstd::String>& right_on,
-                                    JoinHow how, const dstd::String& suffix) {
+dstd::Result<dstd::Vector<Field>> join_out_fields(
+    const dstd::Vector<Field>& left, const dstd::Vector<Field>& right,
+    const dstd::Vector<dstd::String>& left_on,
+    const dstd::Vector<dstd::String>& right_on, JoinHow how,
+    const dstd::String& suffix) {
     dstd::Vector<dstd::String> left_names;
     left_names.reserve(left.size());
     for (const Field& f : left) left_names.push_back(f.name);
     dstd::Vector<dstd::String> right_names;
     right_names.reserve(right.size());
     for (const Field& f : right) right_names.push_back(f.name);
-    join_out_names(left_names, right_names, left_on, right_on, how, suffix);
+    auto names =
+        join_out_names(left_names, right_names, left_on, right_on, how, suffix);
+    if (!names) return names.error();
     dstd::Vector<Field> out;
     out.reserve(left.size() + right.size());
     for (const Field& f : left) out.push_back(Field{f.name, f.type, true});
@@ -495,8 +520,8 @@ dstd::Vector<Field> join_out_fields(const dstd::Vector<Field>& left,
             Field{suffix, list_of(struct_of(std::move(members))), true});
         return out;
     }
-    JoinRightLayout layout = join_right_layout(left_names, right_names, left_on,
-                                               right_on, how, suffix);
+    const JoinRightLayout layout =
+        right_layout(left_names, right_names, left_on, right_on, how, suffix);
     for (std::size_t i = 0; i < layout.keep.size(); ++i) {
         const Field f{layout.names[i], right[layout.keep[i]].type, true};
         if (layout.fills[i] >= 0)
@@ -507,14 +532,15 @@ dstd::Vector<Field> join_out_fields(const dstd::Vector<Field>& left,
     return out;
 }
 
-DataFrame HashJoin::probe(const DataFrame& left,
-                          dstd::Vector<std::uint8_t>* left_matched,
-                          std::int64_t left_base) {
-    const dstd::Vector<std::int64_t> key_idx = left_key_indices(left.names);
+dstd::Result<DataFrame> HashJoin::probe(
+    const DataFrame& left, dstd::Vector<std::uint8_t>* left_matched,
+    std::int64_t left_base) {
+    auto indices = left_key_indices(left.names);
+    if (!indices) return indices.error();
+    const dstd::Vector<std::int64_t>& key_idx = *indices;
     if (by_value(how_)) {
         if (left_matched && how_ == JoinHow::Lookup)
-            throw std::invalid_argument(
-                "join: a lookup join cannot be probed block by block");
+            dstd::fatal("join: a lookup join cannot be probed block by block");
         return probe_values(left, key_idx, left_matched, left_base);
     }
     std::uint8_t* matched =
@@ -525,12 +551,10 @@ DataFrame HashJoin::probe(const DataFrame& left,
         const Series& lc = left.columns[static_cast<std::size_t>(key_idx[p])];
         const Series& rc = right_keys_[p];
         if (lc.type() != rc.type())
-            throw std::invalid_argument(
-                ("join: key '" + left_on_[p] + "' is " +
-                 dstd::String(type_name(lc.type())) + " on the left but '" +
-                 right_on_[p] + "' is " + dstd::String(type_name(rc.type())) +
-                 " on the right")
-                    .c_str());
+            return invalid_argument<
+                "join: key '{}' is {} on the left but '{}' is {} on the "
+                "right">(left_on_[p], type_name(lc.type()), right_on_[p],
+                         type_name(rc.type()));
         left_keys.push_back(flat(lc));
     }
 
@@ -698,14 +722,14 @@ DataFrame HashJoin::probe(const DataFrame& left,
         out.columns.reserve(left.columns.size() + right_.columns.size());
         for (const Series& c : left.columns)
             out.columns.push_back(gather(c, left_idx));
-        JoinRightLayout layout = join_right_layout(
+        JoinRightLayout layout = right_layout(
             left.names, right_.names, left_on_, right_on_, how_, suffix_);
         for (std::size_t i = 0; i < layout.keep.size(); ++i) {
             out.names.push_back(layout.names[i]);
             out.columns.push_back(
                 gather(right_.columns[layout.keep[i]], right_idx));
         }
-        return out;
+        return dstd::Result<DataFrame>(std::move(out));
     };
 
     if (how_ == JoinHow::Cross) {
@@ -747,8 +771,7 @@ void HashJoin::build_value_index() {
 void HashJoin::set_lookup_conflicts(dstd::Vector<std::int64_t> per_row) {
     if (how_ != JoinHow::Lookup ||
         per_row.size() != static_cast<std::size_t>(right_.num_rows()))
-        throw std::invalid_argument(
-            "join: lookup conflicts do not match the right rows");
+        dstd::fatal("join: lookup conflicts do not match the right rows");
     typed_conflicts_ = per_row;
     value_conflicts_ = std::move(per_row);
     conflicts_given_ = true;
@@ -847,10 +870,9 @@ void HashJoin::members(std::int64_t head, bool typed,
         if (rows_equal(views, head, views, r)) out.push_back(r);
 }
 
-DataFrame HashJoin::probe_values(const DataFrame& left,
-                                 const dstd::Vector<std::int64_t>& key_idx,
-                                 dstd::Vector<std::uint8_t>* left_matched,
-                                 std::int64_t left_base) {
+dstd::Result<DataFrame> HashJoin::probe_values(
+    const DataFrame& left, const dstd::Vector<std::int64_t>& key_idx,
+    dstd::Vector<std::uint8_t>* left_matched, std::int64_t left_base) {
     dstd::Vector<Series> left_keys;
     bool typed = true;
     for (std::size_t p = 0; p < key_idx.size(); ++p) {
@@ -902,15 +924,13 @@ DataFrame HashJoin::probe_values(const DataFrame& left,
             if (!on.empty()) on += ", ";
             on += dstd::StringView(k);
         }
-        throw std::invalid_argument(
-            ("join: lookup key " + duql::key_text(key) + " of '" + on +
-             "' has right rows with different values of '" +
-             dstd::String(right_.names[static_cast<std::size_t>(
-                 conf[static_cast<std::size_t>(h)])]) +
-             "'")
-                .c_str());
+        return invalid_argument<
+            "join: lookup key {} of '{}' has right rows with different "
+            "values of '{}'">(duql::key_text(key), on,
+                              right_.names[static_cast<std::size_t>(
+                                  conf[static_cast<std::size_t>(h)])]);
     }
-    const JoinRightLayout layout = join_right_layout(
+    const JoinRightLayout layout = right_layout(
         left.names, right_.names, left_on_, right_on_, how_, suffix_);
     for (std::size_t k = 0; k < layout.keep.size(); ++k) {
         Series values = right_.columns[layout.keep[k]].take(hs);
@@ -921,10 +941,9 @@ DataFrame HashJoin::probe_values(const DataFrame& left,
             continue;
         }
         if (out.columns[static_cast<std::size_t>(at)].null_count() != n)
-            throw std::invalid_argument(("join: lookup fills '" +
-                                         layout.names[k] +
-                                         "', which some left rows already hold")
-                                            .c_str());
+            return invalid_argument<
+                "join: lookup fills '{}', which some left rows already hold">(
+                layout.names[k]);
         out.columns[static_cast<std::size_t>(at)] = std::move(values);
     }
     return out;
@@ -936,8 +955,7 @@ DataFrame HashJoin::flush(const dstd::Vector<dstd::String>& left_names,
     if (flushed_ || !keeps_unmatched_right(how_)) return out;
     flushed_ = true;
     if (left_templates.size() != left_names.size())
-        throw std::invalid_argument(
-            "join: left templates do not match the left column count");
+        dstd::fatal("join: left templates do not match the left column count");
     dstd::Vector<std::int64_t> right_idx;
     for (std::size_t r = 0; r < right_matched_n_; ++r)
         if (!right_matched_[r].load(std::memory_order_relaxed))
@@ -952,8 +970,8 @@ DataFrame HashJoin::flush(const dstd::Vector<dstd::String>& left_names,
             p >= 0 ? take(right_keys_[static_cast<std::size_t>(p)], right_idx)
                    : take(left_templates[li], nulls));
     }
-    JoinRightLayout layout = join_right_layout(
-        left_names, right_.names, left_on_, right_on_, how_, suffix_);
+    JoinRightLayout layout = right_layout(left_names, right_.names, left_on_,
+                                          right_on_, how_, suffix_);
     for (std::size_t i = 0; i < layout.keep.size(); ++i) {
         out.names.push_back(layout.names[i]);
         out.columns.push_back(take(right_.columns[layout.keep[i]], right_idx));
@@ -961,23 +979,22 @@ DataFrame HashJoin::flush(const dstd::Vector<dstd::String>& left_names,
     return out;
 }
 
-DataFrame join(const DataFrame& left, const DataFrame& right,
-               const dstd::Vector<dstd::String>& left_on,
-               const dstd::Vector<dstd::String>& right_on, JoinHow how,
-               const dstd::String& suffix, bool nulls_equal) {
-    HashJoin hj(DataFrame{right.names,
-                          [&] {
-                              dstd::Vector<Series> cols;
-                              cols.reserve(right.columns.size());
-                              for (const Series& c : right.columns)
-                                  cols.push_back(c.share());
-                              return cols;
-                          }()},
-                left_on, right_on, how, suffix, nulls_equal);
-    DataFrame matched = hj.probe(left);
-    DataFrame rest = hj.flush(left.names, left.columns);
+dstd::Result<DataFrame> join(const DataFrame& left, const DataFrame& right,
+                             const dstd::Vector<dstd::String>& left_on,
+                             const dstd::Vector<dstd::String>& right_on,
+                             JoinHow how, const dstd::String& suffix,
+                             bool nulls_equal) {
+    dstd::Vector<Series> shared;
+    shared.reserve(right.columns.size());
+    for (const Series& c : right.columns) shared.push_back(c.share());
+    auto hj = HashJoin::make(DataFrame{right.names, std::move(shared)}, left_on,
+                             right_on, how, suffix, nulls_equal);
+    if (!hj) return hj.error();
+    auto matched = hj->probe(left);
+    if (!matched) return matched.error();
+    DataFrame rest = hj->flush(left.names, left.columns);
     if (rest.num_rows() == 0) return matched;
-    return common::unwrap(concat({&matched, &rest}));
+    return concat({&*matched, &rest});
 }
 
 namespace {
@@ -988,7 +1005,8 @@ DataFrame prefix_metrics(const DataFrame& b, std::size_t n_key,
     out.names.reserve(b.names.size());
     out.columns.reserve(b.columns.size());
     for (std::size_t i = 0; i < b.names.size(); ++i) {
-        out.names.push_back(i < n_key ? b.names[i] : prefix + b.names[i]);
+        out.names.push_back(i < n_key ? b.names[i]
+                                      : dstd::fmt<"{}{}">(prefix, b.names[i]));
         out.columns.push_back(b.columns[i].share());
     }
     return out;
@@ -996,44 +1014,47 @@ DataFrame prefix_metrics(const DataFrame& b, std::size_t n_key,
 
 }  // namespace
 
-DataFrame compare_agg(const DataFrame& base, const DataFrame& variant,
-                      std::int64_t n_key) {
-    if (n_key < 1) throw std::invalid_argument("compare_agg: n_key < 1");
+dstd::Result<DataFrame> compare_agg(const DataFrame& base,
+                                    const DataFrame& variant,
+                                    std::int64_t n_key) {
+    if (n_key < 1) return invalid_argument<"compare_agg: n_key < 1">();
     const auto nk = static_cast<std::size_t>(n_key);
     if (nk > base.names.size() || nk > variant.names.size())
-        throw std::invalid_argument(
-            "compare_agg: n_key exceeds a frame's column count");
+        return invalid_argument<
+            "compare_agg: n_key exceeds a frame's column count">();
     dstd::Vector<dstd::String> keys;
     for (std::size_t i = 0; i < nk; ++i) {
         if (base.names[i] != variant.names[i])
-            throw std::invalid_argument(
-                ("compare_agg: key column " + dstd::to_string(i) + " is '" +
-                 base.names[i] + "' vs '" + variant.names[i] + "'")
-                    .c_str());
+            return invalid_argument<
+                "compare_agg: key column {} is '{}' vs '{}'">(i, base.names[i],
+                                                              variant.names[i]);
         keys.push_back(base.names[i]);
     }
 
-    DataFrame joined = common::unwrap(sort_by_multi(
+    auto outer =
         join(prefix_metrics(base, nk, "l_"), prefix_metrics(variant, nk, "r_"),
-             keys, keys, JoinHow::Outer, "_right"),
-        keys, false));
+             keys, keys, JoinHow::Outer, "_right");
+    if (!outer) return outer.error();
+    auto sorted = sort_by_multi(*outer, keys, false);
+    if (!sorted) return sorted.error();
+    DataFrame joined = std::move(*sorted);
 
     const std::int64_t n = joined.num_rows();
     dstd::Vector<double> hundred(static_cast<std::size_t>(n), 100.0);
     Series scale = Series::flat_f64(hundred.data(), n);
     for (std::size_t i = nk; i < base.names.size(); ++i) {
         const dstd::String& m = base.names[i];
-        if (joined.column_index("r_" + m) < 0) continue;
-        Series l = joined.column("l_" + m).materialize();
-        Series r = joined.column("r_" + m).materialize();
+        if (joined.column_index(dstd::fmt<"r_{}">(m)) < 0) continue;
+        Series l = joined.column(dstd::fmt<"l_{}">(m)).materialize();
+        Series r = joined.column(dstd::fmt<"r_{}">(m)).materialize();
         if (!is_numeric_dispatchable(l.type()) ||
             !is_numeric_dispatchable(r.type()))
             continue;
         Series delta = r.sub(l);
         Series pct =
             delta.cast(TypeId::Float64).div(l.cast(TypeId::Float64)).mul(scale);
-        joined = with_column(joined, "delta_" + m, delta);
-        joined = with_column(joined, "pct_" + m, pct);
+        joined = with_column(joined, dstd::fmt<"delta_{}">(m), delta);
+        joined = with_column(joined, dstd::fmt<"pct_{}">(m), pct);
     }
     return joined;
 }

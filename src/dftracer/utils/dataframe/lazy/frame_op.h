@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_LAZY_FRAME_OP_H
 #define DFTRACER_UTILS_DATAFRAME_LAZY_FRAME_OP_H
 
+#include <dftracer/utils/dataframe/internal/errors.h>
 #include <dftracer/utils/dataframe/lazy/common.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
@@ -40,9 +41,24 @@ class OwnedFrameOpArgs {
 
    public:
     explicit OwnedFrameOpArgs(Key) {}
-    OwnedFrameOpArgs(const dftu_op_desc& op, const OpArgs& args,
-                     dstd::Vector<LazyFrame> frames)
-        : frames_(std::move(frames)) {
+
+    /// The operands of `op` copied out of `args`, with `frames` for its frame
+    /// operands after the primary one. An @ref ErrorCode::InvalidArgument
+    /// error for a frame or column operand that is missing, for an operand
+    /// with no owned form, and for a frame count that does not match.
+    static dstd::Result<dstd::SharedPtr<const OwnedFrameOpArgs>> make(
+        const dftu_op_desc& op, const OpArgs& args,
+        dstd::Vector<LazyFrame> frames) {
+        auto out = dstd::make_shared<OwnedFrameOpArgs>(Key{});
+        auto filled = out->fill(op, args, std::move(frames));
+        if (!filled) return filled.error();
+        return dstd::SharedPtr<const OwnedFrameOpArgs>(std::move(out));
+    }
+
+   private:
+    dstd::Result<void> fill(const dftu_op_desc& op, const OpArgs& args,
+                            dstd::Vector<LazyFrame> frames) {
+        frames_ = std::move(frames);
         const dftu_op_arg& raw = args.raw();
         std::size_t next_frame = 0;
         for (int i = 0; i < DFTU_OP_MAX_ARGS; ++i) {
@@ -56,20 +72,16 @@ class OwnedFrameOpArgs {
                 case DFTU_TOK_FRAME:
                     if (i == 0) break;
                     if (next_frame >= frames_.size())
-                        throw std::invalid_argument(
-                            (dstd::String("lazy frame op '") + op.name +
-                             "': operand " + dstd::to_string(i) +
-                             " is a frame but no plan was given for it")
-                                .c_str());
+                        return invalid_argument<
+                            "lazy frame op '{}': operand {} is a frame but no "
+                            "plan was given for it">(op.name, i);
                     s.frame_index = next_frame++;
                     break;
                 case DFTU_TOK_SERIES:
                     if (!v.series)
-                        throw std::invalid_argument(
-                            (dstd::String("lazy frame op '") + op.name +
-                             "': operand " + dstd::to_string(i) +
-                             " is a column but none was given")
-                                .c_str());
+                        return invalid_argument<
+                            "lazy frame op '{}': operand {} is a column but "
+                            "none was given">(op.name, i);
                     s.series = Series{dftu_series_share(v.series)};
                     break;
                 case DFTU_TOK_SCALAR:
@@ -141,22 +153,20 @@ class OwnedFrameOpArgs {
                 case DFTU_TOK_EXPR:
                 case DFTU_TOK_DUQL:
                 case DFTU_TOK_LAZY:
-                    throw std::invalid_argument(
-                        (dstd::String("lazy frame op '") + op.name +
-                         "': operand " + dstd::to_string(i) +
-                         " has no owned form in a plan")
-                            .c_str());
+                    return invalid_argument<
+                        "lazy frame op '{}': operand {} has no owned form in "
+                        "a plan">(op.name, i);
             }
             slots_.push_back(std::move(s));
         }
         if (next_frame != frames_.size())
-            throw std::invalid_argument(
-                (dstd::String("lazy frame op '") + op.name + "': " +
-                 dstd::to_string(frames_.size()) + " plan(s) given for " +
-                 dstd::to_string(next_frame) + " frame operand(s)")
-                    .c_str());
+            return invalid_argument<
+                "lazy frame op '{}': {} plan(s) given for {} frame "
+                "operand(s)">(op.name, frames_.size(), next_frame);
+        return {};
     }
 
+   public:
     const dstd::Vector<LazyFrame>& frames() const noexcept { return frames_; }
 
     // The strings of operand `i` (a STR or STRLIST operand).
@@ -410,7 +420,7 @@ inline constexpr std::int64_t NATIVE_SHIFT_MAX = 1024;
 
 // Runs the registry op `op` over `primary`, collecting each further frame
 // operand's plan, and returns its result.
-inline coro::CoroTask<DataFrame> run_frame_op(
+inline coro::CoroTask<dstd::Result<DataFrame>> run_frame_op(
     const dftu_op_desc* op, const OwnedFrameOpArgs& args, DataFrame primary,
     const dstd::String& name, const dstd::Vector<dstd::String>& sch) {
     dstd::Vector<dftu_dataframe*> handles;
@@ -422,7 +432,8 @@ inline coro::CoroTask<DataFrame> run_frame_op(
     } guard{handles};
     handles.push_back(dataframe_handle_wrap(std::move(primary)));
     for (const LazyFrame& other : args.frames()) {
-        DataFrame f = co_await other.collect();
+        auto collecting = other.collect();
+        DataFrame f = co_await std::move(collecting).or_fail();
         handles.push_back(dataframe_handle_wrap(std::move(f)));
     }
     dstd::Vector<dstd::Vector<const char*>> cstrs;
@@ -433,17 +444,16 @@ inline coro::CoroTask<DataFrame> run_frame_op(
     dftu_dataframe* result = dftu_op_run_frame(
         op, frames.data(), static_cast<uint32_t>(frames.size()), &bag);
     if (!result)
-        throw std::runtime_error(
-            ("lazy frame op '" + name + "' failed: the op returned no frame")
-                .c_str());
+        co_return common::make_error<
+            "lazy frame op '{}' failed: the op returned no frame">(
+            common::ErrorCode::Internal, name.c_str());
     DataFrame out = dataframe_handle_take(result);
     if (has_rest(sch)) {
         if (column_index_of(out.names, dstd::String(REST_COLUMN)) < 0)
-            throw std::runtime_error(
-                ("lazy frame op '" + name +
-                 "' dropped the columns the scan returned beyond the "
-                 "plan's schema")
-                    .c_str());
+            co_return common::make_error<
+                "lazy frame op '{}' dropped the columns the scan returned "
+                "beyond the plan's schema">(common::ErrorCode::Internal,
+                                            name.c_str());
         out = rest_to_back(std::move(out));
     }
     co_return out;

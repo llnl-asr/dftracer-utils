@@ -92,8 +92,20 @@ View full_index(const dstd::String& gz, const dstd::String& schema) {
         .record_schema(dstd::String(schema));
 }
 
+// The query's rows, or its error: from building the view, which throws, or
+// from running it.
+dstd::Result<dataframe::DataFrame> frame_result(const View& v,
+                                                const dstd::String& q) {
+    try {
+        return v.duql(q).collect().get();
+    } catch (const std::exception&) {
+        return dftracer::utils::common::error_of_exception(
+            std::current_exception());
+    }
+}
+
 dataframe::DataFrame frame(const View& v, const dstd::String& q) {
-    return dftu_utils_test::ok(v.duql(q).collect().get());
+    return dftu_utils_test::ok(frame_result(v, q));
 }
 
 bool has(const dataframe::DataFrame& f, const dstd::String& n) {
@@ -170,14 +182,18 @@ void same_as_full(Gen gen, const dstd::String& schema, const dstd::String& q) {
     const Fresh p = fresh(gen, schema);
     dstd::String want_error;
     dataframe::DataFrame want;
-    try {
-        want = frame(f, q);
-    } catch (const std::exception& e) {
-        want_error = e.what();
+    {
+        auto result = frame_result(f, q);
+        if (result.has_value())
+            want = std::move(*result);
+        else
+            want_error = result.error().c_str();
     }
     if (!want_error.empty()) {
         INFO(q);
-        CHECK_THROWS_WITH(frame(p.view, q), want_error.c_str());
+        const auto got = frame_result(p.view, q);
+        REQUIRE_FALSE(got.has_value());
+        CHECK(dstd::String(got.error().c_str()) == want_error);
         return;
     }
     const auto got = frame(p.view, q);
@@ -313,9 +329,15 @@ TEST_SUITE("DropRenameViews") {
             "ts | sort ts";
         TestEnvironment full_env(10);
         const View f = full_index(genesis_trace(full_env), "genesis");
-        CHECK_THROWS_WITH(frame(f, g), doctest::Contains("lookup fills"));
+        const auto full = frame_result(f, g);
+        REQUIRE_FALSE(full.has_value());
+        CHECK(dstd::String(full.error().c_str()).find("lookup fills") !=
+              dstd::String::npos);
         const Fresh p = fresh(genesis_trace, "genesis");
-        CHECK_THROWS_WITH(frame(p.view, g), doctest::Contains("lookup fills"));
+        const auto fresh_result = frame_result(p.view, g);
+        REQUIRE_FALSE(fresh_result.has_value());
+        CHECK(dstd::String(fresh_result.error().c_str()).find("lookup fills") !=
+              dstd::String::npos);
     }
 
     TEST_CASE("fill_null keeps the undeclared columns") {

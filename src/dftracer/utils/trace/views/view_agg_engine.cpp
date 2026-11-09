@@ -964,20 +964,23 @@ class TransformSource final : public dataframe::Source {
               resolver_(src.resolver_),
               projection_(std::move(projection)) {}
 
-        coro::CoroTask<dstd::Optional<dataframe::Morsel>> next(
+        coro::CoroTask<dataframe::MorselResult> next(
             std::int64_t max_rows) override {
             for (;;) {
                 if (rows_) {
-                    auto m = co_await rows_->next(max_rows);
-                    if (m) {
-                        m->dyn_state().name_ids = ids_;
-                        m->dyn->intern = intern_;
+                    auto next_task = rows_->next(max_rows);
+                    auto m = co_await std::move(next_task);
+                    if (!m) co_return m.error();
+                    if (*m) {
+                        (*m)->dyn_state().name_ids = ids_;
+                        (*m)->dyn->intern = intern_;
                         co_return m;
                     }
                 }
                 auto batch = co_await batches_.next();
-                if (!batch) co_return dstd::nullopt;
-                dataframe::DataFrame f = std::move(*batch);
+                if (!batch) co_return dataframe::MorselResult(dstd::nullopt);
+                if (!*batch) co_return batch->error();
+                dataframe::DataFrame f = std::move(**batch);
                 append_transform_columns(f, tfs_, resolver_.get());
                 if (!projection_.empty())
                     f = common::unwrap(f.select(projection_));
@@ -992,7 +995,7 @@ class TransformSource final : public dataframe::Source {
         dstd::SharedPtr<dftracer::utils::dstd::StringIntern> intern_ =
             dstd::make_shared<dftracer::utils::dstd::StringIntern>();
         dstd::Vector<std::uint32_t> ids_;
-        coro::AsyncGenerator<dataframe::DataFrame> batches_;
+        coro::AsyncGenerator<dstd::Result<dataframe::DataFrame>> batches_;
         dstd::Vector<AggInputSpec::Transform> tfs_;
         dstd::SharedPtr<const dftracer::utils::index::plan::GroupResolver>
             resolver_;
@@ -1259,8 +1262,8 @@ coro::CoroTask<dataframe::DataFrame> run_collect_via_engine(
 
     // materialize() persists the AggState partials as a rollup (opt-in).
     if (plan.materialize && !plan.limit && !plan.offset) {
-        auto state = co_await ep.lf->collect_group_state(
-            ep.group_key_names, ep.gaggs, ep.dyn_specs, ep.dyn_prefix);
+        auto state = common::unwrap(co_await ep.lf->collect_group_state(
+            ep.group_key_names, ep.gaggs, ep.dyn_specs, ep.dyn_prefix));
         persist_rollup(plan, *state);
         co_return finalize_engine_result(*state, plan);
     }
@@ -1270,17 +1273,19 @@ coro::CoroTask<dataframe::DataFrame> run_collect_via_engine(
     // state; both fold into a single AggState and finalize that.
     if ((plan.group_by.empty() && plan.time_bucket_us == 0) ||
         clips_occupancy(plan)) {
-        auto state = co_await ep.lf->collect_group_state(
-            ep.group_key_names, ep.gaggs, ep.dyn_specs, ep.dyn_prefix);
+        auto state = common::unwrap(co_await ep.lf->collect_group_state(
+            ep.group_key_names, ep.gaggs, ep.dyn_specs, ep.dyn_prefix));
         co_return finalize_engine_result(*state, plan);
     }
 
-    dataframe::DataFrame r = co_await ep.lf
-                                 ->group_by(ep.group_key_names, ep.gaggs,
-                                            ep.dyn_specs, ep.dyn_prefix)
-                                 .collect();
+    dataframe::DataFrame r =
+        common::unwrap(co_await ep.lf
+                           ->group_by(ep.group_key_names, ep.gaggs,
+                                      ep.dyn_specs, ep.dyn_prefix)
+                           .collect());
     co_return finalize_engine_frame(
-        co_await dataframe::join_chunks(std::move(r)), plan, ep.dyn_specs);
+        common::unwrap(co_await dataframe::join_chunks(std::move(r))), plan,
+        ep.dyn_specs);
 }
 
 coro::CoroTask<dataframe::AggStatePtr> build_engine_agg_state(
@@ -1293,8 +1298,8 @@ coro::CoroTask<dataframe::AggStatePtr> build_engine_agg_state(
     const bool folded = co_await partials_scan_collect(plan, scanned);
     if (folded) co_return std::move(scanned);
     EnginePrep ep = co_await prepare_engine_group(plan);
-    co_return co_await ep.lf->collect_group_state(ep.group_key_names, ep.gaggs,
-                                                  ep.dyn_specs, ep.dyn_prefix);
+    co_return common::unwrap(co_await ep.lf->collect_group_state(
+        ep.group_key_names, ep.gaggs, ep.dyn_specs, ep.dyn_prefix));
 }
 
 }  // namespace dftracer::utils::trace::views::detail

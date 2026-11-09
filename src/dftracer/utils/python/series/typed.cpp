@@ -127,10 +127,13 @@ PyObject* Series_to_bytes(PyObject* self, PyObject*) {
         dataframe::DataFrame f;
         f.names.emplace_back("v");
         f.columns.push_back(a->share());
-        const dftracer::utils::dstd::String bytes =
-            dataframe::frame_to_native(f);
-        return PyBytes_FromStringAndSize(bytes.data(),
-                                         static_cast<Py_ssize_t>(bytes.size()));
+        const auto bytes = dataframe::frame_to_native(f);
+        if (!bytes) {
+            PyErr_SetString(PyExc_TypeError, bytes.error().c_str());
+            return nullptr;
+        }
+        return PyBytes_FromStringAndSize(
+            bytes->data(), static_cast<Py_ssize_t>(bytes->size()));
     } catch (const std::exception& e) {
         PyErr_SetString(PyExc_TypeError, e.what());
         return nullptr;

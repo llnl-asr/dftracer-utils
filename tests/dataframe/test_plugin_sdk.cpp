@@ -30,7 +30,7 @@ using namespace dftracer::utils;
 namespace {
 
 dataframe::DataFrame run(
-    dftracer::utils::coro::CoroTask<dataframe::DataFrame> t) {
+    dftracer::utils::coro::CoroTask<dstd::Result<dataframe::DataFrame>> t) {
     return dftu_utils_test::ok(
         dftracer::utils::default_runtime().submit(std::move(t)).get());
 }
@@ -242,8 +242,13 @@ TEST_SUITE("plugin SDK source") {
     TEST_CASE("a cursor exception surfaces as a scan error") {
         auto c = dstd::make_shared<Counters>();
         Root r(c, 0, 3, true);
-        CHECK_THROWS_WITH(run(dataframe::LazyFrame::scan(r.source).collect()),
-                          doctest::Contains("range cursor broke"));
+        const auto collected =
+            dftracer::utils::default_runtime()
+                .submit(dataframe::LazyFrame::scan(r.source).collect())
+                .get();
+        REQUIRE_FALSE(collected.has_value());
+        CHECK(dstd::String(collected.error().c_str())
+                  .find("range cursor broke") != dstd::String::npos);
     }
 }
 
@@ -334,11 +339,15 @@ TEST_SUITE("plugin SDK node") {
         RegisteredNode node("sdk.double_throw", OpenMode::Throw);
         {
             Root r(c, 0, 4);
-            CHECK_THROWS_WITH(
-                run(dataframe::LazyFrame::scan(r.source)
-                        .op("sdk.double_throw", dataframe::OpArgs{})
-                        .collect()),
-                doctest::Contains("sdk.double_throw"));
+            const auto collected =
+                dftracer::utils::default_runtime()
+                    .submit(dataframe::LazyFrame::scan(r.source)
+                                .op("sdk.double_throw", dataframe::OpArgs{})
+                                .collect())
+                    .get();
+            REQUIRE_FALSE(collected.has_value());
+            CHECK(dstd::String(collected.error().c_str())
+                      .find("sdk.double_throw") != dstd::String::npos);
         }
         CHECK(c->cursors_destroyed == 1);
     }

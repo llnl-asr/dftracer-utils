@@ -38,7 +38,9 @@ struct DrainResult {
 coro::CoroTask<DrainResult> drain(dstd::UniquePtr<Cursor> cur,
                                   std::int64_t max_rows) {
     DrainResult out;
-    while (auto m = co_await cur->next(max_rows)) {
+    for (;;) {
+        auto m = dftu_utils_test::ok(co_await cur->next(max_rows));
+        if (!m) break;
         out.batch_indices.push_back(m->batch_index);
         out.orderings.push_back(m->ordering);
         out.ordered_columns.push_back(m->ordered_column);
@@ -57,10 +59,12 @@ coro::CoroTask<DrainResult> drain(dstd::UniquePtr<Cursor> cur,
     co_return out;
 }
 
-DrainResult run_drain(dstd::UniquePtr<Cursor> cur, std::int64_t max_rows) {
-    return dftu_utils_test::ok(dftracer::utils::default_runtime()
-                                   .submit(drain(std::move(cur), max_rows))
-                                   .get());
+DrainResult run_drain(dstd::Result<dstd::UniquePtr<Cursor>> opened,
+                      std::int64_t max_rows) {
+    return dftu_utils_test::ok(
+        dftracer::utils::default_runtime()
+            .submit(drain(dftu_utils_test::ok(std::move(opened)), max_rows))
+            .get());
 }
 
 }  // namespace

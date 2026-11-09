@@ -196,7 +196,8 @@ void Applier::partition_aggs(
         [spid, specs](dataframe::DataFrame f) {
             dataframe::DataFrame g = common::unwrap(
                 f.group_by(dstd::Vector<dstd::String>{spid}, specs));
-            return f.join(g, {spid}, {spid}, dataframe::JoinHow::Lookup);
+            return common::unwrap(
+                f.join(g, {spid}, {spid}, dataframe::JoinHow::Lookup));
         },
         "partition aggregates " + text, std::move(schema));
     cols_ = std::move(next);

@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 
 #include <optional>
@@ -14,8 +15,9 @@ namespace dftracer::utils::dataframe {
 /// and buffers (the spill format, so a column keeps its type, nulls, JSON
 /// flag, time unit, time zone, decimal and fixed size, and a list or struct
 /// column its children). Machine byte order: for stores that stay on one
-/// host.
-dstd::String frame_to_native(const DataFrame& f);
+/// host. An ErrorCode::InvalidArgument error for a column that
+/// spill::put_series cannot write.
+dstd::Result<dstd::String> frame_to_native(const DataFrame& f);
 
 /// The frame `frame_to_native` wrote, or nullopt when `bytes` is another
 /// format or version, is truncated, or holds a column that does not decode.

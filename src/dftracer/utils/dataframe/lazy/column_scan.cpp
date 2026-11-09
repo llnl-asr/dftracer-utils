@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dataframe/internal/errors.h>
 #include <dftracer/utils/dataframe/lazy/cursors.h>
 #include <dftracer/utils/dataframe/lazy/numeric.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -67,35 +68,40 @@ class ColumnScanCursor : public Cursor {
           keep_(keep),
           shift_(shift) {}
 
-    coro::CoroTask<dstd::Optional<Morsel>> next(
-        std::int64_t max_rows) override {
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
         for (;;) {
-            auto m = co_await in_->next(max_rows);
+            auto task = in_->next(max_rows);
+            auto m = co_await std::move(task).or_fail();
             if (!m) break;
             if (m->rows == 0) continue;
             sent_ = true;
             co_return scan(std::move(*m));
         }
-        if (sent_) co_return dstd::nullopt;
+        if (sent_) co_return MorselResult(dstd::nullopt);
         // An input with no rows still leaves as one morsel of typed columns,
         // the op's column typed by the op itself.
         sent_ = true;
         Morsel none;
-        for (const Field& f : in_fields_)
-            none.columns.push_back(
-                null_column_of(f, 0, "column_op", "the input has no rows"));
+        for (const Field& f : in_fields_) {
+            auto column =
+                null_column_of(f, 0, "column_op", "the input has no rows");
+            if (!column) co_return column.error();
+            none.columns.push_back(std::move(*column));
+        }
         co_return scan(std::move(none));
     }
 
    private:
-    Morsel scan(Morsel&& m) {
+    MorselResult scan(Morsel&& m) {
         g_scan_morsels.fetch_add(1, std::memory_order_relaxed);
         const Series col = m.columns[column_].share();
         const std::int64_t held = carry_.valid() ? carry_.length() : 0;
         Series whole;
         if (held > 0) {
             const dstd::Vector<const Series*> parts{&carry_, &col};
-            whole = common::unwrap(concat_columns(parts));
+            auto joined = concat_columns(parts);
+            if (!joined) return joined.error();
+            whole = std::move(*joined);
         } else {
             whole = col.share();
         }
@@ -104,14 +110,14 @@ class ColumnScanCursor : public Cursor {
         const dftu_series* in[1] = {whole.handle()};
         dftu_series* raw = dftu_op_run(op_, in, 1, &arg);
         if (!raw)
-            throw std::runtime_error(
+            return common::make_error<
                 "lazy frame op 'dftu.frame.column_op' failed: the op returned "
-                "no column");
+                "no column">(common::ErrorCode::Internal);
         Series res{raw};
         if (res.length() != whole.length())
-            throw std::runtime_error(
+            return common::make_error<
                 "lazy frame op 'dftu.frame.column_op' failed: the op is not "
-                "row for row");
+                "row for row">(common::ErrorCode::Internal);
         if (carry_mode_ == Carry::Output) {
             for (std::int64_t i = res.length() - 1; i >= 0; --i) {
                 if (res.is_null(i)) continue;
@@ -125,7 +131,7 @@ class ColumnScanCursor : public Cursor {
         m.columns[column_] =
             held > 0 ? res.slice(held, m.rows) : std::move(res);
         m.ordering = Ordering::Unordered;
-        return std::move(m);
+        return MorselResult(std::move(m));
     }
 
     dstd::UniquePtr<Cursor> in_;
@@ -158,14 +164,14 @@ class SeriesColumnCursor : public Cursor {
         operand_.columns.push_back(std::move(column));
     }
 
-    coro::CoroTask<dstd::Optional<Morsel>> next(
-        std::int64_t max_rows) override {
-        auto m = co_await in_->next(max_rows);
-        if (!m) co_return dstd::nullopt;
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
+        auto task = in_->next(max_rows);
+        auto m = co_await std::move(task).or_fail();
+        if (!m) co_return MorselResult(dstd::nullopt);
         g_scan_morsels.fetch_add(1, std::memory_order_relaxed);
         if (offset_ + m->rows > operand_.columns[0].length())
-            throw std::out_of_range(
-                "with_column: the column is shorter than the frame");
+            co_return invalid_argument<
+                "with_column: the column is shorter than the frame">();
         Series part =
             std::move(operand_.slice(offset_, m->rows).columns.front());
         offset_ += m->rows;
@@ -174,7 +180,7 @@ class SeriesColumnCursor : public Cursor {
         else
             m->columns.push_back(std::move(part));
         m->ordering = Ordering::Unordered;
-        co_return std::move(*m);
+        co_return MorselResult(std::move(m));
     }
 
     dstd::Optional<dstd::Vector<dstd::String>> out_names() const override {
@@ -202,18 +208,18 @@ std::uint64_t column_scan_morsels() {
 
 namespace lazy_internal {
 
-dstd::UniquePtr<Cursor> make_column_scan(dstd::UniquePtr<Cursor>& in,
-                                         const dstd::Vector<dstd::String>& sch,
-                                         const dstd::Vector<Field>& in_fields,
-                                         const OwnedFrameOpArgs& args) {
+CursorResult make_column_scan(dstd::UniquePtr<Cursor>& in,
+                              const dstd::Vector<dstd::String>& sch,
+                              const dstd::Vector<Field>& in_fields,
+                              const OwnedFrameOpArgs& args) {
     if (!static_schema(sch, in_fields) || !args.frames().empty())
-        return nullptr;
+        return no_cursor();
     const dstd::String& series_op = args.strings_at(2).front();
     const ScanOp* scan =
         std::find_if(std::begin(SCAN_OPS), std::end(SCAN_OPS),
                      [&](const ScanOp& s) { return s.name == series_op; });
     if (scan == std::end(SCAN_OPS) || !args.strings_at(3).front().empty())
-        return nullptr;
+        return no_cursor();
     const dstd::String& column = args.strings_at(1).front();
     const int at = column_index_of(sch, column);
     const auto field =
@@ -222,29 +228,30 @@ dstd::UniquePtr<Cursor> make_column_scan(dstd::UniquePtr<Cursor>& in,
     NumClass cls = NumClass::Signed;
     if (at < 0 || field == in_fields.end() || !num_class(field->type.id, cls) ||
         (scan->integers_only && cls == NumClass::Float))
-        return nullptr;
+        return no_cursor();
     std::int64_t shift = 0;
     std::int64_t keep = 0;
     if (series_op == "dftu.series.shift") {
         shift = scalar_to_i64(args.scalar_at(4));
-        if (shift < 0 || shift > NATIVE_SHIFT_MAX) return nullptr;
+        if (shift < 0 || shift > NATIVE_SHIFT_MAX) return no_cursor();
         keep = shift;
     } else if (series_op == "dftu.series.diff") {
         keep = 1;
     }
     const dftu_op_desc* op = dftu_op_find(series_op.c_str());
-    if (!op) return nullptr;
+    if (!op) return no_cursor();
     return dstd::make_unique<ColumnScanCursor>(std::move(in), in_fields,
                                                static_cast<std::size_t>(at), op,
                                                scan->carry, keep, shift);
 }
 
-dstd::UniquePtr<Cursor> make_series_column(
-    dstd::UniquePtr<Cursor>& in, const dstd::Vector<dstd::String>& sch,
-    const dstd::Vector<Field>& in_fields, const OwnedFrameOpArgs& args) {
+CursorResult make_series_column(dstd::UniquePtr<Cursor>& in,
+                                const dstd::Vector<dstd::String>& sch,
+                                const dstd::Vector<Field>& in_fields,
+                                const OwnedFrameOpArgs& args) {
     if (!static_schema(sch, in_fields) || !args.frames().empty() ||
         !args.series_at(2).valid())
-        return nullptr;
+        return no_cursor();
     return dstd::make_unique<SeriesColumnCursor>(std::move(in), sch,
                                                  args.strings_at(1).front(),
                                                  args.series_at(2).share());

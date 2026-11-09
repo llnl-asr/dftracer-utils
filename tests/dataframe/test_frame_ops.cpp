@@ -165,11 +165,12 @@ TEST_SUITE("frame ops") {
             return dataframe::LazyFrame::scan(
                 dstd::make_shared<dataframe::InMemorySource>(std::move(df)));
         };
-        auto run = [](dftracer::utils::coro::CoroTask<DataFrame> t) {
-            return dftracer::utils::default_runtime()
-                .submit(std::move(t))
-                .get();
-        };
+        auto run =
+            [](dftracer::utils::coro::CoroTask<dstd::Result<DataFrame>> t) {
+                return dftracer::utils::default_runtime()
+                    .submit(std::move(t))
+                    .get();
+            };
         const char* pid[1] = {"pid"};
         const char* ts[1] = {"ts"};
         dftu_window_spec specs[2] = {};

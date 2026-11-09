@@ -1355,16 +1355,14 @@ PyObject* DataFrame_arrow_c_stream(PyObject* self, PyObject*) {
 PyObject* DataFrame_to_ipc(PyObject* self, PyObject*) {
     DataFrameObject* b = as_dataframe(self);
     if (!b) return nullptr;
-    try {
-        dftracer::utils::dstd::Vector<std::uint8_t> bytes =
-            to_dataframe(b).to_ipc();
-        return PyBytes_FromStringAndSize(
-            reinterpret_cast<const char*>(bytes.data()),
-            static_cast<Py_ssize_t>(bytes.size()));
-    } catch (const std::exception& e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+    auto bytes = to_dataframe(b).to_ipc();
+    if (!bytes) {
+        PyErr_SetString(PyExc_RuntimeError, bytes.error().c_str());
         return nullptr;
     }
+    return PyBytes_FromStringAndSize(
+        reinterpret_cast<const char*>(bytes->data()),
+        static_cast<Py_ssize_t>(bytes->size()));
 }
 #endif
 
@@ -1374,10 +1372,13 @@ PyObject* DataFrame_to_bytes(PyObject* self, PyObject*) {
     DataFrameObject* b = as_dataframe(self);
     if (!b) return nullptr;
     try {
-        const dftracer::utils::dstd::String bytes =
-            dataframe::frame_to_native(to_dataframe(b));
-        return PyBytes_FromStringAndSize(bytes.data(),
-                                         static_cast<Py_ssize_t>(bytes.size()));
+        const auto bytes = dataframe::frame_to_native(to_dataframe(b));
+        if (!bytes) {
+            PyErr_SetString(PyExc_TypeError, bytes.error().c_str());
+            return nullptr;
+        }
+        return PyBytes_FromStringAndSize(
+            bytes->data(), static_cast<Py_ssize_t>(bytes->size()));
     } catch (const std::exception& e) {
         PyErr_SetString(PyExc_TypeError, e.what());
         return nullptr;

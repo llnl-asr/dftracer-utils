@@ -52,11 +52,11 @@ coro::CoroTask<dstd::Vector<dstd::String>> collect_partials(
         plans.reserve(end - at);
         for (std::size_t i = at; i < end; ++i)
             plans.push_back(shards[i].memory_budget(share).aggregate_partial());
-        dstd::Vector<coro::CoroTask<dstd::String>> runs;
+        dstd::Vector<coro::CoroTask<dstd::Result<dstd::String>>> runs;
         runs.reserve(plans.size());
         for (const auto& p : plans) runs.push_back(p.collect());
         auto done = co_await coro::when_all(std::move(runs));
-        for (dstd::String& d : done) partials.push_back(std::move(d));
+        for (auto& d : done) partials.push_back(common::unwrap(std::move(d)));
     }
     co_return partials;
 }

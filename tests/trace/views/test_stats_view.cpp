@@ -204,7 +204,7 @@ TEST_SUITE("stats via View") {
                                 return dstd::Function<void(const ExportStats&)>(
                                     [](const ExportStats&) {});
                             });
-                    co_await plan.collect();
+                    dftu_utils_test::ok(co_await plan.collect());
                 }))));
 
         // Both rollups are now reconstructable with no scan.
@@ -243,7 +243,7 @@ TEST_SUITE("stats via View") {
                                 return dstd::Function<void(const ExportStats&)>(
                                     [](const ExportStats&) {});
                             });
-                    co_await plan.collect();
+                    dftu_utils_test::ok(co_await plan.collect());
                 }))));
 
         ExportStats stats;
@@ -266,7 +266,7 @@ TEST_SUITE("stats via View") {
                                         cat_sum = sum_i64(cat.get(), "n");
                                     });
                             });
-                    co_await plan.collect();
+                    dftu_utils_test::ok(co_await plan.collect());
                 }))));
 
         // Both branches were served from rollups, so nothing was scanned.
@@ -300,7 +300,7 @@ TEST_SUITE("stats via View") {
                                         cats = std::move(c.get());
                                     });
                             });
-                    co_await plan.collect();
+                    dftu_utils_test::ok(co_await plan.collect());
                 }))));
         CHECK(cats.num_rows() == 2);
         CHECK(sum_i64(cats, "n") == 50);

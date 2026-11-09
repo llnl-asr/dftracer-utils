@@ -33,7 +33,7 @@ using namespace dftracer::utils::dataframe;
 
 namespace {
 
-DataFrame run(coro::CoroTask<DataFrame> t) {
+DataFrame run(coro::CoroTask<dstd::Result<DataFrame>> t) {
     return dftu_utils_test::ok(
         dftracer::utils::default_runtime().submit(std::move(t)).get());
 }
@@ -154,9 +154,12 @@ TEST_SUITE("lazy frame ops") {
                                 .filter(col(2) > std::int64_t{6})
                                 .collect());
         CHECK(i64_col(big, "count") == dstd::Vector<I>{7, 9});
-        CHECK_THROWS_AS(scan(make_nested()).unnest("nope"), std::out_of_range);
-        CHECK_THROWS_AS(scan(make_nested()).unnest("pid"),
-                        std::invalid_argument);
+        dftu_utils_test::expect_error(
+            scan(make_nested()).unnest("nope").status(),
+            dftracer::utils::common::ErrorCode::NotFound);
+        dftu_utils_test::expect_error(
+            scan(make_nested()).unnest("pid").status(),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
     }
 
     TEST_CASE(
@@ -165,7 +168,8 @@ TEST_SUITE("lazy frame ops") {
         CHECK(plan.schema() == dstd::Vector<dstd::String>{"k", "l_n", "r_n",
                                                           "delta_n", "pct_n"});
         CHECK(plan.explain().find("frame_op") == dstd::String::npos);
-        DataFrame eager = make_base().compare_agg(make_variant(), 1);
+        DataFrame eager =
+            dftu_utils_test::ok(make_base().compare_agg(make_variant(), 1));
         for (std::int64_t morsel : dstd::Vector<std::int64_t>{0, 1}) {
             DataFrame out = run(plan.collect(morsel));
             CHECK(out.names == eager.names);
@@ -183,14 +187,16 @@ TEST_SUITE("lazy frame ops") {
         DataFrame spilled = run(plan.memory_budget(1).collect(1));
         CHECK(spilled.names == eager.names);
         CHECK(i64_col(spilled, "delta_n") == dstd::Vector<I>{-5, NI, NI});
-        CHECK_THROWS_AS(scan(make_base()).compare_agg(scan(make_variant()), 0),
-                        std::invalid_argument);
-        CHECK_THROWS_AS(
+        dftu_utils_test::expect_error(
+            scan(make_base()).compare_agg(scan(make_variant()), 0).status(),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
+        dftu_utils_test::expect_error(
             scan(make_base())
                 .compare_agg(scan(dftu_utils_test::ok(
                                  make_variant().rename({"j", "n"}))),
-                             1),
-            std::invalid_argument);
+                             1)
+                .status(),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
     }
 
     TEST_CASE("compare_agg: a plan with unknown columns is collected") {
@@ -201,9 +207,9 @@ TEST_SUITE("lazy frame ops") {
         CHECK(plan.explain().find("frame_op dftu.frame.compare_agg") !=
               dstd::String::npos);
         DataFrame out = run(plan.collect(1));
-        DataFrame eager =
+        DataFrame eager = dftu_utils_test::ok(
             row_numbered_eager(make_base())
-                .compare_agg(row_numbered_eager(make_variant()), 1);
+                .compare_agg(row_numbered_eager(make_variant()), 1));
         CHECK(out.names == eager.names);
         CHECK(i64_col(out, "k") == i64_col(eager, "k"));
         CHECK(i64_col(out, "delta_n") == i64_col(eager, "delta_n"));
@@ -258,20 +264,23 @@ TEST_SUITE("lazy frame ops") {
         CHECK(i64_col(run(native.collect(1)), "n") == dstd::Vector<I>{20});
 
         OpArgs none;
-        CHECK_THROWS_WITH_AS(
-            scan(make_base()).frame_op("dftu.frame.nope", none),
+        dftu_utils_test::expect_error(
+            scan(make_base()).frame_op("dftu.frame.nope", none).status(),
+            dftracer::utils::common::ErrorCode::InvalidArgument,
             "lazy frame op 'dftu.frame.nope': no op "
-            "registered under this name",
-            std::invalid_argument);
-        CHECK_THROWS_AS(scan(make_base()).frame_op("dftu.series.add", none),
-                        std::invalid_argument);
-        CHECK_THROWS_AS(scan(make_base()).frame_op("dftu.frame.union", none),
-                        std::invalid_argument);
-        CHECK_THROWS_AS(
+            "registered under this name");
+        dftu_utils_test::expect_error(
+            scan(make_base()).frame_op("dftu.series.add", none).status(),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
+        dftu_utils_test::expect_error(
+            scan(make_base()).frame_op("dftu.frame.union", none).status(),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
+        dftu_utils_test::expect_error(
             scan(make_base())
                 .frame_op("dftu.frame.union", none,
-                          {scan(make_variant()), scan(make_variant())}),
-            std::invalid_argument);
+                          {scan(make_variant()), scan(make_variant())})
+                .status(),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
         DataFrame u =
             run(scan(make_base())
                     .frame_op("dftu.frame.union", none, {scan(make_variant())})
@@ -345,9 +354,12 @@ TEST_SUITE("lazy frame ops") {
         CHECK(i64_col(lz_k, "a") == dstd::Vector<I>{3, 4});
         DataFrame lz_size = run(scan_df().group_by({"k"}).size().collect(1));
         CHECK(i64_col(lz_size, "size") == dstd::Vector<I>{2, 2});
-        CHECK_THROWS_AS(scan_df().group_by({"nope"}), std::out_of_range);
-        CHECK_THROWS_AS(scan_df().reduce_specs(Agg::Sum, {"nope"}),
-                        std::out_of_range);
+        dftu_utils_test::expect_error(
+            scan_df().group_by({"nope"}).sum().status(),
+            dftracer::utils::common::ErrorCode::NotFound);
+        dftu_utils_test::expect_error(
+            scan_df().reduce_specs(Agg::Sum, {"nope"}),
+            dftracer::utils::common::ErrorCode::NotFound);
 
         dftu_dataframe* h = to_abi(df);
         REQUIRE(h);
@@ -457,7 +469,9 @@ TEST_SUITE("lazy frame ops") {
             run(scan_df().memory_budget(1).unique({"k"}).collect(1));
         CHECK(i64_col(spilled, "k") == dstd::Vector<I>{1, 2, 3});
         CHECK(i64_col(spilled, "v") == dstd::Vector<I>{1, 3, 4});
-        CHECK_THROWS_AS(scan_df().unique({"nope"}), std::out_of_range);
+        dftu_utils_test::expect_error(
+            scan_df().unique({"nope"}).status(),
+            dftracer::utils::common::ErrorCode::NotFound);
 
         dftu_dataframe* h = to_abi(df);
         REQUIRE(h);
@@ -614,7 +628,9 @@ TEST_SUITE("lazy frame ops") {
             CHECK(i64_col(run(scan(frame()).head_by({}, 3).collect(morsel)),
                           "v") == dstd::Vector<I>{0, 1, 2});
         }
-        CHECK_THROWS_AS(scan(frame()).head_by({"nope"}, 1), std::out_of_range);
+        dftu_utils_test::expect_error(
+            scan(frame()).head_by({"nope"}, 1).status(),
+            dftracer::utils::common::ErrorCode::NotFound);
 
         // Equal numbers are one key: 0.0 and -0.0, and every NaN.
         const double fv[5] = {0.0, -0.0, std::nan(""), -std::nan(""), 1.5};

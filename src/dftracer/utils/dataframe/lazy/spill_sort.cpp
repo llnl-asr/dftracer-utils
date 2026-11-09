@@ -2,6 +2,7 @@
 #include <dftracer/utils/dataframe/internal/governor.h>
 #include <dftracer/utils/dataframe/kernels/order.h>
 #include <dftracer/utils/dataframe/lazy/cursors.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/queue.h>
@@ -141,8 +142,7 @@ struct KeyData {
                 return static_cast<std::int64_t>(c.data<std::uint64_t>()[i] ^
                                                  (std::uint64_t{1} << 63));
             default:
-                throw std::invalid_argument(
-                    "sort: a key of this type has no order");
+                dstd::fatal("sort: a key of this type has no order");
         }
     }
 };
@@ -160,15 +160,19 @@ class RunMerger {
     }
 
     // Reads the first morsel of every run.
-    coro::CoroTask<void> open(std::int64_t max_rows) {
+    coro::CoroTask<dstd::Result<void>> open(std::int64_t max_rows) {
         cur_.resize(runs_.size());
         pos_.assign(runs_.size(), 0);
         run_keys_.resize(runs_.size());
-        for (std::size_t k = 0; k < runs_.size(); ++k)
-            load(k, co_await runs_[k]->next(max_rows));
+        for (std::size_t k = 0; k < runs_.size(); ++k) {
+            auto task = runs_[k]->next(max_rows);
+            auto first = co_await std::move(task).or_fail();
+            load(k, std::move(first));
+        }
+        co_return dstd::Result<void>{};
     }
 
-    coro::CoroTask<dstd::Optional<Morsel>> next(std::int64_t max_rows) {
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) {
         // A heap over the run heads picks the next row; the rows taken from one
         // run morsel are gathered once, and one more gather puts the pieces in
         // order, so the cost per row is a few comparisons, not a morsel.
@@ -237,7 +241,9 @@ class RunMerger {
             out_rows += take_n;
             if (pos_[k] >= cur_[k]->rows) {
                 close_segment(k);
-                co_await advance(w, max_rows);
+                auto advancing = advance(w, max_rows);
+                auto advanced = co_await std::move(advancing);
+                if (!advanced) co_return advanced.error();
                 if (cur_[k] && cur_[k]->rows > 0) heap.push(w);
             } else {
                 heap.push(w);
@@ -245,7 +251,7 @@ class RunMerger {
         }
         for (std::size_t k = 0; k < cur_.size(); ++k)
             if (open_segment[k] >= 0) close_segment(k);
-        if (out_rows == 0) co_return dstd::nullopt;
+        if (out_rows == 0) co_return MorselResult(dstd::nullopt);
 
         Morsel out;
         out.rows = out_rows;
@@ -266,8 +272,9 @@ class RunMerger {
                 dstd::Vector<const Series*> parts;
                 parts.reserve(segments.size());
                 for (auto& seg : segments) parts.push_back(&seg[c]);
-                out.columns.push_back(
-                    common::unwrap(concat_columns(parts)).take(order));
+                auto joined = concat_columns(parts);
+                if (!joined) co_return joined.error();
+                out.columns.push_back(joined->take(order));
             }
         }
         // The merge always takes the globally smallest key across the whole
@@ -277,7 +284,7 @@ class RunMerger {
         out.ordering = Ordering::ByColumn;
         out.ordered_column = key_idx_.front();
         out.ordered_descending = descending_.front();
-        co_return out;
+        co_return MorselResult(std::move(out));
     }
 
    private:
@@ -311,9 +318,12 @@ class RunMerger {
                 cur_[k]->columns[static_cast<std::size_t>(idx)]);
     }
 
-    coro::CoroTask<void> advance(int k, std::int64_t max_rows) {
+    coro::CoroTask<dstd::Result<void>> advance(int k, std::int64_t max_rows) {
         const auto i = static_cast<std::size_t>(k);
-        load(i, co_await runs_[i]->next(max_rows));
+        auto task = runs_[i]->next(max_rows);
+        auto next_morsel = co_await std::move(task).or_fail();
+        load(i, std::move(next_morsel));
+        co_return dstd::Result<void>{};
     }
 
     dstd::Vector<int> key_idx_;
@@ -355,33 +365,40 @@ class SortMergeCursor : public Cursor {
 
     std::uint64_t resident_bytes() const override { return gov_.reserved(); }
 
-    coro::CoroTask<dstd::Optional<Morsel>> next(
-        std::int64_t max_rows) override {
-        if (!built_) co_await build(max_rows);
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
+        if (!built_) {
+            auto building = build(max_rows);
+            auto built = co_await std::move(building);
+            if (!built) co_return built.error();
+        }
 
-        if (merger_) co_return co_await merger_->next(max_rows);
+        if (merger_) {
+            auto merging = merger_->next(max_rows);
+            co_return co_await std::move(merging);
+        }
         if (empty_) {
             dstd::Optional<Morsel> m = std::move(empty_);
             empty_.reset();
-            co_return m;
+            co_return MorselResult(std::move(m));
         }
-        auto m = co_await single_->next(max_rows);
+        auto task = single_->next(max_rows);
+        auto m = co_await std::move(task).or_fail();
         if (m) {
             m->ordering = Ordering::ByColumn;
             m->ordered_column = key_idx_.front();
             m->ordered_descending = descending_.front();
         }
-        co_return m;
+        co_return MorselResult(std::move(m));
     }
 
    private:
-    DataFrame sort_rows(DataFrame df) const {
-        return common::unwrap(
-            keys_.size() == 1 ? df.sort_by(keys_.front(), descending_.front())
-                              : df.sort_by_multi(keys_, descending_));
+    dstd::Result<DataFrame> sort_rows(DataFrame df) const {
+        return keys_.size() == 1
+                   ? df.sort_by(keys_.front(), descending_.front())
+                   : df.sort_by_multi(keys_, descending_);
     }
 
-    DataFrame concat_pending(
+    dstd::Result<DataFrame> concat_pending(
         dstd::Vector<dstd::Vector<Series>>& pending) const {
         DataFrame buf;
         buf.names = sch_;
@@ -390,17 +407,34 @@ class SortMergeCursor : public Cursor {
             dstd::Vector<const Series*> parts;
             parts.reserve(pending.size());
             for (auto& ch : pending) parts.push_back(&ch[c]);
-            buf.columns.push_back(common::unwrap(concat_columns(parts)));
+            auto joined = concat_columns(parts);
+            if (!joined) return joined.error();
+            buf.columns.push_back(std::move(*joined));
         }
         return buf;
     }
 
-    void spill_run(dstd::Vector<dstd::Vector<Series>>& pending, int id,
-                   std::int64_t chunk) {
-        DataFrame joined = concat_pending(pending);
+    dstd::Result<void> ensure_dir() {
+        if (dir_) return {};
+        auto dir = spill::Dir::create();
+        if (!dir) return dir.error();
+        dir_ = std::move(*dir);
+        return {};
+    }
+
+    dstd::Result<void> spill_run(dstd::Vector<dstd::Vector<Series>>& pending,
+                                 int id, std::int64_t chunk) {
+        auto dir_ok = ensure_dir();
+        if (!dir_ok) return dir_ok;
+        auto concatenated = concat_pending(pending);
+        if (!concatenated) return concatenated.error();
         pending.clear();
-        DataFrame sorted = sort_rows(std::move(joined));
-        spill::Writer w(dir_.run_path(id));
+        auto sorted_rows = sort_rows(std::move(*concatenated));
+        if (!sorted_rows) return sorted_rows.error();
+        DataFrame sorted = std::move(*sorted_rows);
+        auto opened = spill::Writer::open(dir_->run_path(id));
+        if (!opened) return opened.error();
+        spill::Writer w = std::move(*opened);
         const std::int64_t total = sorted.num_rows();
         // Morsels of about RUN_MORSEL_BYTES, so a merge can read many runs.
         if (total > 0) {
@@ -412,10 +446,10 @@ class SortMergeCursor : public Cursor {
                                                  RUN_MORSEL_BYTES / per_row)));
             run_rows_ = chunk;
         }
-        run_morsel_bytes_ =
-            std::max(run_morsel_bytes_,
-                     spill::write_run(w, sorted.columns, total, chunk));
-        w.close();
+        auto wrote = spill::write_run(w, sorted.columns, total, chunk);
+        if (!wrote) return wrote.error();
+        run_morsel_bytes_ = std::max(run_morsel_bytes_, *wrote);
+        return w.close();
     }
 
     // A merge holds one morsel per run it reads (several times
@@ -429,56 +463,75 @@ class SortMergeCursor : public Cursor {
             std::max<std::uint64_t>(4, budget_ / per_run));
     }
 
-    coro::CoroTask<int> merge_runs(const dstd::Vector<int>& ids, int out_id,
-                                   std::int64_t max_rows) {
+    coro::CoroTask<dstd::Result<int>> merge_runs(const dstd::Vector<int>& ids,
+                                                 int out_id,
+                                                 std::int64_t max_rows) {
         {
             RunMerger merger(key_idx_, descending_);
-            for (int id : ids)
-                merger.add_run(
-                    dstd::make_unique<spill::Reader>(dir_.run_path(id)));
-            co_await merger.open(max_rows);
-            spill::Writer w(dir_.run_path(out_id));
+            for (int id : ids) {
+                auto reader = spill::Reader::open(dir_->run_path(id));
+                if (!reader) co_return reader.error();
+                merger.add_run(std::move(*reader));
+            }
+            auto opening = merger.open(max_rows);
+            auto opened = co_await std::move(opening);
+            if (!opened) co_return opened.error();
+            auto writer = spill::Writer::open(dir_->run_path(out_id));
+            if (!writer) co_return writer.error();
+            spill::Writer w = std::move(*writer);
             // The merged run keeps the morsel size of the runs it replaces, so
             // the fan-in chosen for the first pass holds for every later one.
             const std::int64_t rows = run_rows_ > 0 ? run_rows_ : max_rows;
             for (;;) {
-                auto m = co_await merger.next(rows);
+                auto task = merger.next(rows);
+                auto m = co_await std::move(task).or_fail();
                 if (!m) break;
                 run_morsel_bytes_ = std::max<std::uint64_t>(
                     run_morsel_bytes_, spill::columns_bytes(m->columns));
-                w.write(m->columns, m->rows);
+                auto wrote = w.write(m->columns, m->rows);
+                if (!wrote) co_return wrote.error();
             }
-            w.close();
+            auto closed = w.close();
+            if (!closed) co_return closed.error();
         }
-        for (int id : ids) dir_.remove_run(dir_.run_path(id));
+        for (int id : ids) dir_->remove_run(dir_->run_path(id));
         co_return out_id;
     }
 
-    coro::CoroTask<void> build(std::int64_t max_rows) {
-        for (const dstd::String& key : keys_)
-            key_idx_.push_back(require_col(sch_, key, "sort_by"));
+    coro::CoroTask<dstd::Result<void>> build(std::int64_t max_rows) {
+        for (const dstd::String& key : keys_) {
+            auto at = require_col(sch_, key, "sort_by");
+            if (!at) co_return at.error();
+            key_idx_.push_back(*at);
+        }
 
         dstd::Vector<dstd::UniquePtr<Cursor>> runs;
         dstd::Vector<dstd::Vector<Series>> pending;
         std::size_t pend_bytes = 0;
         int run_id = 0;
         for (;;) {
-            auto m = co_await in_->next(max_rows);
+            auto task = in_->next(max_rows);
+            auto m = co_await std::move(task).or_fail();
             if (!m) break;
             pend_bytes += spill::columns_bytes(m->columns);
             pending.push_back(std::move(m->columns));
             if (budget_ > 0 &&
                 (pend_bytes > budget_ / share::SORT_RUN ||
                  (has_cap(budget_) && gov_.check(pend_bytes) != 0))) {
-                spill_run(pending, run_id++, max_rows);
+                auto run_ok = spill_run(pending, run_id++, max_rows);
+                if (!run_ok) co_return run_ok;
                 pend_bytes = 0;
                 gov_.spilled(0);
             }
         }
 
         if (run_id == 0) {  // everything fits in memory: one sorted run
-            DataFrame buf =
-                pending.empty() ? DataFrame{} : concat_pending(pending);
+            DataFrame buf;
+            if (!pending.empty()) {
+                auto concatenated = concat_pending(pending);
+                if (!concatenated) co_return concatenated.error();
+                buf = std::move(*concatenated);
+            }
             if (pending.empty()) buf.names = sch_;
             // An input that sent only rowless morsels (a group-by of no rows)
             // still hands its typed columns on.
@@ -486,12 +539,21 @@ class SortMergeCursor : public Cursor {
                 empty_.emplace();
                 empty_->columns = std::move(buf.columns);
             }
-            DataFrame sorted =
-                buf.num_rows() ? sort_rows(std::move(buf)) : std::move(buf);
+            DataFrame sorted;
+            if (buf.num_rows()) {
+                auto sorted_rows = sort_rows(std::move(buf));
+                if (!sorted_rows) co_return sorted_rows.error();
+                sorted = std::move(*sorted_rows);
+            } else {
+                sorted = std::move(buf);
+            }
             runs.push_back(dstd::make_unique<InMemoryCursor>(
                 dstd::make_shared<const DataFrame>(std::move(sorted))));
         } else {
-            if (!pending.empty()) spill_run(pending, run_id++, max_rows);
+            if (!pending.empty()) {
+                auto run_ok = spill_run(pending, run_id++, max_rows);
+                if (!run_ok) co_return run_ok;
+            }
             dstd::Vector<int> ids(static_cast<std::size_t>(run_id));
             std::iota(ids.begin(), ids.end(), 0);
             while (ids.size() > merge_fan_in()) {
@@ -505,14 +567,18 @@ class SortMergeCursor : public Cursor {
                     }
                     const dstd::Vector<int> group(ids.begin() + at,
                                                   ids.begin() + end);
-                    next_ids.push_back(
-                        co_await merge_runs(group, run_id++, max_rows));
+                    auto merging = merge_runs(group, run_id++, max_rows);
+                    auto merged_id = co_await std::move(merging);
+                    if (!merged_id) co_return merged_id.error();
+                    next_ids.push_back(*merged_id);
                 }
                 ids = std::move(next_ids);
             }
-            for (int id : ids)
-                runs.push_back(
-                    dstd::make_unique<spill::Reader>(dir_.run_path(id)));
+            for (int id : ids) {
+                auto reader = spill::Reader::open(dir_->run_path(id));
+                if (!reader) co_return reader.error();
+                runs.push_back(std::move(*reader));
+            }
         }
         if (runs.size() == 1) {
             single_ = std::move(runs.front());
@@ -520,9 +586,12 @@ class SortMergeCursor : public Cursor {
             merger_.emplace(key_idx_, descending_);
             for (dstd::UniquePtr<Cursor>& r : runs)
                 merger_->add_run(std::move(r));
-            co_await merger_->open(max_rows);
+            auto opening = merger_->open(max_rows);
+            auto opened = co_await std::move(opening);
+            if (!opened) co_return opened.error();
         }
         built_ = true;
+        co_return dstd::Result<void>{};
     }
 
     std::uint64_t run_morsel_bytes_ = 0;
@@ -534,7 +603,7 @@ class SortMergeCursor : public Cursor {
     std::uint64_t budget_;
     bool built_ = false;
     dstd::Vector<int> key_idx_;
-    spill::Dir dir_;
+    dstd::SharedPtr<spill::Dir> dir_;
     dstd::Optional<RunMerger> merger_;
     dstd::UniquePtr<Cursor> single_;
     dstd::Optional<Morsel> empty_;
@@ -545,11 +614,11 @@ class SortMergeCursor : public Cursor {
 
 namespace lazy_internal {
 
-dstd::UniquePtr<Cursor> make_sort_merge(dstd::UniquePtr<Cursor> in,
-                                        dstd::Vector<dstd::String> sch,
-                                        dstd::Vector<dstd::String> keys,
-                                        dstd::Vector<bool> descending,
-                                        std::uint64_t budget) {
+CursorResult make_sort_merge(dstd::UniquePtr<Cursor> in,
+                             dstd::Vector<dstd::String> sch,
+                             dstd::Vector<dstd::String> keys,
+                             dstd::Vector<bool> descending,
+                             std::uint64_t budget) {
     return dstd::make_unique<SortMergeCursor>(std::move(in), std::move(sch),
                                               std::move(keys),
                                               std::move(descending), budget);

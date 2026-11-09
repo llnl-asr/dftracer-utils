@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_TRACE_COMPARATOR_COMPARE_VIEW_H
 #define DFTRACER_UTILS_TRACE_COMPARATOR_COMPARE_VIEW_H
 
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -49,7 +50,7 @@ class CompareView {
     coro::CoroTask<dataframe::DataFrame> collect() const {
         dataframe::LazyFrame plan =
             baseline_.group_by(group_by_).agg(agg_).compare(variant_);
-        co_return co_await plan.collect();
+        co_return common::unwrap(co_await plan.collect());
     }
 
     /// FULL-join two aggregation results on their first `n_key` group-key
@@ -58,7 +59,7 @@ class CompareView {
     static dataframe::DataFrame compare_batches(
         const dataframe::DataFrame& base, const dataframe::DataFrame& variant,
         std::int64_t n_key) {
-        return base.compare_agg(variant, n_key);
+        return common::unwrap(base.compare_agg(variant, n_key));
     }
 
    private:

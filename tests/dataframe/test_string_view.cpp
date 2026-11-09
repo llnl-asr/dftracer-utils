@@ -444,8 +444,10 @@ TEST_SUITE("string view kernels match the flat column") {
             Series::strings({"pear", "short", "zz another long value here"}));
         const std::int64_t w[3] = {10, 20, 30};
         right.columns.push_back(Series::flat_i64(w, 3));
-        const DataFrame jv = frame(p.view).join(right, {"k"});
-        const DataFrame jf = frame(p.flat).join(right, {"k"});
+        const DataFrame jv =
+            dftu_utils_test::ok(frame(p.view).join(right, {"k"}));
+        const DataFrame jf =
+            dftu_utils_test::ok(frame(p.flat).join(right, {"k"}));
         REQUIRE(jv.num_rows() == jf.num_rows());
         CHECK(jv.num_rows() == 4);
         for (std::int64_t i = 0; i < jv.num_rows(); ++i) {
@@ -464,7 +466,8 @@ TEST_SUITE("string view kernels match the flat column") {
         right_view.columns[0] = make_view(
             {Row("pear"), Row("short"), Row("zz another long value here")},
             &released);
-        const DataFrame jw = left_flat.join(right_view, {"k"});
+        const DataFrame jw =
+            dftu_utils_test::ok(left_flat.join(right_view, {"k"}));
         CHECK(rows_of(jw.column("k")) == rows_of(jf.column("k")));
         CHECK(jw.num_rows() == 4);
     }
@@ -494,9 +497,10 @@ TEST_SUITE("string view writers") {
         int released = 0;
         const Series s = make_view(SAMPLE, &released);
         dstd::String bytes;
-        spill::put_series(bytes, s);
+        dftu_utils_test::ok(spill::put_series(bytes, s));
         const auto* p = reinterpret_cast<const std::uint8_t*>(bytes.data());
-        const Series back = spill::get_series(p, p + bytes.size());
+        const Series back =
+            dftu_utils_test::ok(spill::get_series(p, p + bytes.size()));
         REQUIRE(back.valid());
         CHECK(back.encoding() == Encoding::Flat);
         CHECK(rows_of(back) == SAMPLE);
@@ -510,7 +514,8 @@ TEST_SUITE("string view writers") {
         DataFrame f;
         f.names = {"s"};
         f.columns.push_back(make_view(SAMPLE, &released));
-        const auto back = frame_from_native(frame_to_native(f));
+        const auto back =
+            frame_from_native(dftu_utils_test::ok(frame_to_native(f)));
         REQUIRE(back);
         CHECK(back->columns[0].encoding() == Encoding::Flat);
         CHECK(back->columns[0].type() == TypeId::String);
@@ -523,8 +528,9 @@ TEST_SUITE("string view writers") {
         DataFrame f;
         f.names = {"s"};
         f.columns.push_back(make_view(SAMPLE, &released));
-        dstd::Vector<std::uint8_t> bytes;
-        REQUIRE_NOTHROW(bytes = f.to_ipc());
+        auto ipc = f.to_ipc();
+        REQUIRE(ipc.has_value());
+        const dstd::Vector<std::uint8_t>& bytes = *ipc;
         const dstd::String text(bytes.begin(), bytes.end());
         CHECK(text.find("a value longer than twelve") != dstd::String::npos);
         CHECK(text.find("zz another long value here") != dstd::String::npos);

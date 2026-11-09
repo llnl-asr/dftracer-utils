@@ -36,6 +36,7 @@
 #include <signal.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
+#include <task_result.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -96,8 +97,8 @@ class GenCursor : public Cursor {
               std::size_t pad)
         : rows_(rows), keys_(keys), seed_(seed), pad_(pad) {}
 
-    coro::CoroTask<dstd::Optional<Morsel>> next(std::int64_t) override {
-        if (at_ >= rows_) co_return dstd::nullopt;
+    coro::CoroTask<MorselResult> next(std::int64_t) override {
+        if (at_ >= rows_) co_return MorselResult(dstd::nullopt);
         const std::int64_t n = std::min(MORSEL_ROWS, rows_ - at_);
         dstd::Vector<std::int64_t> k(n), t(n), v(n), g(n);
         dstd::Vector<dstd::String> s(n);
@@ -120,7 +121,7 @@ class GenCursor : public Cursor {
         m.columns.push_back(Series::flat_i64(v.data(), n));
         m.columns.push_back(Series::strings(s));
         m.columns.push_back(Series::flat_i64(g.data(), n));
-        co_return m;
+        co_return MorselResult(std::move(m));
     }
 
    private:
@@ -189,8 +190,8 @@ class ListCursor : public Cursor {
    public:
     explicit ListCursor(std::int64_t rows) : rows_(rows) {}
 
-    coro::CoroTask<dstd::Optional<Morsel>> next(std::int64_t) override {
-        if (at_ >= rows_) co_return dstd::nullopt;
+    coro::CoroTask<MorselResult> next(std::int64_t) override {
+        if (at_ >= rows_) co_return MorselResult(dstd::nullopt);
         const std::int64_t n = std::min(MORSEL_ROWS, rows_ - at_);
         dstd::Vector<std::int64_t> pid(static_cast<std::size_t>(n));
         for (std::int64_t i = 0; i < n; ++i)
@@ -200,7 +201,7 @@ class ListCursor : public Cursor {
         m.columns.push_back(Series::flat_i64(pid.data(), n));
         m.columns.push_back(make_tk(n, at_));
         at_ += n;
-        co_return m;
+        co_return MorselResult(std::move(m));
     }
 
    private:
@@ -667,7 +668,13 @@ dstd::Set<dstd::String> registry_ops() {
 coro::CoroTask<std::int64_t> drain_count(LazyFrame lf) {
     std::int64_t n = 0;
     auto g = lf.stream(MORSEL_ROWS);
-    while (auto df = co_await g.next()) n += df->num_rows();
+    while (auto df = co_await g.next()) {
+        if (!*df) {
+            std::fprintf(stderr, "stream failed: %s\n", df->error().c_str());
+            co_return -1;
+        }
+        n += (*df)->num_rows();
+    }
     co_return n;
 }
 
@@ -681,6 +688,7 @@ int child_main(const dstd::String& op) {
     }
     const std::int64_t n = dftracer::utils::common::unwrap(
         dftracer::utils::default_runtime().submit(drain_count(plan)).get());
+    if (n < 0) return 3;
     std::printf("rows=%lld\n", static_cast<long long>(n));
     return 0;
 }

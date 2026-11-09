@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_LAZY_COMMON_H
 #define DFTRACER_UTILS_DATAFRAME_LAZY_COMMON_H
 
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/coro/task_abi.h>        // task_to_abi
@@ -36,6 +37,7 @@
 #include <dftracer/utils/dstd/int128.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>  // compute_memory_budget
 #include <dftracer/utils/dstd/vector.h>
@@ -62,6 +64,14 @@
 
 namespace dftracer::utils::dataframe::lazy_internal {
 
+/// A cursor, or the error that stopped it from opening.
+using CursorResult = dstd::Result<dstd::UniquePtr<Cursor>>;
+
+/// The result of a factory that has no cursor to give and no error to report.
+inline CursorResult no_cursor() {
+    return CursorResult{dstd::UniquePtr<Cursor>{}};
+}
+
 inline dstd::Vector<const Series*> column_ptrs(
     const dstd::Vector<Series>& cols) {
     dstd::Vector<const Series*> in;
@@ -77,32 +87,31 @@ inline int column_index_of(const dstd::Vector<dstd::String>& names,
 }
 
 // The index of column `name` of `sch`. A name that is not there is the error of
-// the op `op`: std::out_of_range "<op>: no column named <name>".
-inline int require_col(const dstd::Vector<dstd::String>& sch,
-                       const dstd::String& name, const char* op) {
+// the op `op`: NotFound "<op>: no column named <name>".
+inline dstd::Result<int> require_col(const dstd::Vector<dstd::String>& sch,
+                                     const dstd::String& name, const char* op) {
     const int at = column_index_of(sch, name);
     if (at < 0)
-        throw std::out_of_range(
-            (dstd::String(op) + ": no column named " + name).c_str());
+        return common::make_error<"{}: no column named {}">(
+            common::ErrorCode::NotFound, op, name);
     return at;
 }
 
 // An all-null column of `rows` rows of the type of `f`, with the type's
 // parameters. Refuses a type it cannot rebuild rather than emit a column that
 // has silently lost them; `why` says what has no rows to take the type from.
-inline Series null_column_of(const Field& f, std::int64_t rows, const char* who,
-                             const char* why) {
+inline dstd::Result<Series> null_column_of(const Field& f, std::int64_t rows,
+                                           const char* who, const char* why) {
     const DataType& dt = f.type;
     const bool rebuildable =
         dt.fields.empty() &&
         (byte_width(dt.id).has_value() || dt.id == TypeId::String ||
          dt.id == TypeId::Binary);
     if (!rebuildable)
-        throw std::runtime_error((dstd::String(who) +
-                                  ": cannot build a null column of type " +
-                                  dstd::String(type_name(dt.id)) +
-                                  " for column '" + f.name + "' when " + why)
-                                     .c_str());
+        return common::make_error<
+            "{}: cannot build a null column of type {} for column '{}' when "
+            "{}">(common::ErrorCode::Internal, who, type_name(dt.id), f.name,
+                  why);
     Series s = Series::nulls(dt.id, rows);
     dftu_series* h = s.handle();
     h->set_time_unit(dt.time_unit());
@@ -168,10 +177,11 @@ inline std::int64_t rows_within(std::uint64_t byte_share,
 class MorselFeed {
    public:
     // True when a row is left to take; reads the next morsel when the last
-    // one is used up.
-    coro::CoroTask<bool> fill(Cursor& in, std::int64_t max_rows) {
+    // one is used up. The error is the one the input ended its read with.
+    coro::CoroTask<dstd::Result<bool>> fill(Cursor& in, std::int64_t max_rows) {
         while (!cur_ || pos_ >= cur_->rows) {
-            cur_ = co_await in.next(max_rows);
+            auto next = in.next(max_rows);
+            cur_ = co_await std::move(next).or_fail();
             pos_ = 0;
             if (!cur_) co_return false;
         }
@@ -338,6 +348,15 @@ inline Morsel morsel_of(DataFrame&& f) {
     return out;
 }
 
+// The answer of a try_next that holds `in`, with `fn` run over its morsel. An
+// end of stream or an error passes through unchanged; `fn` returns a Morsel or
+// the MorselResult of a step that can fail.
+template <class Fn>
+inline MorselResult map_morsel(MorselResult&& in, Fn&& fn) {
+    if (!in || !*in) return std::move(in);
+    return MorselResult(fn(std::move(**in)));
+}
+
 // ---- cursors ----------------------------------------------------------------
 
 inline constexpr std::size_t MAX_ACCUMULATE_BATCH = 32;
@@ -359,11 +378,12 @@ inline std::size_t accumulate_batch(std::uint64_t budget,
 // straight into `state`; a larger one is folded morsel by morsel into partial
 // states in parallel (the mergeable agg IR) that are then merged, so the batch
 // size follows the size of a partial and memory stays near the budget.
-// `accumulate(state, morsel, row_base)` folds one morsel, `make()` makes a
+// `accumulate(state, morsel, row_base)` folds one morsel and returns a
+// dstd::Result<void>, as does `after`; `make()` makes a
 // fresh state, `active()` says whether folding is still wanted and
 // `cut(batch)`, called per morsel taken, ends the batch early when true.
 template <class Make, class Accumulate, class After, class Active, class Cut>
-inline coro::CoroTask<void> accumulate_batches(
+inline coro::CoroTask<dstd::Result<void>> accumulate_batches(
     Cursor& in, std::int64_t max_rows, std::uint64_t budget, AggStatePtr& state,
     Make make, Accumulate accumulate, After after, Active active, Cut cut) {
     std::size_t cap = accumulate_batch(budget, 0);
@@ -375,7 +395,8 @@ inline coro::CoroTask<void> accumulate_batches(
     while (!eof) {
         batch.clear();
         for (std::size_t b = 0; b < cap; ++b) {
-            auto m = co_await in.next(max_rows);
+            auto next = in.next(max_rows);
+            auto m = co_await std::move(next).or_fail();
             if (!m) {
                 eof = true;
                 break;
@@ -391,18 +412,24 @@ inline coro::CoroTask<void> accumulate_batches(
         }
         if (active()) {
             if (batch.size() == 1) {
-                accumulate(*state, batch[0], row_base[0]);
+                auto folded = accumulate(*state, batch[0], row_base[0]);
+                if (!folded) co_return folded.error();
             } else {
                 dstd::Vector<AggStatePtr> partials(batch.size());
+                dstd::Vector<dstd::Optional<dstd::Error>> failed(batch.size());
                 parallel_for(static_cast<std::int64_t>(batch.size()), 1,
                              [&](std::int64_t bi, std::int64_t ei) {
                                  for (std::int64_t j = bi; j < ei; ++j) {
                                      const auto z = static_cast<std::size_t>(j);
                                      AggStatePtr st = make();
-                                     accumulate(*st, batch[z], row_base[z]);
+                                     auto folded =
+                                         accumulate(*st, batch[z], row_base[z]);
+                                     if (!folded) failed[z] = folded.error();
                                      partials[z] = std::move(st);
                                  }
                              });
+                for (auto& f : failed)
+                    if (f) co_return *f;
                 std::uint64_t partial_bytes = 0;
                 for (auto& p : partials)
                     if (p) partial_bytes += agg_approx_bytes(*p);
@@ -411,9 +438,28 @@ inline coro::CoroTask<void> accumulate_batches(
                     if (p) agg_merge(*state, *p);
             }
         }
-        after(batch, state);
+        auto after_ok = after(batch, state);
+        if (!after_ok) co_return after_ok;
     }
+    co_return dstd::Result<void>{};
 }
+
+// A cursor that gives one error and then nothing, for a Source::scan that
+// cannot fail any other way.
+class ErrorCursor final : public Cursor {
+   public:
+    explicit ErrorCursor(dstd::Error error) : error_(std::move(error)) {}
+
+    coro::CoroTask<MorselResult> next(std::int64_t) override {
+        if (done_) co_return MorselResult(dstd::nullopt);
+        done_ = true;
+        co_return error_;
+    }
+
+   private:
+    dstd::Error error_;
+    bool done_ = false;
+};
 
 // The columns of `in` picked by index, in that order.
 class ProjectCursor : public Cursor {
@@ -421,9 +467,9 @@ class ProjectCursor : public Cursor {
     ProjectCursor(dstd::UniquePtr<Cursor> in, dstd::Vector<std::size_t> pick)
         : in_(std::move(in)), pick_(std::move(pick)) {}
 
-    coro::CoroTask<dstd::Optional<Morsel>> next(
-        std::int64_t max_rows) override {
-        auto m = co_await in_->next(max_rows);
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
+        auto task = in_->next(max_rows);
+        auto m = co_await std::move(task).or_fail();
         if (!m) co_return dstd::nullopt;
         Morsel out;
         out.rows = m->rows;
@@ -443,15 +489,16 @@ class InMemoryCursor : public Cursor {
     explicit InMemoryCursor(dstd::SharedPtr<const DataFrame> frame)
         : frame_(std::move(frame)), n_(frame_->num_rows()) {}
 
-    coro::CoroTask<dstd::Optional<Morsel>> next(
-        std::int64_t max_rows) override {
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
         dstd::Optional<Morsel> out;
         fill(max_rows, out);
         co_return out;
     }
 
-    bool try_next(std::int64_t max_rows, dstd::Optional<Morsel>& out) override {
-        fill(max_rows, out);
+    bool try_next(std::int64_t max_rows, MorselResult& out) override {
+        dstd::Optional<Morsel> m;
+        fill(max_rows, m);
+        out = std::move(m);
         return true;
     }
 

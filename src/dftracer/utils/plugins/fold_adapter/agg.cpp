@@ -50,22 +50,20 @@ const dftu_svc_agg g_agg = {host_agg_new, host_agg_accumulate, host_agg_result,
 // Finalize `acc` and move its columns into a dftu_dataframe handle (the
 // engine's own ABI boundary type) so the result crosses as our DataFrame, no
 // Arrow round-trip. agg_finalize reads the state, so this may run more than
-// once for the same accumulator. Null if it has no state or finalize throws.
+// once for the same accumulator. Null if it has no state or finalize fails.
 ::dftu_dataframe* finalize_to_frame(const AggAccum& acc) {
     if (!acc.state) return nullptr;
-    try {
-        dataframe::DataFrame out = acc.spiller.drain(*acc.state, acc.key_names);
-        dstd::Vector<dftu_series*> handles;
-        handles.reserve(out.columns.size());
-        for (dataframe::Series& c : out.columns) handles.push_back(c.release());
-        dstd::Vector<const char*> names;
-        names.reserve(out.names.size());
-        for (const dstd::String& n : out.names) names.push_back(n.c_str());
-        return dftu_dataframe_new(names.data(), handles.data(),
-                                  static_cast<std::int32_t>(handles.size()));
-    } catch (...) {
-        return nullptr;
-    }
+    auto drained = acc.spiller.drain(*acc.state, acc.key_names);
+    if (!drained) return nullptr;
+    dataframe::DataFrame& out = *drained;
+    dstd::Vector<dftu_series*> handles;
+    handles.reserve(out.columns.size());
+    for (dataframe::Series& c : out.columns) handles.push_back(c.release());
+    dstd::Vector<const char*> names;
+    names.reserve(out.names.size());
+    for (const dstd::String& n : out.names) names.push_back(n.c_str());
+    return dftu_dataframe_new(names.data(), handles.data(),
+                              static_cast<std::int32_t>(handles.size()));
 }
 
 }  // namespace
@@ -166,16 +164,19 @@ void PluginFold::agg_accumulate(::dftu_agg* a, const ::dftu_dataframe* df) {
         values.push_back(c);
     }
 
-    try {
-        // Pass the row count explicitly: a zero-key accumulator (the scalar
-        // case) has no key column for the engine to size the batch from.
-        common::unwrap(dataframe::agg_accumulate(*acc.state, keys, values, 0,
-                                                 dftu_dataframe_num_rows(df)));
-        acc.spiller.maybe_spill(acc.state);
-    } catch (...) {
+    // Pass the row count explicitly: a zero-key accumulator (the scalar
+    // case) has no key column for the engine to size the batch from.
+    const auto accumulated = dataframe::agg_accumulate(
+        *acc.state, keys, values, 0, dftu_dataframe_num_rows(df));
+    if (!accumulated) {
         DFTRACER_UTILS_LOG_ERROR("Plugin agg '%s' accumulate failed",
                                  acc.name.c_str());
+        return;
     }
+    const auto spilled = acc.spiller.maybe_spill(acc.state);
+    if (!spilled.has_value())
+        DFTRACER_UTILS_LOG_ERROR("Plugin agg '%s' spill failed: %s",
+                                 acc.name.c_str(), spilled.error().c_str());
 }
 
 // Cross-plugin reads see only what a plugin that already finalized published.

@@ -309,11 +309,11 @@ trace::views::ViewFile view_file(const dstd::String& gz_path,
 }
 
 std::size_t count_reads(const trace::views::ViewFile& f) {
-    auto df = dftu_utils_test::run_here(
+    auto df = dftu_utils_test::ok(dftu_utils_test::run_here(
         trace::views::View::from_files({f})
             .duql(R"(name == "read" | agg { n = count() })")
             .lazy()
-            .collect());
+            .collect()));
     REQUIRE(df.num_rows() == 1);
     return static_cast<std::size_t>(df.columns[0].data<std::uint64_t>()[0]);
 }

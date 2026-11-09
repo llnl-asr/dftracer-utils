@@ -199,17 +199,17 @@ dstd::Result<DataFrame> DataFrame::group_by(
     return group_agg_expr(keys, aggs, inputs, key_names);
 }
 
-DataFrame DataFrame::join(const DataFrame& other,
-                          const dstd::Vector<dstd::String>& left_on,
-                          const dstd::Vector<dstd::String>& right_on,
-                          JoinHow how, const dstd::String& suffix,
-                          bool nulls_equal) const {
+dstd::Result<DataFrame> DataFrame::join(
+    const DataFrame& other, const dstd::Vector<dstd::String>& left_on,
+    const dstd::Vector<dstd::String>& right_on, JoinHow how,
+    const dstd::String& suffix, bool nulls_equal) const {
     return dataframe::join(*this, other, left_on, right_on, how, suffix,
                            nulls_equal);
 }
-DataFrame DataFrame::join(const DataFrame& other,
-                          const dstd::Vector<dstd::String>& on, JoinHow how,
-                          const dstd::String& suffix, bool nulls_equal) const {
+dstd::Result<DataFrame> DataFrame::join(const DataFrame& other,
+                                        const dstd::Vector<dstd::String>& on,
+                                        JoinHow how, const dstd::String& suffix,
+                                        bool nulls_equal) const {
     return dataframe::join(*this, other, on, on, how, suffix, nulls_equal);
 }
 
@@ -226,8 +226,8 @@ dstd::Result<DataFrame> DataFrame::melt(
 dstd::Result<DataFrame> DataFrame::explode(const dstd::String& column) const {
     return dataframe::explode(*this, column);
 }
-DataFrame DataFrame::compare_agg(const DataFrame& variant,
-                                 std::int64_t n_key) const {
+dstd::Result<DataFrame> DataFrame::compare_agg(const DataFrame& variant,
+                                               std::int64_t n_key) const {
     return dataframe::compare_agg(*this, variant, n_key);
 }
 dstd::Result<DataFrame> DataFrame::unnest(const dstd::String& column,

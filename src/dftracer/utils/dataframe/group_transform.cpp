@@ -75,9 +75,10 @@ LazyFrame window(const LazyFrame& plan, const dstd::Vector<dstd::String>& part,
 
 dstd::Result<dstd::Vector<dstd::String>> value_columns(
     const LazyFrame& plan, const dstd::Vector<dstd::String>& keys, Agg agg) {
+    auto specs = plan.reduce_specs(agg, keys);
+    if (!specs) return specs.error();
     dstd::Vector<dstd::String> out;
-    for (const GroupAgg& g : plan.reduce_specs(agg, keys))
-        out.push_back(g.column);
+    for (const GroupAgg& g : *specs) out.push_back(g.column);
     if (out.empty())
         return invalid_argument<"group_by transform: no eligible columns">();
     return out;

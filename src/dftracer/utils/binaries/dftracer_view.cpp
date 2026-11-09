@@ -834,7 +834,7 @@ coro::CoroTask<dataframe::DataFrame> ViewRun::windowed_table(
     if (!cli->select.empty()) rows = rows.select(select_columns(cli->select));
     if (has_window)
         rows = rows.slice(static_cast<std::int64_t>(cli->offset), window_size);
-    co_return co_await rows.collect();
+    co_return common::unwrap(co_await rows.collect());
 }
 
 // Stages after the scan give a table, not events; --explain prints the
@@ -1036,7 +1036,7 @@ coro::CoroTask<void> ViewRun::run_local() {
     if (ct_mode || fg_mode) {
         dataframe::LazyFrame tree =
             fg_mode ? v.flamegraph(ct_partition) : v.call_tree(ct_partition);
-        dataframe::DataFrame table = co_await tree.collect();
+        dataframe::DataFrame table = common::unwrap(co_await tree.collect());
         print_table(out_target, table);
         stats.events_matched = table.num_rows();
     } else if (mv_mode) {
@@ -1054,7 +1054,7 @@ coro::CoroTask<void> ViewRun::run_local() {
     } else if (counters) {
         stats = co_await base.sink_counters(*sink);
     } else if (aggregate || duql_rows) {
-        dataframe::DataFrame table = co_await v.collect();
+        dataframe::DataFrame table = common::unwrap(co_await v.collect());
         print_table(out_target, table);
         stats.events_matched = table.num_rows();
         stats.events_scanned = scans->events_scanned.load();

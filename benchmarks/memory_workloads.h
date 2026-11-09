@@ -59,10 +59,11 @@ class GenCursor : public dftracer::utils::dataframe::Cursor {
     GenCursor(std::int64_t rows, std::int64_t keys, std::uint64_t seed)
         : rows_(rows), keys_(keys), seed_(seed) {}
 
-    dftracer::utils::coro::CoroTask<
-        dftracer::utils::dstd::Optional<dftracer::utils::dataframe::Morsel>>
+    dftracer::utils::coro::CoroTask<dftracer::utils::dataframe::MorselResult>
     next(std::int64_t) override {
-        if (at_ >= rows_) co_return dftracer::utils::dstd::nullopt;
+        if (at_ >= rows_)
+            co_return dftracer::utils::dataframe::MorselResult(
+                dftracer::utils::dstd::nullopt);
         const std::int64_t n = std::min(MORSEL_ROWS, rows_ - at_);
         dftracer::utils::dstd::Vector<std::int64_t> k(
             static_cast<std::size_t>(n));
@@ -88,7 +89,7 @@ class GenCursor : public dftracer::utils::dataframe::Cursor {
             dftracer::utils::dataframe::Series::flat_i64(t.data(), n));
         m.columns.push_back(
             dftracer::utils::dataframe::Series::flat_i64(v.data(), n));
-        co_return m;
+        co_return dftracer::utils::dataframe::MorselResult(std::move(m));
     }
 
    private:
@@ -141,7 +142,13 @@ inline dftracer::utils::coro::CoroTask<std::int64_t> drain_count(
     dftracer::utils::dataframe::LazyFrame lf) {
     std::int64_t n = 0;
     auto g = lf.stream(MORSEL_ROWS);
-    while (auto frame = co_await g.next()) n += frame->num_rows();
+    while (auto frame = co_await g.next()) {
+        if (!*frame) {
+            std::fprintf(stderr, "drain_count: %s\n", frame->error().c_str());
+            std::exit(1);
+        }
+        n += (*frame)->num_rows();
+    }
     co_return n;
 }
 

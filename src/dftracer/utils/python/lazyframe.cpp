@@ -81,10 +81,20 @@ PyObject* run_lazy_op(Fn&& fn) {
     try {
         auto out = fn();
         if constexpr (std::is_same_v<decltype(out), LazyFrame>) {
+            const auto built = out.status();
+            if (!built) {
+                PyErr_SetString(PyExc_ValueError, built.error().c_str());
+                return nullptr;
+            }
             return make_lazyframe(std::move(out));
         } else {
             if (!out) {
                 PyErr_SetString(PyExc_ValueError, out.error().c_str());
+                return nullptr;
+            }
+            const auto built = out->status();
+            if (!built) {
+                PyErr_SetString(PyExc_ValueError, built.error().c_str());
                 return nullptr;
             }
             return make_lazyframe(std::move(*out));
@@ -311,16 +321,17 @@ PyObject* LazyFrame_reduce_specs(PyObject* self, PyObject* args) {
         return nullptr;
     }
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> specs;
-    try {
-        specs = dftracer::utils::python::reduce_spec_strings(
-            b->lf.reduce_specs(*op, keys));
-    } catch (const std::out_of_range& e) {
-        PyErr_SetString(PyExc_KeyError, e.what());
-        return nullptr;
-    } catch (const std::exception& e) {
-        PyErr_SetString(PyExc_ValueError, e.what());
+    const auto reduced = b->lf.reduce_specs(*op, keys);
+    if (!reduced) {
+        PyErr_SetString(
+            dftracer::utils::common::errorcode_of(reduced.error()) ==
+                    dftracer::utils::common::ErrorCode::NotFound
+                ? PyExc_KeyError
+                : PyExc_ValueError,
+            reduced.error().c_str());
         return nullptr;
     }
+    specs = dftracer::utils::python::reduce_spec_strings(*reduced);
     PyObject* list = PyList_New(static_cast<Py_ssize_t>(specs.size()));
     if (!list) return nullptr;
     for (std::size_t i = 0; i < specs.size(); ++i) {
@@ -850,13 +861,14 @@ dftracer::utils::coro::CoroTask<void> drain_stream(
     try {
         auto gen = lf.stream(morsel_rows);
         for (;;) {
-            auto df = co_await gen.next();
-            if (!df) break;
+            auto next_frame = co_await gen.next();
+            if (!next_frame) break;
             if (state->cancelled()) break;
+            dataframe::DataFrame df = common::unwrap(std::move(*next_frame));
             const std::size_t bytes =
-                static_cast<std::size_t>(df->num_rows()) *
-                static_cast<std::size_t>(df->num_columns() + 1) * 16;
-            if (!state->push(std::move(*df), bytes)) break;
+                static_cast<std::size_t>(df.num_rows()) *
+                static_cast<std::size_t>(df.num_columns() + 1) * 16;
+            if (!state->push(std::move(df), bytes)) break;
         }
         state->complete();
     } catch (...) {

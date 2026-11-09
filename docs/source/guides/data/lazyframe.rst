@@ -39,9 +39,11 @@ Where a plan comes from
 
          LazyFrame plan = LazyFrame::scan(source);        // any Source (below)
          LazyFrame plan = df.lazy();                      // an InMemorySource
-         DataFrame out = co_await plan.filter(col(1) > std::int64_t{100})
-                                      .group_by({"name"}, {{Agg::Count, "", "count"}})
-                                      .collect();
+         // collect() gives dstd::Result<DataFrame>: the frame or the error.
+         dstd::Result<DataFrame> out =
+             co_await plan.filter(col(1) > std::int64_t{100})
+                          .group_by({"name"}, {{Agg::Count, "", "count"}})
+                          .collect();
 
    .. tab-item:: C
 
@@ -212,8 +214,8 @@ against each block: a left or outer join emits a left row that no block
 matched once, at the end, a semi join emits a matched left row once, and an
 anti join the rows that no block matched. A lookup join reads such a partition
 in blocks too and keeps, per key, only its first right row and whether the
-rows of the key differ, then probes the left partition once; it throws what
-the in-memory join throws. That per-key state (a row and the key text for each
+rows of the key differ, then probes the left partition once; it gives the
+error the in-memory join gives. That per-key state (a row and the key text for each
 distinct key of the partition) is held in memory. A nest join packs the keys
 of such a partition into groups that fit a block and joins one group per pass
 over the right side: a left row leaves with its list in the pass of its key,
@@ -282,8 +284,8 @@ morsel, do not fit half of the budget is cut from the spilling sort.
 ``group_by_dynamic`` needs an ascending time column, as the eager op does: a
 window is final once a time past its end has been seen, so it leaves then and
 the op holds only the open windows (about ``period / every`` of them). A time
-below the one before raises ``ValueError`` (``std::invalid_argument``) in both
-the lazy and the eager op, which before put such a row in a wrong window or
+below the one before is an ``InvalidArgument`` error (``ValueError`` in Python)
+in both the lazy and the eager op, which before put such a row in a wrong window or
 dropped it. ``to_dummies`` holds one entry and one output column
 per distinct value. ``tail(n)``, ``topk(k)``,
 ``sample(n)`` and ``describe`` hold at most ``n`` or ``k`` rows or one figure
@@ -415,7 +417,7 @@ Results that are not one frame
 
 A ``LazyResult<T>`` is a lazy value of any type: the plans it reads and a
 step that turns their frames into a ``T``. Its ``collect()`` returns the
-``T``. A source uses it for a terminal that is not a frame. For example, a
+``T``, or the error of a plan that failed, as ``dstd::Result<T>``. A source uses it for a terminal that is not a frame. For example, a
 trace's ``containment()`` gives both containment frames, a partial gives
 mergeable bytes, and a sink gives its write stats. The C++ variadic
 ``collect_all(roots...)`` takes ``LazyFrame`` and ``LazyResult`` roots

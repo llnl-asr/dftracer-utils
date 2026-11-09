@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_TRACE_STATISTICS_STATS_VIEW_H
 #define DFTRACER_UTILS_TRACE_STATISTICS_STATS_VIEW_H
 
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/internal/column_read.h>
 #include <dftracer/utils/dstd/deque.h>
@@ -87,7 +88,7 @@ class StatsView {
 
     coro::CoroTask<dstd::Vector<StatCount>> pid_tid_counts() const {
         const views::View agg = pid_agg();
-        dataframe::DataFrame b = co_await agg.collect();
+        dataframe::DataFrame b = common::unwrap(co_await agg.collect());
         const dataframe::Series& n = b.columns[col(b, "n")];
         const dataframe::Series& pid = b.columns[0];
         const dataframe::Series& tid = b.columns[1];
@@ -116,7 +117,7 @@ class StatsView {
             (needs.pid_tids ? cat_pid_agg() : cat_agg()).lazy()};
         if (needs.names) plans.push_back(name_agg().lazy());
         dstd::Vector<dataframe::DataFrame> frames =
-            co_await dataframe::collect_all(std::move(plans));
+            common::unwrap(co_await dataframe::collect_all(std::move(plans)));
 
         // The category pass also carries the global duration/timestamp
         // aggregates needed to combine into the summary.
@@ -284,7 +285,7 @@ class StatsView {
     }
 
     coro::CoroTask<dstd::Vector<StatCount>> group_counts(views::View v) const {
-        dataframe::DataFrame b = co_await v.collect();
+        dataframe::DataFrame b = common::unwrap(co_await v.collect());
         const dataframe::Series& n = b.columns[col(b, "n")];
         dstd::Vector<StatCount> out;
         out.reserve(static_cast<std::size_t>(b.num_rows()));

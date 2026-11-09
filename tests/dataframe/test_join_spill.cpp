@@ -28,11 +28,6 @@ using namespace dftracer::utils::dataframe;
 
 namespace {
 
-DataFrame run(coro::CoroTask<DataFrame> t) {
-    return dftu_utils_test::ok(
-        dftracer::utils::default_runtime().submit(std::move(t)).get());
-}
-
 struct Rng {
     std::uint64_t x;
     std::uint64_t next(std::uint64_t m) {
@@ -129,8 +124,9 @@ dstd::Vector<dstd::String> reference(const Table& l, const Table& r,
     return out;
 }
 
-DataFrame join(const DataFrame& l, const DataFrame& r, JoinHow how,
-               std::uint64_t budget, const dstd::String& suffix = "") {
+dstd::Result<DataFrame> join_result(const DataFrame& l, const DataFrame& r,
+                                    JoinHow how, std::uint64_t budget,
+                                    const dstd::String& suffix = "") {
     const LazyFrame left =
         LazyFrame::scan(dstd::make_shared<InMemorySource>(
                             DataFrame{l.names,
@@ -147,7 +143,14 @@ DataFrame join(const DataFrame& l, const DataFrame& r, JoinHow how,
                       for (const auto& s : r.columns) c.push_back(s.share());
                       return c;
                   }()}));
-    return run(left.join(right, {"lk"}, {"rk"}, how, suffix).collect(200));
+    return dftracer::utils::default_runtime()
+        .submit(left.join(right, {"lk"}, {"rk"}, how, suffix).collect(200))
+        .get();
+}
+
+DataFrame join(const DataFrame& l, const DataFrame& r, JoinHow how,
+               std::uint64_t budget, const dstd::String& suffix = "") {
+    return dftu_utils_test::ok(join_result(l, r, how, budget, suffix));
 }
 
 // One row per left row: its two columns and the list of (rk, rv) cells, in
@@ -199,12 +202,11 @@ void block_tables(Table& l, Table& r) {
 
 dstd::String error_of(const DataFrame& l, const DataFrame& r, JoinHow how,
                       std::uint64_t budget) {
-    try {
-        (void)join(l, r, how, budget);
-    } catch (const std::invalid_argument& e) {
-        return e.what();
-    }
-    return "";
+    const auto result = join_result(l, r, how, budget);
+    if (result.has_value()) return "";
+    dftu_utils_test::expect_error(
+        result, dftracer::utils::common::ErrorCode::InvalidArgument);
+    return result.error().c_str();
 }
 
 const JoinHow HOWS[] = {JoinHow::Inner, JoinHow::Left, JoinHow::Right,

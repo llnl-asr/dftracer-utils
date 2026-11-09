@@ -801,7 +801,7 @@ TEST_SUITE("ViewIndexParity") {
                                     out = std::move(c.get());
                                 });
                         });
-                    co_await plan.collect();
+                    dftu_utils_test::ok(co_await plan.collect());
                 }))));
             return out;
         };
@@ -822,7 +822,7 @@ TEST_SUITE("ViewIndexParity") {
                                 fused_posix = std::move(b.get());
                             });
                     });
-                co_await plan.collect();
+                dftu_utils_test::ok(co_await plan.collect());
             }))));
 
         // Both branches scanned the traces: no rollup or tier answered them.

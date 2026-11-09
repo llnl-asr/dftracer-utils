@@ -26,7 +26,7 @@ class ViewCursor : public dftracer::utils::dataframe::Cursor {
         dstd::SharedPtr<const dftracer::utils::dataframe::DataFrame> buf)
         : buf_(std::move(buf)) {}
 
-    coro::CoroTask<dstd::Optional<dftracer::utils::dataframe::Morsel>> next(
+    coro::CoroTask<dftracer::utils::dataframe::MorselResult> next(
         std::int64_t max_rows) override;
 
    private:

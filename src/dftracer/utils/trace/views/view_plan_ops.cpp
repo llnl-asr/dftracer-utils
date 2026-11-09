@@ -1231,7 +1231,7 @@ coro::AsyncGenerator<dataframe::DataFrame> stream(ScanPlan plan,
     for (;;) {
         auto df = co_await gen.next();
         if (!df) break;
-        co_yield std::move(*df);
+        co_yield common::unwrap(std::move(*df));
     }
 }
 

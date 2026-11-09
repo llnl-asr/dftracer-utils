@@ -1579,10 +1579,12 @@ coro::CoroTask<dataframe::DataFrame> run_collect_rows_distinct(
     if (!host_pass) co_return b;
     // The frame holds only the fold's candidates, already in first-position
     // order, so the host first-occurrence dedup runs over far fewer rows.
-    co_return co_await dataframe::LazyFrame::scan(
-        dstd::make_shared<dataframe::InMemorySource>(std::move(b)))
-        .unique(std::move(subset))
-        .collect();
+    auto deduped =
+        dataframe::LazyFrame::scan(
+            dstd::make_shared<dataframe::InMemorySource>(std::move(b)))
+            .unique(std::move(subset));
+    auto collecting = deduped.collect();
+    co_return common::unwrap(co_await std::move(collecting));
 }
 
 namespace {

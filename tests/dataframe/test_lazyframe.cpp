@@ -36,11 +36,22 @@ using namespace dftracer::utils::dataframe;
 
 namespace {
 
-DataFrame run(coro::CoroTask<DataFrame> t) {
+dstd::Result<DataFrame> run_result(coro::CoroTask<dstd::Result<DataFrame>> t) {
+    return dftracer::utils::default_runtime().submit(std::move(t)).get();
+}
+
+DataFrame run(coro::CoroTask<dstd::Result<DataFrame>> t) {
     DataFrame out = dftu_utils_test::ok(
         dftracer::utils::default_runtime().submit(std::move(t)).get());
     for (Series& c : out.columns) c = c.materialize();
     return out;
+}
+
+dstd::String key_of(const dstd::Vector<Series>& cols, std::int64_t r) {
+    dftracer::utils::dataframe::KeyRefusal refusal;
+    dstd::String key = dftracer::utils::dataframe::row_key(cols, r, refusal);
+    REQUIRE_FALSE(refusal.refused());
+    return key;
 }
 
 // Whether the fixed-width values p[i] and q[j] have the same bytes, false for
@@ -90,8 +101,7 @@ void expect_frames_equal(const DataFrame& a, const DataFrame& b) {
                 }
                 for (std::int32_t k = 0; k < xo[r + 1] - xo[r]; ++k)
                     if (!same_bytes(xe[0], xo[r] + k, ye[0], yo[r] + k) &&
-                        dftracer::utils::dataframe::row_key(xe, xo[r] + k) !=
-                            dftracer::utils::dataframe::row_key(ye, yo[r] + k))
+                        key_of(xe, xo[r] + k) != key_of(ye, yo[r] + k))
                         bad = r;
             }
         } else {
@@ -109,9 +119,7 @@ void expect_frames_equal(const DataFrame& a, const DataFrame& b) {
                     std::isnan(x[0].data<float>()[r]) &&
                     std::isnan(y[0].data<float>()[r]))
                     continue;
-                if (dftracer::utils::dataframe::row_key(x, r) !=
-                    dftracer::utils::dataframe::row_key(y, r))
-                    bad = r;
+                if (key_of(x, r) != key_of(y, r)) bad = r;
             }
         }
         INFO("column " << a.names[c] << " differs first at row " << bad);
@@ -123,20 +131,30 @@ void expect_frames_equal(const DataFrame& a, const DataFrame& b) {
 // max_rows pulls the whole in-memory source as a single morsel.
 coro::CoroTask<DataFrame> drain_cursor(dstd::UniquePtr<Cursor> cur) {
     DataFrame out;
-    while (auto m = co_await cur->next(1 << 20)) {
+    for (;;) {
+        auto m = dftu_utils_test::ok(co_await cur->next(1 << 20));
+        if (!m) break;
         out.columns = std::move(m->columns);
         out.names.assign(out.columns.size(), dstd::String());
     }
     co_return out;
 }
 
+DataFrame take_frame(DataFrame f) { return f; }
+
+DataFrame take_frame(dstd::Result<DataFrame> r) {
+    return dftu_utils_test::ok(std::move(r));
+}
+
+template <class Gen>
 coro::CoroTask<dstd::Pair<dstd::Vector<std::int64_t>, DataFrame>> probe_stream(
-    dftracer::utils::coro::AsyncGenerator<DataFrame> gen) {
+    Gen gen) {
     dstd::Vector<std::int64_t> chunk_rows;
     dstd::Vector<DataFrame> chunks;
-    while (auto df = co_await gen.next()) {
-        chunk_rows.push_back(df->num_rows());
-        chunks.push_back(std::move(*df));
+    while (auto next_frame = co_await gen.next()) {
+        DataFrame df = take_frame(std::move(*next_frame));
+        chunk_rows.push_back(df.num_rows());
+        chunks.push_back(std::move(df));
     }
     dstd::Vector<const DataFrame*> ptrs;
     for (const DataFrame& c : chunks) ptrs.push_back(&c);
@@ -146,17 +164,18 @@ coro::CoroTask<dstd::Pair<dstd::Vector<std::int64_t>, DataFrame>> probe_stream(
         std::move(chunk_rows), std::move(merged)};
 }
 
-dstd::Pair<dstd::Vector<std::int64_t>, DataFrame> run_stream_probe(
-    dftracer::utils::coro::AsyncGenerator<DataFrame> gen) {
+template <class Gen>
+dstd::Pair<dstd::Vector<std::int64_t>, DataFrame> run_stream_probe(Gen gen) {
     return dftu_utils_test::ok(dftracer::utils::default_runtime()
                                    .submit(probe_stream(std::move(gen)))
                                    .get());
 }
 
 coro::CoroTask<dstd::Vector<DataFrame>> stream_parts(
-    dftracer::utils::coro::AsyncGenerator<DataFrame> gen) {
+    dftracer::utils::coro::AsyncGenerator<dstd::Result<DataFrame>> gen) {
     dstd::Vector<DataFrame> parts;
-    while (auto df = co_await gen.next()) parts.push_back(std::move(*df));
+    while (auto df = co_await gen.next())
+        parts.push_back(dftu_utils_test::ok(std::move(*df)));
     co_return parts;
 }
 
@@ -189,7 +208,7 @@ class RaggedCursor : public Cursor {
     explicit RaggedCursor(dstd::SharedPtr<dstd::StringIntern> intern)
         : intern_(std::move(intern)) {}
 
-    coro::CoroTask<dstd::Optional<Morsel>> next(std::int64_t) override {
+    coro::CoroTask<MorselResult> next(std::int64_t) override {
         if (step_ == 0) {
             ++step_;
             dstd::Vector<std::int64_t> a{1, 2};
@@ -201,7 +220,7 @@ class RaggedCursor : public Cursor {
             m.dyn_state().name_ids = {intern_->get_or_insert("a"),
                                       intern_->get_or_insert("b")};
             m.dyn->intern = intern_;
-            co_return m;
+            co_return MorselResult(std::move(m));
         }
         if (step_ == 1) {
             ++step_;
@@ -214,9 +233,9 @@ class RaggedCursor : public Cursor {
             m.dyn_state().name_ids = {intern_->get_or_insert("a"),
                                       intern_->get_or_insert("c")};
             m.dyn->intern = intern_;
-            co_return m;
+            co_return MorselResult(std::move(m));
         }
-        co_return dstd::nullopt;
+        co_return MorselResult(dstd::nullopt);
     }
 
    private:
@@ -2018,19 +2037,20 @@ TEST_SUITE("lazyframe") {
         }
         const std::int64_t big = std::numeric_limits<std::int64_t>::max();
         const DataFrame wide = frame({1.0, 1.0}, {big, 1});
-        CHECK_THROWS_AS(
-            run(dftu_utils_test::ok(
-                    wide.lazy().group_by(keys).transform(
-                        GroupwiseOp::CumSum, 0, RankMethod::Average, true))
-                    .collect(64)),
-            std::overflow_error);
+        dftu_utils_test::expect_error(
+            run_result(dftu_utils_test::ok(wide.lazy().group_by(keys).transform(
+                                               GroupwiseOp::CumSum, 0,
+                                               RankMethod::Average, true))
+                           .collect(64)),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
         // The window plan reports the same overflow, but through the op ABI,
         // which drops the message.
-        CHECK_THROWS(
-            run(dftu_utils_test::ok(composed_group_transform(
-                                        wide.lazy(), keys, GroupwiseOp::CumSum,
-                                        0, RankMethod::Average, true))
-                    .collect(64)));
+        CHECK_FALSE(run_result(dftu_utils_test::ok(
+                                   composed_group_transform(
+                                       wide.lazy(), keys, GroupwiseOp::CumSum,
+                                       0, RankMethod::Average, true))
+                                   .collect(64))
+                        .has_value());
         // A transform the native step does not cover is composed.
         CHECK(dftu_utils_test::ok(
                   frames[2].lazy().group_by(keys).transform(
@@ -2089,8 +2109,9 @@ TEST_SUITE("lazyframe") {
                     .transform(c.op, 0, RankMethod::Average, true));
             REQUIRE(fast.explain().find("group_transform") !=
                     dstd::String::npos);
-            CHECK_THROWS_WITH_AS(run(fast.collect(64)), c.text,
-                                 std::overflow_error);
+            dftu_utils_test::expect_error(
+                run_result(fast.collect(64)),
+                dftracer::utils::common::ErrorCode::InvalidArgument, c.text);
         }
     }
 
@@ -2394,7 +2415,9 @@ TEST_SUITE("lazyframe") {
 
     TEST_CASE("take reports an index past the end") {
         DataFrame df = make_df();
-        CHECK_THROWS(run(df.lazy().memory_budget(1).take({1, 99}).collect(2)));
+        CHECK_FALSE(
+            run_result(df.lazy().memory_budget(1).take({1, 99}).collect(2))
+                .has_value());
     }
 
     TEST_CASE("lazy filter_mask matches the eager DataFrame::filter(mask)") {
@@ -2817,14 +2840,9 @@ TEST_SUITE("lazyframe") {
         f.names = {"name"};
         f.columns.push_back(Series::strings(names));
         LazyFrame lf = f.lazy().with_column("big", col(0) > std::int64_t{25});
-        bool refused = false;
-        try {
-            run(lf.collect());
-        } catch (const dftracer::utils::common::DFTUtilsException& e) {
-            refused = dftracer::utils::common::errorcode_of(e.error()) ==
-                      dftracer::utils::common::ErrorCode::InvalidArgument;
-        }
-        CHECK(refused);
+        dftu_utils_test::expect_error(
+            run_result(lf.collect()),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
     }
 
     TEST_CASE("predicate pushdown keeps a dependent filter after with_column") {

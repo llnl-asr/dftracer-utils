@@ -388,7 +388,9 @@ TEST_SUITE("ViewPartials") {
             q.by_host = by_host;
             q.names.emplace_back("read");
             for (const char* h : hosts) q.hosts.emplace_back(h);
-            auto r = run(trace::run_agg_query(q));
+            auto r = dftracer::utils::default_runtime()
+                         .submit(trace::run_agg_query(q))
+                         .get();
             REQUIRE_MESSAGE(r.has_value(), r.error().format());
             return std::move(*r);
         };
@@ -431,7 +433,9 @@ TEST_SUITE("ViewPartials") {
         q.config.compute_percentiles = true;
         q.reread = false;
         q.by_file = true;  // the partials hold no file
-        auto r = run(trace::run_agg_query(q));
+        auto r = dftracer::utils::default_runtime()
+                     .submit(trace::run_agg_query(q))
+                     .get();
         REQUIRE_MESSAGE(r.has_value(), r.error().format());
         CHECK(r->stats.chunks_reread == 0);
         CHECK(r->stats.unanswered > 0);
@@ -510,7 +514,9 @@ TEST_SUITE("ViewPartials") {
         q.config.compute_percentiles = true;
         q.by_kind = true;
         q.names.emplace_back("read");
-        auto r = run(trace::run_agg_query(q));
+        auto r = dftracer::utils::default_runtime()
+                     .submit(trace::run_agg_query(q))
+                     .get();
         REQUIRE_MESSAGE(r.has_value(), r.error().format());
         CHECK(r->stats.chunks_reread == 0);
         dstd::Map<int, std::uint64_t> counts;

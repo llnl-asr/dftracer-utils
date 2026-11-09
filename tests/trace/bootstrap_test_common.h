@@ -57,7 +57,7 @@ inline dftracer::utils::dataframe::DataFrame count_by_name(
             dftracer::utils::coro::with_scope(
                 [&](dftracer::utils::coro::Scope&)
                     -> dftracer::utils::coro::CoroTask<void> {
-                    out = co_await view.collect();
+                    out = dftu_utils_test::ok(co_await view.collect());
                 }))));
     return out;
 }

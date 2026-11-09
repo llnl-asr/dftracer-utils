@@ -254,9 +254,11 @@ class GenSource : public dataframe::Source {
              dftracer::utils::dstd::Vector<std::size_t> picked)
             : shape_(std::move(shape)), picked_(std::move(picked)) {}
 
-        coro::CoroTask<dftracer::utils::dstd::Optional<dataframe::Morsel>> next(
+        coro::CoroTask<dataframe::MorselResult> next(
             std::int64_t max_rows) override {
-            if (pos_ >= shape_->rows) co_return dftracer::utils::dstd::nullopt;
+            if (pos_ >= shape_->rows)
+                co_return dataframe::MorselResult(
+                    dftracer::utils::dstd::nullopt);
             const std::int64_t want = max_rows > 0 ? max_rows : MORSEL_ROWS;
             const std::int64_t n = std::min(want, shape_->rows - pos_);
             dataframe::Morsel m;
@@ -265,7 +267,7 @@ class GenSource : public dataframe::Source {
                 m.columns.push_back(
                     generate(shape_->columns[c], c, shape_->seed, pos_, n));
             pos_ += n;
-            co_return m;
+            co_return dataframe::MorselResult(std::move(m));
         }
 
        private:
@@ -444,7 +446,10 @@ dftracer::utils::dstd::Vector<Case> make_cases() {
 coro::CoroTask<std::int64_t> drain(LazyFrame plan) {
     auto gen = plan.stream(MORSEL_ROWS);
     std::int64_t rows = 0;
-    while (auto part = co_await gen.next()) rows += part->num_rows();
+    while (auto part = co_await gen.next()) {
+        if (!*part) co_return -1;
+        rows += (*part)->num_rows();
+    }
     co_return rows;
 }
 

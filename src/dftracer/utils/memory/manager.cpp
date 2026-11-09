@@ -1222,13 +1222,10 @@ void PoolInternals::retire(Manager& m, Pool& p) noexcept {
 
 ReserveWait* ReserveWait::create(Pool& pool, std::size_t bytes, Resume resume,
                                  void* context) noexcept {
-    void* raw = nullptr;
-    try {
-        raw = allocate(sizeof(ReserveWait), alignof(ReserveWait),
-                       Manager::get().general());
-    } catch (const std::bad_alloc&) {
-        return nullptr;
-    }
+    void* raw =
+        try_allocate_at(sizeof(ReserveWait), alignof(ReserveWait),
+                        Manager::get().general(), __builtin_return_address(0));
+    if (raw == nullptr) return nullptr;
     return new (raw) ReserveWait(pool, bytes, resume, context);
 }
 

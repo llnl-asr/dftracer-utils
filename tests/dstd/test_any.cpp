@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/memory/detail/manager.h>
 #include <doctest/doctest.h>
+#include <memory/fresh_process.h>
 
 #include <any>
 #include <array>
@@ -106,7 +107,7 @@ TEST_CASE("copy and move keep the value and destroy each one once") {
     CHECK(g_alive == 0);
 }
 
-TEST_CASE("any_cast returns the value or throws bad_any_cast") {
+TEST_CASE("any_cast returns the value or null for a pointer") {
     dstd::Any a = dstd::String("text");
     CHECK(a.type() == typeid(dstd::String));
     CHECK(dstd::any_cast<dstd::String>(a) == "text");
@@ -117,8 +118,6 @@ TEST_CASE("any_cast returns the value or throws bad_any_cast") {
     CHECK(*dstd::any_cast<dstd::String>(&ca) == "text!");
 
     CHECK(dstd::any_cast<int>(&a) == nullptr);
-    CHECK_THROWS_AS(dstd::any_cast<int>(a), std::bad_any_cast);
-    CHECK_THROWS_AS(dstd::any_cast<const int&>(ca), std::bad_any_cast);
 
     dstd::String taken = dstd::any_cast<dstd::String>(std::move(a));
     CHECK(taken == "text!");
@@ -129,7 +128,28 @@ TEST_CASE("any_cast returns the value or throws bad_any_cast") {
     CHECK(dstd::any_cast<int>(&empty) == nullptr);
     dstd::Any* none = nullptr;
     CHECK(dstd::any_cast<int>(none) == nullptr);
-    CHECK_THROWS_AS(dstd::any_cast<int>(empty), std::bad_any_cast);
+}
+
+TEST_CASE("any_cast to another type ends the process" * doctest::skip()) {
+    fresh_process::announce_abort();
+    dstd::Any a = dstd::String("text");
+    dstd::any_cast<int>(a);
+}
+
+TEST_CASE("any_cast of an empty Any ends the process" * doctest::skip()) {
+    fresh_process::announce_abort();
+    dstd::Any empty;
+    dstd::any_cast<const int&>(empty);
+}
+
+TEST_CASE("a failed any_cast aborts with its message") {
+    for (const char* test_case :
+         {"any_cast to another type ends the process",
+          "any_cast of an empty Any ends the process"}) {
+        auto result = fresh_process::run(test_case);
+        CHECK(result.aborted_with(
+            "any_cast: the Any is empty or holds another type"));
+    }
 }
 
 namespace {

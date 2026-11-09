@@ -38,7 +38,7 @@ class Block {
      * @brief An owned block of @p bytes whose payload is aligned to @p align.
      *
      * @p align must be a power of two. The payload and the padding are not
-     * initialized. Throws std::bad_alloc when the memory is not available.
+     * initialized. Ends the process when the memory is not available.
      */
     static BlockRef allocate(std::size_t bytes,
                              std::size_t align = BLOCK_ALIGN);
@@ -47,8 +47,8 @@ class Block {
      * @brief A borrowed block over @p bytes at @p data.
      *
      * The memory must stay valid until @p release runs once with @p context.
-     * @p release must not be null. Throws std::bad_alloc when the header is not
-     * available and @p release then does not run.
+     * @p release must not be null. Ends the process when the header is not
+     * available.
      */
     static BlockRef borrow(void* data, std::size_t bytes, Release release,
                            void* context);

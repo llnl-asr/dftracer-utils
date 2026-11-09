@@ -25,12 +25,9 @@ memory::Pool& queue_pool() {
 }  // namespace
 
 void* ConcurrentQueueTraits::malloc(std::size_t size) noexcept {
-    try {
-        return memory::detail::allocate(size, alignof(std::max_align_t),
-                                        queue_pool());
-    } catch (const std::bad_alloc&) {
-        return nullptr;
-    }
+    return memory::detail::try_allocate_at(size, alignof(std::max_align_t),
+                                           queue_pool(),
+                                           __builtin_return_address(0));
 }
 
 void ConcurrentQueueTraits::free(void* p) noexcept {

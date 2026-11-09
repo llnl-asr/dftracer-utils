@@ -154,12 +154,7 @@ int IpcReader::read_footer() {
     }
 
     // Initialize decoder
-    dstd::UniquePtr<ArrowIpcDecoder> decoder_owner;
-    try {
-        decoder_owner = dstd::make_unique<ArrowIpcDecoder>();
-    } catch (const std::bad_alloc&) {
-        return -1;
-    }
+    auto decoder_owner = dstd::make_unique<ArrowIpcDecoder>();
     auto* decoder = decoder_owner.get();
     std::memset(decoder, 0, sizeof(ArrowIpcDecoder));
 
@@ -199,12 +194,7 @@ int IpcReader::read_footer() {
     }
 
     // Create shared schema - deep copy once, share for all batches
-    dstd::UniquePtr<ArrowSchema> schema_owner;
-    try {
-        schema_owner = dstd::make_unique<ArrowSchema>();
-    } catch (const std::bad_alloc&) {
-        return -1;
-    }
+    auto schema_owner = dstd::make_unique<ArrowSchema>();
     auto* schema = schema_owner.get();
     std::memset(schema, 0, sizeof(ArrowSchema));
     rc = ArrowSchemaDeepCopy(&footer->schema, schema);

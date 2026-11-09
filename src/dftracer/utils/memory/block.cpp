@@ -30,11 +30,11 @@ BlockRef Block::allocate(std::size_t bytes, std::size_t align) {
     std::size_t head = header_span(align);
     if (bytes >
         std::numeric_limits<std::size_t>::max() - 2 * head - BLOCK_PADDING) {
-        throw std::bad_alloc();
+        detail::size_overflow();
     }
     std::size_t total = system_bytes(head, bytes);
     auto* base = static_cast<std::uint8_t*>(std::aligned_alloc(head, total));
-    if (base == nullptr) throw std::bad_alloc();
+    if (base == nullptr) detail::out_of_memory(total);
     detail::AttribCache& cache = detail::attrib_local();
     attrib_charge_any(cache, total);
     auto* b =

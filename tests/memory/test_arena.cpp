@@ -5,6 +5,7 @@
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/memory/detail/pool_access.h>
 #include <doctest/doctest.h>
+#include <memory/fresh_process.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -251,10 +252,25 @@ TEST_CASE("the hard cap makes try_allocate return null") {
     {
         HardCap cap{1};
         CHECK(arena.try_allocate(80 * MIB) == nullptr);
-        CHECK_THROWS_AS(arena.allocate(80 * MIB), std::bad_alloc);
         CHECK(arena.try_allocate(64) != nullptr);
     }
     CHECK(arena.try_allocate(80 * MIB) != nullptr);
+}
+
+TEST_CASE("an arena chunk past the hard cap ends the process" *
+          doctest::skip()) {
+    fresh_process::announce_abort();
+    Arena arena{root(), "capped"};
+    arena.allocate(64);
+    HardCap cap{1};
+    arena.allocate(80 * MIB);
+}
+
+TEST_CASE("an arena chunk past the hard cap names the limit and the size") {
+    auto result =
+        fresh_process::run("an arena chunk past the hard cap ends the process");
+    CHECK(result.aborted_with("DFTRACER_UTILS_MEM_HARD_LIMIT"));
+    CHECK(result.aborted_with("allocating 83886080 bytes"));
 }
 
 TEST_CASE("reserve tops up the standing reservation") {

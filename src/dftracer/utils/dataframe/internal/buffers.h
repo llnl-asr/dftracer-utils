@@ -16,7 +16,7 @@ namespace dftracer::utils::dataframe {
 using memory::BufferView;
 
 /// A new owned block of `bytes` on the memory heap, viewed whole. The bytes
-/// are not initialized. Throws std::bad_alloc.
+/// are not initialized.
 inline BufferView new_buffer(std::size_t bytes,
                              std::size_t align = memory::BLOCK_ALIGN) {
     return BufferView(memory::Block::allocate(bytes, align));
@@ -32,8 +32,7 @@ inline std::uint8_t* writable(BufferView& view) noexcept {
 }
 
 /// `bytes` foreign bytes at `data`, kept alive by a copy of `owner` that is
-/// dropped when the last view of the block goes, on that thread. Throws
-/// std::bad_alloc, and then the copy is dropped at once.
+/// dropped when the last view of the block goes, on that thread.
 inline BufferView borrow_buffer(const void* data, std::size_t bytes,
                                 dstd::SharedPtr<const void> owner) {
     auto held =

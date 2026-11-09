@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/hash/xxh3.h>
 #include <dftracer/utils/dstd/hasher.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -11,7 +12,6 @@
 #include <algorithm>
 #include <cstring>
 #include <memory>
-#include <stdexcept>
 #include <string>
 
 namespace dftracer::utils::dstd {
@@ -61,6 +61,12 @@ std::uint32_t StringIntern::find(StringView sv) const {
 }
 
 std::uint32_t StringIntern::get_or_insert(StringView sv) {
+    auto id = try_get_or_insert(sv);
+    if (!id) fatal(id.error().c_str());
+    return *id;
+}
+
+Result<std::uint32_t> StringIntern::try_get_or_insert(StringView sv) {
     const auto h = hash(sv);
     if (auto id = lookup(h, sv); id != NO_ID) return id;
 
@@ -74,7 +80,7 @@ std::uint32_t StringIntern::get_or_insert(StringView sv) {
         id = static_cast<std::uint32_t>(h & (FAST_CAPACITY - 1));
         if (const auto* existing = slot_value(id)) {
             if (record_view(existing) == sv) return id;
-            throw_collision(existing, sv);
+            return Unexpected<Error>(collision(existing, sv));
         }
     } else {
         id = static_cast<std::uint32_t>(
@@ -83,7 +89,7 @@ std::uint32_t StringIntern::get_or_insert(StringView sv) {
 
     const char* rec = write_record(sh, sv);
     if (!bind_slot(id, rec, det)) {
-        throw_collision(slot_value(id), sv);
+        return Unexpected<Error>(collision(slot_value(id), sv));
     }
     index_insert(sh, h, id);
     if (det) advance_string_count(id);
@@ -115,8 +121,7 @@ StringIntern::InsertStatus StringIntern::insert_at_id(std::uint32_t id,
 
 StringView StringIntern::resolve(std::uint32_t id) const {
     if (id >= FAST_CAPACITY) {
-        throw std::out_of_range(
-            ("string intern: id " + id_text(id) + " is out of range").c_str());
+        fatal("string intern: id is out of range", id_text(id).c_str());
     }
     const auto* p = slot_value(id);
     return p ? record_view(p) : StringView{};
@@ -193,18 +198,21 @@ std::size_t StringIntern::shard_of(std::size_t h) {
     return (h >> 40) & (SHARDS - 1);
 }
 
-void StringIntern::throw_collision(const char* existing, StringView sv) {
-    throw std::logic_error(
-        ("string intern: deterministic id collision between '" +
-         String(record_view(existing)) + "' and '" + String(sv) +
-         "'; the dictionary is too large for this id space")
-            .c_str());
+Error StringIntern::collision(const char* existing, StringView sv) {
+    return Error(
+        Condition::InvalidArgument,
+        StringView(("string intern: deterministic id collision "
+                    "between '" +
+                    String(record_view(existing)) + "' and '" + String(sv) +
+                    "'; the dictionary is too large for this id "
+                    "space")
+                       .c_str()));
 }
 
 std::uint32_t StringIntern::add_chunk(std::size_t bytes) {
     const auto n = chunk_count_.fetch_add(1, std::memory_order_relaxed);
     if (n >= CHUNK_DIRECTORY_SIZE * CHUNK_BLOCK_SIZE) {
-        throw std::length_error("string intern: exhausted the chunk table");
+        fatal("string intern: exhausted the chunk table");
     }
     auto& dir = entry(chunk_dir_, n >> CHUNK_BLOCK_BITS);
     auto* block = dir.load(std::memory_order_acquire);
@@ -254,14 +262,9 @@ const char* StringIntern::write_record(Shard& sh, StringView sv) {
 
 StringIntern::Index* StringIntern::make_index(std::size_t slots) {
     auto* array = make_array<IndexSlot>(slots);
-    try {
-        auto* idx = make_array<Index>(1);
-        *idx = Index{slots - 1, array, nullptr};
-        return idx;
-    } catch (...) {
-        free_array(array, slots);
-        throw;
-    }
+    auto* idx = make_array<Index>(1);
+    *idx = Index{slots - 1, array, nullptr};
+    return idx;
 }
 
 void StringIntern::delete_index(Index* idx) {
@@ -354,9 +357,7 @@ void StringIntern::log_entry(std::uint32_t id) {
 
 bool StringIntern::bind_slot(std::uint32_t id, const char* str, bool cas) {
     if (id >= FAST_CAPACITY) {
-        throw std::length_error(
-            ("string intern: exhausted the id space at " + id_text(id))
-                .c_str());
+        fatal("string intern: exhausted the id space at", id_text(id).c_str());
     }
     auto& dir = entry(directory_, id >> BLOCK_BITS);
     auto* block = dir.load(std::memory_order_acquire);
@@ -392,12 +393,7 @@ template <class T>
 T* StringIntern::make_array(std::size_t n) const {
     void* p = memory::detail::allocate(n * sizeof(T), alignof(T), *pool_);
     auto* a = static_cast<T*>(p);
-    try {
-        std::uninitialized_value_construct_n(a, n);
-    } catch (...) {
-        memory::detail::deallocate(p, n * sizeof(T));
-        throw;
-    }
+    std::uninitialized_value_construct_n(a, n);
     return a;
 }
 

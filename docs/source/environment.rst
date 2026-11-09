@@ -115,9 +115,9 @@ Memory and kernels
    * - ``DFTRACER_UTILS_MEM_HARD_LIMIT``
      - ``0``
      - Bytes of heap the process may hold from the operating system, in bytes
-       or with a unit. An allocation that would pass it fails with
-       ``std::bad_alloc``. ``0`` sets no cap. A bad value is an error that
-       names the variable.
+       or with a unit. An allocation that would pass it ends the process with
+       a message that names the variable and the size asked for. ``0`` sets
+       no cap. A bad value is an error that names the variable.
    * - ``DFTRACER_UTILS_MEM_LIMIT_HEADROOM``
      - 5% of the limit, at least 256 MB
      - How far below the process memory limit the memory counted against it

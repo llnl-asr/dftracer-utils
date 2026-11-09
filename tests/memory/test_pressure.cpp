@@ -254,9 +254,8 @@ TEST_CASE("the external table fills and frees") {
     CHECK(none.bytes() == 0);
 }
 
-TEST_CASE("the hard cap throws and try_allocate returns null") {
+TEST_CASE("the hard cap makes try_allocate return null") {
     Settings settings(0, 64 * MIB);
-    CHECK_THROWS_AS(allocate(128 * MIB, 16), std::bad_alloc);
     CHECK(try_allocate(128 * MIB, 16) == nullptr);
 
     std::vector<void*> blocks;
@@ -265,7 +264,6 @@ TEST_CASE("the hard cap throws and try_allocate returns null") {
         REQUIRE(blocks.size() <= 8);
     }
     CHECK(!blocks.empty());
-    CHECK_THROWS_AS(allocate(8 * MIB, 16), std::bad_alloc);
     void* small = try_allocate(64, 16);
     CHECK(small != nullptr);
     deallocate(small);
@@ -274,6 +272,34 @@ TEST_CASE("the hard cap throws and try_allocate returns null") {
     void* again = try_allocate(8 * MIB, 16);
     CHECK(again != nullptr);
     deallocate(again);
+}
+
+TEST_CASE("allocate past the hard cap ends the process" * doctest::skip()) {
+    fresh_process::announce_abort();
+    Settings settings(0, 64 * MIB);
+    allocate(128 * MIB, 16);
+}
+
+TEST_CASE("allocate past the hard cap names the limit and the size") {
+    auto result =
+        fresh_process::run("allocate past the hard cap ends the process");
+    CHECK(result.aborted_with("DFTRACER_UTILS_MEM_HARD_LIMIT"));
+    CHECK(result.aborted_with("allocating 134217728 bytes"));
+}
+
+TEST_CASE("allocate with the cap spent by live blocks ends the process" *
+          doctest::skip()) {
+    fresh_process::announce_abort();
+    Settings settings(0, 64 * MIB);
+    std::vector<void*> blocks;
+    while (void* p = try_allocate(8 * MIB, 16)) blocks.push_back(p);
+    allocate(8 * MIB, 16);
+}
+
+TEST_CASE("allocate with the cap spent by live blocks aborts") {
+    auto result = fresh_process::run(
+        "allocate with the cap spent by live blocks ends the process");
+    CHECK(result.aborted_with("out of memory allocating 8388608 bytes"));
 }
 
 TEST_CASE("no hard cap means large blocks are served") {

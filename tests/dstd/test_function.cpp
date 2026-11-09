@@ -4,6 +4,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/memory/detail/manager.h>
 #include <doctest/doctest.h>
+#include <memory/fresh_process.h>
 
 #include <array>
 #include <cstddef>
@@ -131,14 +132,25 @@ TEST_CASE("operator() is const and calls a mutable target") {
     CHECK(counter() == 2);
 }
 
-TEST_CASE("an empty Function throws when called") {
+TEST_CASE("an empty Function is false and a null pointer makes one") {
     dstd::Function<void()> empty;
     CHECK_FALSE(empty);
     CHECK(empty == nullptr);
-    CHECK_THROWS_AS(empty(), std::bad_function_call);
     int (*null_fn)(int) = nullptr;
     dstd::Function<int(int)> from_null = null_fn;
     CHECK_FALSE(from_null);
+}
+
+TEST_CASE("calling an empty Function ends the process" * doctest::skip()) {
+    fresh_process::announce_abort();
+    dstd::Function<void()> empty;
+    empty();
+}
+
+TEST_CASE("calling an empty Function aborts with its message") {
+    auto result =
+        fresh_process::run("calling an empty Function ends the process");
+    CHECK(result.aborted_with("Function: called while empty"));
 }
 
 TEST_CASE("arguments and results pass through") {

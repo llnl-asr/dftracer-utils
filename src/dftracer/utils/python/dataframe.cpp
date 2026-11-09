@@ -1229,12 +1229,8 @@ PyObject* DataFrame_arrow_c_array(PyObject* self, PyObject*) {
     if (!b) return nullptr;
     dftracer::utils::dstd::UniquePtr<ArrowSchema> schema;
     dftracer::utils::dstd::UniquePtr<ArrowArray> array;
-    try {
-        schema = dftracer::utils::dstd::make_unique<ArrowSchema>();
-        array = dftracer::utils::dstd::make_unique<ArrowArray>();
-    } catch (const std::bad_alloc&) {
-        return PyErr_NoMemory();
-    }
+    schema = dftracer::utils::dstd::make_unique<ArrowSchema>();
+    array = dftracer::utils::dstd::make_unique<ArrowArray>();
     try {
         dataframe::to_arrow(b->st, schema.get(), array.get());
     } catch (const std::exception& e) {
@@ -1293,13 +1289,7 @@ PyObject* DataFrame_arrow_c_stream(PyObject* self, PyObject*) {
         PyErr_SetString(PyExc_RuntimeError, e.what());
         return nullptr;
     }
-    dftracer::utils::dstd::UniquePtr<ArrowArrayStream> stream_owner;
-    try {
-        stream_owner = dftracer::utils::dstd::make_unique<ArrowArrayStream>();
-    } catch (const std::bad_alloc&) {
-        drop();
-        return PyErr_NoMemory();
-    }
+    auto stream_owner = dftracer::utils::dstd::make_unique<ArrowArrayStream>();
     ArrowArrayStream* stream = stream_owner.get();
     if (ArrowBasicArrayStreamInit(stream, &schema,
                                   static_cast<std::int64_t>(arrays.size())) !=

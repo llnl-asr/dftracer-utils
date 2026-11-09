@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_DSTD_FUNCTION_H
 #define DFTRACER_UTILS_DSTD_FUNCTION_H
 
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/memory/detail/heap.h>
 
 #include <cstddef>
@@ -20,7 +21,7 @@ class Function;
  *
  * A nothrow move constructible callable that fits stays inline, else it is
  * placed by memory::detail::allocate. A moved-from Function is empty and
- * calling it throws std::bad_function_call. operator() calls the target as
+ * calling it ends the process. operator() calls the target as
  * non-const.
  */
 template <class R, class... Args>
@@ -46,12 +47,16 @@ class Function<R(Args...)> {
             ops_ = &INLINE_OPS<T>;
         } else {
             void* raw = memory::detail::allocate(sizeof(T), alignof(T));
+#if defined(__cpp_exceptions)
             try {
                 ::new (raw) T(std::forward<F>(f));
             } catch (...) {
                 memory::detail::deallocate(raw, sizeof(T));
                 throw;
             }
+#else
+            ::new (raw) T(std::forward<F>(f));
+#endif
             ::new (static_cast<void*>(buffer_)) void*(raw);
             ops_ = &HEAP_OPS<T>;
         }
@@ -142,7 +147,7 @@ class Function<R(Args...)> {
     }
 
     [[noreturn]] static R invoke_empty(void*, Args&&...) {
-        throw std::bad_function_call();
+        fatal("Function: called while empty");
     }
 
     static constexpr Ops EMPTY_OPS{&invoke_empty, [](void*, void*) noexcept {},

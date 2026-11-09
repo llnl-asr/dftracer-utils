@@ -4,9 +4,11 @@
 
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/test_probes.h>
+#include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/ptr_hash.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
@@ -155,6 +157,7 @@ class AggregationFold : public trace::views::detail::Fold {
     }
 
     void step(const trace::views::detail::FoldBatch& batch) override {
+        if (error_) return;
         for (const auto& ev : batch.events) {
             PodAccessor acc(ev, *build_intern_, metric_ids_);
             if (!partial_holds(acc)) continue;
@@ -183,7 +186,9 @@ class AggregationFold : public trace::views::detail::Fold {
     /// entries into `build`. A column block holds only the system counter rows
     /// (phase Counter, category sys) of its chunk, and a chunk with none has no
     /// block. Finishes the Agg extension. The commit replaces the file's copy
-    /// of it. Throws std::logic_error on a fold with no file.
+    /// of it. Throws std::logic_error on a fold with no file and
+    /// @ref common::DFTUtilsException with the error a string id collision
+    /// left.
     void write(index::FileBuild& build);
 
     /// Lets the fold put its closed rows into `build` once they pass a run's
@@ -267,6 +272,9 @@ class AggregationFold : public trace::views::detail::Fold {
     void add_to_columns(const trace::views::detail::FoldEvent& ev);
     TimeBin& bin_of(Slot& slot, std::uint64_t pid, std::uint64_t tid,
                     std::uint64_t bin);
+    /// The id of `text` in the aggregation table. A deterministic id collision
+    /// is kept in `error_`, which write() reports, and gives NO_ID.
+    std::uint32_t agg_id(dstd::StringView text);
     /// Cached by `build_id`.
     std::uint32_t root_id(dstd::Vector<std::uint32_t>& cache,
                           std::uint32_t build_id, bool lower);
@@ -323,6 +331,8 @@ class AggregationFold : public trace::views::detail::Fold {
     index::FileBuild* through_ = nullptr;
     bool drain_due_ = false;
     std::size_t through_runs_ = 0;
+    /// The first failure to give a string an id. The rows are not valid.
+    dstd::Optional<dstd::Error> error_;
 };
 
 }  // namespace dftracer::utils::index::schemas::dft::agg

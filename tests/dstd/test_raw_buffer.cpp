@@ -3,6 +3,7 @@
 #include <dftracer/utils/dstd/raw_buffer.h>
 #include <dftracer/utils/memory/detail/manager.h>
 #include <doctest/doctest.h>
+#include <memory/fresh_process.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -148,12 +149,14 @@ TEST_CASE("the first growth covers at least 64 bytes") {
     CHECK(wide.capacity() == 3);
 }
 
-TEST_CASE("a failed growth throws and keeps the buffer") {
+TEST_CASE("a growth past the size limit ends the process" * doctest::skip()) {
+    fresh_process::announce_abort();
     dstd::RawBuffer<std::uint64_t> buf(10);
-    buf[9] = 99;
-    const std::uint64_t* data = buf.data();
-    CHECK_THROWS_AS(buf.reserve(SIZE_MAX / 4), std::bad_alloc);
-    CHECK(buf.data() == data);
-    CHECK(buf.size() == 10);
-    CHECK(buf[9] == 99);
+    buf.reserve(SIZE_MAX / 4);
+}
+
+TEST_CASE("a growth past the size limit aborts with the overflow message") {
+    auto result =
+        fresh_process::run("a growth past the size limit ends the process");
+    CHECK(result.aborted_with("allocation size overflows"));
 }

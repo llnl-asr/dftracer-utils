@@ -14,7 +14,10 @@ namespace {
 
 PoolHandle open_pool(Pool& parent, std::string_view name) {
     PoolHandle pool = parent.child(name, PoolKind::Scratch);
-    if (!pool) throw std::bad_alloc();
+    if (!pool) {
+        detail::abort_with(
+            "dftracer-utils memory: cannot open the arena pool\n");
+    }
     return pool;
 }
 
@@ -29,15 +32,16 @@ Arena::Arena(std::string_view name) : Arena(detail::current_pool(), name) {}
 Arena::~Arena() { release(); }
 
 void* Arena::try_allocate(std::size_t n, std::size_t align) noexcept {
-    try {
-        return allocate(n, align);
-    } catch (const std::bad_alloc&) {
-        return nullptr;
-    }
+    void* p = bump(n, align);
+    if (p != nullptr) [[likely]]
+        return p;
+    return allocate_chunk(n, align);
 }
 
-Arena::Chunk* Arena::new_chunk(std::size_t size) {
-    void* raw = memory::detail::allocate(size, alignof(Chunk), *pool_);
+Arena::Chunk* Arena::new_chunk(std::size_t size) noexcept {
+    void* raw = memory::detail::try_allocate_at(size, alignof(Chunk), *pool_,
+                                                __builtin_return_address(0));
+    if (raw == nullptr) return nullptr;
     auto* chunk = ::new (raw) Chunk{chunks_, size};
     chunks_ = chunk;
     chunk_bytes_ += size;
@@ -48,19 +52,20 @@ Arena::Chunk* Arena::new_chunk(std::size_t size) {
 // A request too big for the next chunk gets a chunk of its own and the current
 // chunk keeps serving small requests. It still counts as a step of growth, or
 // requests just above the chunk size would never reach a bigger chunk.
-void* Arena::allocate_chunk(std::size_t n, std::size_t align) {
+void* Arena::allocate_chunk(std::size_t n, std::size_t align) noexcept {
     if (align == 0 || (align & (align - 1)) != 0) {
         detail::abort_with(
             "dftracer-utils memory: alignment is not a power of two\n");
     }
     std::size_t pad = align > alignof(Chunk) ? align - alignof(Chunk) : 0;
     if (n > std::numeric_limits<std::size_t>::max() - sizeof(Chunk) - pad) {
-        throw std::bad_alloc();
+        return nullptr;
     }
     std::size_t need = sizeof(Chunk) + pad + n;
     std::size_t next = next_chunk();
     if (need > next) {
         Chunk* chunk = new_chunk(need);
+        if (chunk == nullptr) return nullptr;
         ++grown_;
         auto start = reinterpret_cast<std::uintptr_t>(chunk + 1);
         std::uintptr_t p = (start + align - 1) & ~(align - 1);
@@ -68,11 +73,12 @@ void* Arena::allocate_chunk(std::size_t n, std::size_t align) {
         return reinterpret_cast<void*>(p);
     }
     Chunk* chunk = new_chunk(next);
+    if (chunk == nullptr) return nullptr;
     ++grown_;
     if (first_ == nullptr) first_ = chunk;
     cur_ = reinterpret_cast<std::uintptr_t>(chunk + 1);
     end_ = reinterpret_cast<std::uintptr_t>(chunk) + next;
-    return allocate(n, align);
+    return bump(n, align);
 }
 
 // A destructor may put new objects on the list. They run in the next pass.

@@ -10,6 +10,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/detail/manager.h>
 #include <doctest/doctest.h>
+#include <memory/fresh_process.h>
 
 #include <algorithm>
 #include <atomic>
@@ -61,14 +62,24 @@ TEST_SUITE("StringIntern") {
         CHECK(intern.get_or_insert("dur") == dur);
     }
 
-    TEST_CASE("StringIntern - ids beyond the table are reported, not empty") {
+    TEST_CASE("StringIntern - a free slot inside the table is empty") {
         dstd::StringIntern intern;
         auto id = intern.get_or_insert("a");
         CHECK(intern.resolve(id) == "a");
-        // A free slot inside the table is a genuine absent string.
         CHECK(intern.resolve(id + 1).empty());
-        CHECK_THROWS_AS(intern.resolve(dstd::StringIntern::FAST_CAPACITY),
-                        std::out_of_range);
+    }
+
+    TEST_CASE("StringIntern - resolve past the table ends the process" *
+              doctest::skip()) {
+        fresh_process::announce_abort();
+        dstd::StringIntern intern;
+        intern.resolve(dstd::StringIntern::FAST_CAPACITY);
+    }
+
+    TEST_CASE("StringIntern - ids beyond the table are reported, not empty") {
+        auto result = fresh_process::run(
+            "StringIntern - resolve past the table ends the process");
+        CHECK(result.aborted_with("string intern: id is out of range"));
     }
 
     TEST_CASE("StringIntern - insert_at_id preserves loaded ids") {
@@ -321,23 +332,27 @@ TEST_SUITE("StringIntern") {
         CHECK(intern.entry_count() == static_cast<std::size_t>(N));
     }
 
-    TEST_CASE("StringIntern - a deterministic id collision throws") {
+    TEST_CASE("StringIntern - a deterministic id collision is an error") {
         dstd::StringIntern intern;
         intern.enable_deterministic_ids();
         dstd::Vector<dstd::String> kept;
-        bool threw = false;
-        for (int i = 0; i < 2000000 && !threw; ++i) {
+        bool collided = false;
+        for (int i = 0; i < 2000000 && !collided; ++i) {
             const auto key = "collide_" + dstd::to_string(i);
-            try {
-                intern.get_or_insert(key);
+            auto id = intern.try_get_or_insert(key);
+            if (id) {
                 kept.push_back(key);
-            } catch (const std::logic_error&) {
-                threw = true;
+                continue;
             }
+            collided = true;
+            CHECK(id.error().condition() == dstd::Condition::InvalidArgument);
+            CHECK(dstd::StringView(id.error().c_str())
+                      .find("deterministic id collision") !=
+                  dstd::StringView::npos);
         }
-        REQUIRE(threw);
+        REQUIRE(collided);
         for (const auto& key : kept)
-            CHECK(intern.resolve(intern.get_or_insert(key)) == key);
+            CHECK(intern.resolve(*intern.try_get_or_insert(key)) == key);
         CHECK(intern.entry_count() == kept.size());
     }
 

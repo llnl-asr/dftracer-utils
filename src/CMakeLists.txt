@@ -483,6 +483,8 @@ foreach(variant objects shared static)
   if(TARGET ${VARIANT_TARGET})
     if(variant STREQUAL "objects")
       target_set_warnings(dftracer_utils_memory_objects)
+      target_compile_options(dftracer_utils_memory_objects
+                             PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
       if(DFTRACER_UTILS_MEMORY_BACKEND STREQUAL "system")
         target_compile_definitions(dftracer_utils_memory_objects
                                    PRIVATE DFTRACER_UTILS_MEMORY_BACKEND_SYSTEM)
@@ -509,6 +511,8 @@ if(NOT DFTRACER_UTILS_ENABLE_ASAN AND NOT DFTRACER_UTILS_ENABLE_TSAN)
     dftracer_utils_global_new PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include
                                       ${CMAKE_CURRENT_SOURCE_DIR})
   target_set_warnings(dftracer_utils_global_new)
+  target_compile_options(dftracer_utils_global_new
+                         PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
 endif()
 
 create_library(
@@ -548,6 +552,8 @@ foreach(variant objects shared static)
   if(TARGET ${VARIANT_TARGET})
     if(variant STREQUAL "objects")
       target_set_warnings(dftracer_utils_dstd_objects)
+      target_compile_options(dftracer_utils_dstd_objects
+                             PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
     elseif(COVERAGE_LINK_OPTIONS)
       target_link_libraries(${VARIANT_TARGET}
                             PRIVATE ${COVERAGE_LINK_OPTIONS})

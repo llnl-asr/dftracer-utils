@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_partial_update.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
@@ -20,6 +21,13 @@ dstd::StringView bytes_of(const dstd::Vector<std::uint8_t>& bytes) {
 }
 }  // namespace
 
+std::uint32_t AggregationFold::agg_id(dstd::StringView text) {
+    auto id = agg_intern_->intern.try_get_or_insert(text);
+    if (id) return *id;
+    if (!error_) error_.emplace(id.error());
+    return NO_ID;
+}
+
 std::uint32_t AggregationFold::root_id(dstd::Vector<std::uint32_t>& cache,
                                        std::uint32_t build_id, bool lower) {
     const bool cacheable = build_id < MAX_CACHED_BUILD_ID;
@@ -32,7 +40,7 @@ std::uint32_t AggregationFold::root_id(dstd::Vector<std::uint32_t>& cache,
                                 : build_intern_->resolve(build_id);
     dstd::String storage;
     if (lower) text = trace::internal::to_lower_ascii(text, storage);
-    const std::uint32_t id = agg_intern_->intern.get_or_insert(text);
+    const std::uint32_t id = agg_id(text);
     if (cacheable) cache[build_id] = id;
     return id;
 }
@@ -47,12 +55,11 @@ void AggregationFold::add_to_partial(const trace::views::detail::FoldEvent& ev,
         kind == last_kind_) {
         at = last_slot_;
     } else {
-        if (empty_id_ == NO_ID)
-            empty_id_ = agg_intern_->intern.get_or_insert("");
+        if (empty_id_ == NO_ID) empty_id_ = agg_id("");
         std::uint32_t extra = empty_id_;
         if (has_extra) {
             extra_values(acc, config_, extra_buf_);
-            extra = agg_intern_->intern.get_or_insert(extra_buf_);
+            extra = agg_id(extra_buf_);
         }
         const SlotKey key{root_id(cat_ids_, ev.cat_id, true),
                           root_id(name_ids_, ev.name_id, false),
@@ -93,8 +100,7 @@ void AggregationFold::add_to_file_partial(
     PartialKind kind) {
     std::uint32_t file = NO_ID;
     if (ev.fhash_id != NO_ID) {
-        if (empty_id_ == NO_ID)
-            empty_id_ = agg_intern_->intern.get_or_insert("");
+        if (empty_id_ == NO_ID) empty_id_ = agg_id("");
         file = root_id(fhash_ids_, ev.fhash_id, false);
         if (file == empty_id_) file = NO_ID;
     }
@@ -286,6 +292,7 @@ void AggregationFold::merge(trace::views::detail::Fold& other) {
     state_.max_time_bucket =
         std::max(state_.max_time_bucket, os.max_time_bucket);
     state_.events_processed += os.events_processed;
+    if (!error_ && o.error_) error_.emplace(*o.error_);
 
     close_chunk();
     o.close_chunk();
@@ -309,6 +316,7 @@ void AggregationFold::write(index::FileBuild& build) {
         throw std::logic_error(
             "an aggregation fold writes the data of one file, and has none");
     }
+    if (error_) throw common::DFTUtilsException(*error_);
     close_chunk();
     finish_rows(build);
 }

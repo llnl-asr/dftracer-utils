@@ -42,16 +42,23 @@ struct PageStats {
 void* page_allocate(std::size_t size, std::size_t align);
 /// Like page_allocate but charges the block to @p pool whatever the scope.
 void* page_allocate_to(std::size_t size, std::size_t align, std::uint16_t pool);
+/// Like page_allocate and page_allocate_to, but null when the memory is not
+/// available. The others end the process.
+void* page_try_allocate(std::size_t size, std::size_t align);
+void* page_try_allocate_to(std::size_t size, std::size_t align,
+                           std::uint16_t pool);
 void page_deallocate(void* p) noexcept;
 void page_deallocate(void* p, std::size_t size) noexcept;
 void page_trim(Mode mode) noexcept;
 void page_trim_thread() noexcept;
 
 /// Move a huge block to @p size bytes, which must be larger than LARGE_MAX and
-/// than the block. The contents stay. Throws std::bad_alloc.
+/// than the block. The contents stay. Returns null and leaves the block intact
+/// when the memory is not available.
 void* page_grow_huge(void* p, std::size_t size, std::size_t align);
 
-/// Resize a block from page_allocate as reallocate() describes.
+/// Resize a block from page_allocate as reallocate() describes. Ends the
+/// process when the memory is not available.
 void* page_reallocate(void* p, std::size_t old_size, std::size_t new_size,
                       std::size_t align);
 

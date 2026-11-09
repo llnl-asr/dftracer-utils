@@ -26,8 +26,8 @@ enum class Mode : std::uint8_t {
  * @brief Allocate @p size bytes aligned to @p align.
  *
  * @p align is a power of two. The page heap aborts above 2 MiB. Zero @p size
- * still needs a free. Throws std::bad_alloc when memory is not available or the
- * hard cap would be passed. Free only with this library's deallocate().
+ * still needs a free. Ends the process when memory is not available or the hard
+ * cap would be passed. Free only with this library's deallocate().
  */
 void* allocate(std::size_t size, std::size_t align);
 
@@ -47,12 +47,28 @@ void* allocate(std::size_t size, std::size_t align, Pool& pool);
 void* allocate_at(std::size_t size, std::size_t align, Pool& pool, void* site);
 
 /**
- * @brief Allocate like allocate() and return null instead of throwing.
+ * @brief Allocate like allocate() and return null instead of ending the
+ * process.
  *
  * Null means the hard cap or the operating system refused. A bad alignment
  * still aborts.
  */
 void* try_allocate(std::size_t size, std::size_t align) noexcept;
+
+/// Like try_allocate(size, align) and charged to @p pool and @p site as
+/// allocate_at() does.
+void* try_allocate_at(std::size_t size, std::size_t align, Pool& pool,
+                      void* site) noexcept;
+
+/**
+ * @brief Report that @p size bytes are not available and abort.
+ *
+ * The message names the hard limit variable when a hard cap is set.
+ */
+[[noreturn]] void out_of_memory(std::size_t size) noexcept;
+
+/// Report a byte count that overflows std::size_t and abort.
+[[noreturn]] void size_overflow() noexcept;
 
 /// Free a block from allocate(); null is a no-op.
 void deallocate(void* p) noexcept;
@@ -81,9 +97,8 @@ void deallocate_retained(void* p, std::size_t size) noexcept;
  * @brief Resize a block from allocate() whose requested size is @p old_size.
  *
  * Returns @p p if it fits, else a copy of the first min(@p old_size, @p
- * new_size) bytes and frees @p p. Null @p p is allocate(). Throws
- * std::bad_alloc and leaves @p p intact. Debug builds abort on a wrong @p
- * old_size.
+ * new_size) bytes and frees @p p. Null @p p is allocate(). Ends the process
+ * when memory is not available. Debug builds abort on a wrong @p old_size.
  */
 void* reallocate(void* p, std::size_t old_size, std::size_t new_size,
                  std::size_t align);

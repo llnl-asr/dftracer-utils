@@ -13,6 +13,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Make `dstd::Expected` our own class and remove the vendored `tl::expected`.
   `value()` and `error()` on the wrong side now end the process with the message and a stack trace, where `value()` threw before.
   A build with `DFTRACER_UTILS_DEBUG` also ends the process when an error result is destroyed unchecked.
+- End the process with a message when memory runs out or an allocation would pass `DFTRACER_UTILS_MEM_HARD_LIMIT`, where it threw `std::bad_alloc` before.
+  Python gets an abort in place of `MemoryError`.
+- End the process when `dstd::any_cast` gets the wrong type or an empty `dstd::Function` is called, where they threw before.
 - Make an index of system counter traces up to 57% smaller, because each counter value is stored as a change from the last value of the same counter.
   Rebuild indexes made by an earlier version.
 - Store index extents on 8-byte boundaries in place of 4 KiB, so an index of a small trace set is up to 23% smaller.

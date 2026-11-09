@@ -15,11 +15,13 @@ enum class ShutdownStage : std::uint8_t {
 
 /// Runs `hook` in `stage` at shutdown.
 ///
+/// A hook is `noexcept`, so an exception in it ends the process.
+///
 /// Hooks of one stage run in reverse order of registration, so the hook added
 /// last runs first. A hook must not make a runtime and must not keep memory
 /// the memory exit check counts. Safe from any thread. A hook beyond the fixed
 /// table of 24 per stage aborts the process.
-void add_shutdown_hook(ShutdownStage stage, void (*hook)());
+void add_shutdown_hook(ShutdownStage stage, void (*hook)() noexcept);
 
 /// Runs every hook once, and a second call does nothing.
 ///

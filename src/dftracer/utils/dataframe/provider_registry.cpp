@@ -49,7 +49,7 @@ Providers& registry() {
     Providers& held = dftracer::utils::dstd::Singleton<Providers>::get();
     [[maybe_unused]] static const bool hooked = [] {
         dftracer::utils::dstd::add_shutdown_hook(
-            dftracer::utils::dstd::ShutdownStage::FreeCaches, [] {
+            dftracer::utils::dstd::ShutdownStage::FreeCaches, []() noexcept {
                 Providers& dropped =
                     dftracer::utils::dstd::Singleton<Providers>::get();
                 const std::lock_guard<std::mutex> lock(dropped.mutex);

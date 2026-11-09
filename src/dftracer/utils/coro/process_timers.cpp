@@ -6,7 +6,9 @@
 namespace dftracer::utils::coro {
 namespace {
 
-void retire_process_timers() { dstd::Singleton<TimerService>::get().retire(); }
+void retire_process_timers() noexcept {
+    dstd::Singleton<TimerService>::get().retire();
+}
 
 TimerService& start_process_timers() {
     TimerService& timers = dstd::Singleton<TimerService>::get();

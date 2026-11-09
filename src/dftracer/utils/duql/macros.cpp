@@ -227,7 +227,7 @@ struct PathRegistry {
 PathRegistry& registry() {
     PathRegistry& r = dstd::Singleton<PathRegistry>::get();
     [[maybe_unused]] static const bool hooked = [] {
-        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, [] {
+        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, []() noexcept {
             PathRegistry& held = dstd::Singleton<PathRegistry>::get();
             dstd::Set<dstd::String> dropped_loaded;
             dstd::Vector<Macro> dropped_macros;

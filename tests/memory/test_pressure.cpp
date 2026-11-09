@@ -52,7 +52,7 @@ bool far_from_limit() {
 
 void* g_kept = nullptr;
 
-void free_kept() {
+void free_kept() noexcept {
     deallocate(g_kept, 64);
     g_kept = nullptr;
 }

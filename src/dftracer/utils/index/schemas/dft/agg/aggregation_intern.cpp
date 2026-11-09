@@ -27,7 +27,7 @@ Registry& registry() {
     // A weak reference keeps a table's whole block alive, which the memory
     // exit check counts as a leak.
     [[maybe_unused]] static const bool hooked = [] {
-        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, [] {
+        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, []() noexcept {
             Registry& r = dstd::Singleton<Registry>::get();
             std::lock_guard lock(r.mutex);
             r.slot.reset();

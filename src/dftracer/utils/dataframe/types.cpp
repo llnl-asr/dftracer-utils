@@ -26,7 +26,7 @@ struct Zones {
 Zones& zones() {
     Zones& held = dstd::Singleton<Zones>::get();
     [[maybe_unused]] static const bool hooked = [] {
-        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, [] {
+        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, []() noexcept {
             Zones& dropped = dstd::Singleton<Zones>::get();
             const std::lock_guard<std::mutex> lock(dropped.mutex);
             dropped.tables.reset();

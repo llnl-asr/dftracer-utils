@@ -351,7 +351,7 @@ void Runtime::become_process_runtime() {
          true);
 }
 
-void Runtime::stop_at_exit() {
+void Runtime::stop_at_exit() noexcept {
     dstd::SharedPtr<Runtime> rt;
     {
         std::lock_guard<std::mutex> lock(g_default_mtx);

@@ -164,7 +164,7 @@ struct Roots {
 Roots& roots() {
     Roots& held = dstd::Singleton<Roots>::get();
     [[maybe_unused]] static const bool hooked = [] {
-        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, [] {
+        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, []() noexcept {
             Roots& dropped = dstd::Singleton<Roots>::get();
             // Swapped out so the old buffers are destroyed, since assigning
             // an empty value keeps the heap buffer in libstdc++.

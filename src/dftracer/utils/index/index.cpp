@@ -632,9 +632,9 @@ RetainedRoots& retained_roots() {
     RetainedRoots& roots = dstd::Singleton<RetainedRoots>::get();
     [[maybe_unused]] static const bool hooked = [] {
         dftracer::utils::store::Store::register_shutdown_close();
-        dstd::add_shutdown_hook(dstd::ShutdownStage::CloseStores, [] {
-            dstd::Singleton<RetainedRoots>::get().clear();
-        });
+        dstd::add_shutdown_hook(
+            dstd::ShutdownStage::CloseStores,
+            []() noexcept { dstd::Singleton<RetainedRoots>::get().clear(); });
         return true;
     }();
     return roots;

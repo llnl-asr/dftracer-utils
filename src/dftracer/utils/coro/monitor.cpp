@@ -197,7 +197,7 @@ void render_tree(const dstd::Vector<Done>& recs) {
     }
 }
 
-void at_exit_render() {
+void at_exit_render() noexcept {
     Registry& r = registry();
     const auto now = Clock::now();
     dstd::Vector<Done> all;

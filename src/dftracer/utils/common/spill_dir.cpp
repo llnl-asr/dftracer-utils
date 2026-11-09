@@ -118,7 +118,7 @@ struct DirKinds {
 bool spill_dir_in_memory(dstd::CStringView dir) {
     DirKinds& known = dstd::Singleton<DirKinds>::get();
     [[maybe_unused]] static const bool hooked = [] {
-        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, [] {
+        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, []() noexcept {
             DirKinds& held = dstd::Singleton<DirKinds>::get();
             std::lock_guard<std::mutex> lock(held.mu);
             held.kinds.clear();
@@ -243,7 +243,7 @@ dstd::Result<ScopedSpillSubdir> ScopedSpillSubdir::create(
     if (!root) return dstd::Unexpected(std::move(root).error());
     SweptPrefixes& swept = dstd::Singleton<SweptPrefixes>::get();
     [[maybe_unused]] static const bool hooked = [] {
-        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, [] {
+        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, []() noexcept {
             SweptPrefixes& held = dstd::Singleton<SweptPrefixes>::get();
             std::lock_guard<std::mutex> lock(held.mu);
             held.prefixes.clear();

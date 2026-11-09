@@ -26,7 +26,7 @@ struct Nodes {
 Nodes& registry() {
     Nodes& held = dstd::Singleton<Nodes>::get();
     [[maybe_unused]] static const bool hooked = [] {
-        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, [] {
+        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, []() noexcept {
             Nodes& dropped = dstd::Singleton<Nodes>::get();
             const std::lock_guard<std::mutex> lock(dropped.mutex);
             dropped.by_name.reset();

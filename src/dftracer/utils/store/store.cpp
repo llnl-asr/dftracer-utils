@@ -308,7 +308,7 @@ std::mutex& registry_mutex() {
     return *value;
 }
 
-void close_all_at_shutdown() {
+void close_all_at_shutdown() noexcept {
     if (auto closed = Store::close_all(); !closed) {
         DFTRACER_UTILS_LOG_ERROR("store: close at exit: %s",
                                  closed.error().format().c_str());

@@ -39,7 +39,7 @@ void configure_global_member_decode_cache(std::size_t capacity_bytes,
                                           dstd::cache::EvictionKind kind) {
     GlobalCache& global = global_cache();
     [[maybe_unused]] static const bool hooked = [] {
-        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, [] {
+        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, []() noexcept {
             GlobalCache& held = global_cache();
             std::lock_guard<std::mutex> lock(held.mutex);
             held.published.store(nullptr, std::memory_order_release);

@@ -132,9 +132,9 @@ CacheRoots& cache_roots() {
     CacheRoots& roots = dstd::Singleton<CacheRoots>::get();
     [[maybe_unused]] static const bool hooked = [] {
         store::Store::register_shutdown_close();
-        dstd::add_shutdown_hook(dstd::ShutdownStage::CloseStores, [] {
-            dstd::Singleton<CacheRoots>::get().clear();
-        });
+        dstd::add_shutdown_hook(
+            dstd::ShutdownStage::CloseStores,
+            []() noexcept { dstd::Singleton<CacheRoots>::get().clear(); });
         return true;
     }();
     return roots;

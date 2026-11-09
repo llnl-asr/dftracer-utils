@@ -210,7 +210,7 @@ class Runtime {
     void configure(const RuntimeSettings& settings);
     /// Stops the process runtime. For a shutdown hook only: nothing may
     /// submit work after it.
-    static void stop_at_exit();
+    static void stop_at_exit() noexcept;
     std::size_t threads() const;
     std::size_t io_threads() const;
     TaskExecutor* executor() { return executor_.get(); }

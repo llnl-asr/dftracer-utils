@@ -914,7 +914,7 @@ void load_into(Registry& reg, dstd::StringView path) {
 Registry& registry() {
     Registry& r = dstd::Singleton<Registry>::get();
     [[maybe_unused]] static const bool hooked = [] {
-        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, [] {
+        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, []() noexcept {
             dstd::Singleton<Registry>::get().release();
         });
         return true;
@@ -1080,7 +1080,7 @@ struct DetectionCache {
 DetectionCache& detection_cache() {
     // Pool memory alive at exit would fail the memory exit check.
     [[maybe_unused]] static const bool hooked = [] {
-        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, [] {
+        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, []() noexcept {
             auto& cache = dstd::Singleton<DetectionCache>::get();
             std::lock_guard lock(cache.mu);
             cache.map.reset();

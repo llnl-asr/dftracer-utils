@@ -236,7 +236,7 @@ struct ConfirmedFiles {
 ConfirmedFiles& confirmed_files() {
     ConfirmedFiles& files = dstd::Singleton<ConfirmedFiles>::get();
     [[maybe_unused]] static const bool hooked = [] {
-        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, [] {
+        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, []() noexcept {
             ConfirmedFiles& confirmed = dstd::Singleton<ConfirmedFiles>::get();
             const std::lock_guard<std::mutex> lock(confirmed.mu);
             confirmed.slot.reset();

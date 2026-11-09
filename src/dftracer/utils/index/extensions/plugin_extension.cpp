@@ -26,7 +26,7 @@ struct Registry {
 Registry& registry() {
     Registry& r = dstd::Singleton<Registry>::get();
     [[maybe_unused]] static const bool hooked = [] {
-        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, [] {
+        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, []() noexcept {
             Registry& held = dstd::Singleton<Registry>::get();
             decltype(held.by_name) dropped;
             std::unique_lock lock(held.mutex);

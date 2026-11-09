@@ -515,6 +515,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 - Fix `dftracer_replay` reporting "No trace files" when it cannot read the trace directory.
   It now reports the read error.
+- Fix a compressed Python export of an aggregated view reporting success when closing the gzip file failed.
 - Fix a hang of a runtime with few threads when a task waits for other tasks while a blocked worker waits to run again, such as a duql join on one thread.
 - Fix a line that spans two chunks being lost when a query prunes chunks.
 - Make a reader stop at the verified end of the index, so it no longer reads bytes the index has not checked.

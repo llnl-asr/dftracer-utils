@@ -26,8 +26,15 @@ class GzipSink : public trace::views::ExportSink {
             common::unwrap(utilities::fileio::GzipLineWriterBlocking::open(
                 dstd::String(path), std::move(opts))));
     }
+    // Without close(), an export that failed part way still removes its
+    // output, and that error is already the one reported.
     ~GzipSink() override {
         if (writer_) writer_->close(tail_).discard();
+    }
+    void close() {
+        auto closed = writer_->close(tail_);
+        writer_.reset();
+        common::unwrap(std::move(closed));
     }
     void write(dstd::StringView data) override {
         const std::size_t nl = data.rfind('\n');

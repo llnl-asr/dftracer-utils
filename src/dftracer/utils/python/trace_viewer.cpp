@@ -942,10 +942,13 @@ PyObject* tv_export_trace(PyObject* self, PyObject* args, PyObject* kwds) {
     }
     if (aggregates) {
         dftracer::utils::dstd::UniquePtr<trace::views::ExportSink> sink;
+        dftracer::utils::python::GzipSink* gzip = nullptr;
         if (compress) {
             try {
-                sink = dftracer::utils::dstd::make_unique<
+                auto made = dftracer::utils::dstd::make_unique<
                     dftracer::utils::python::GzipSink>(path, level);
+                gzip = made.get();
+                sink = std::move(made);
             } catch (const std::exception& e) {
                 python::set_typed_py_error(e);
                 return nullptr;
@@ -960,6 +963,14 @@ PyObject* tv_export_trace(PyObject* self, PyObject* args, PyObject* kwds) {
         }
         const bool ok =
             run_on(runtime_arg, [&] { return t.sink_counters(*sink); }, stats);
+        if (ok && gzip != nullptr) {
+            try {
+                gzip->close();
+            } catch (const std::exception& e) {
+                python::set_typed_py_error(e);
+                return nullptr;
+            }
+        }
         sink.reset();
         if (!ok) return nullptr;
         return stats_dict(stats);

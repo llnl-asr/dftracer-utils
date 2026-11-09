@@ -134,6 +134,34 @@ dstd::Unexpected<dstd::Error> make_error(E code, dstd::StringView message) {
     return dstd::Unexpected<dstd::Error>(dstd::Error{code, message});
 }
 
+/// An error whose message is the format `S` filled with `a...`, built with
+/// one allocation and no temporary string:
+///   return common::make_error<"open {}: {}">(ErrorCode::Io, path, reason);
+/// The format is checked at compile time (see @ref dstd::fmt). A helper that
+/// takes a message writes itself once as
+///   template <dstd::FixedString S, dstd::FmtArg... A>
+///   auto fail(const A&... a) { return common::make_error<S>(code, a...); }
+/// and, for the `fail("..."_f, x)` call form,
+///   template <dstd::FixedString S, dstd::FmtArg... A>
+///   auto fail(dstd::Format<S> f, const A&... a) { return
+///   common::make_error(code, f, a...); }
+/// A generic lambda cannot take `<"...">`, so it takes the format as a value:
+///   auto fail = [&](auto f, const auto&... a) { return
+///   common::make_error(code, f, a...); };
+template <dstd::FixedString S, dstd::ErrorEnum E, dstd::FmtArg... A>
+dstd::Unexpected<dstd::Error> make_error(E code, const A&... a) {
+    return dstd::Unexpected<dstd::Error>(
+        dstd::Error::from_format<S>(code, a...));
+}
+
+/// @ref make_error with the format as a value: `make_error(code, "x {}"_f, v)`.
+template <dstd::ErrorEnum E, dstd::FixedString S, dstd::FmtArg... A>
+dstd::Unexpected<dstd::Error> make_error(E code, dstd::Format<S> f,
+                                         const A&... a) {
+    return dstd::Unexpected<dstd::Error>(
+        dstd::Error::from_format(code, f, a...));
+}
+
 /// Throwable carrying the (domain, condition) identity of a failure, so a
 /// domain error throws without collapsing to a coarse code.
 class DFTUtilsException : public std::exception {

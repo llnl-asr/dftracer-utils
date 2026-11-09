@@ -21,8 +21,7 @@ using namespace dftracer::utils::utilities::fileio;
 
 namespace {
 
-template <line_format::FixedString Fmt, class E = line_format::PlainEscape,
-          class... A>
+template <dstd::FixedString Fmt, class E = line_format::PlainEscape, class... A>
 dstd::String fmt_ct(const A&... a) {
     const auto v = line_format::view<Fmt>();
     dstd::String out(line_format::max_line_bytes<E>(v, a...), '\0');
@@ -184,7 +183,7 @@ TEST_CASE("line_format - writer output equals hand-built lines") {
                 dstd::to_string(i) + "\",\"v\":" + (i % 2 ? "true" : "false") +
                 "}\n";
 
-    bool bad_count = false, null_arg = false;
+    bool bad_count = false, null_arg = false, null_mut_arg = false;
     dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         GzipWriterOptions o;
         o.member_size = 1024;
@@ -203,6 +202,10 @@ TEST_CASE("line_format - writer output equals hand-built lines") {
         bad_count = !r.has_value() &&
                     r.error().is_code(common::ErrorCode::InvalidArgument);
         auto r2 = co_await w->append_json<"{}">((const char*)nullptr);
+        char* null_mut = nullptr;
+        auto r3 = co_await w->append_fmt<"{}">(null_mut);
+        null_mut_arg = !r3.has_value() &&
+                       r3.error().is_code(common::ErrorCode::InvalidArgument);
         null_arg = !r2.has_value() &&
                    r2.error().is_code(common::ErrorCode::InvalidArgument);
         REQUIRE(co_await w->close());
@@ -223,6 +226,7 @@ TEST_CASE("line_format - writer output equals hand-built lines") {
     });
     CHECK(bad_count);
     CHECK(null_arg);
+    CHECK(null_mut_arg);
     CHECK(gunzip_all(p1) == want);
     auto lines = [](const dstd::String& t) {
         dstd::MultiSet<dstd::String> out;

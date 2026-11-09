@@ -259,9 +259,8 @@ dstd::Result<void> publish_path(dstd::PathView src, dstd::PathView dst) {
     const auto copied =
         dstd::fs::copy_tree(src, dst, dstd::fs::CopyMode::Overwrite);
     if (!copied) {
-        return make_error(ErrorCode::Io,
-                          str_cat("failed to publish ", src.str(), " to ",
-                                  dst.str(), ": ", copied.error().message()));
+        return make_error<"failed to publish {} to {}: {}">(
+            ErrorCode::Io, src.str(), dst.str(), copied.error().message());
     }
     dstd::fs::remove_all(src).discard();
     return {};

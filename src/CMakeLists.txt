@@ -80,6 +80,7 @@ set(DFTRACER_UTILS_DSTD_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/concurrent_queue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/error.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/fatal.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/fmt.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/file.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/fs.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/os.cpp
@@ -2437,6 +2438,7 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/pool_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/string_intern_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/hash_bench.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/fmt_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/quantile_store_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/pressure_read_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/slice_bench.cpp
@@ -2495,6 +2497,9 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
     add_test(NAME bench_smoke/pool COMMAND pool_bench --smoke)
     add_test(NAME bench_smoke/io COMMAND io_bench --smoke)
     set_tests_properties(bench_smoke/coro PROPERTIES LABELS bench_smoke)
+
+    add_test(NAME bench_smoke/fmt COMMAND fmt_bench --smoke)
+    set_tests_properties(bench_smoke/fmt PROPERTIES LABELS bench_smoke)
 
     add_test(NAME bench_smoke/string_intern COMMAND string_intern_bench --smoke)
     set_tests_properties(bench_smoke/string_intern PROPERTIES LABELS bench_smoke)

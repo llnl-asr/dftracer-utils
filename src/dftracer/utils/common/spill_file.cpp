@@ -25,11 +25,11 @@ dstd::Result<dstd::UniquePtr<SpillFile>> SpillFile::create() {
     f->file_ =
         dstd::File::from_native_handle(::mkostemp(path.data(), O_CLOEXEC));
     if (!f->file_.is_open())
-        return make_error(
-            ErrorCode::Io,
-            str_cat("spill: cannot create a spill file in '", dir->str(), "' (",
-                    std::strerror(errno), "); set ", constants::SPILL_DIR_ENV,
-                    " to a writable directory"));
+        return make_error<
+            "spill: cannot create a spill file in '{}' ({}); set {} to a "
+            "writable directory">(ErrorCode::Io, dir->str(),
+                                  std::strerror(errno),
+                                  constants::SPILL_DIR_ENV);
     dstd::fs::remove(dstd::PathView(path)).discard();
     return f;
 }
@@ -52,10 +52,9 @@ dstd::Result<void> SpillFile::write_at(std::uint64_t offset, const void* data,
     auto written = file_.write_all_at(
         offset, dstd::ByteView(static_cast<const char*>(data), n));
     if (!written)
-        return make_error(
-            ErrorCode::Io,
-            str_cat("spill: write failed (", written.error().format(),
-                    "); the spill directory may be full"));
+        return make_error<
+            "spill: write failed ({}); the spill directory may be full">(
+            ErrorCode::Io, written.error().format());
     return {};
 }
 
@@ -71,10 +70,8 @@ dstd::Result<void> SpillFile::read(std::uint64_t offset, void* out,
     auto got = file_.read_exact_at(
         offset, dstd::Span<std::uint8_t>(static_cast<std::uint8_t*>(out), n));
     if (!got)
-        return make_error(
-            ErrorCode::Io,
-            str_cat("spill: read of ", n, " bytes at offset ", offset,
-                    " failed (", got.error().format(), ")"));
+        return make_error<"spill: read of {} bytes at offset {} failed ({})">(
+            ErrorCode::Io, n, offset, got.error().format());
     return {};
 }
 

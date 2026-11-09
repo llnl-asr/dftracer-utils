@@ -180,6 +180,31 @@ inline ToCharsResult to_chars(char* first, char* last, T v) noexcept {
     }
 }
 
+/// std::to_chars for an integer in `base` 2 to 36, lowercase digits.
+template <class T>
+    requires(std::is_integral_v<T> && !std::is_same_v<T, bool>)
+inline ToCharsResult to_chars(char* first, char* last, T v, int base) noexcept {
+    return std::to_chars(first, last, v, base);
+}
+
+/// `v` in fixed notation with `precision` decimals, exact as printf("%.*f")
+/// is. Returns past-the-end pointer on success, nullptr when [first, last) is
+/// too short. Falls back to snprintf where libc++ gates the floating-point
+/// overload.
+inline char* to_chars_fixed(char* first, char* last, double v,
+                            int precision) noexcept {
+    if (last <= first) return nullptr;
+#ifdef DFTRACER_UTILS_FP_TO_CHARS_UNAVAILABLE
+    const std::size_t cap = static_cast<std::size_t>(last - first);
+    const int n = std::snprintf(first, cap, "%.*f", precision, v);
+    return n > 0 && static_cast<std::size_t>(n) < cap ? first + n : nullptr;
+#else
+    auto [p, ec] =
+        std::to_chars(first, last, v, std::chars_format::fixed, precision);
+    return ec == std::errc{} ? p : nullptr;
+#endif
+}
+
 /// std::from_chars for integers, float and double on every platform: no
 /// leading whitespace or '+', `ptr` at the first byte not consumed, `ec` set
 /// when no number starts there or the value is out of range for T.

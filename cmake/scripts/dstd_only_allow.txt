@@ -43,9 +43,11 @@ tests/dstd/test_containers.cpp | deque, map, set, string, string_view, vector | 
 tests/dstd/test_std_extras.cpp | hash, shared_ptr, stable_sort, string, to_string, unique_ptr, unordered_set | compares dstd with its std twin
 tests/dstd/test_cstring_view.cpp | string | CStringView takes a std::string
 tests/dstd/test_fs.cpp | ifstream | independent of dstd::fs::read_file
+tests/dstd/test_fmt.cpp | string | a hole takes a std::string argument
 benchmarks/hash_bench.cpp | ankerl | the old dstd::StringHash went through this vendored hash
 
 # Benchmark scaffolding that must not allocate from the heap under measurement.
+benchmarks/fmt_bench.cpp | string, to_string | the old std::string chain is counted at the global operator new
 benchmarks/heap_bench.cpp | thread, vector | scaffolding must not allocate from the heap under measurement
 benchmarks/memory_attribution_bench.cpp | vector | memory::detail::PoolStats is below dstd
 tests/runtime/test_task_pool.cpp | set, thread, vector | a dstd container or thread would charge the pool under test

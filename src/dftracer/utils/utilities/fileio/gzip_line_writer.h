@@ -145,9 +145,9 @@ class GzipLineWriter {
         /// JSON-escapes them; raw() bypasses both. A null `const char*`
         /// argument returns INVALID_ARGUMENT. Arguments are read until the call
         /// returns, so temporaries in the awaiting expression are fine.
-        template <line_format::FixedString Fmt, line_format::LineArg... A>
-            requires(Fmt.line_safe() &&
-                     sizeof...(A) == line_format::detail::HOLES<Fmt>)
+        template <dstd::FixedString Fmt, line_format::LineArg... A>
+            requires(line_format::detail::line_safe<Fmt>() &&
+                     sizeof...(A) == dstd::FMT_HOLES<Fmt>)
         coro::CoroTask<dstd::Result<void>> append_fmt(const A&... args) {
             co_return co_await append_view<line_format::PlainEscape>(
                 line_format::view<Fmt>(), args...);
@@ -158,9 +158,9 @@ class GzipLineWriter {
             co_return co_await append_view<line_format::PlainEscape>(fmt.view(),
                                                                      args...);
         }
-        template <line_format::FixedString Fmt, line_format::LineArg... A>
-            requires(Fmt.line_safe() &&
-                     sizeof...(A) == line_format::detail::HOLES<Fmt>)
+        template <dstd::FixedString Fmt, line_format::LineArg... A>
+            requires(line_format::detail::line_safe<Fmt>() &&
+                     sizeof...(A) == dstd::FMT_HOLES<Fmt>)
         coro::CoroTask<dstd::Result<void>> append_json(const A&... args) {
             co_return co_await append_view<line_format::JsonEscape>(
                 line_format::view<Fmt>(), args...);
@@ -235,9 +235,9 @@ class GzipLineWriter {
     /// JSON-escapes them; raw() bypasses both. A null `const char*` argument
     /// returns INVALID_ARGUMENT. Arguments are read until the call returns, so
     /// temporaries in the awaiting expression are fine.
-    template <line_format::FixedString Fmt, line_format::LineArg... A>
-        requires(Fmt.line_safe() &&
-                 sizeof...(A) == line_format::detail::HOLES<Fmt>)
+    template <dstd::FixedString Fmt, line_format::LineArg... A>
+        requires(line_format::detail::line_safe<Fmt>() &&
+                 sizeof...(A) == dstd::FMT_HOLES<Fmt>)
     coro::CoroTask<dstd::Result<void>> append_fmt(const A&... args) {
         co_return co_await append_view<line_format::PlainEscape>(
             line_format::view<Fmt>(), args...);
@@ -248,9 +248,9 @@ class GzipLineWriter {
         co_return co_await append_view<line_format::PlainEscape>(fmt.view(),
                                                                  args...);
     }
-    template <line_format::FixedString Fmt, line_format::LineArg... A>
-        requires(Fmt.line_safe() &&
-                 sizeof...(A) == line_format::detail::HOLES<Fmt>)
+    template <dstd::FixedString Fmt, line_format::LineArg... A>
+        requires(line_format::detail::line_safe<Fmt>() &&
+                 sizeof...(A) == dstd::FMT_HOLES<Fmt>)
     coro::CoroTask<dstd::Result<void>> append_json(const A&... args) {
         co_return co_await append_view<line_format::JsonEscape>(
             line_format::view<Fmt>(), args...);

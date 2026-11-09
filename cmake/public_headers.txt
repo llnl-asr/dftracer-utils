@@ -86,6 +86,7 @@ dftracer/utils/dstd/error.h
 dftracer/utils/dstd/expected.h
 dftracer/utils/dstd/fatal.h
 dftracer/utils/dstd/file.h
+dftracer/utils/dstd/fmt.h
 dftracer/utils/dstd/fs.h
 dftracer/utils/dstd/function.h
 dftracer/utils/dstd/function_ref.h

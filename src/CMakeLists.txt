@@ -1102,6 +1102,8 @@ foreach(variant objects shared static)
     endif()
     if(variant STREQUAL "objects")
       target_set_warnings(dftracer_utils_io_objects)
+      target_compile_options(dftracer_utils_io_objects
+                             PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
     elseif(COVERAGE_LINK_OPTIONS)
       target_link_libraries(${VARIANT_TARGET}
                             PRIVATE ${COVERAGE_LINK_OPTIONS})

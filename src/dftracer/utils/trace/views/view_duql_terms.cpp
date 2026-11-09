@@ -192,7 +192,7 @@ dataframe::Expr Applier::compile(const duql::TermRef& t,
     if (untyped(*t)) return per_batch(t, text, condition);
     auto e = condition ? duql::vectorize_condition(*t, cols_, fb)
                        : duql::vectorize(*t, cols_, fb);
-    if (!e) refuse(dstd::String(e.error().message + " in '") + text + "'");
+    if (!e) refuse(dstd::String(e.error().message()) + " in '" + text + "'");
     return std::move(*e);
 }
 
@@ -244,7 +244,7 @@ dataframe::Expr Applier::per_batch(const duql::TermRef& t,
                                      : duql::vectorize(*t, typed, fb);
                     if (!built)
                         throw std::invalid_argument(
-                            (dstd::String(built.error().message) + " in '" +
+                            (dstd::String(built.error().message()) + " in '" +
                              text + "'")
                                 .c_str());
                     it = cache->exprs.emplace(types, std::move(*built)).first;
@@ -400,7 +400,8 @@ void Applier::call(const duql::TermRef& t, const duql::Term* term) {
                        "filter evaluates");
             auto e = duql::vectorize(*a, cols_, schema_.args_fallback);
             if (!e)
-                refuse(dstd::String(e.error().message + " in '") + text + "'");
+                refuse(dstd::String(e.error().message()) + " in '" + text +
+                       "'");
             args.push_back(std::move(*e));
             arg_types.push_back(
                 ls && duql::is_null_term(*a, cols_, schema_.args_fallback)
@@ -521,7 +522,7 @@ void Applier::quantifier(const duql::TermRef& t, const duql::Term* term) {
             dstd::Vector<const dataframe::Series*> inputs;
             for (const auto& c : f.columns) inputs.push_back(&c);
             auto truth = duql::quantify(*q, inputs, in, fb);
-            if (!truth) refuse(truth.error().message);
+            if (!truth) refuse(dstd::String(truth.error().message()));
             f.names.emplace_back(name);
             f.columns.push_back(std::move(*truth));
             return f;
@@ -733,7 +734,7 @@ void Applier::lookup(const duql::TermRef& t, const duql::Term* term) {
             dstd::Vector<const dataframe::Series*> inputs;
             for (const auto& c : f.columns) inputs.push_back(&c);
             auto values = duql::lookup(*l, inputs, in, fb);
-            if (!values) refuse(values.error().message);
+            if (!values) refuse(dstd::String(values.error().message()));
             f.names.emplace_back(name);
             f.columns.push_back(std::move(*values));
             return f;

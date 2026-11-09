@@ -2595,6 +2595,7 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
 
   # Link to unified library to test if this fixes the bus error
   target_link_libraries(dftracer_utils_ext PRIVATE dftracer_utils::shared)
+  target_set_warnings(dftracer_utils_ext)
 
   if(DFTRACER_UTILS_ENABLE_ARROW)
     link_nanoarrow(dftracer_utils_ext SHARED)

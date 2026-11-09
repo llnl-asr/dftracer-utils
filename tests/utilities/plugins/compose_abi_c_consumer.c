@@ -5,6 +5,7 @@
  * harness builds the host and drives the tasks these functions return. */
 #include <dftracer/utils/plugins/abi.h>
 #include <stdint.h>
+#include <utilities/plugins/abi_c_consumers.h>
 
 static dftu_task* c_double(void* state, const void* in, void* out, int* rc) {
     (void)state;

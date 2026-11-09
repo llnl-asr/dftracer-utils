@@ -4,6 +4,7 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <stdint.h>
+#include <utilities/plugins/abi_c_consumers.h>
 
 /* Each callback delivers one scanned batch as a dftu_dataframe*; sum its rows.
  */

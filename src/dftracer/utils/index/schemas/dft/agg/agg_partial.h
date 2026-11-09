@@ -5,10 +5,10 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/distinct_sketch.h>
 #include <dftracer/utils/dataframe/field_stat.h>
-#include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/schemas/dft/agg/quantile_store.h>
@@ -189,10 +189,10 @@ struct AggPartial {
 
     /// Parses exactly `bytes`; a truncated, malformed or over-long input is
     /// ErrorCode::Parse.
-    static dstd::Expected<AggPartial, common::ErrorCode> deserialize(
+    static dstd::Result<AggPartial> deserialize(
         dstd::Span<const std::uint8_t> bytes,
         double relative_accuracy = QuantileStore::DEFAULT_ACCURACY);
-    static dstd::Expected<AggPartial, common::ErrorCode> deserialize(
+    static dstd::Result<AggPartial> deserialize(
         dstd::Span<const std::uint8_t> bytes, double relative_accuracy,
         Fields keep);
 };

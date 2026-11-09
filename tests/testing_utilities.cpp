@@ -546,8 +546,7 @@ char* test_environment_create_test_file_with_format(
     dftu_utils_test::Format cpp_format = dftu_utils_test::Format::Gzip;
 
     try {
-        dftu_utils_test::TestEnvironment temp_env(
-            cpp_env->dir().empty() ? 100 : 100, cpp_format);
+        dftu_utils_test::TestEnvironment temp_env(100, cpp_format);
         dstd::String file_path;
 
         file_path = cpp_env->create_test_gzip_file();

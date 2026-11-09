@@ -8,6 +8,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/variant.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/duql/errc.h>
 #include <dftracer/utils/duql/lookup.h>
 #include <dftracer/utils/duql/numbers.h>
 #include <dftracer/utils/duql/pattern_engine.h>
@@ -108,8 +109,13 @@ TypeId type_of(K k) {
 }
 
 struct Failure {
-    VectorizeError error;
+    dstd::String message;
 };
+
+dstd::Unexpected<dstd::Error> unsupported(const Failure& f) {
+    return dstd::Unexpected<dstd::Error>(
+        dstd::Error{DuqlErrc::Unsupported, dstd::StringView(f.message)});
+}
 
 class Vectorizer {
    public:
@@ -125,8 +131,8 @@ class Vectorizer {
     const dstd::Vector<VectorColumn>& columns_;
     bool args_fallback_;
 
-    [[noreturn]] static void fail(dstd::String msg, bool rows = false) {
-        throw Failure{{std::move(msg), rows}};
+    [[noreturn]] static void fail(dstd::String msg) {
+        throw Failure{std::move(msg)};
     }
 
     [[noreturn]] static void no_kernel(dstd::StringView what) {
@@ -207,8 +213,7 @@ class Vectorizer {
         const auto c = field_column(f, consumed);
         if (!c) return null();
         const VectorColumn& col = columns_[*c];
-        if (col.json)
-            fail("'" + dstd::String(col.name) + "' is a json field", true);
+        if (col.json) fail("'" + dstd::String(col.name) + "' is a json field");
         V v{dataframe::expr_col(static_cast<std::int32_t>(*c)),
             column_kind(col.type.id)};
         const dataframe::DataType* type = &col.type;
@@ -429,8 +434,7 @@ class Vectorizer {
             if (columns_[i].index == &x) return column_value(i);
         fail(
             "an array index runs on columns only through "
-            "call_column()",
-            true);
+            "call_column()");
     }
 
     V node(const TList& l) {
@@ -438,8 +442,7 @@ class Vectorizer {
             if (columns_[i].list == &l) return column_value(i);
         fail(
             "a list literal runs on columns only through "
-            "call_column()",
-            true);
+            "call_column()");
     }
 
     V node(const TQuant& q) {
@@ -448,8 +451,7 @@ class Vectorizer {
                 return {dataframe::expr_col(static_cast<std::int32_t>(i)),
                         K::Bool};
         fail(dstd::String(q.all ? "all" : "any") +
-                 "() runs on a list column only through quantify()",
-             true);
+             "() runs on a list column only through quantify()");
     }
 
     V node(const TLookup& l) {
@@ -460,8 +462,7 @@ class Vectorizer {
                 return {dataframe::expr_col(static_cast<std::int32_t>(i)), k};
             }
         fail("a lookup into '" + l.name +
-                 "' runs on columns only through lookup()",
-             true);
+             "' runs on columns only through lookup()");
     }
 
     // The column of `t` when it is a parse_json() call.
@@ -491,8 +492,7 @@ class Vectorizer {
         if (columns_[i].json)
             fail(
                 "parse_json() gives a json value, which only json() "
-                "and a whole select or derive item read here",
-                true);
+                "and a whole select or derive item read here");
         V v{dataframe::expr_col(static_cast<std::int32_t>(i)),
             kind_of(columns_[i].type.id)};
         v.elem = element(columns_[i].type);
@@ -504,9 +504,8 @@ class Vectorizer {
         for (std::size_t i = 0; i < columns_.size(); ++i)
             if (columns_[i].call == &c) return column_value(i);
         fail(dstd::String(fn_name(c)) +
-                 "() runs on columns only through "
-                 "call_column()",
-             true);
+             "() runs on columns only through "
+             "call_column()");
     }
 
     V node(const TMatch& m) {
@@ -936,7 +935,7 @@ class Vectorizer {
 
 }  // namespace
 
-dftracer::utils::dstd::Expected<dataframe::Expr, VectorizeError> vectorize(
+dstd::Result<dataframe::Expr> vectorize(
     const Term& t, const dstd::Vector<VectorColumn>& columns,
     bool args_fallback) {
     try {
@@ -944,7 +943,7 @@ dftracer::utils::dstd::Expected<dataframe::Expr, VectorizeError> vectorize(
         if (v.k == K::Nul) return dataframe::expr_lit_null(TypeId::Bool);
         return std::move(v.e);
     } catch (const Failure& f) {
-        return dftracer::utils::dstd::Unexpected(f.error);
+        return unsupported(f);
     }
 }
 
@@ -976,13 +975,13 @@ dstd::Vector<dataframe::Series> key_columns(
 
 const LookupTable& bound(const TLookup& l) {
     if (!l.slot || !l.slot->table)
-        throw Failure{{"'" + l.name + "' was read before its rows were bound"}};
+        throw Failure{"'" + l.name + "' was read before its rows were bound"};
     return *l.slot->table;
 }
 
 }  // namespace
 
-dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> lookup(
+dstd::Result<dataframe::Series> lookup(
     const TLookup& l, const dstd::Vector<const dataframe::Series*>& inputs,
     const dstd::Vector<VectorColumn>& columns, bool args_fallback) {
     const std::int64_t rows = inputs.empty() ? 0 : inputs.front()->length();
@@ -994,11 +993,11 @@ dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> lookup(
         for (const auto& k : keys) ptrs.push_back(&k);
         return lookup_column(l, ptrs, rows);
     } catch (const Failure& f) {
-        return dftracer::utils::dstd::Unexpected(f.error);
+        return unsupported(f);
     }
 }
 
-dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> quantify(
+dstd::Result<dataframe::Series> quantify(
     const TQuant& q, const dstd::Vector<const dataframe::Series*>& inputs,
     const dstd::Vector<VectorColumn>& columns, bool args_fallback) {
     const std::int64_t rows = inputs.empty() ? 0 : inputs.front()->length();
@@ -1125,19 +1124,19 @@ dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> quantify(
         return dataframe::Series::flat(TypeId::Bool, out.data(), rows,
                                        valid.data());
     } catch (const Failure& f) {
-        return dftracer::utils::dstd::Unexpected(f.error);
+        return unsupported(f);
     }
 }
 
-dftracer::utils::dstd::Expected<dataframe::Expr, VectorizeError>
-vectorize_condition(const Term& t, const dstd::Vector<VectorColumn>& columns,
-                    bool args_fallback) {
+dstd::Result<dataframe::Expr> vectorize_condition(
+    const Term& t, const dstd::Vector<VectorColumn>& columns,
+    bool args_fallback) {
     try {
         V v = Vectorizer(columns, args_fallback)(t);
         if (v.k != K::Bool) return dataframe::expr_lit_null(TypeId::Bool);
         return std::move(v.e);
     } catch (const Failure& f) {
-        return dftracer::utils::dstd::Unexpected(f.error);
+        return unsupported(f);
     }
 }
 

@@ -259,48 +259,18 @@ static void ArrowBatchStream_dealloc(ArrowBatchStreamObject *self) {
 static PyMethodDef ArrowBatchStream_methods[] = {
     {"__arrow_c_stream__", DFTU_PYCFUNCTION(ArrowBatchStream_arrow_c_stream),
      METH_VARARGS, "Export as Arrow C Data Interface stream PyCapsule"},
-    {NULL}};
+    {NULL, NULL, 0, NULL}};
 
 }  // namespace
 
 PyTypeObject ArrowBatchStreamType = {
-    PyVarObject_HEAD_INIT(NULL, 0) "dftracer_utils_ext._ArrowBatchStream",
-    sizeof(ArrowBatchStreamObject), /* tp_basicsize */
-    0,                              /* tp_itemsize */
-    (destructor)ArrowBatchStream_dealloc,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    Py_TPFLAGS_DEFAULT,
-    "Zero-iteration Arrow stream backed by a C++ coroutine channel",
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    ArrowBatchStream_methods,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
+    .ob_base = PyVarObject_HEAD_INIT(NULL, 0).tp_name =
+        "dftracer_utils_ext._ArrowBatchStream",
+    .tp_basicsize = sizeof(ArrowBatchStreamObject),
+    .tp_dealloc = (destructor)ArrowBatchStream_dealloc,
+    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_doc = "Zero-iteration Arrow stream backed by a C++ coroutine channel",
+    .tp_methods = ArrowBatchStream_methods,
 };
 
 int dftracer::utils::python::init_arrow_batch_stream(PyObject *m) {

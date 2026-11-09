@@ -557,10 +557,13 @@ void encode_chunk_columns(const ChunkColumns& block, std::size_t column_count,
     append_block(block, column_count, out);
 }
 
-dstd::Expected<ChunkColumns, common::ErrorCode> decode_chunk_columns(
+dstd::Result<ChunkColumns> decode_chunk_columns(
     dstd::Span<const std::uint8_t> bytes) {
     dstd::LeReader r(bytes.data(), bytes.size());
-    const auto bad = [] { return dstd::Unexpected(common::ErrorCode::Parse); };
+    const auto bad = [] {
+        return common::make_error(common::ErrorCode::Parse,
+                                  "bad chunk columns");
+    };
     std::uint8_t format = 0;
     if (!r.u8(format) || format != BLOCK_FORMAT) return bad();
     ChunkColumns block;

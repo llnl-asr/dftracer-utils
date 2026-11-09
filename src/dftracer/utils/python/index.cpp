@@ -178,50 +178,23 @@ PyMethodDef Index_methods[] = {
      "write_agg_config(aggregation_config) -> None\n"
      "Record the aggregation config a distributed build aggregated its "
      "files with. Each file's dftracer.agg entry comes with its data."},
-    {NULL}};
+    {NULL, NULL, 0, NULL}};
 
 }  // namespace
 
 PyTypeObject IndexType = {
-    PyVarObject_HEAD_INIT(NULL, 0) "dftracer_utils_ext.Index",
-    sizeof(IndexObject),
-    0,
-    (destructor)Index_dealloc,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    Py_TPFLAGS_DEFAULT,
-    "Handle to a .dftindex index root.\n\n"
-    "Used by the distributed indexer coordinator to check staleness and to "
-    "record the aggregation of a distributed build.",
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    Index_methods,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    (initproc)Index_init,
-    0,
-    Index_new,
+    .ob_base = PyVarObject_HEAD_INIT(NULL, 0).tp_name =
+        "dftracer_utils_ext.Index",
+    .tp_basicsize = sizeof(IndexObject),
+    .tp_dealloc = (destructor)Index_dealloc,
+    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_doc =
+        "Handle to a .dftindex index root.\n\n"
+        "Used by the distributed indexer coordinator to check staleness and to "
+        "record the aggregation of a distributed build.",
+    .tp_methods = Index_methods,
+    .tp_init = (initproc)Index_init,
+    .tp_new = Index_new,
 };
 
 namespace dftracer::utils::python {

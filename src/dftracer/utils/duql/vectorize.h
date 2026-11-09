@@ -6,9 +6,9 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
-#include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/lookup.h>
@@ -44,18 +44,12 @@ struct VectorColumn {
     const Term* term = nullptr;
 };
 
-struct VectorizeError {
-    dstd::String message;
-    /// The term reads a json column, which only the row evaluator can walk.
-    bool needs_rows = false;
-};
-
 /// `t` as a column expression over `columns` with duql's meaning: an unknown
 /// result is a null cell. A field that no column names, and an operand of the
 /// wrong type, compile to a null column. With `args_fallback`, a bare name no
 /// column names reads the column of that name under `args.`; the same holds
 /// for the functions below.
-dftracer::utils::dstd::Expected<dataframe::Expr, VectorizeError> vectorize(
+dstd::Result<dataframe::Expr> vectorize(
     const Term& t, const dstd::Vector<VectorColumn>& columns,
     bool args_fallback);
 
@@ -65,9 +59,9 @@ bool is_null_term(const Term& t, const dstd::Vector<VectorColumn>& columns,
                   bool args_fallback);
 
 /// `t` as a Bool column: its truth, null where it is not a bool.
-dftracer::utils::dstd::Expected<dataframe::Expr, VectorizeError>
-vectorize_condition(const Term& t, const dstd::Vector<VectorColumn>& columns,
-                    bool args_fallback);
+dstd::Result<dataframe::Expr> vectorize_condition(
+    const Term& t, const dstd::Vector<VectorColumn>& columns,
+    bool args_fallback);
 
 /// The truth of `q` for each row of `inputs`, the frame `columns` describes:
 /// its condition runs over a frame of the list elements with the record's
@@ -75,13 +69,13 @@ vectorize_condition(const Term& t, const dstd::Vector<VectorColumn>& columns,
 /// rule. Null where the subject is not a list or the result is unknown. A
 /// subject that is a lookup of every match reads the matching rows' values,
 /// null where none matches.
-dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> quantify(
+dstd::Result<dataframe::Series> quantify(
     const TQuant& q, const dstd::Vector<const dataframe::Series*>& inputs,
     const dstd::Vector<VectorColumn>& columns, bool args_fallback);
 
 /// The column the bound lookup `l` (not `l.all`) gives for each row of
 /// `inputs`. Throws DFTUtilsException for a query error of the lookup.
-dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> lookup(
+dstd::Result<dataframe::Series> lookup(
     const TLookup& l, const dstd::Vector<const dataframe::Series*>& inputs,
     const dstd::Vector<VectorColumn>& columns, bool args_fallback);
 

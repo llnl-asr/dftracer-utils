@@ -96,48 +96,28 @@ static PyMethodDef ArrowBatchCapsule_methods[] = {
     {"__arrow_c_array__", DFTU_PYCFUNCTION(ArrowBatchCapsule_arrow_c_array),
      METH_VARARGS,
      "Export as Arrow C Data Interface PyCapsule pair (schema, array)"},
-    {NULL}};
+    {NULL, NULL, 0, NULL}};
 
 static PyGetSetDef ArrowBatchCapsule_getsetters[] = {
     {"num_rows", (getter)ArrowBatchCapsule_get_num_rows, NULL, "Number of rows",
      NULL},
     {"num_columns", (getter)ArrowBatchCapsule_get_num_columns, NULL,
      "Number of columns", NULL},
-    {NULL}};
+    {NULL, NULL, NULL, NULL, NULL}};
 
 PyTypeObject ArrowBatchCapsuleType = {
-    PyVarObject_HEAD_INIT(NULL, 0) "dftracer_utils_ext._ArrowBatchCapsule",
-    sizeof(ArrowBatchCapsuleObject),       /* tp_basicsize */
-    0,                                     /* tp_itemsize */
-    (destructor)ArrowBatchCapsule_dealloc, /* tp_dealloc */
-    0,                                     /* tp_vectorcall_offset */
-    0,                                     /* tp_getattr */
-    0,                                     /* tp_setattr */
-    0,                                     /* tp_as_async */
-    0,                                     /* tp_repr */
-    0,                                     /* tp_as_number */
-    0,                                     /* tp_as_sequence */
-    0,                                     /* tp_as_mapping */
-    0,                                     /* tp_hash */
-    0,                                     /* tp_call */
-    0,                                     /* tp_str */
-    0,                                     /* tp_getattro */
-    0,                                     /* tp_setattro */
-    0,                                     /* tp_as_buffer */
-    Py_TPFLAGS_DEFAULT,                    /* tp_flags */
-    "Internal Arrow batch wrapper implementing __arrow_c_array__ protocol",
-    0,                                     /* tp_traverse */
-    0,                                     /* tp_clear */
-    0,                                     /* tp_richcompare */
-    0,                                     /* tp_weaklistoffset */
-    0,                                     /* tp_iter */
-    0,                                     /* tp_iternext */
-    ArrowBatchCapsule_methods,             /* tp_methods */
-    0,                                     /* tp_members */
-    ArrowBatchCapsule_getsetters,          /* tp_getset */
+    .ob_base = PyVarObject_HEAD_INIT(NULL, 0).tp_name =
+        "dftracer_utils_ext._ArrowBatchCapsule",
+    .tp_basicsize = sizeof(ArrowBatchCapsuleObject),
+    .tp_dealloc = (destructor)ArrowBatchCapsule_dealloc,
+    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_doc =
+        "Internal Arrow batch wrapper implementing __arrow_c_array__ protocol",
+    .tp_methods = ArrowBatchCapsule_methods,
+    .tp_getset = ArrowBatchCapsule_getsetters,
 };
 
-#endif                                     // DFTRACER_UTILS_ENABLE_ARROW
+#endif  // DFTRACER_UTILS_ENABLE_ARROW
 
 static void cancel_and_wait_batch_state(MemoryViewBatchIteratorState *bs) {
     bs->cancelled.store(true, std::memory_order_release);
@@ -261,43 +241,14 @@ static PyObject *TraceReaderIterator_next(TraceReaderIteratorObject *self) {
 }
 
 PyTypeObject TraceReaderIteratorType = {
-    PyVarObject_HEAD_INIT(NULL, 0) "dftracer_utils_ext.TraceReaderIterator",
-    sizeof(TraceReaderIteratorObject),       /* tp_basicsize */
-    0,                                       /* tp_itemsize */
-    (destructor)TraceReaderIterator_dealloc, /* tp_dealloc */
-    0,                                       /* tp_vectorcall_offset */
-    0,                                       /* tp_getattr */
-    0,                                       /* tp_setattr */
-    0,                                       /* tp_as_async */
-    0,                                       /* tp_repr */
-    0,                                       /* tp_as_number */
-    0,                                       /* tp_as_sequence */
-    0,                                       /* tp_as_mapping */
-    0,                                       /* tp_hash */
-    0,                                       /* tp_call */
-    0,                                       /* tp_str */
-    0,                                       /* tp_getattro */
-    0,                                       /* tp_setattro */
-    0,                                       /* tp_as_buffer */
-    Py_TPFLAGS_DEFAULT,                      /* tp_flags */
-    "Lazy iterator over TraceReader lines or raw chunks",
-    0,                                       /* tp_traverse */
-    0,                                       /* tp_clear */
-    0,                                       /* tp_richcompare */
-    0,                                       /* tp_weaklistoffset */
-    (getiterfunc)TraceReaderIterator_iter,   /* tp_iter */
-    (iternextfunc)TraceReaderIterator_next,  /* tp_iternext */
-    0,                                       /* tp_methods */
-    0,                                       /* tp_members */
-    0,                                       /* tp_getset */
-    0,                                       /* tp_base */
-    0,                                       /* tp_dict */
-    0,                                       /* tp_descr_get */
-    0,                                       /* tp_descr_set */
-    0,                                       /* tp_dictoffset */
-    0,                                       /* tp_init */
-    0,                                       /* tp_alloc */
-    0,                                       /* tp_new */
+    .ob_base = PyVarObject_HEAD_INIT(NULL, 0).tp_name =
+        "dftracer_utils_ext.TraceReaderIterator",
+    .tp_basicsize = sizeof(TraceReaderIteratorObject),
+    .tp_dealloc = (destructor)TraceReaderIterator_dealloc,
+    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_doc = "Lazy iterator over TraceReader lines or raw chunks",
+    .tp_iter = (getiterfunc)TraceReaderIterator_iter,
+    .tp_iternext = (iternextfunc)TraceReaderIterator_next,
 };
 
 int dftracer::utils::python::init_trace_reader_iterator(PyObject *m) {

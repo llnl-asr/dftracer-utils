@@ -4,8 +4,8 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/sketch.h>
-#include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/vector.h>
 
@@ -57,8 +57,8 @@ class QuantileStore {
     /// bytes. Integers and exact doubles are little endian. The sketch bytes
     /// keep the sketch's own byte order.
     void serialize_into(dstd::Vector<std::uint8_t>& buf) const;
-    static dstd::Expected<QuantileStore, common::ErrorCode> deserialize(
-        const std::uint8_t* data, std::size_t len);
+    static dstd::Result<QuantileStore> deserialize(const std::uint8_t* data,
+                                                   std::size_t len);
 
    private:
     using SketchPtr = dstd::UniquePtr<dataframe::MergeSketch>;

@@ -61,11 +61,11 @@ struct CursorObject {
     bool started;
 };
 
-PyTypeObject StoreType = {PyVarObject_HEAD_INIT(NULL, 0)};
-PyTypeObject NamespaceType = {PyVarObject_HEAD_INIT(NULL, 0)};
-PyTypeObject BatchType = {PyVarObject_HEAD_INIT(NULL, 0)};
-PyTypeObject SnapshotType = {PyVarObject_HEAD_INIT(NULL, 0)};
-PyTypeObject CursorType = {PyVarObject_HEAD_INIT(NULL, 0)};
+PyTypeObject StoreType = {.ob_base = PyVarObject_HEAD_INIT(NULL, 0)};
+PyTypeObject NamespaceType = {.ob_base = PyVarObject_HEAD_INIT(NULL, 0)};
+PyTypeObject BatchType = {.ob_base = PyVarObject_HEAD_INIT(NULL, 0)};
+PyTypeObject SnapshotType = {.ob_base = PyVarObject_HEAD_INIT(NULL, 0)};
+PyTypeObject CursorType = {.ob_base = PyVarObject_HEAD_INIT(NULL, 0)};
 
 template <class T>
 void destroy(T &member) {
@@ -516,7 +516,7 @@ PyMethodDef Store_methods[] = {
      "copies written, copies skipped, files deleted and bytes deleted."},
     {"snapshot", DFTU_PYCFUNCTION(Store_snapshot), METH_NOARGS,
      "A point-in-time view of every data file of the store."},
-    {NULL}};
+    {NULL, NULL, 0, NULL}};
 
 /* Namespace */
 
@@ -558,7 +558,7 @@ PyGetSetDef Namespace_getsetters[] = {
      "Whether the namespace is durable.", NULL},
     {"shared", reinterpret_cast<getter>(Namespace_shared), NULL,
      "Whether each scope holds the keys of every writer.", NULL},
-    {NULL}};
+    {NULL, NULL, NULL, NULL, NULL}};
 
 /* Batch */
 
@@ -657,7 +657,7 @@ PyMethodDef Batch_methods[] = {
      "Commit and consume the batch."},
     {"discard", DFTU_PYCFUNCTION(Batch_discard), METH_NOARGS,
      "Drop the batch without writing it."},
-    {NULL}};
+    {NULL, NULL, 0, NULL}};
 
 /* Snapshot */
 
@@ -850,7 +850,7 @@ PyMethodDef Snapshot_methods[] = {
      METH_VARARGS | METH_KEYWORDS,
      "copy_info(ns, scope)\n\n"
      "(state, generation, params_hash, sources) of the current copy."},
-    {NULL}};
+    {NULL, NULL, 0, NULL}};
 
 /* Cursor */
 

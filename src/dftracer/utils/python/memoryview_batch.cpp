@@ -65,10 +65,8 @@ static PyBufferProcs MemoryViewBatch_as_buffer = {
 };
 
 static PySequenceMethods MemoryViewBatch_as_sequence = {
-    (lenfunc)MemoryViewBatch_length,
-    NULL,
-    NULL,
-    (ssizeargfunc)MemoryViewBatch_item,
+    .sq_length = (lenfunc)MemoryViewBatch_length,
+    .sq_item = (ssizeargfunc)MemoryViewBatch_item,
 };
 
 static PyObject *MemoryViewBatch_get_num_entries(MemoryViewBatchObject *self,
@@ -90,7 +88,7 @@ static PyGetSetDef MemoryViewBatch_getsetters[] = {
      "Number of entries", NULL},
     {"num_bytes", (getter)MemoryViewBatch_get_num_bytes, NULL,
      "Total buffer size in bytes", NULL},
-    {NULL}};
+    {NULL, NULL, NULL, NULL, NULL}};
 
 PyTypeObject MemoryViewBatchType = {
     .ob_base = PyVarObject_HEAD_INIT(NULL, 0).tp_name =

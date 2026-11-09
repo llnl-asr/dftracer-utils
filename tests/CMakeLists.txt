@@ -12,6 +12,7 @@ find_package(ZLIB 1.2 REQUIRED)
 # ##############################################################################
 
 add_library(testing_utilities STATIC testing_utilities.cpp)
+target_set_warnings(testing_utilities)
 target_include_directories(testing_utilities PUBLIC ${CMAKE_SOURCE_DIR}/tests)
 target_link_libraries(
   testing_utilities
@@ -45,11 +46,12 @@ foreach(hdr ${DFTRACER_UTILS_C_ABI_HEADERS})
   string(APPEND C_ABI_GUARD_CONTENT "#include <${hdr}>\n")
 endforeach()
 string(APPEND C_ABI_GUARD_CONTENT
-       "\nint dftracer_c_abi_guard(void) { return 0; }\n")
+       "\nint dftracer_c_abi_guard(void);\nint dftracer_c_abi_guard(void) { return 0; }\n")
 file(WRITE ${C_ABI_GUARD_SRC} "${C_ABI_GUARD_CONTENT}")
 set_source_files_properties(${C_ABI_GUARD_SRC} PROPERTIES LANGUAGE C)
 
 add_library(c_abi_guard OBJECT ${C_ABI_GUARD_SRC})
+target_set_warnings(c_abi_guard)
 target_include_directories(
   c_abi_guard PRIVATE ${CMAKE_SOURCE_DIR}/include ${CMAKE_BINARY_DIR}/include)
 
@@ -61,6 +63,7 @@ add_executable(schema_class_bad_member EXCLUDE_FROM_ALL
                index/schema_class_bad_member.cpp)
 target_link_libraries(schema_class_bad_member
                       PRIVATE testing_utilities)
+target_set_warnings(schema_class_bad_member)
 add_test(NAME schema_class_bad_member
          COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target
                  schema_class_bad_member --config $<CONFIG>)
@@ -647,6 +650,7 @@ foreach (test_file ${TEST_C_SOURCES})
   target_include_directories(${target_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
                                                  ${CMAKE_SOURCE_DIR}/src)
   target_link_libraries(${target_name} PRIVATE unity_lib testing_utilities)
+  target_set_warnings(${target_name})
   target_add_rpath(${target_name})
 
   # Set output directory to preserve folder structure in binaries
@@ -902,14 +906,14 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
       "-DGENERATOR=${CMAKE_GENERATOR}" -DC_COMPILER=${CMAKE_C_COMPILER}
       -DCXX_COMPILER=${CMAKE_CXX_COMPILER} "-DCXX_FLAGS=${CMAKE_CXX_FLAGS}" -P
       ${CMAKE_SOURCE_DIR}/cmake/scripts/check_public_headers_compile.cmake)
-
-  # ==========================================================================
-  # pkg-config discovery tests
-  # ==========================================================================
   # Both install from this build tree, which a build test (c_abi_guard) can
   # configure again while they copy its files.
   set_tests_properties(install_package public_headers_compile
                        PROPERTIES RESOURCE_LOCK build_tree)
+
+  # ==========================================================================
+  # pkg-config discovery tests
+  # ==========================================================================
 
   if(NOT DFTRACER_UTILS_SINGLE_LIBRARY)
     # Test memory library

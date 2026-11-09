@@ -369,7 +369,7 @@ static PyMethodDef CheckpointIndexer_methods[] = {
      "Enter the runtime context for the with statement."},
     {"__exit__", DFTU_PYCFUNCTION(CheckpointIndexer_exit), METH_VARARGS,
      "Release this Python wrapper on context exit."},
-    {NULL} /* Sentinel */
+    {NULL, NULL, 0, NULL} /* Sentinel */
 };
 
 static PyGetSetDef CheckpointIndexer_getsetters[] = {
@@ -381,66 +381,39 @@ static PyGetSetDef CheckpointIndexer_getsetters[] = {
      "Checkpoint size in bytes", NULL},
     {"has_bloom", (getter)CheckpointIndexer_has_bloom, NULL,
      "Whether bloom data exists in index", NULL},
-    {NULL} /* Sentinel */
+    {NULL, NULL, NULL, NULL, NULL} /* Sentinel */
 };
 
 PyTypeObject CheckpointIndexerType = {
-    PyVarObject_HEAD_INIT(
-        NULL, 0) "dftracer_utils_ext.CheckpointIndexer", /* tp_name */
-    sizeof(CheckpointIndexerObject),                     /* tp_basicsize */
-    0,                                                   /* tp_itemsize */
-    (destructor)CheckpointIndexer_dealloc,               /* tp_dealloc */
-    0,                                        /* tp_vectorcall_offset */
-    0,                                        /* tp_getattr */
-    0,                                        /* tp_setattr */
-    0,                                        /* tp_as_async */
-    0,                                        /* tp_repr */
-    0,                                        /* tp_as_number */
-    0,                                        /* tp_as_sequence */
-    0,                                        /* tp_as_mapping */
-    0,                                        /* tp_hash */
-    0,                                        /* tp_call */
-    0,                                        /* tp_str */
-    0,                                        /* tp_getattro */
-    0,                                        /* tp_setattro */
-    0,                                        /* tp_as_buffer */
-    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE, /* tp_flags */
-    "CheckpointIndexer(gz_path, index_path=None, checkpoint_size=33554432, "
-    "force_rebuild=False, build_bloom=False, runtime=None)\n"
-    "--\n"
-    "\n"
-    "Checkpoint indexer for single-file checkpoint-level operations on a "
-    "gzip trace.\n"
-    "\n"
-    "Args:\n"
-    "    gz_path (str): Path to the gzip trace file.\n"
-    "    index_path (str or None): Path to the .dftindex store. If None,\n"
-    "        uses the root-local \".dftindex\" next to gz_path.\n"
-    "    checkpoint_size (int): Checkpoint size in bytes for index\n"
-    "        building (default 1 MB).\n"
-    "    force_rebuild (bool): If True, rebuild the index even if it\n"
-    "        exists.\n"
-    "    build_bloom (bool): If True, build bloom filter data in the\n"
-    "        index.\n"
-    "    runtime (Runtime or None): Runtime instance for thread pool\n"
-    "        control. If None, uses the default global Runtime.\n", /* tp_doc */
-    0,                                /* tp_traverse */
-    0,                                /* tp_clear */
-    0,                                /* tp_richcompare */
-    0,                                /* tp_weaklistoffset */
-    0,                                /* tp_iter */
-    0,                                /* tp_iternext */
-    CheckpointIndexer_methods,        /* tp_methods */
-    0,                                /* tp_members */
-    CheckpointIndexer_getsetters,     /* tp_getset */
-    0,                                /* tp_base */
-    0,                                /* tp_dict */
-    0,                                /* tp_descr_get */
-    0,                                /* tp_descr_set */
-    0,                                /* tp_dictoffset */
-    (initproc)CheckpointIndexer_init, /* tp_init */
-    0,                                /* tp_alloc */
-    CheckpointIndexer_new,            /* tp_new */
+    .ob_base = PyVarObject_HEAD_INIT(NULL, 0).tp_name =
+        "dftracer_utils_ext.CheckpointIndexer",
+    .tp_basicsize = sizeof(CheckpointIndexerObject),
+    .tp_dealloc = (destructor)CheckpointIndexer_dealloc,
+    .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
+    .tp_doc =
+        "CheckpointIndexer(gz_path, index_path=None, checkpoint_size=33554432, "
+        "force_rebuild=False, build_bloom=False, runtime=None)\n"
+        "--\n"
+        "\n"
+        "Checkpoint indexer for single-file checkpoint-level operations on a "
+        "gzip trace.\n"
+        "\n"
+        "Args:\n"
+        "    gz_path (str): Path to the gzip trace file.\n"
+        "    index_path (str or None): Path to the .dftindex store. If None,\n"
+        "        uses the root-local \".dftindex\" next to gz_path.\n"
+        "    checkpoint_size (int): Checkpoint size in bytes for index\n"
+        "        building (default 1 MB).\n"
+        "    force_rebuild (bool): If True, rebuild the index even if it\n"
+        "        exists.\n"
+        "    build_bloom (bool): If True, build bloom filter data in the\n"
+        "        index.\n"
+        "    runtime (Runtime or None): Runtime instance for thread pool\n"
+        "        control. If None, uses the default global Runtime.\n",
+    .tp_methods = CheckpointIndexer_methods,
+    .tp_getset = CheckpointIndexer_getsetters,
+    .tp_init = (initproc)CheckpointIndexer_init,
+    .tp_new = CheckpointIndexer_new,
 };
 
 int dftracer::utils::python::init_checkpoint_indexer(PyObject *m) {

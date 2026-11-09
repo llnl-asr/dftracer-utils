@@ -173,7 +173,7 @@ Series leaf_mask(const duql::detail::ExprLeaf& leaf, const DataFrame& b) {
     truths.reserve(quants.size());
     for (const TQuant* q : quants) {
         auto t = quantify(*q, inputs, cols, FRAME_ARGS_FALLBACK);
-        if (!t) unsupported(t.error().message);
+        if (!t) unsupported(t.error().message());
         truths.push_back(std::move(*t));
     }
     for (std::size_t i = 0; i < quants.size(); ++i) {
@@ -181,7 +181,7 @@ Series leaf_mask(const duql::detail::ExprLeaf& leaf, const DataFrame& b) {
         inputs.push_back(&truths[i]);
     }
     auto e = vectorize_condition(*leaf.term, cols, FRAME_ARGS_FALLBACK);
-    if (!e) unsupported(e.error().message);
+    if (!e) unsupported(e.error().message());
     return eval(*e, inputs);
 }
 

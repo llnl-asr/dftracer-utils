@@ -3,9 +3,9 @@
 #define DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_CHUNK_COLUMNS_H
 
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -127,7 +127,7 @@ void encode_chunk_columns(const ChunkColumns& block, std::size_t column_count,
 /// `chunk` stays 0, since neither is in the bytes. Values round-trip exactly,
 /// doubles bit for bit. An unknown format, a truncated body or a value out of
 /// range is ErrorCode::Parse.
-dstd::Expected<ChunkColumns, common::ErrorCode> decode_chunk_columns(
+dstd::Result<ChunkColumns> decode_chunk_columns(
     dstd::Span<const std::uint8_t> bytes);
 
 }  // namespace dftracer::utils::index::schemas::dft::agg

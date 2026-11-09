@@ -362,7 +362,7 @@ static PyMethodDef Runtime_methods[] = {
      "Enter context manager."},
     {"__exit__", DFTU_PYCFUNCTION(Runtime_exit), METH_VARARGS,
      "Exit context manager. The process runtime keeps running."},
-    {NULL}};
+    {NULL, NULL, 0, NULL}};
 
 static PyObject *Runtime_get_io_threads(RuntimeObject *self, void *) {
     if (!self->runtime) {
@@ -377,57 +377,31 @@ static PyGetSetDef Runtime_getsetters[] = {
      NULL},
     {"io_threads", (getter)Runtime_get_io_threads, NULL,
      "Number of I/O threads", NULL},
-    {NULL}};
+    {NULL, NULL, NULL, NULL, NULL}};
 
 PyTypeObject RuntimeType = {
-    PyVarObject_HEAD_INIT(NULL, 0) "dftracer_utils_ext.Runtime",
-    sizeof(RuntimeObject),                    /* tp_basicsize */
-    0,                                        /* tp_itemsize */
-    (destructor)Runtime_dealloc,              /* tp_dealloc */
-    0,                                        /* tp_vectorcall_offset */
-    0,                                        /* tp_getattr */
-    0,                                        /* tp_setattr */
-    0,                                        /* tp_as_async */
-    0,                                        /* tp_repr */
-    0,                                        /* tp_as_number */
-    0,                                        /* tp_as_sequence */
-    0,                                        /* tp_as_mapping */
-    0,                                        /* tp_hash */
-    0,                                        /* tp_call */
-    0,                                        /* tp_str */
-    0,                                        /* tp_getattro */
-    0,                                        /* tp_setattro */
-    0,                                        /* tp_as_buffer */
-    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE, /* tp_flags */
-    "Runtime(threads: int = 0, io_threads: int = 0)\n"
-    "--\n"
-    "\n"
-    "A handle to the process runtime, the one thread pool every part of\n"
-    "the library runs on. Making one configures that runtime in place;\n"
-    "it runs until the process exits.\n"
-    "\n"
-    "Args:\n"
-    "    threads (int): Worker threads. 0 (default) keeps the current\n"
-    "        count (the hardware concurrency for a new runtime).\n"
-    "    io_threads (int): I/O threads, which only grow. 0 (default)\n"
-    "        keeps the current count.\n", /* tp_doc */
-    0,                                    /* tp_traverse */
-    0,                                    /* tp_clear */
-    0,                                    /* tp_richcompare */
-    0,                                    /* tp_weaklistoffset */
-    0,                                    /* tp_iter */
-    0,                                    /* tp_iternext */
-    Runtime_methods,                      /* tp_methods */
-    0,                                    /* tp_members */
-    Runtime_getsetters,                   /* tp_getset */
-    0,                                    /* tp_base */
-    0,                                    /* tp_dict */
-    0,                                    /* tp_descr_get */
-    0,                                    /* tp_descr_set */
-    0,                                    /* tp_dictoffset */
-    (initproc)Runtime_init,               /* tp_init */
-    0,                                    /* tp_alloc */
-    Runtime_new,                          /* tp_new */
+    .ob_base = PyVarObject_HEAD_INIT(NULL, 0).tp_name =
+        "dftracer_utils_ext.Runtime",
+    .tp_basicsize = sizeof(RuntimeObject),
+    .tp_dealloc = (destructor)Runtime_dealloc,
+    .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
+    .tp_doc =
+        "Runtime(threads: int = 0, io_threads: int = 0)\n"
+        "--\n"
+        "\n"
+        "A handle to the process runtime, the one thread pool every part of\n"
+        "the library runs on. Making one configures that runtime in place;\n"
+        "it runs until the process exits.\n"
+        "\n"
+        "Args:\n"
+        "    threads (int): Worker threads. 0 (default) keeps the current\n"
+        "        count (the hardware concurrency for a new runtime).\n"
+        "    io_threads (int): I/O threads, which only grow. 0 (default)\n"
+        "        keeps the current count.\n",
+    .tp_methods = Runtime_methods,
+    .tp_getset = Runtime_getsetters,
+    .tp_init = (initproc)Runtime_init,
+    .tp_new = Runtime_new,
 };
 
 // Module-level function table (registered via PyModule_AddFunctions or
@@ -438,7 +412,7 @@ static PyMethodDef runtime_module_methods[] = {
     {"peek_default_runtime", peek_default_runtime_py, METH_NOARGS,
      "Return the process runtime, or None before its first use "
      "(never makes one)."},
-    {NULL}};
+    {NULL, NULL, 0, NULL}};
 
 // Runs during interpreter finalization. Run the shutdown hooks there, while
 // the process is still healthy, because the runtime is one of them.

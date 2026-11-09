@@ -812,63 +812,39 @@ static PyMethodDef Indexer_methods[] = {
      "Query every indexed file with its PIDs in one call.\n\n"
      "Returns:\n"
      "    dict mapping trace path to set of PIDs.\n"},
-    {nullptr}};
+    {NULL, NULL, 0, NULL}};
 
-static PyGetSetDef Indexer_getsetters[] = {{nullptr}};
+static PyGetSetDef Indexer_getsetters[] = {{NULL, NULL, NULL, NULL, NULL}};
 
 PyTypeObject IndexerType = {
-    PyVarObject_HEAD_INIT(nullptr, 0) "dftracer_utils_ext.Indexer",
-    sizeof(IndexerObject),
-    0,
-    (destructor)Indexer_dealloc,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
-    "BatchIndexer(directory='', files=None, index_dir='',\n"
-    "             require_checkpoint=True, require_bloom=True,\n"
-    "             time_interval_ms=1000.0, group_keys=None,\n"
-    "             compute_percentiles=True, parallelism=0,\n"
-    "             force_rebuild=False, runtime=None)\n"
-    "--\n\n"
-    "Indexer with tiered index building.\n\n"
-    "At least one of 'directory' or 'files' must be provided.\n"
-    "- directory: scan for .pfw/.jsonl/.ndjson/.json files, plain or gzip\n"
-    "- files: list of specific file paths\n\n"
-    "Supports:\n"
-    "- Tier 1: Checkpoints (require_checkpoint)\n"
-    "- Tier 2: Bloom filters (require_bloom)\n"
-    "- Tier 3: Aggregation, which every build makes; the time_interval_ms,\n"
-    "  group_keys, compute_percentiles and group_by_file arguments set its\n"
-    "  config, whose defaults are the standard config\n",
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    Indexer_methods,
-    0,
-    Indexer_getsetters,
-    0,
-    0,
-    0,
-    0,
-    0,
-    (initproc)Indexer_init,
-    0,
-    Indexer_new,
+    .ob_base = PyVarObject_HEAD_INIT(nullptr, 0).tp_name =
+        "dftracer_utils_ext.Indexer",
+    .tp_basicsize = sizeof(IndexerObject),
+    .tp_dealloc = (destructor)Indexer_dealloc,
+    .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
+    .tp_doc =
+        "BatchIndexer(directory='', files=None, index_dir='',\n"
+        "             require_checkpoint=True, require_bloom=True,\n"
+        "             time_interval_ms=1000.0, group_keys=None,\n"
+        "             compute_percentiles=True, parallelism=0,\n"
+        "             force_rebuild=False, runtime=None)\n"
+        "--\n\n"
+        "Indexer with tiered index building.\n\n"
+        "At least one of 'directory' or 'files' must be provided.\n"
+        "- directory: scan for .pfw/.jsonl/.ndjson/.json files, plain or gzip\n"
+        "- files: list of specific file paths\n\n"
+        "Supports:\n"
+        "- Tier 1: Checkpoints (require_checkpoint)\n"
+        "- Tier 2: Bloom filters (require_bloom)\n"
+        "- Tier 3: Aggregation, which every build makes; the "
+        "time_interval_ms,\n"
+        "  group_keys, compute_percentiles and group_by_file arguments set "
+        "its\n"
+        "  config, whose defaults are the standard config\n",
+    .tp_methods = Indexer_methods,
+    .tp_getset = Indexer_getsetters,
+    .tp_init = (initproc)Indexer_init,
+    .tp_new = Indexer_new,
 };
 
 namespace {

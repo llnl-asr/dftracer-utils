@@ -299,6 +299,7 @@ target_include_directories(${cabi_target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..
 target_link_libraries(${cabi_target} PRIVATE doctest::doctest dftracer_utils
                                              testing_utilities)
 target_enable_coroutine(${cabi_target})
+target_set_warnings(${cabi_target})
 set_target_properties(${cabi_target} PROPERTIES OUTPUT_NAME test_plugin_c_abi
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/plugins")
 add_test(NAME utilities/plugins/test_plugin_c_abi COMMAND ${cabi_target})
@@ -309,6 +310,7 @@ add_test(NAME utilities/plugins/test_plugin_c_abi COMMAND ${cabi_target})
 # +++++++++++++++++++++++++++++++++++++++++
 
 add_library(bad_abi_version_plugin MODULE plugins/bad_abi_version_plugin.c)
+target_set_warnings(bad_abi_version_plugin)
 set_target_properties(
   bad_abi_version_plugin
   PROPERTIES OUTPUT_NAME bad_abi_version_plugin
@@ -347,6 +349,7 @@ endif()
 foreach(fh_plugin factory_registers_op_plugin factory_escapes_plugin
                   scan_registers_op_plugin index_minmax_plugin)
   add_library(${fh_plugin} MODULE plugins/${fh_plugin}.c)
+  target_set_warnings(${fh_plugin})
   set_target_properties(
     ${fh_plugin}
     PROPERTIES OUTPUT_NAME ${fh_plugin}
@@ -364,6 +367,7 @@ endforeach()
 foreach(cxx_plugin builder_plugin config_keys_plugin reads_projection_plugin
                   provider_fixture_plugin)
   add_library(${cxx_plugin} MODULE plugins/${cxx_plugin}.cpp)
+  target_set_warnings(${cxx_plugin})
   set_target_properties(
     ${cxx_plugin}
     PROPERTIES OUTPUT_NAME ${cxx_plugin}
@@ -445,6 +449,7 @@ endif()
 
 if(DFTRACER_UTILS_ENABLE_ARROW)
   add_library(reference_plugin MODULE plugins/reference_plugin.c)
+  target_set_warnings(reference_plugin)
   set_target_properties(
     reference_plugin
     PROPERTIES OUTPUT_NAME reference_plugin

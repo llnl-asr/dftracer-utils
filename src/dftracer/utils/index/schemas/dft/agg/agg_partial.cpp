@@ -551,17 +551,20 @@ void AggPartial::serialize_into(dstd::Vector<std::uint8_t>& buf) const {
     }
 }
 
-dstd::Expected<AggPartial, common::ErrorCode> AggPartial::deserialize(
+dstd::Result<AggPartial> AggPartial::deserialize(
     dstd::Span<const std::uint8_t> bytes, double relative_accuracy) {
     return deserialize(bytes, relative_accuracy, Fields{});
 }
 
-dstd::Expected<AggPartial, common::ErrorCode> AggPartial::deserialize(
+dstd::Result<AggPartial> AggPartial::deserialize(
     dstd::Span<const std::uint8_t> bytes, double relative_accuracy,
     Fields keep) {
     dstd::LeReader r(bytes.data(), bytes.size());
     AggPartial p(relative_accuracy);
-    const auto bad = [] { return dstd::Unexpected(common::ErrorCode::Parse); };
+    const auto bad = [] {
+        return common::make_error(common::ErrorCode::Parse,
+                                  "bad aggregate partial");
+    };
 
     std::uint8_t flags = 0;
     if (!r.u8(flags) || (flags & ~KNOWN_FLAGS) != 0) return bad();

@@ -98,7 +98,14 @@ ChunkExtractorUtility::extract_and_write(
     writer_config.memory_budget = input.memory_budget;
 
     ChunkWriter writer(std::move(writer_config));
-    co_await writer.open();
+    const auto fail = [&](const dstd::Error& error) {
+        DFTRACER_UTILS_LOG_ERROR("Failed to extract chunks of group %d: %s",
+                                 input.chunk_index,
+                                 dstd::String(error.message()).c_str());
+        return result;
+    };
+    const auto opened = co_await writer.open();
+    if (!opened) co_return fail(opened.error());
 
     std::size_t content_hash = 0;
     utilities::hash::HasherUtility hasher;
@@ -116,8 +123,9 @@ ChunkExtractorUtility::extract_and_write(
             const dstd::StringView event = event_of_line(
                 dstd::StringView(line.content.data(), line.content.length()));
             if (!event.empty()) {
-                co_await writer.write_line(
+                const auto written = co_await writer.write_line(
                     dstd::ByteView(event.data(), event.size()));
+                if (!written) co_return fail(written.error());
 
                 if (input.compute_hash) {
                     hasher.reset();
@@ -128,7 +136,8 @@ ChunkExtractorUtility::extract_and_write(
         }
     }
 
-    co_await writer.close();
+    const auto closed = co_await writer.close();
+    if (!closed) co_return fail(closed.error());
 
     result.chunks.assign(writer.chunks().begin(), writer.chunks().end());
     result.events = writer.total_events_written();

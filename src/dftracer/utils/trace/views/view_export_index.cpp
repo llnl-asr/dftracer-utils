@@ -35,6 +35,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <mutex>
 
 // Fused export + index: write the View's events as a new multi-member trace AND
@@ -111,8 +112,8 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
     std::mutex pool_mu;
     dstd::Vector<dstd::UniquePtr<FoldSlice>> pool;
 
-    auto fold_member = [&](const utilities::fileio::MemberRef& ref,
-                           dstd::StringView data) {
+    auto fold_member_body = [&](const utilities::fileio::MemberRef& ref,
+                                dstd::StringView data) {
         dstd::UniquePtr<FoldSlice> sl;
         {
             std::lock_guard<std::mutex> lk(pool_mu);
@@ -210,7 +211,21 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
         pd.total_uc = uc_bytes;
         pd.total_lines = lines;
     };
-    wopts.fold = fold_member;
+    // The writer's code is built without exceptions, so the callback returns
+    // what the fold throws.
+    wopts.fold = [&](const utilities::fileio::MemberRef& ref,
+                     dstd::StringView data) -> dstd::Result<void> {
+        try {
+            fold_member_body(ref, data);
+        } catch (const std::exception& e) {
+            return common::make_error(common::ErrorCode::Internal,
+                                      dstd::StringView(e.what()));
+        } catch (...) {
+            return common::make_error(common::ErrorCode::Internal,
+                                      "unknown worker failure");
+        }
+        return dstd::Result<void>{};
+    };
     auto opened = co_await utilities::fileio::GzipLineWriter::open(
         dstd::String(opts.output_path), std::move(wopts));
     if (!opened) {

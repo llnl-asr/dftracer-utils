@@ -132,20 +132,18 @@ struct PaddedStripedImpl {
         if (!packer_drained) {
             producers.clear();
             if (packer_future.has_value()) {
-                // A shutdown cancels the wait with an exception. The scope
-                // must still be joined before the Impl can be destroyed.
-                int rc = 0;
-                std::exception_ptr cancelled;
-                try {
-                    rc = co_await *packer_future;
-                } catch (...) {
-                    cancelled = std::current_exception();
-                }
+                // A shutdown stops the wait. The scope must still be joined
+                // before the Impl can be destroyed.
+                auto settled = co_await coro::settle_in_place(*packer_future);
                 packer_future.reset();
-                co_await packer_scope->join();
+                co_await packer_scope->join_quietly();
                 packer_drained = true;
-                if (cancelled) std::rethrow_exception(cancelled);
-                if (rc != 0) co_return rc;
+                if (std::exception_ptr error = packer_scope->take_error())
+                    co_await coro::fail_with(std::move(error));
+                if (settled.exception)
+                    co_await coro::fail_with(std::move(settled.exception));
+                if (settled.stopped) co_await coro::stop_here();
+                if (*settled.value != 0) co_return *settled.value;
             }
             packer_drained = true;
         }

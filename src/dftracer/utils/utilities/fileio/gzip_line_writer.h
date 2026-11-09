@@ -71,8 +71,11 @@ struct GzipWriterOptions {
     /// ordered = false.
     dstd::Function<void(const MemberInfo&)> on_member;
     /// Once per member on a compress worker, concurrently across members.
-    /// `plaintext` is valid only during the call.
-    dstd::Function<void(const MemberRef& ref, dstd::StringView plaintext)> fold;
+    /// `plaintext` is valid only during the call. An error fails the write
+    /// like a failed compression; the callback must not throw.
+    dstd::Function<dstd::Result<void>(const MemberRef& ref,
+                                      dstd::StringView plaintext)>
+        fold;
 };
 
 struct WriteSummary {
@@ -218,9 +221,9 @@ class GzipLineWriter {
 
     /// Formats lines in place. `fill(dst, cap)` writes whole lines to `dst`
     /// (cap >= max_bytes) and returns the bytes written; a non-empty span must
-    /// end with '\n', otherwise the call fails like append. Cuts as append
-    /// does. In unordered mode the call fills a member of its own and submits
-    /// it, so concurrent calls share no state.
+    /// end with '\n', otherwise the call fails like append. `fill` must not
+    /// throw. Cuts as append does. In unordered mode the call fills a member of
+    /// its own and submits it, so concurrent calls share no state.
     coro::CoroTask<dstd::Result<void>> append_with(
         std::size_t max_bytes,
         dstd::Function<std::size_t(char*, std::size_t)> fill);

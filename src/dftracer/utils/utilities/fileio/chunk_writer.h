@@ -34,6 +34,7 @@ struct ChunkWriterConfig {
     /// The coalescing buffer of io_flush_bytes is on top of it.
     std::uint64_t memory_budget = 0;
 
+    /// Called once per finished chunk file. Must not throw.
     using ChunkRotationCallback = dstd::Function<void(
         std::size_t chunk_index, dstd::StringView chunk_path,
         std::size_t event_count, std::size_t byte_count)>;
@@ -72,9 +73,9 @@ class ChunkWriter {
     ChunkWriter(const ChunkWriter&) = delete;
     ChunkWriter& operator=(const ChunkWriter&) = delete;
 
-    coro::CoroTask<void> open();
-    coro::CoroTask<void> write_line(dstd::ByteView line);
-    coro::CoroTask<void> close();
+    coro::CoroTask<dstd::Result<void>> open();
+    coro::CoroTask<dstd::Result<void>> write_line(dstd::ByteView line);
+    coro::CoroTask<dstd::Result<void>> close();
 
     std::size_t total_bytes_written() const { return total_bytes_; }
     std::size_t total_events_written() const { return total_events_; }

@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/coro/stop_token.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/coro/time.h>
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -446,5 +448,48 @@ TEST_CASE("PaddedStripedWriter - every stripe ends in whole gzip members") {
     dstd::String want;
     for (const auto& p : payloads) want += p;
     CHECK(gunzip_all(path) == want);
+    dstd::fs::remove(path).discard();
+}
+
+TEST_CASE(
+    "PaddedStripedWriter - a task stopped after a write drops its writer "
+    "cleanly and the chunk lands") {
+    dstd::String path = tmp_path("test_padded_stopped.json.gz");
+    std::remove(path.c_str());
+    const dstd::String payload = "{\"stopped\":1}\n";
+    const auto member = gzip_member(payload);
+    bool stopped = false;
+    Runtime runtime(4);
+    coro::StopSource source;
+    dftu_utils_test::ok(runtime.block_on([&]() -> CoroTask<void> {
+        coro::Scope scope;
+        auto writing = [&]() -> CoroTask<void> {
+            auto w = make_padded_striped_writer(STRIPE);
+            auto jobs = dstd::make_unique<coro::Scope>();
+            REQUIRE(co_await w->open(dstd::String(path), 2, true, jobs.get()) ==
+                    0);
+            REQUIRE(co_await w->write_chunk(0, as_bv(member)) == 0);
+            co_await coro::sleep(std::chrono::seconds(30));
+            co_await jobs->join();
+        };
+        auto waiting = scope.spawn_future(
+            coro::with_stop_token(writing(), source.token()));
+        co_await coro::sleep(std::chrono::milliseconds(100));
+        source.request_stop();
+        auto settled = co_await coro::settle_in_place(waiting);
+        stopped = settled.stopped;
+        CHECK(!settled.exception);
+        co_await scope.join();
+    }()));
+    CHECK(stopped);
+    // The dropped writer drains its packer in the background and the chunk
+    // reaches the file.
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (gunzip_all(path).find(payload) == dstd::String::npos &&
+           std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    CHECK(gunzip_all(path).find(payload) != dstd::String::npos);
+    runtime.shutdown();
     dstd::fs::remove(path).discard();
 }

@@ -204,6 +204,11 @@ struct GzipLineWriter::Impl {
         if (!error) error = dstd::Error{code, msg};
     }
 
+    void set_error(dstd::Error e) {
+        std::lock_guard<std::mutex> lk(mu);
+        if (!error) error = std::move(e);
+    }
+
     dstd::Error get_error() {
         std::lock_guard<std::mutex> lk(mu);
         return *error;
@@ -402,29 +407,26 @@ struct GzipLineWriter::Impl {
         d.lines = static_cast<std::uint64_t>(
             std::count(bytes.begin(), bytes.end(), '\n'));
         if (!failed()) {
-            try {
-                if (opts.fold)
+            dstd::Result<void> folded;
+            if (opts.fold)
+                folded =
                     opts.fold({job->seq, job->part, job->part_index}, bytes);
-                if (opts.compress) {
-                    auto c = take_compressor();
-                    const bool ok =
-                        c->valid() && c->compress_member_into(
-                                          d.comp, bytes.data(), bytes.size());
-                    give_compressor(std::move(c));
-                    if (!ok)
-                        set_error(common::ErrorCode::Compression,
-                                  "member compression failed");
-                } else {
-                    if (job->raw)
-                        d.plain.assign(bytes);
-                    else
-                        d.plain = std::move(job->data);
-                }
-            } catch (const std::exception& e) {
-                set_error(common::ErrorCode::Internal, e.what());
-            } catch (...) {
-                set_error(common::ErrorCode::Internal,
-                          "unknown worker failure");
+            if (!folded) {
+                set_error(std::move(folded).error());
+            } else if (opts.compress) {
+                auto c = take_compressor();
+                const bool ok =
+                    c->valid() &&
+                    c->compress_member_into(d.comp, bytes.data(), bytes.size());
+                give_compressor(std::move(c));
+                if (!ok)
+                    set_error(common::ErrorCode::Compression,
+                              "member compression failed");
+            } else {
+                if (job->raw)
+                    d.plain.assign(bytes);
+                else
+                    d.plain = std::move(job->data);
             }
         }
         if (unordered()) {
@@ -489,15 +491,11 @@ struct GzipLineWriter::Impl {
     dstd::UniquePtr<char[]> scratch;  ///< ordered append_with, reused
     std::size_t scratch_cap = 0;
 
-    coro::CoroTask<dstd::Error> fail() {
-        // A job a shutdown cancelled raises at the join, and the files of the
+    coro::CoroTask<dstd::Error> fail(std::exception_ptr job_error = {}) {
+        // A job a shutdown cancelled ends the join, and the files of the
         // failed write are removed all the same.
-        std::exception_ptr job_error;
-        try {
-            co_await scope.join();
-        } catch (...) {
-            job_error = std::current_exception();
-        }
+        const bool first_pass = !cleaned;
+        co_await scope.join_quietly();
         if (!cleaned) {
             cleaned = true;
             if (writer) co_await writer->close();
@@ -506,7 +504,9 @@ struct GzipLineWriter::Impl {
             for (auto& p : created)
                 dstd::fs::remove(dstd::PathView(p)).discard();
         }
-        if (job_error) std::rethrow_exception(job_error);
+        if (!job_error) job_error = scope.take_error();
+        if (job_error) co_await coro::fail_with(std::move(job_error));
+        if (first_pass && scope.child_stopped()) co_await coro::stop_here();
         co_return get_error();
     }
 };
@@ -796,9 +796,15 @@ coro::CoroTask<dstd::Result<WriteSummary>> GzipLineWriter::close(
     s.buf.append(tail);
     if (!s.failed() && !s.buf.empty()) co_await s.submit(std::move(s.buf));
     s.buf.clear();
-    co_await s.scope.join();
+    co_await s.scope.join_quietly();
+    std::exception_ptr job_error = s.scope.take_error();
+    // Never seen: fail() ends the frame for a stopped job or an exception.
+    if (job_error && !s.failed())
+        s.set_error(common::ErrorCode::Internal, "write failed");
+    if (s.scope.child_stopped() && !s.failed())
+        s.set_error(common::ErrorCode::Internal, "write interrupted");
     if (s.failed()) {
-        dstd::Error err = co_await s.fail();
+        dstd::Error err = co_await s.fail(std::move(job_error));
         co_return dstd::Unexpected(std::move(err));
     }
     s.summary.parts = s.writer ? s.part + 1 : s.part;
@@ -826,11 +832,12 @@ namespace {
 template <typename T, typename F>
 dstd::Result<T> run_on_default(const char* name, F&& f) {
     dstd::Optional<dstd::Result<T>> out;
-    common::unwrap(default_runtime().block_on(
+    auto ran = default_runtime().block_on(
         coro::named(name, [&]() -> coro::CoroTask<void> {
             out.emplace(co_await f());
             co_return;
-        }())));
+        }()));
+    if (!ran) return dstd::Unexpected(std::move(ran).error());
     return std::move(*out);
 }
 }  // namespace

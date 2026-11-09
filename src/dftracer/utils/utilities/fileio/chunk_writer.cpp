@@ -21,13 +21,15 @@ ChunkWriter::~ChunkWriter() {
     }
 }
 
-coro::CoroTask<void> ChunkWriter::open() {
+coro::CoroTask<dstd::Result<void>> ChunkWriter::open() {
     const dstd::PathView output_dir(config_.output_dir);
     auto checking = runtime::fs::exists(output_dir);
-    const bool found = common::unwrap(co_await std::move(checking));
+    auto checked = co_await std::move(checking);
+    const bool found = co_await coro::or_fail(std::move(checked));
     if (!found) {
         auto creating = runtime::fs::create_directories(output_dir);
-        common::unwrap(co_await std::move(creating));
+        auto created = co_await std::move(creating);
+        co_await coro::or_fail(std::move(created));
     }
     GzipWriterOptions opts;
     opts.member_size = config_.member_size_bytes;
@@ -53,17 +55,20 @@ coro::CoroTask<void> ChunkWriter::open() {
                                       static_cast<std::size_t>(uc_bytes));
         }
     };
-    writer_.emplace(common::unwrap(
-        co_await GzipLineWriter::open(opts.part_name(0), std::move(opts))));
+    dstd::String first_part = opts.part_name(0);
+    auto opening = GzipLineWriter::open(std::move(first_part), std::move(opts));
+    writer_.emplace(co_await std::move(opening).or_fail());
     open_ = true;
+    co_return dstd::Result<void>{};
 }
 
-coro::CoroTask<void> ChunkWriter::write_line(dstd::ByteView line) {
+coro::CoroTask<dstd::Result<void>> ChunkWriter::write_line(
+    dstd::ByteView line) {
     pending_.append(line.as<char>(), line.size());
     pending_.push_back('\n');
     total_events_++;
     if (pending_.size() >= config_.io_flush_bytes) {
-        common::unwrap(co_await writer_->append(pending_));
+        co_await writer_->append(pending_).or_fail();
         pending_.clear();
     }
 
@@ -72,19 +77,22 @@ coro::CoroTask<void> ChunkWriter::write_line(dstd::ByteView line) {
     if ((total_events_ & 0xff) == 0) {
         co_await coro::yield();
     }
+    co_return dstd::Result<void>{};
 }
 
-coro::CoroTask<void> ChunkWriter::close() {
-    if (!open_) co_return;
+coro::CoroTask<dstd::Result<void>> ChunkWriter::close() {
+    if (!open_) co_return dstd::Result<void>{};
     open_ = false;
     if (!pending_.empty()) {
-        common::unwrap(co_await writer_->append(pending_));
+        co_await writer_->append(pending_).or_fail();
         pending_.clear();
     }
-    auto summary = common::unwrap(co_await writer_->close());
+    auto closing = writer_->close();
+    const WriteSummary summary = co_await std::move(closing).or_fail();
     total_bytes_ = static_cast<std::size_t>(summary.c_bytes);
     peak_bytes_ = summary.peak_bytes;
     writer_.reset();
+    co_return dstd::Result<void>{};
 }
 
 }  // namespace dftracer::utils::utilities::fileio

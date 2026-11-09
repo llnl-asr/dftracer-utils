@@ -373,6 +373,18 @@ TEST_CASE("DFTracer Replay - Real trace files") {
     }
 }
 
+TEST_CASE("DFTracer Replay - unreadable trace directory is an error") {
+    ReplayConfig config;
+    config.no_sleep = true;
+    config.use_call_tree = true;
+    ReplayEngine engine(std::move(config));
+    ReplayResult result =
+        engine.replay_with_call_tree("/nonexistent/dftracer_replay_dir");
+    REQUIRE(result.error_messages.size() == 1);
+    CHECK(result.error_messages[0].find("Cannot list trace directory") !=
+          dstd::String::npos);
+}
+
 TEST_CASE("DFTracer Replay - Call tree integration") {
     dftracer::utils::common::logger::init();
 

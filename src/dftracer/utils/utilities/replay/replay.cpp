@@ -590,30 +590,30 @@ bool ReplayEngine::should_execute_trace(const Trace& trace) const {
 
 namespace {
 // Files under `dir` whose name ends with `pattern`'s suffix (e.g. "*.pfw.gz").
-dstd::Vector<dstd::String> glob_trace_files(dstd::StringView dir,
-                                            dstd::StringView pattern) {
+dstd::Result<dstd::Vector<dstd::String>> glob_trace_files(
+    dstd::StringView dir, dstd::StringView pattern) {
     dstd::String suffix(pattern);
     if (auto star = suffix.find('*'); star != dstd::String::npos)
         suffix = suffix.substr(star + 1);
     dstd::Vector<dstd::String> out;
-    // An unreadable directory ends the walk with the files found so far.
-    dstd::fs::walk(dstd::PathView(dir), [&](dstd::PathView path,
-                                            dstd::fs::FileKind kind) {
-        if (kind == dstd::fs::FileKind::Symlink) {
-            const auto target = dstd::fs::stat(path);
-            if (!target || target->kind != dstd::fs::FileKind::File) {
+    auto walked = dstd::fs::walk(
+        dstd::PathView(dir), [&](dstd::PathView path, dstd::fs::FileKind kind) {
+            if (kind == dstd::fs::FileKind::Symlink) {
+                const auto target = dstd::fs::stat(path);
+                if (!target || target->kind != dstd::fs::FileKind::File) {
+                    return dstd::fs::WalkAction::Continue;
+                }
+            } else if (kind != dstd::fs::FileKind::File) {
                 return dstd::fs::WalkAction::Continue;
             }
-        } else if (kind != dstd::fs::FileKind::File) {
+            const dstd::StringView s = path.str();
+            if (suffix.empty() || (s.size() >= suffix.size() &&
+                                   s.compare(s.size() - suffix.size(),
+                                             suffix.size(), suffix) == 0))
+                out.emplace_back(s);
             return dstd::fs::WalkAction::Continue;
-        }
-        const dstd::StringView s = path.str();
-        if (suffix.empty() ||
-            (s.size() >= suffix.size() &&
-             s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0))
-            out.emplace_back(s);
-        return dstd::fs::WalkAction::Continue;
-    }).discard();
+        });
+    if (!walked) return walked.error();
     std::sort(out.begin(), out.end());
     return out;
 }
@@ -626,8 +626,14 @@ ReplayResult ReplayEngine::replay_with_call_tree(
     ReplayResult& result = lane.result;
     auto start_time = std::chrono::steady_clock::now();
     try {
-        dstd::Vector<dstd::String> files =
-            glob_trace_files(trace_directory, pattern);
+        auto globbed = glob_trace_files(trace_directory, pattern);
+        if (!globbed) {
+            result.error_messages.push_back(
+                common::str_cat("Cannot list trace directory ", trace_directory,
+                                ": ", globbed.error().message()));
+            return std::move(lane.result);
+        }
+        dstd::Vector<dstd::String> files = std::move(*globbed);
         if (files.empty()) {
             result.error_messages.push_back(common::str_cat(
                 "No trace files in directory: ", trace_directory));

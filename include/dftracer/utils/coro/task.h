@@ -272,6 +272,39 @@ struct StopHere {
 inline detail::StopHere stop_here() noexcept { return {}; }
 
 namespace detail {
+struct FailWith {
+    static constexpr bool CANCEL_EXEMPT = true;
+    std::exception_ptr exception;
+
+    bool await_ready() const noexcept { return false; }
+
+    template <typename Promise>
+    void await_suspend(std::coroutine_handle<Promise> h) noexcept {
+        if constexpr (requires { h.promise().exception; }) {
+            h.promise().exception = std::move(exception);
+            h.promise().complete();
+        } else {
+            dstd::fatal("coro: fail_with in a frame that cannot fail");
+        }
+    }
+
+    void await_resume() const noexcept {}
+};
+}  // namespace detail
+
+/**
+ * @brief Ends the calling task with @p exception: `co_await fail_with(e)`.
+ *
+ * For a frame built without exceptions that holds an exception from a task
+ * that code with exceptions ran. The task is not resumed, its frame is
+ * destroyed by its owner, and its awaiter sees @p exception as if the task had
+ * thrown it.
+ */
+inline detail::FailWith fail_with(std::exception_ptr exception) noexcept {
+    return {std::move(exception)};
+}
+
+namespace detail {
 
 template <typename Promise>
 bool end_cancelled(std::coroutine_handle<> awaiter,

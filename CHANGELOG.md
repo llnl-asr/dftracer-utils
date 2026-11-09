@@ -363,6 +363,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- Add `coro::fail_with`, which ends a task with a stored exception without a throw, for code built without exceptions.
 - Add `coro::or_fail` and `CoroTask::or_fail()`, which give the value of a `dstd::Expected` or of a task that returns one, or end the calling task with its error, with no exception.
 - Add `match`, `discard` and `or_fail` to `dstd::Expected`, and pass an error on with `return r.error();`.
 - Add `trace::views::LiveView` and its Python adaptor `LiveTraceViewer`, which follow gzip traces that are still being written.
@@ -527,6 +528,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix `dftu_task_when_all` and `dftu_task_when_any` ending the process when an input task raises an exception.
+  The combined task now reports the exception.
 - Fix `Store::commit` accepting a batch made before a `close()` when the next writer got the address of the closed one.
   Such a batch is now refused.
 - Fix `dftracer_replay` reporting "No trace files" when it cannot read the trace directory.

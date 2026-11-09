@@ -8,6 +8,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 
+#include <exception>
 #include <memory>
 #include <utility>
 
@@ -36,10 +37,17 @@ dstd::Vector<coro::CoroTask<void>> take(dftu_task* const* ts, std::uint32_t n) {
     return out;
 }
 
+// How an input ended. A task that threw is settled here, so no exception
+// unwinds through a frame built without exceptions.
+struct Outcome {
+    bool stopped = false;
+    std::exception_ptr exception;
+};
+
 // when_any cannot hold a void result, so race valued tasks and discard it.
-coro::CoroTask<int> as_valued(coro::CoroTask<void> t) {
-    co_await std::move(t);
-    co_return 0;
+coro::CoroTask<Outcome> as_outcome(coro::CoroTask<void> t) {
+    auto settled = co_await coro::settle(std::move(t));
+    co_return Outcome{settled.stopped, std::move(settled.exception)};
 }
 
 // A task the host owns ends the call with -1 when it stops or raises.
@@ -49,14 +57,29 @@ coro::CoroTask<void> await_one(coro::CoroTask<void>* task, int* rc) {
 }
 
 coro::CoroTask<void> await_all(dstd::Vector<coro::CoroTask<void>> inner) {
-    co_await coro::when_all(std::move(inner));
+    dstd::Vector<coro::CoroTask<Outcome>> outcomes;
+    outcomes.reserve(inner.size());
+    for (auto& t : inner) outcomes.push_back(as_outcome(std::move(t)));
+    auto done = co_await coro::when_all(std::move(outcomes));
+    for (auto& outcome : done) {
+        if (outcome.exception) {
+            co_await coro::fail_with(std::move(outcome.exception));
+        }
+    }
+    for (auto& outcome : done) {
+        if (outcome.stopped) co_await coro::stop_here();
+    }
 }
 
 coro::CoroTask<void> await_any(dstd::Vector<coro::CoroTask<void>> inner) {
-    dstd::Vector<coro::CoroTask<int>> valued;
-    valued.reserve(inner.size());
-    for (auto& t : inner) valued.push_back(as_valued(std::move(t)));
-    co_await coro::when_any(std::move(valued));
+    dstd::Vector<coro::CoroTask<Outcome>> outcomes;
+    outcomes.reserve(inner.size());
+    for (auto& t : inner) outcomes.push_back(as_outcome(std::move(t)));
+    auto first = co_await coro::when_any(std::move(outcomes));
+    if (first.result.exception) {
+        co_await coro::fail_with(std::move(first.result.exception));
+    }
+    if (first.result.stopped) co_await coro::stop_here();
 }
 
 }  // namespace

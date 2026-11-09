@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/agg_expr.h>
 #include <dftracer/utils/dataframe/dataframe.h>
@@ -7,6 +8,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <algorithm>
 #include <cmath>
@@ -94,11 +96,13 @@ TEST_CASE("a column of an unsupported type is refused with its type named") {
     cols.push_back(Series::flat_i64(field.data(), 3));
     Series st = Series::structs({"f"}, std::move(cols));
     CHECK_THROWS_WITH_AS(set_union_of(st, {"a", "a", "b"}),
-                         doctest::Contains("struct"), std::invalid_argument);
+                         doctest::Contains("struct"),
+                         common::DFTUtilsException);
     dstd::Vector<std::int64_t> ts{1, 2, 3};
     Series t = Series::flat(dataframe::TypeId::Timestamp, ts.data(), 3);
     CHECK_THROWS_WITH_AS(set_union_of(t, {"a", "a", "b"}),
-                         doctest::Contains("timestamp"), std::invalid_argument);
+                         doctest::Contains("timestamp"),
+                         common::DFTUtilsException);
 }
 
 TEST_CASE("a list of lists is refused with the element type named") {
@@ -106,7 +110,7 @@ TEST_CASE("a list of lists is refused with the element type named") {
     Series inner = Series::list({0, 1, 3}, Series::flat_i64(leaf.data(), 3));
     Series outer = Series::list({0, 1, 2}, std::move(inner));
     CHECK_THROWS_WITH_AS(set_union_of(outer, {"a", "b"}),
-                         doctest::Contains("list"), std::invalid_argument);
+                         doctest::Contains("list"), common::DFTUtilsException);
 }
 
 TEST_CASE("a float keeps every digit") {
@@ -130,7 +134,8 @@ TEST_CASE("a string holding the separator is refused") {
     Series v =
         Series::strings(dstd::Vector<dstd::String>{"x" + SEP + "y", "z"});
     CHECK_THROWS_WITH_AS(set_union_of(v, {"a", "a"}),
-                         doctest::Contains("separator"), std::invalid_argument);
+                         doctest::Contains("separator"),
+                         common::DFTUtilsException);
 }
 
 TEST_CASE(
@@ -147,7 +152,7 @@ TEST_CASE(
             {dataframe::agg_argmax(dataframe::expr_col(1),
                                    dataframe::expr_col(2), "m")},
             inputs, "g"),
-        doctest::Contains("list"), std::invalid_argument);
+        doctest::Contains("list"), common::DFTUtilsException);
 }
 
 TEST_CASE("typed set_union orders integers by value, not by text") {
@@ -242,14 +247,15 @@ TEST_CASE("typed set_union merges with a serialized partial") {
     dstd::Vector<dataframe::AggSpec> specs{
         {dataframe::AggOp::SetUnion, 0, "su", 1.0}};
     auto a = dataframe::agg_new(specs);
-    dataframe::agg_accumulate(*a, key, vals, 0, 200);
+    dftu_utils_test::ok(dataframe::agg_accumulate(*a, key, vals, 0, 200));
     auto b = dataframe::agg_new(specs);
-    dataframe::agg_accumulate(*b, key, vals, 200, 400);
-    auto b2 = dataframe::agg_deserialize(dataframe::agg_serialize(*b));
+    dftu_utils_test::ok(dataframe::agg_accumulate(*b, key, vals, 200, 400));
+    auto b2 = dftu_utils_test::ok(
+        dataframe::agg_deserialize(dataframe::agg_serialize(*b)));
     dataframe::agg_merge(*a, *b2);
     DataFrame merged = dataframe::agg_finalize(*a, "k");
     auto full = dataframe::agg_new(specs);
-    dataframe::agg_accumulate(*full, key, vals);
+    dftu_utils_test::ok(dataframe::agg_accumulate(*full, key, vals));
     DataFrame direct = dataframe::agg_finalize(*full, "k");
     REQUIRE(merged.num_rows() == direct.num_rows());
     for (std::int64_t r = 0; r < merged.num_rows(); ++r) {

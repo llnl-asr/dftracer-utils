@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/agg_expr.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
@@ -19,6 +20,8 @@
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <memory/fresh_process.h>
+#include <task_result.h>
 
 #include <cmath>
 #include <cstdint>
@@ -1338,7 +1341,8 @@ TEST_SUITE("vec") {
             {dataframe::AggOp::Max, 0, "max_dur"}};
 
         // One-shot fused group-by: all four aggregates in a single pass.
-        DataFrame one = dataframe::group_agg(key, vals, specs, "cat");
+        DataFrame one =
+            dftu_utils_test::ok(dataframe::group_agg(key, vals, specs, "cat"));
         REQUIRE(one.num_rows() == 2);
         REQUIRE(one.names.size() == 5);
         REQUIRE(one.names == dstd::Vector<dstd::String>{"cat", "n", "sum_dur",
@@ -1363,8 +1367,8 @@ TEST_SUITE("vec") {
         auto s1 = dataframe::agg_new(specs);
         auto s2 = dataframe::agg_new(specs);
         dstd::Vector<const Series*> v1{&c1}, v2{&c2};
-        dataframe::agg_accumulate(*s1, k1, v1);
-        dataframe::agg_accumulate(*s2, k2, v2);
+        dftu_utils_test::ok(dataframe::agg_accumulate(*s1, k1, v1));
+        dftu_utils_test::ok(dataframe::agg_accumulate(*s2, k2, v2));
         dataframe::agg_merge(*s1, *s2);
         DataFrame merged = dataframe::agg_finalize(*s1, "cat");
         REQUIRE(merged.num_rows() == 2);
@@ -1376,7 +1380,7 @@ TEST_SUITE("vec") {
         // Serialize the merged partial, ship it (round-trip), finalize - must
         // match (the distributed-partial path).
         dstd::String blob = dataframe::agg_serialize(*s1);
-        auto s3 = dataframe::agg_deserialize(blob);
+        auto s3 = dftu_utils_test::ok(dataframe::agg_deserialize(blob));
         DataFrame rt = dataframe::agg_finalize(*s3, "cat");
         REQUIRE(rt.num_rows() == 2);
         CHECK(rt.columns[0].string_at(0) == "io");
@@ -1399,7 +1403,8 @@ TEST_SUITE("vec") {
             {dataframe::AggOp::Count, -1, "n"},
             {dataframe::AggOp::Sum, 0, "sum_dur"}};
 
-        DataFrame g = dataframe::group_agg(keys, vals, specs, {"cat", "pid"});
+        DataFrame g = dftu_utils_test::ok(
+            dataframe::group_agg(keys, vals, specs, {"cat", "pid"}));
         REQUIRE(g.num_rows() == 3);  // (io,1) (cpu,1) (io,2) - first-seen order
         REQUIRE(g.names ==
                 dstd::Vector<dstd::String>{"cat", "pid", "n", "sum_dur"});
@@ -1440,10 +1445,10 @@ TEST_SUITE("vec") {
         auto s2 = dataframe::agg_new(specs);
         dstd::Vector<const Series*> keys1{&ck1, &pid1}, keys2{&ck2, &pid2};
         dstd::Vector<const Series*> v1{&c1}, v2{&c2};
-        dataframe::agg_accumulate(*s1, keys1, v1);
-        dataframe::agg_accumulate(*s2, keys2, v2);
+        dftu_utils_test::ok(dataframe::agg_accumulate(*s1, keys1, v1));
+        dftu_utils_test::ok(dataframe::agg_accumulate(*s2, keys2, v2));
         dstd::String blob = dataframe::agg_serialize(*s2);
-        auto s2b = dataframe::agg_deserialize(blob);
+        auto s2b = dftu_utils_test::ok(dataframe::agg_deserialize(blob));
         dataframe::agg_merge(*s1, *s2b);
         DataFrame merged = dataframe::agg_finalize(
             *s1, dstd::Vector<dstd::String>{"cat", "pid"});
@@ -1471,7 +1476,8 @@ TEST_SUITE("vec") {
             {dataframe::AggOp::Std, 0, "std"},
             {dataframe::AggOp::Skew, 0, "skew"},
             {dataframe::AggOp::Kurt, 0, "kurt"}};
-        DataFrame g = dataframe::group_agg(key, vals, specs, "k");
+        DataFrame g =
+            dftu_utils_test::ok(dataframe::group_agg(key, vals, specs, "k"));
         REQUIRE(g.num_rows() == 2);
         REQUIRE(g.names ==
                 dstd::Vector<dstd::String>{"k", "var", "std", "skew", "kurt"});
@@ -1497,12 +1503,12 @@ TEST_SUITE("vec") {
         auto s1 = dataframe::agg_new(specs);
         auto s2 = dataframe::agg_new(specs);
         dstd::Vector<const Series*> v1{&c1}, v2{&c2};
-        dataframe::agg_accumulate(*s1, k1, v1);
-        dataframe::agg_accumulate(*s2, k2, v2);
+        dftu_utils_test::ok(dataframe::agg_accumulate(*s1, k1, v1));
+        dftu_utils_test::ok(dataframe::agg_accumulate(*s2, k2, v2));
         dataframe::agg_merge(*s1, *s2);
         dstd::String blob = dataframe::agg_serialize(*s1);
-        DataFrame m =
-            dataframe::agg_finalize(*dataframe::agg_deserialize(blob), "k");
+        DataFrame m = dataframe::agg_finalize(
+            *dftu_utils_test::ok(dataframe::agg_deserialize(blob)), "k");
         CHECK(m.columns[1].data<double>()[0] ==
               doctest::Approx(g.columns[1].data<double>()[0]));
         CHECK(m.columns[4].data<double>()[0] ==
@@ -1668,10 +1674,11 @@ TEST_SUITE("vec") {
         Series key = Series::strings(ks);
         Series dur = Series::flat_i64(dv.data(), n);
         dstd::Vector<const Series*> vals{&dur};
-        DataFrame g = dataframe::group_agg(key, vals,
-                                           {{dataframe::AggOp::Count, -1, "n"},
-                                            {dataframe::AggOp::Sum, 0, "s"}},
-                                           "cat");
+        DataFrame g = dftu_utils_test::ok(
+            dataframe::group_agg(key, vals,
+                                 {{dataframe::AggOp::Count, -1, "n"},
+                                  {dataframe::AggOp::Sum, 0, "s"}},
+                                 "cat"));
         REQUIRE(g.num_rows() == 2);
         // first-seen order: a then b
         CHECK(g.columns[0].string_at(0) == "a");
@@ -3251,17 +3258,19 @@ TEST_CASE("dftu_series_string_at returns null and length 0 when no value") {
 
 TEST_CASE("Series::strings refuses more than INT32_MAX total bytes") {
     constexpr std::size_t MAX_BYTES = 2147483647u;
-    CHECK_NOTHROW(Series::check_string_bytes(MAX_BYTES));
-    CHECK_THROWS_AS(Series::check_string_bytes(MAX_BYTES + 1),
-                    std::length_error);
+    Series::check_string_bytes(MAX_BYTES);
+    auto result = fresh_process::run("Series::strings past INT32_MAX scenario");
+    CHECK(result.aborted_with("String column exceeds INT32_MAX bytes"));
+}
 
+TEST_CASE("Series::strings past INT32_MAX scenario" * doctest::skip()) {
+    fresh_process::announce_abort();
     // The sizes are summed before any byte is read, so the pointer is never
     // dereferenced.
     const char byte = 'x';
     const dstd::StringView big(&byte, std::size_t{1} << 30);
     const dstd::Vector<dstd::StringView> views = {big, big, big};
-    CHECK_THROWS_AS(Series::strings(dstd::Span<const dstd::StringView>(views)),
-                    std::length_error);
+    (void)Series::strings(dstd::Span<const dstd::StringView>(views));
 }
 
 TEST_CASE("dftu_series_new_string rejects wrapped offsets") {

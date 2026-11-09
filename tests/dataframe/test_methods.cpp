@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/agg_expr.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
@@ -142,7 +143,7 @@ TEST_CASE(
                                   "name"),
         "group_by: aggregate 's' reduces a String column numerically; only "
         "count_valid, first and last apply to strings",
-        std::invalid_argument);
+        common::DFTUtilsException);
 }
 
 TEST_CASE("SIMD sketch_bucket_keys matches scalar DDSketch::add") {
@@ -222,21 +223,21 @@ TEST_CASE("group_agg pct partials serialize / merge round-trip") {
 
     auto st = dataframe::agg_new(
         {dataframe::AggSpec{dataframe::AggOp::Pct, 0, "p90", 0.9}});
-    dataframe::agg_accumulate(*st, key, vals, 0, 1000);
+    dftu_utils_test::ok(dataframe::agg_accumulate(*st, key, vals, 0, 1000));
     auto st2 = dataframe::agg_new(
         {dataframe::AggSpec{dataframe::AggOp::Pct, 0, "p90", 0.9}});
-    dataframe::agg_accumulate(*st2, key, vals, 1000, 2000);
+    dftu_utils_test::ok(dataframe::agg_accumulate(*st2, key, vals, 1000, 2000));
 
     // Round-trip the second partial through serialize before merging.
     dstd::String blob = dataframe::agg_serialize(*st2);
-    auto st2b = dataframe::agg_deserialize(blob);
+    auto st2b = dftu_utils_test::ok(dataframe::agg_deserialize(blob));
     dataframe::agg_merge(*st, *st2b);
 
     DataFrame direct;
     {
         auto full = dataframe::agg_new(
             {dataframe::AggSpec{dataframe::AggOp::Pct, 0, "p90", 0.9}});
-        dataframe::agg_accumulate(*full, key, vals);
+        dftu_utils_test::ok(dataframe::agg_accumulate(*full, key, vals));
         direct = dataframe::agg_finalize(*full, "k");
     }
     DataFrame merged = dataframe::agg_finalize(*st, "k");
@@ -482,17 +483,17 @@ TEST_CASE("group_agg argmax/sumsq/set_union merge and serialize round-trip") {
     dstd::Vector<dataframe::AggSpec> specs{argmax_spec, set_spec, sumsq_spec};
 
     auto st1 = dataframe::agg_new(specs);
-    dataframe::agg_accumulate(*st1, key, vals, 0, 1000);
+    dftu_utils_test::ok(dataframe::agg_accumulate(*st1, key, vals, 0, 1000));
     auto st2 = dataframe::agg_new(specs);
-    dataframe::agg_accumulate(*st2, key, vals, 1000, 2000);
+    dftu_utils_test::ok(dataframe::agg_accumulate(*st2, key, vals, 1000, 2000));
 
     dstd::String blob = dataframe::agg_serialize(*st2);
-    auto st2b = dataframe::agg_deserialize(blob);
+    auto st2b = dftu_utils_test::ok(dataframe::agg_deserialize(blob));
     dataframe::agg_merge(*st1, *st2b);
     DataFrame merged = dataframe::agg_finalize(*st1, "k");
 
     auto full = dataframe::agg_new(specs);
-    dataframe::agg_accumulate(*full, key, vals);
+    dftu_utils_test::ok(dataframe::agg_accumulate(*full, key, vals));
     DataFrame direct = dataframe::agg_finalize(*full, "k");
 
     REQUIRE(merged.num_rows() == direct.num_rows());

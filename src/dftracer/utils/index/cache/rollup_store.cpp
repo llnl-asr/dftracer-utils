@@ -194,7 +194,8 @@ bool rollup_exists(const CacheStore& db, std::uint64_t sig) {
 dataframe::AggStatePtr read_rollup(const CacheStore& db, std::uint64_t sig) {
     dataframe::AggStatePtr merged;
     db.scan(sig, ROW_TAG, [&](dstd::StringView, dstd::StringView blob) {
-        auto one = dataframe::agg_deserialize(dstd::String(blob));
+        auto one =
+            common::unwrap(dataframe::agg_deserialize(dstd::String(blob)));
         if (!merged)
             merged = std::move(one);
         else

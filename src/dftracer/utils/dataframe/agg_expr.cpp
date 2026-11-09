@@ -189,7 +189,8 @@ DataFrame group_agg_expr(const dstd::Vector<Expr>& keys,
     dstd::Vector<const Series*> key_ptrs;
     key_ptrs.reserve(key_cols.size());
     for (const Series& c : key_cols) key_ptrs.push_back(&c);
-    return group_agg(key_ptrs, values, std::move(col_specs), key_names);
+    return common::unwrap(
+        group_agg(key_ptrs, values, std::move(col_specs), key_names));
 }
 
 DataFrame group_agg_expr(const Expr& key,

@@ -5,6 +5,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
@@ -22,6 +23,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -628,7 +630,8 @@ void scale_case(bool long_keys) {
     const Series c = Series::flat_i64(f.c.data(), SCALE_ROWS);
     const dstd::Vector<const Series*> values{&a, &b, &c};
     const auto names = dstd::Vector<dstd::String>{"k"};
-    const DataFrame want = group_agg({&flat}, values, scale_specs(), names);
+    const DataFrame want =
+        dftu_utils_test::ok(group_agg({&flat}, values, scale_specs(), names));
     REQUIRE(want.num_rows() > 2048);
     ViewBuilder vb;
     vb.append_column(*flat.handle());
@@ -637,7 +640,8 @@ void scale_case(bool long_keys) {
     REQUIRE(view.encoding() == Encoding::View);
     REQUIRE(dict.encoding() == Encoding::Dictionary);
     for (const Series* key : {&view, &dict}) {
-        const DataFrame got = group_agg({key}, values, scale_specs(), names);
+        const DataFrame got =
+            dftu_utils_test::ok(group_agg({key}, values, scale_specs(), names));
         CHECK(int_cells(got) == int_cells(want));
     }
 }
@@ -658,8 +662,7 @@ TEST_SUITE("kernels keep layouts: group-by drivers and size checks") {
         CHECK(fits_int32_offsets(0));
         CHECK(fits_int32_offsets(MAX));
         CHECK_FALSE(fits_int32_offsets(MAX + 1));
-        CHECK_NOTHROW(Series::check_string_bytes(MAX));
-        CHECK_THROWS_AS(Series::check_string_bytes(MAX + 1), std::length_error);
+        Series::check_string_bytes(MAX);
     }
 
     TEST_CASE("offsets from lengths refuse a total past the offset width") {

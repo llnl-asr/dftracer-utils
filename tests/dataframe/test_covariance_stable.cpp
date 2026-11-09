@@ -3,11 +3,13 @@
 // to the spread, and any partitioning of the rows merges to the one-pass value.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <algorithm>
 #include <cmath>
@@ -116,8 +118,8 @@ DataFrame one_group(const dstd::Vector<double>& x,
     Series k = Series::flat_i64(keys.data(), n);
     Series sy = Series::flat_f64(y.data(), n);
     Series sx = Series::flat_f64(x.data(), n);
-    return dataframe::group_agg({&k}, {&sy, &sx}, all_specs(),
-                                dstd::Vector<dstd::String>{"g"});
+    return dftu_utils_test::ok(dataframe::group_agg(
+        {&k}, {&sy, &sx}, all_specs(), dstd::Vector<dstd::String>{"g"}));
 }
 
 }  // namespace
@@ -165,8 +167,8 @@ TEST_CASE("every group keeps its own accuracy at different offsets") {
     Series k = Series::flat_i64(keys.data(), n);
     Series sy = Series::flat_f64(y.data(), n);
     Series sx = Series::flat_f64(x.data(), n);
-    DataFrame r = dataframe::group_agg({&k}, {&sy, &sx}, all_specs(),
-                                       dstd::Vector<dstd::String>{"g"});
+    DataFrame r = dftu_utils_test::ok(dataframe::group_agg(
+        {&k}, {&sy, &sx}, all_specs(), dstd::Vector<dstd::String>{"g"}));
     REQUIRE(r.num_rows() == 2);
     const std::int64_t* g = r.column("g").data<std::int64_t>();
     check_against(r, two_pass(x0, y0), g[0] == 0 ? 0 : 1);
@@ -187,7 +189,8 @@ TEST_CASE("partitions merge to the one-pass value for any split") {
     const std::int64_t cuts[] = {0, 90000, 90001, 250000, n};
     auto part = [&](int i) {
         auto st = dataframe::agg_new(all_specs());
-        dataframe::agg_accumulate(*st, kc, vc, cuts[i], cuts[i + 1]);
+        dftu_utils_test::ok(
+            dataframe::agg_accumulate(*st, kc, vc, cuts[i], cuts[i + 1]));
         return st;
     };
     // Left to right, then the two halves merged separately and joined.
@@ -213,8 +216,9 @@ TEST_CASE("a serialized partial reads back to the same values") {
     const dstd::Vector<const Series*> kc = {&k};
     const dstd::Vector<const Series*> vc = {&sy, &sx};
     auto st = dataframe::agg_new(all_specs());
-    dataframe::agg_accumulate(*st, kc, vc);
-    auto back = dataframe::agg_deserialize(dataframe::agg_serialize(*st));
+    dftu_utils_test::ok(dataframe::agg_accumulate(*st, kc, vc));
+    auto back = dftu_utils_test::ok(
+        dataframe::agg_deserialize(dataframe::agg_serialize(*st)));
     DataFrame a = dataframe::agg_finalize(*st, G);
     DataFrame b = dataframe::agg_finalize(*back, G);
     for (const char* name : {"corr", "covar_pop", "covar_samp", "regr_slope",

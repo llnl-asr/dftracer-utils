@@ -1669,8 +1669,8 @@ dataframe::AggStatePtr decode_partials(
             throw common::DFTUtilsException::cat(
                 common::ErrorCode::Aggregation,
                 "aggregate partial: unknown wire tag");
-        dataframe::AggStatePtr st =
-            dataframe::agg_deserialize(dstd::String(p.substr(1)));
+        dataframe::AggStatePtr st = common::unwrap(
+            dataframe::agg_deserialize(dstd::String(p.substr(1))));
         if (!state)
             state = std::move(st);
         else

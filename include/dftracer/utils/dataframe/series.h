@@ -6,6 +6,7 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -114,16 +115,16 @@ class Series {
             [](void* ctx) { delete static_cast<Held*>(ctx); }, held)};
     }
 
-    /// Throws std::length_error when `total` bytes do not fit the int32
-    /// offsets of a String column.
+    /// Ends the process when `total` bytes do not fit the int32 offsets of a
+    /// String column.
     static void check_string_bytes(std::size_t total) {
         if (total >
             static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()))
-            throw std::length_error("String column exceeds INT32_MAX bytes");
+            dstd::fatal("String column exceeds INT32_MAX bytes");
     }
 
     /// Build a FLAT String column from `values` (offsets + concatenated bytes).
-    /// Throws std::length_error when the total bytes pass INT32_MAX.
+    /// Ends the process when the total bytes pass INT32_MAX.
     static Series strings(const dstd::Vector<dstd::String>& values) {
         dstd::Vector<std::int32_t> offsets(values.size() + 1, 0);
         std::size_t total = 0;

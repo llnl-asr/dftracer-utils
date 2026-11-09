@@ -291,7 +291,7 @@ void GroupFold::add(dataframe::DataFrame batch) {
         dstd::Vector<const dataframe::Series*> values;
         for (const auto& c : batch.columns) values.push_back(&c);
         dataframe::agg_set_row_base(*engine_, rows_);
-        dataframe::agg_accumulate(*engine_, {&g}, values);
+        common::unwrap(dataframe::agg_accumulate(*engine_, {&g}, values));
     }
     for (std::size_t a = 0; a < aggs_.size(); ++a) {
         const FoldAgg& f = aggs_[a];

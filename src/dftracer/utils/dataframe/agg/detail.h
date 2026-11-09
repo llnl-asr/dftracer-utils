@@ -618,6 +618,8 @@ class AggState : public dstd::HeapObject {
     bool has_dyn = false;
     bool dyn_has_sketch = false;
     dstd::Vector<AggDynSpec> dyn_specs;
+    dstd::String
+        init_error;  // agg_new found a bad dyn spec; accumulate reports it
     dstd::Vector<dstd::String> dyn_names;
     dstd::HashMap<dstd::String, std::uint32_t, dstd::TransparentStringHash,
                   dstd::TransparentStringEqual>

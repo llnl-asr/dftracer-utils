@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/agg_expr.h>
 #include <dftracer/utils/dataframe/dataframe.h>
@@ -8,6 +9,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 #include <stdexcept>
@@ -125,8 +127,8 @@ void check_same(const DataFrame& a, const DataFrame& b) {
 
 TEST_CASE("extended aggregate ops produce the exact expected values") {
     Sample s;
-    DataFrame r = dataframe::group_agg(s.keys, s.values, all_specs(),
-                                       dstd::Vector<dstd::String>{"k"});
+    DataFrame r = dftu_utils_test::ok(dataframe::group_agg(
+        s.keys, s.values, all_specs(), dstd::Vector<dstd::String>{"k"}));
     REQUIRE(r.num_rows() == 2);
     const std::int64_t g0 = row_of(r, "k", 0);
     const std::int64_t g1 = row_of(r, "k", 1);
@@ -186,9 +188,10 @@ TEST_CASE("extended aggregate ops produce the exact expected values") {
 TEST_CASE("extended aggregate ops round-trip through serialize/deserialize") {
     Sample s;
     auto st = dataframe::agg_new(all_specs());
-    dataframe::agg_accumulate(*st, s.keys, s.values);
+    dftu_utils_test::ok(dataframe::agg_accumulate(*st, s.keys, s.values));
     const DataFrame direct = dataframe::agg_finalize(*st, "k");
-    auto back = dataframe::agg_deserialize(dataframe::agg_serialize(*st));
+    auto back = dftu_utils_test::ok(
+        dataframe::agg_deserialize(dataframe::agg_serialize(*st)));
     check_same(direct, dataframe::agg_finalize(*back, "k"));
 }
 
@@ -196,12 +199,12 @@ TEST_CASE(
     "extended aggregate ops merge two partials into the one-pass result") {
     Sample s;
     auto whole = dataframe::agg_new(all_specs());
-    dataframe::agg_accumulate(*whole, s.keys, s.values);
+    dftu_utils_test::ok(dataframe::agg_accumulate(*whole, s.keys, s.values));
 
     auto lo = dataframe::agg_new(all_specs());
-    dataframe::agg_accumulate(*lo, s.keys, s.values, 0, 4);
+    dftu_utils_test::ok(dataframe::agg_accumulate(*lo, s.keys, s.values, 0, 4));
     auto hi = dataframe::agg_new(all_specs());
-    dataframe::agg_accumulate(*hi, s.keys, s.values, 4, 8);
+    dftu_utils_test::ok(dataframe::agg_accumulate(*hi, s.keys, s.values, 4, 8));
     dataframe::agg_merge(*lo, *hi);
 
     check_same(dataframe::agg_finalize(*whole, "k"),
@@ -209,9 +212,11 @@ TEST_CASE(
 
     // Merging in the other order must land on the same state.
     auto hi2 = dataframe::agg_new(all_specs());
-    dataframe::agg_accumulate(*hi2, s.keys, s.values, 4, 8);
+    dftu_utils_test::ok(
+        dataframe::agg_accumulate(*hi2, s.keys, s.values, 4, 8));
     auto lo2 = dataframe::agg_new(all_specs());
-    dataframe::agg_accumulate(*lo2, s.keys, s.values, 0, 4);
+    dftu_utils_test::ok(
+        dataframe::agg_accumulate(*lo2, s.keys, s.values, 0, 4));
     dataframe::agg_merge(*hi2, *lo2);
     check_same(dataframe::agg_finalize(*whole, "k"),
                dataframe::agg_finalize(*hi2, "k"));
@@ -237,7 +242,7 @@ TEST_CASE("ArgMin specs sharing a by column return one whole row") {
     };
 
     auto whole = dataframe::agg_new(specs);
-    dataframe::agg_accumulate(*whole, keys, values);
+    dftu_utils_test::ok(dataframe::agg_accumulate(*whole, keys, values));
     DataFrame r = dataframe::agg_finalize(*whole, "k");
     REQUIRE(r.num_rows() == 1);
     CHECK(dstd::String(r.column("min_name").string_at(0)) == "a");
@@ -245,15 +250,15 @@ TEST_CASE("ArgMin specs sharing a by column return one whole row") {
 
     // The shared row survives a split accumulate + merge and a round-trip.
     auto lo = dataframe::agg_new(specs);
-    dataframe::agg_accumulate(*lo, keys, values, 0, 1);
+    dftu_utils_test::ok(dataframe::agg_accumulate(*lo, keys, values, 0, 1));
     auto hi = dataframe::agg_new(specs);
-    dataframe::agg_accumulate(*hi, keys, values, 1, 3);
+    dftu_utils_test::ok(dataframe::agg_accumulate(*hi, keys, values, 1, 3));
     dataframe::agg_merge(*lo, *hi);
     check_same(r, dataframe::agg_finalize(*lo, "k"));
-    check_same(
-        r,
-        dataframe::agg_finalize(
-            *dataframe::agg_deserialize(dataframe::agg_serialize(*lo)), "k"));
+    check_same(r, dataframe::agg_finalize(
+                      *dftu_utils_test::ok(dataframe::agg_deserialize(
+                          dataframe::agg_serialize(*lo))),
+                      "k"));
 }
 
 // A tied `by` keeps the row seen first, matching the View fold the two engines
@@ -275,7 +280,7 @@ TEST_CASE("ArgMin breaks a by tie on the first row seen") {
     };
 
     auto st = dataframe::agg_new(specs);
-    dataframe::agg_accumulate(*st, keys, values);
+    dftu_utils_test::ok(dataframe::agg_accumulate(*st, keys, values));
     DataFrame r = dataframe::agg_finalize(*st, "k");
     REQUIRE(r.num_rows() == 1);
     CHECK(dstd::String(r.column("min_name").string_at(0)) == "b");
@@ -290,8 +295,8 @@ TEST_CASE("ArgMin and ArgMax on one by column keep separate extremes") {
         AggSpec{AggOp::ArgMin, VC_NAME, "lo", 0.0, VC_BY},
         AggSpec{AggOp::ArgMax, VC_NAME, "hi", 0.0, VC_BY},
     };
-    DataFrame r = dataframe::group_agg(s.keys, s.values, specs,
-                                       dstd::Vector<dstd::String>{"k"});
+    DataFrame r = dftu_utils_test::ok(dataframe::group_agg(
+        s.keys, s.values, specs, dstd::Vector<dstd::String>{"k"}));
     const std::int64_t g0 = row_of(r, "k", 0);
     const std::int64_t g1 = row_of(r, "k", 1);
     CHECK(dstd::String(r.column("lo").string_at(g0)) == "c");
@@ -312,10 +317,11 @@ TEST_CASE("Distinct estimates and Sample bounds beyond k") {
     Series sv = Series::strings(v);
     const dstd::Vector<const Series*> keys{&sk};
     const dstd::Vector<const Series*> values{&sv};
-    DataFrame r = dataframe::group_agg(keys, values,
-                                       {AggSpec{AggOp::Distinct, 0, "d", 256.0},
-                                        AggSpec{AggOp::Sample, 0, "s", 16.0}},
-                                       dstd::Vector<dstd::String>{"k"});
+    DataFrame r = dftu_utils_test::ok(
+        dataframe::group_agg(keys, values,
+                             {AggSpec{AggOp::Distinct, 0, "d", 256.0},
+                              AggSpec{AggOp::Sample, 0, "s", 16.0}},
+                             dstd::Vector<dstd::String>{"k"}));
     REQUIRE(r.num_rows() == 1);
     const std::int64_t est = r.column("d").data<std::int64_t>()[0];
     CHECK(est > n / 2);
@@ -336,7 +342,7 @@ TEST_CASE("a null key is its own group and stays null in the result") {
     dstd::Vector<AggSpec> specs{AggSpec{AggOp::Sum, 0, "sum"}};
 
     auto st = dataframe::agg_new(specs);
-    dataframe::agg_accumulate(*st, keys, values);
+    dftu_utils_test::ok(dataframe::agg_accumulate(*st, keys, values));
     DataFrame r = dataframe::agg_finalize(*st, "k");
     REQUIRE(r.num_rows() == 3);
     const Series rk = r.column("k");
@@ -355,12 +361,13 @@ TEST_CASE("a null key is its own group and stays null in the result") {
     CHECK(rs.data<double>()[present_row(0)] == doctest::Approx(7.0));
 
     // The null flag survives serialize, merge and the seed-side split.
-    auto back = dataframe::agg_deserialize(dataframe::agg_serialize(*st));
+    auto back = dftu_utils_test::ok(
+        dataframe::agg_deserialize(dataframe::agg_serialize(*st)));
     check_same(r, dataframe::agg_finalize(*back, "k"));
     auto lo = dataframe::agg_new(specs);
-    dataframe::agg_accumulate(*lo, keys, values, 0, 2);
+    dftu_utils_test::ok(dataframe::agg_accumulate(*lo, keys, values, 0, 2));
     auto hi = dataframe::agg_new(specs);
-    dataframe::agg_accumulate(*hi, keys, values, 2, 4);
+    dftu_utils_test::ok(dataframe::agg_accumulate(*hi, keys, values, 2, 4));
     dataframe::agg_merge(*lo, *hi);
     check_same(r, dataframe::agg_finalize(*lo, "k"));
 }
@@ -393,11 +400,11 @@ TEST_CASE("group_agg_expr reads a value column in a view encoding") {
 
 TEST_CASE("agg_deserialize survives mutated and truncated blobs") {
     // A deterministic mutation pass over a real state's bytes: every
-    // mutation is either decoded or refused with an exception, never read
+    // mutation is either decoded or refused with an error, never read
     // past the blob or crashed on.
     Sample s;
     auto st = dataframe::agg_new(all_specs());
-    dataframe::agg_accumulate(*st, s.keys, s.values);
+    dftu_utils_test::ok(dataframe::agg_accumulate(*st, s.keys, s.values));
     const dstd::String blob = dataframe::agg_serialize(*st);
     REQUIRE(blob.size() > 64);
     std::uint64_t x = 0x9e3779b97f4a7c15ULL;
@@ -414,15 +421,11 @@ TEST_CASE("agg_deserialize survives mutated and truncated blobs") {
         for (int e = 0; e < edits; ++e)
             m[next() % m.size()] = static_cast<char>(next() & 0xff);
         if (round % 5 == 0) m.resize(next() % m.size());
-        try {
-            auto back = dataframe::agg_deserialize(m);
-            if (back) {
-                dataframe::agg_finalize(*back, "k");
-                ++decoded;
-            } else {
-                ++refused;
-            }
-        } catch (const std::exception&) {
+        auto back = dataframe::agg_deserialize(m);
+        if (back.has_value()) {
+            dataframe::agg_finalize(**back, "k");
+            ++decoded;
+        } else {
             ++refused;
         }
     }

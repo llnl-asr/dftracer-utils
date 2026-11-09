@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/kernels/order.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -9,7 +10,6 @@
 #include <cmath>
 #include <cstring>
 #include <numeric>
-#include <stdexcept>
 
 namespace dftracer::utils::dataframe {
 
@@ -56,9 +56,9 @@ ColumnView::ColumnView(const Series& column)
     type_ = column_.type();
     const auto kind = kind_of(type_);
     if (!kind)
-        throw std::invalid_argument((dstd::String("column type '") +
-                                     type_name(type_) + "' has no order")
-                                        .c_str());
+        dstd::fatal((dstd::String("column type '") + type_name(type_) +
+                     "' has no order; check ColumnView::supports first")
+                        .c_str());
     kind_ = *kind;
     physical_ = physical_type(type_);
     const dftu_series& h = *column_.handle();

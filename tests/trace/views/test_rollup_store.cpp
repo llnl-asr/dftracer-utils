@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dstd/fs.h>
@@ -9,6 +10,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <cstdint>
@@ -28,10 +30,10 @@ dataframe::AggStatePtr make_state(const dstd::Vector<double>& values) {
     dataframe::Series val = dataframe::Series::flat_f64(
         vd.data(), static_cast<std::int64_t>(vd.size()));
     dstd::Vector<const dataframe::Series*> vals{&val};
-    return dataframe::group_agg_state(
+    return dftu_utils_test::ok(dataframe::group_agg_state(
         {&key}, vals,
         {dataframe::AggSpec{dataframe::AggOp::Count, -1, "n"},
-         dataframe::AggSpec{dataframe::AggOp::Sum, 0, "total"}});
+         dataframe::AggSpec{dataframe::AggOp::Sum, 0, "total"}}));
 }
 
 // A multi-group AggState: row i belongs to group gkeys[i] with value values[i].
@@ -43,10 +45,10 @@ dataframe::AggStatePtr make_state_kv(const dstd::Vector<dstd::String>& gkeys,
     dataframe::Series val = dataframe::Series::flat_f64(
         vd.data(), static_cast<std::int64_t>(vd.size()));
     dstd::Vector<const dataframe::Series*> vals{&val};
-    return dataframe::group_agg_state(
+    return dftu_utils_test::ok(dataframe::group_agg_state(
         {&key}, vals,
         {dataframe::AggSpec{dataframe::AggOp::Count, -1, "n"},
-         dataframe::AggSpec{dataframe::AggOp::Sum, 0, "total"}});
+         dataframe::AggSpec{dataframe::AggOp::Sum, 0, "total"}}));
 }
 
 }  // namespace

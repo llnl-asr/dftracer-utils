@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_VIEW_H
 #define DFTRACER_UTILS_TRACE_VIEWS_VIEW_H
 
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/async_generator.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
@@ -443,7 +444,8 @@ class ViewSession {
     Deferred<P> fold(const FieldExpr& predicate,
                      dstd::Function<void(P&, json::Value&, dstd::StringView)> f,
                      dstd::Function<P(P&&, P&&)> combine) {
-        return fold<P>(predicate.to_duql(), std::move(f), std::move(combine));
+        return fold<P>(common::unwrap(predicate.to_duql()), std::move(f),
+                       std::move(combine));
     }
 
     /// Attach an externally-built Fold to the shared scan. `make` constructs it

@@ -944,7 +944,7 @@ View View::filter(Query q) const {
 
 View View::filter(const FieldExpr& pred) const {
     return reshape("filter", [&](const detail::scan::ScanPlan& v) {
-        return detail::scan::filter(v, pred.to_duql());
+        return detail::scan::filter(v, common::unwrap(pred.to_duql()));
     });
 }
 

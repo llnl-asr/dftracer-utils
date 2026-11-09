@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/agg/detail.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <numeric>
-#include <stdexcept>
 #include <utility>
 
 namespace dftracer::utils::dataframe {
@@ -314,7 +314,7 @@ void agg_seed_group(AggState& st, const dstd::Vector<dstd::String>& str_keys,
     if (!st.inited) agg_seed_begin(st, str_keys.size());
     for (const AggSpec& sp : st.specs)
         if (!agg_op_seedable(sp.op))
-            throw std::logic_error(
+            dstd::fatal(
                 "agg_seed_group: an aggregate op has no FieldStat/sketch seed "
                 "representation (First/Last, the extremum/list/sketch ops, "
                 "SetUnion, the co-moments, occupancy)");

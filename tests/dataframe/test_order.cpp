@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dataframe/internal/view_builder.h>
 #include <dftracer/utils/dataframe/kernels/order.h>
 #include <dftracer/utils/dataframe/kernels/sort.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
@@ -9,6 +10,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <memory/fresh_process.h>
 #include <task_result.h>
 
 #include <algorithm>
@@ -85,13 +87,9 @@ TEST_CASE("run_end finds the run of equal keys, nulls equal nulls") {
     CHECK_FALSE(dataframe::same_keys(keys, 0, 3));
 }
 
-TEST_CASE("a column view refuses an unordered type") {
-    const dataframe::Series a = ints({1, 2});
-    const dataframe::Series list = dataframe::Series::list(
-        dstd::Vector<std::int32_t>{0, 1, 2}, ints({1, 2}));
+TEST_CASE("a column view supports ordered types only") {
     CHECK(dataframe::ColumnView::supports(dataframe::TypeId::Int64));
     CHECK_FALSE(dataframe::ColumnView::supports(dataframe::TypeId::List));
-    CHECK_THROWS_AS((void)dataframe::ColumnView(list), std::invalid_argument);
 }
 
 TEST_CASE("every float order in the library is the order of compare_doubles") {
@@ -217,4 +215,33 @@ TEST_CASE(
                                             .collect(64))
                                 .get());
     CHECK(order_of(spilled.column("row").materialize()) == want);
+}
+
+TEST_CASE("a column view of a nested type ends the process" * doctest::skip()) {
+    fresh_process::announce_abort();
+    dstd::Vector<std::int64_t> leaf{1, 2, 3};
+    const dataframe::Series nested = dataframe::Series::list(
+        {0, 1, 3}, dataframe::Series::flat_i64(leaf.data(), 3));
+    const dataframe::ColumnView view(nested);
+    (void)view;
+}
+
+TEST_CASE("a column view of a nested type is fatal") {
+    CHECK_FALSE(dataframe::ColumnView::supports(dataframe::TypeId::List));
+    auto result =
+        fresh_process::run("a column view of a nested type ends the process");
+    CHECK(result.aborted_with("has no order"));
+}
+
+TEST_CASE("an inline view row over 12 bytes ends the process" *
+          doctest::skip()) {
+    fresh_process::announce_abort();
+    dataframe::ViewBuilder builder;
+    builder.append_inline("thirteen bytes");
+}
+
+TEST_CASE("an inline view row over 12 bytes is fatal") {
+    auto result =
+        fresh_process::run("an inline view row over 12 bytes ends the process");
+    CHECK(result.aborted_with("inline value over 12 bytes"));
 }

@@ -21,7 +21,7 @@ namespace dftracer::utils::dataframe {
 /// values are copied. Buffers are deduplicated by data pointer.
 ///
 /// Not thread safe. A value longer than INT32_MAX bytes cannot be a view and
-/// throws std::length_error. A value of a flat column that starts past
+/// ends the process. A value of a flat column that starts past
 /// INT32_MAX bytes of its buffer cannot have a view offset, so it is copied
 /// into a buffer owned by the builder.
 class ViewBuilder {

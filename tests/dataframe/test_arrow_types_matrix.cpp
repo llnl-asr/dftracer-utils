@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/error.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
@@ -412,7 +413,7 @@ TEST_SUITE("dataframe_arrow_types_matrix") {
             if (row.ops[OpGroupAgg] == Support::Refuses) {
                 CHECK_THROWS_AS(
                     df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}}),
-                    std::invalid_argument);
+                    common::DFTUtilsException);
                 continue;
             }
             DataFrame g = df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}});

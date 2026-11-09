@@ -169,8 +169,8 @@ void PluginFold::agg_accumulate(::dftu_agg* a, const ::dftu_dataframe* df) {
     try {
         // Pass the row count explicitly: a zero-key accumulator (the scalar
         // case) has no key column for the engine to size the batch from.
-        dataframe::agg_accumulate(*acc.state, keys, values, 0,
-                                  dftu_dataframe_num_rows(df));
+        common::unwrap(dataframe::agg_accumulate(*acc.state, keys, values, 0,
+                                                 dftu_dataframe_num_rows(df)));
         acc.spiller.maybe_spill(acc.state);
     } catch (...) {
         DFTRACER_UTILS_LOG_ERROR("Plugin agg '%s' accumulate failed",

@@ -860,7 +860,7 @@ DataFrame group_by(const DataFrame& b, const dstd::Vector<dstd::String>& keys,
         if (agg_uses_by_col(sp.op)) sp.by_col = resolve(a.by);
         specs.push_back(std::move(sp));
     }
-    return group_agg(key_cols, values, std::move(specs), keys);
+    return common::unwrap(group_agg(key_cols, values, std::move(specs), keys));
 }
 
 DataFrame group_by(const DataFrame& b, const dstd::String& key,
@@ -2123,7 +2123,8 @@ DataFrame pivot(const DataFrame& b, const dstd::String& index_name,
         dstd::Vector<const Series*> values{&val_col};
         dstd::Vector<AggSpec> specs;
         specs.push_back(AggSpec{reduce_op, 0, "v"});
-        DataFrame agg_res = group_agg(keyc, values, std::move(specs), "cell");
+        DataFrame agg_res =
+            common::unwrap(group_agg(keyc, values, std::move(specs), "cell"));
         source = agg_res.column("v");
         Series cells_col = agg_res.column("cell");
         const std::int64_t m = cells_col.length();
@@ -2263,7 +2264,8 @@ DataFrame group_by_dynamic(const DataFrame& b, const dstd::String& time_col,
             if (agg_uses_by_col(sp.op)) sp.by_col = resolve(a.by);
             specs.push_back(std::move(sp));
         }
-        DataFrame res = group_agg(keyc, values, std::move(specs), time_col);
+        DataFrame res =
+            common::unwrap(group_agg(keyc, values, std::move(specs), time_col));
         return sort_by(res, time_col, false);
     }
 
@@ -2317,7 +2319,8 @@ DataFrame group_by_dynamic(const DataFrame& b, const dstd::String& time_col,
     values.reserve(gathered.size());
     for (const Series& g : gathered) values.push_back(&g);
 
-    DataFrame res = group_agg(keyc, values, std::move(specs), time_col);
+    DataFrame res =
+        common::unwrap(group_agg(keyc, values, std::move(specs), time_col));
     return sort_by(res, time_col, false);
 }
 

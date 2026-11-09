@@ -160,7 +160,7 @@ class GroupByCursor : public Cursor {
             values.reserve(value_idx.size());
             for (int vi : value_idx) values.push_back(&m.columns[vi]);
             if (dyn_specs_.empty()) {
-                agg_accumulate(st, keys, values);
+                common::unwrap(agg_accumulate(st, keys, values));
                 return;
             }
             dstd::Vector<AggDynInput> dyn;
@@ -173,7 +173,7 @@ class GroupByCursor : public Cursor {
                 if (rest.names[i].rfind(dyn_prefix_, 0) == 0)
                     dyn.push_back({rest.names[i].substr(dyn_prefix_.size()),
                                    &rest.columns[i]});
-            agg_accumulate(st, keys, values, dyn);
+            common::unwrap(agg_accumulate(st, keys, values, dyn));
         };
         // Rows per slice: what keeps a slice's state within an eighth of the
         // spill threshold, from the state bytes per row seen so far; few rows
@@ -310,8 +310,9 @@ class GroupByCursor : public Cursor {
                 static_cast<std::int64_t>(raw.size()), 1,
                 [&](std::int64_t b, std::int64_t e) {
                     for (std::int64_t j = b; j < e; ++j)
-                        states[static_cast<std::size_t>(j)] = agg_deserialize(
-                            raw[static_cast<std::size_t>(j)], true);
+                        states[static_cast<std::size_t>(j)] =
+                            common::unwrap(agg_deserialize(
+                                raw[static_cast<std::size_t>(j)], true));
                 });
             raw.clear();
             have = 0;
@@ -547,7 +548,7 @@ class GroupByDynamicCursor : public Cursor {
         for (const Series& g : gathered) values.push_back(&g);
         agg_set_row_base(*state_, rows_seen_);
         rows_seen_ += static_cast<std::int64_t>(rowsv.size());
-        agg_accumulate(*state_, keyc, values);
+        common::unwrap(agg_accumulate(*state_, keyc, values));
     }
 
     // Hands on the windows no later row can reach and keeps the others.

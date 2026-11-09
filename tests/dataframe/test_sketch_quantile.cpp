@@ -4,6 +4,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/dataframe.h>
@@ -251,15 +252,16 @@ TEST_CASE("sketch_quantile: the agg state merges and round-trips") {
     auto b = dataframe::agg_new(specs);
     const dstd::Vector<const Series*> keys{&k};
     const dstd::Vector<const Series*> values{&s};
-    dataframe::agg_accumulate(*a, keys, values, 0, half);
-    dataframe::agg_accumulate(*b, keys, values, half, n);
-    auto b2 = dataframe::agg_deserialize(dataframe::agg_serialize(*b));
+    dftu_utils_test::ok(dataframe::agg_accumulate(*a, keys, values, 0, half));
+    dftu_utils_test::ok(dataframe::agg_accumulate(*b, keys, values, half, n));
+    auto b2 = dftu_utils_test::ok(
+        dataframe::agg_deserialize(dataframe::agg_serialize(*b)));
     REQUIRE(b2);
     dataframe::agg_merge(*a, *b2);
     dataframe::agg_sort_groups(*a);
 
     auto whole = dataframe::agg_new(specs);
-    dataframe::agg_accumulate(*whole, keys, values);
+    dftu_utils_test::ok(dataframe::agg_accumulate(*whole, keys, values));
     dataframe::agg_sort_groups(*whole);
 
     const DataFrame got = dataframe::agg_finalize(*a, "k");
@@ -284,7 +286,8 @@ TEST_CASE("sketch_quantile: a non-String column is refused") {
     d.names = {"k", "s"};
     d.columns.push_back(Series::flat_i64(k.data(), 2));
     d.columns.push_back(Series::flat_i64(v.data(), 2));
-    CHECK_THROWS_AS(d.group_by("k", quantile_aggs()), std::invalid_argument);
+    CHECK_THROWS_AS(d.group_by("k", quantile_aggs()),
+                    common::DFTUtilsException);
 }
 
 TEST_CASE("DDSketch::deserialize rejects truncated and hostile bytes") {

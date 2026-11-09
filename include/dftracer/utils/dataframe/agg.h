@@ -7,6 +7,7 @@
 #include <dftracer/utils/dataframe/sketch.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
@@ -198,21 +199,33 @@ AggStatePtr agg_new(dstd::Vector<AggSpec> specs,
 /// column-by-column (no string concatenation); each key column keeps its own
 /// type. `end < 0` means the whole column. Serial; one thread per state - the
 /// parallel/async drivers give each chunk its own state.
-void agg_accumulate(AggState& state, const dstd::Vector<const Series*>& keys,
-                    const dstd::Vector<const Series*>& values,
-                    std::int64_t begin = 0, std::int64_t end = -1);
+///
+/// Returns an InvalidArgument error, and leaves `state` unusable, for a spec
+/// the columns cannot feed (a key column type that cannot be grouped, a
+/// numeric reduction over a String column, a SetUnion over an unsupported
+/// type or over a string that holds the separator byte 0x1e, a text
+/// aggregate over a nested column, an unsupported dyn op).
+dstd::Result<void> agg_accumulate(AggState& state,
+                                  const dstd::Vector<const Series*>& keys,
+                                  const dstd::Vector<const Series*>& values,
+                                  std::int64_t begin = 0,
+                                  std::int64_t end = -1);
 /// As above plus the dyn inputs: each @ref AggDynInput feeds a per-argument
 /// value column whose name is discovered here. Requires `state` to have been
 /// built with a non-empty `dyn` spec list; the column set may differ from batch
 /// to batch, and a group's dyn set grows to the union of names seen for it.
-void agg_accumulate(AggState& state, const dstd::Vector<const Series*>& keys,
-                    const dstd::Vector<const Series*>& values,
-                    const dstd::Vector<AggDynInput>& dyn,
-                    std::int64_t begin = 0, std::int64_t end = -1);
+/// Errors are those of the form above.
+dstd::Result<void> agg_accumulate(AggState& state,
+                                  const dstd::Vector<const Series*>& keys,
+                                  const dstd::Vector<const Series*>& values,
+                                  const dstd::Vector<AggDynInput>& dyn,
+                                  std::int64_t begin = 0,
+                                  std::int64_t end = -1);
 /// Single-key convenience: forwards to the N-key form with `keys = {&key}`.
-void agg_accumulate(AggState& state, const Series& key,
-                    const dstd::Vector<const Series*>& values,
-                    std::int64_t begin = 0, std::int64_t end = -1);
+dstd::Result<void> agg_accumulate(AggState& state, const Series& key,
+                                  const dstd::Vector<const Series*>& values,
+                                  std::int64_t begin = 0,
+                                  std::int64_t end = -1);
 
 /// Number rows of the batches that later agg_accumulate calls fold from
 /// `base` (row 0 of a batch is row `base`), so First/Last and the group order
@@ -280,7 +293,10 @@ DataFrame agg_finalize(const AggState& state,
 /// for one query, such as a spill; a blob that is stored keeps the default,
 /// and a reader must pass the same `compact` as the writer.
 dstd::String agg_serialize(const AggState& state, bool compact = false);
-AggStatePtr agg_deserialize(const dstd::String& blob, bool compact = false);
+/// Returns an InvalidArgument error for a blob that is truncated or corrupt,
+/// and a Parse error for one in the other (compact or full) format.
+dstd::Result<AggStatePtr> agg_deserialize(const dstd::String& blob,
+                                          bool compact = false);
 
 /// Number of groups currently held by `state`.
 std::int64_t agg_group_count(const AggState& state);
@@ -332,9 +348,10 @@ AggStatePtr agg_extract_groups(const AggState& state,
 /// agg_finalize. The caller finalizes (agg_finalize), coarsens (agg_regroup),
 /// or persists (agg_extract_group + agg_serialize) the state. Used by the
 /// rollup materialize path to store per-group partials.
-AggStatePtr group_agg_state(const dstd::Vector<const Series*>& keys,
-                            const dstd::Vector<const Series*>& values,
-                            dstd::Vector<AggSpec> specs);
+/// Errors are those of @ref agg_accumulate.
+dstd::Result<AggStatePtr> group_agg_state(
+    const dstd::Vector<const Series*>& keys,
+    const dstd::Vector<const Series*>& values, dstd::Vector<AggSpec> specs);
 
 /// One value column's already-reduced statistics to seed into an AggState,
 /// identified by `value_col` (the AggSpec value_col index the state was built
@@ -355,6 +372,7 @@ void agg_seed_begin(AggState& state, std::size_t nkeys);
 /// specs). `str_keys` is one String per key column and `null_keys[k]` set makes
 /// key k null (empty means none). Repeated calls for a key merge. Call
 /// agg_seed_finalize once, after all calls and before agg_finalize/serialize.
+/// Ends the process when a spec has no seed representation.
 void agg_seed_group(AggState& state, const dstd::Vector<dstd::String>& str_keys,
                     const dstd::Vector<bool>& null_keys, std::uint64_t count,
                     const dstd::Vector<AggSeedValue>& values);
@@ -367,14 +385,16 @@ void agg_seed_finalize(AggState& state);
 
 /// Fused group-by: accumulate the whole batch in one pass over all specs (the
 /// sync driver chunks via the parallel_for seam and merges), then finalize.
-DataFrame group_agg(const dstd::Vector<const Series*>& keys,
-                    const dstd::Vector<const Series*>& values,
-                    dstd::Vector<AggSpec> specs,
-                    const dstd::Vector<dstd::String>& key_names);
+/// Errors are those of @ref agg_accumulate.
+dstd::Result<DataFrame> group_agg(const dstd::Vector<const Series*>& keys,
+                                  const dstd::Vector<const Series*>& values,
+                                  dstd::Vector<AggSpec> specs,
+                                  const dstd::Vector<dstd::String>& key_names);
 /// Single-key convenience: forwards to the N-key form.
-DataFrame group_agg(const Series& key,
-                    const dstd::Vector<const Series*>& values,
-                    dstd::Vector<AggSpec> specs, const dstd::String& key_name);
+dstd::Result<DataFrame> group_agg(const Series& key,
+                                  const dstd::Vector<const Series*>& values,
+                                  dstd::Vector<AggSpec> specs,
+                                  const dstd::String& key_name);
 
 /// How many group-bys wrote their aggregate columns in place (straight into
 /// the output, with no per-partition columns to join) since the process began.

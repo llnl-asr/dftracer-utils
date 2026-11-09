@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/internal/cell_ops.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dstd/fs.h>
@@ -844,7 +845,7 @@ TEST_SUITE("View") {
             CHECK_THROWS_AS(dataframe::group_agg_expr(
                                 key, {dataframe::agg_sum(cyc, "sum_cycles")},
                                 inputs, "name"),
-                            std::invalid_argument);
+                            common::DFTUtilsException);
         }
     }
 

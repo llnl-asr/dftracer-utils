@@ -991,7 +991,7 @@ void AggRunReader::advance() {
     dstd::String blob(len, '\0');
     if (std::fread(blob.data(), 1, len, is_.get()) != len)
         throw std::runtime_error("agg spill: truncated run");
-    cur_ = agg_deserialize(blob, true);
+    cur_ = common::unwrap(agg_deserialize(blob, true));
     valid_ = true;
 }
 

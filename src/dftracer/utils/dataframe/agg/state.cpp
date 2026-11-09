@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/agg/detail.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>  // dftu_series
 #include <dftracer/utils/dataframe/internal/column_read.h>  // read_i64/u64/f64
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dataframe/sketch.h>  // DDSketch, sketch_bucket_keys
 #include <dftracer/utils/dstd/base64.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/function_ref.h>
 #include <dftracer/utils/dstd/hash/hash.h>
 #include <dftracer/utils/dstd/hash/xxh3.h>
@@ -22,7 +24,6 @@
 #include <functional>
 #include <limits>
 #include <numeric>
-#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -157,6 +158,12 @@ void fs_add(FieldStat& fs, const Series& c, std::int64_t i, FieldStatDomain d) {
     }
 }
 
+// The type a text aggregate met as a non-null nested cell, set by cell_repr and
+// read by agg_accumulate after its row loop, so the per-row path stays free of
+// a result and a column that is all null or out of range is not refused.
+thread_local TypeId t_nested_text_type = TypeId::Unknown;
+thread_local bool t_has_nested_text = false;
+
 // Generic string form of a cell, for ArgMax's repr and SetUnion's values:
 // matches the View's to_str (std::to_string for numbers, the raw text for a
 // String column) so the two engines agree on ArgMax/SetUnion output.
@@ -169,10 +176,9 @@ dstd::String cell_repr(const Series& c, std::int64_t i) {
         case TypeId::LargeList:
         case TypeId::FixedSizeList:
         case TypeId::Struct:
-            throw std::invalid_argument(
-                (dstd::String("agg: a ") + type_name(c.type()) +
-                 " column has no text form for this aggregate")
-                    .c_str());
+            t_nested_text_type = c.type();
+            t_has_nested_text = true;
+            return {};
         default:
             break;
     }
@@ -228,15 +234,12 @@ dstd::String set_text(const Series& c, std::int64_t i) {
     }
 }
 
-void set_insert(AggState::StringSet& set, dstd::String v, std::size_t group,
-                bool typed) {
-    if (!typed && v.find(AGG_SET_SEP) != dstd::String::npos)
-        throw std::invalid_argument(
-            ("set_union: a string value in group " + dstd::to_string(group) +
-             " contains the set separator (0x1e), which the joined text cannot "
-             "hold")
-                .c_str());
+// False, with the value left out, for an untyped value that holds the
+// separator; the caller reports it after the row loop.
+bool set_insert(AggState::StringSet& set, dstd::String v, bool typed) {
+    if (!typed && v.find(AGG_SET_SEP) != dstd::String::npos) return false;
     set.insert(std::move(v));
+    return true;
 }
 
 // KMV element hash. XXH3 avalanches, which makes the bottom-k order (and the
@@ -250,8 +253,9 @@ std::uint64_t kmv_hash(dstd::StringView v) {
 void AggStateDeleter::operator()(AggState* p) const noexcept { delete p; }
 
 AggStatePtr agg_new(dstd::Vector<AggSpec> specs, dstd::Vector<AggDynSpec> dyn) {
+    AggStatePtr s(new AggState());
     // The dyn finalize computes only these ops. Any other would come out as a
-    // silent 0.0 in every group.
+    // silent 0.0 in every group; agg_accumulate reports it.
     for (const AggDynSpec& d : dyn) {
         switch (d.op) {
             case AggOp::Count:
@@ -267,25 +271,26 @@ AggStatePtr agg_new(dstd::Vector<AggSpec> specs, dstd::Vector<AggDynSpec> dyn) {
             case AggOp::Pct:
                 break;
             default:
-                throw std::invalid_argument(
-                    ("group_by: dyn columns support count, sum, min, max, "
-                     "sum_sq, mean, var, std, skew, kurt and pct; op " +
-                     dstd::to_string(static_cast<int>(d.op)) + " for prefix '" +
-                     d.out_prefix + "' is not one of them")
-                        .c_str());
+                if (s->init_error.empty())
+                    s->init_error =
+                        "group_by: dyn columns support count, sum, min, max, "
+                        "sum_sq, mean, var, std, skew, kurt and pct; op " +
+                        dstd::to_string(static_cast<int>(d.op)) +
+                        " for prefix '" + d.out_prefix + "' is not one of them";
         }
     }
-    AggStatePtr s(new AggState());
     s->specs = std::move(specs);
     s->dyn_specs = std::move(dyn);
     s->init_layout();
     return s;
 }
 
-void agg_accumulate(AggState& st, const dstd::Vector<const Series*>& keys,
-                    const dstd::Vector<const Series*>& values,
-                    std::int64_t begin, std::int64_t end) {
-    agg_accumulate(st, keys, values, dstd::Vector<AggDynInput>{}, begin, end);
+dstd::Result<void> agg_accumulate(AggState& st,
+                                  const dstd::Vector<const Series*>& keys,
+                                  const dstd::Vector<const Series*>& values,
+                                  std::int64_t begin, std::int64_t end) {
+    return agg_accumulate(st, keys, values, dstd::Vector<AggDynInput>{}, begin,
+                          end);
 }
 
 namespace {
@@ -1185,10 +1190,14 @@ bool accumulate_plain(AggState& st, const dstd::Vector<const Series*>& keys,
 
 }  // namespace
 
-void agg_accumulate(AggState& st, const dstd::Vector<const Series*>& keys,
-                    const dstd::Vector<const Series*>& values,
-                    const dstd::Vector<AggDynInput>& dyn_in, std::int64_t begin,
-                    std::int64_t end) {
+dstd::Result<void> agg_accumulate(AggState& st,
+                                  const dstd::Vector<const Series*>& keys,
+                                  const dstd::Vector<const Series*>& values,
+                                  const dstd::Vector<AggDynInput>& dyn_in,
+                                  std::int64_t begin, std::int64_t end) {
+    if (!st.init_error.empty())
+        return common::make_error(common::ErrorCode::InvalidArgument,
+                                  st.init_error);
     dstd::String sketch_bytes;
     if (st.has_dyn) {
         // Resolve every dyn input once, before the row loop.
@@ -1229,12 +1238,12 @@ void agg_accumulate(AggState& st, const dstd::Vector<const Series*>& keys,
         for (std::size_t k = 0; k < st.nkeys; ++k) {
             const TypeId kt = keys[k]->type();
             if (!is_group_key_type(kt)) {
-                throw std::invalid_argument(
-                    (dstd::String("group_by: key column type '") +
-                     type_name(kt) +
-                     "' is not supported as a group key (no int64/double "
-                     "domain to hash it in)")
-                        .c_str());
+                return common::make_error(
+                    common::ErrorCode::InvalidArgument,
+                    dstd::String("group_by: key column type '") +
+                        type_name(kt) +
+                        "' is not supported as a group key (no int64/double "
+                        "domain to hash it in)");
             }
             st.key_is_bytes[k] = is_bytes_key_type(kt) ? 1 : 0;
             st.key_domain[k] = col_domain(kt);
@@ -1272,11 +1281,11 @@ void agg_accumulate(AggState& st, const dstd::Vector<const Series*>& keys,
             const AggOp op = st.specs[s].op;
             if (op != AggOp::CountValid && op != AggOp::First &&
                 op != AggOp::Last)
-                throw std::invalid_argument(
-                    (dstd::String("group_by: aggregate '") + st.specs[s].out +
-                     "' reduces a String column numerically; only "
-                     "count_valid, first and last apply to strings")
-                        .c_str());
+                return common::make_error(
+                    common::ErrorCode::InvalidArgument,
+                    dstd::String("group_by: aggregate '") + st.specs[s].out +
+                        "' reduces a String column numerically; only "
+                        "count_valid, first and last apply to strings");
         }
         for (std::size_t s = 0; s < st.specs.size(); ++s) {
             if (st.specs[s].op != AggOp::SetUnion || st.spec_set[s] < 0)
@@ -1291,35 +1300,35 @@ void agg_accumulate(AggState& st, const dstd::Vector<const Series*>& keys,
             }
             if (set_is_list(t) && set_scalar_type(vc->child(0).type())) {
                 if (!vc->is_flat())
-                    throw std::invalid_argument(
-                        (dstd::String("set_union: aggregate '") +
-                         st.specs[s].out + "' needs a flat list column")
-                            .c_str());
+                    return common::make_error(
+                        common::ErrorCode::InvalidArgument,
+                        dstd::String("set_union: aggregate '") +
+                            st.specs[s].out + "' needs a flat list column");
                 if (set_typed(st.specs[s]))
                     st.specs[s].param =
                         1.0 + static_cast<double>(vc->child(0).type());
                 continue;
             }
-            throw std::invalid_argument(
-                (dstd::String("set_union: aggregate '") + st.specs[s].out +
-                 "' does not support " +
-                 (set_is_list(t)
-                      ? dstd::String("a list of ") +
-                            type_name(vc->child(0).type())
-                      : dstd::String("a column of type ") + type_name(t)) +
-                 "; use a string, bool, number or a list of those")
-                    .c_str());
+            return common::make_error(
+                common::ErrorCode::InvalidArgument,
+                dstd::String("set_union: aggregate '") + st.specs[s].out +
+                    "' does not support " +
+                    (set_is_list(t)
+                         ? dstd::String("a list of ") +
+                               type_name(vc->child(0).type())
+                         : dstd::String("a column of type ") + type_name(t)) +
+                    "; use a string, bool, number or a list of those");
         }
         for (std::size_t s = 0; s < st.specs.size(); ++s) {
             if (st.specs[s].op != AggOp::SketchQuantile) continue;
             const Series* vc =
                 values[static_cast<std::size_t>(st.specs[s].value_col)];
             if (narrow_varwidth_type(vc->type()) != TypeId::String)
-                throw std::invalid_argument(
-                    (dstd::String("group_by: aggregate '") + st.specs[s].out +
-                     "' reads base64 sketch text, not a " +
-                     type_name(vc->type()) + " column")
-                        .c_str());
+                return common::make_error(
+                    common::ErrorCode::InvalidArgument,
+                    dstd::String("group_by: aggregate '") + st.specs[s].out +
+                        "' reads base64 sketch text, not a " +
+                        type_name(vc->type()) + " column");
         }
         st.inited = true;
     }
@@ -1351,8 +1360,11 @@ void agg_accumulate(AggState& st, const dstd::Vector<const Series*>& keys,
     // positional / collection state. Every buffer is resolved once and the
     // row loop is loads and adds; the generic loop below makes a C ABI call
     // per cell.
-    if (accumulate_plain(st, keys, values, begin, end)) return;
+    if (accumulate_plain(st, keys, values, begin, end))
+        return dstd::Result<void>();
     st.settle_light();
+    t_has_nested_text = false;
+    std::size_t separator_group = static_cast<std::size_t>(-1);
 
     // Precompute DDSketch bucket keys for each sketch field in one SIMD pass
     // over the chunk (the logarithm is the costly step); the per-group scatter
@@ -1561,9 +1573,10 @@ void agg_accumulate(AggState& st, const dstd::Vector<const Series*>& keys,
                 AggState::StringSet& set =
                     st.sets[static_cast<std::size_t>(g) * st.n_set + slot];
                 if (!set_is_list(vc->type())) {
-                    set_insert(set, set_text(*vc, i),
-                               static_cast<std::size_t>(g),
-                               set_slot_typed[slot] != 0);
+                    if (!set_insert(set, set_text(*vc, i),
+                                    set_slot_typed[slot] != 0))
+                        if (separator_group == static_cast<std::size_t>(-1))
+                            separator_group = static_cast<std::size_t>(g);
                     continue;
                 }
                 const Series& elems = set_elems[slot];
@@ -1574,10 +1587,11 @@ void agg_accumulate(AggState& st, const dstd::Vector<const Series*>& keys,
                                             ? vc->offsets()[i + 1]
                                             : vc->offsets64()[i + 1];
                 for (std::int64_t k = lo; k < hi; ++k)
-                    if (!elems.is_null(k))
-                        set_insert(set, set_text(elems, k),
-                                   static_cast<std::size_t>(g),
-                                   set_slot_typed[slot] != 0);
+                    if (!elems.is_null(k) &&
+                        !set_insert(set, set_text(elems, k),
+                                    set_slot_typed[slot] != 0))
+                        if (separator_group == static_cast<std::size_t>(-1))
+                            separator_group = static_cast<std::size_t>(g);
             }
         }
         if (st.has_occ) {
@@ -1651,13 +1665,28 @@ void agg_accumulate(AggState& st, const dstd::Vector<const Series*>& keys,
             }
         }
     }
+    if (t_has_nested_text) {
+        t_has_nested_text = false;
+        return common::make_error(
+            common::ErrorCode::InvalidArgument,
+            dstd::String("agg: a ") + type_name(t_nested_text_type) +
+                " column has no text form for this aggregate");
+    }
+    if (separator_group != static_cast<std::size_t>(-1))
+        return common::make_error(
+            common::ErrorCode::InvalidArgument,
+            "set_union: a string value in group " +
+                dstd::to_string(separator_group) +
+                " contains the set separator (0x1e), which the joined text "
+                "cannot hold");
+    return dstd::Result<void>();
 }
 
-void agg_accumulate(AggState& st, const Series& key,
-                    const dstd::Vector<const Series*>& values,
-                    std::int64_t begin, std::int64_t end) {
+dstd::Result<void> agg_accumulate(AggState& st, const Series& key,
+                                  const dstd::Vector<const Series*>& values,
+                                  std::int64_t begin, std::int64_t end) {
     const dstd::Vector<const Series*> keys{&key};
-    agg_accumulate(st, keys, values, begin, end);
+    return agg_accumulate(st, keys, values, begin, end);
 }
 
 void agg_set_row_base(AggState& st, std::int64_t base) { st.row_base = base; }
@@ -1701,7 +1730,7 @@ void agg_merge(AggState& into, const AggState& other,
 
 bool agg_pack_shape(AggState& st, const dstd::Vector<const Series*>& keys,
                     const dstd::Vector<const Series*>& values, AggPacked& out) {
-    if (!st.inited) agg_accumulate(st, keys, values, 0, 0);
+    if (!st.inited && !agg_accumulate(st, keys, values, 0, 0)) return false;
     dstd::Vector<PlainKey> k;
     dstd::Vector<Plain8> v;
     if (!st.inited || !light_reducers(st) || st.has_sketch ||
@@ -1781,17 +1810,18 @@ void agg_accumulate_packed(AggState& st,
                            const dstd::Vector<const Series*>& keys,
                            const dstd::Vector<const Series*>& values,
                            const AggPacked& shape, const AggPages& rows) {
-    if (!st.inited) agg_accumulate(st, keys, values, 0, 0);
+    if (!st.inited && !agg_accumulate(st, keys, values, 0, 0))
+        dstd::fatal("agg_accumulate_packed: the columns were rejected");
     dstd::Vector<PlainKey> k;
     dstd::Vector<Plain8> v;
     if (!plain_shape(st, keys, values, k, v))
-        throw std::logic_error("agg_accumulate_packed: not a packable shape");
+        dstd::fatal("agg_accumulate_packed: not a packable shape");
     if (st.ngroups() == 0 && st.fstats.empty()) {
         st.light_on = true;
         st.init_light();
     }
     if (!st.light_on || !fast_open(st, k, true))
-        throw std::logic_error("agg_accumulate_packed: not a light state");
+        dstd::fatal("agg_accumulate_packed: not a light state");
     const std::size_t nf = st.nf;
     const std::size_t W = shape.W;
     for (std::size_t pg = 0; pg < rows.pages.size(); ++pg) {

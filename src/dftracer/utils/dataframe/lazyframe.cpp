@@ -1926,7 +1926,7 @@ class IsDupCursor : public Cursor {
         co_await accumulate_batches(
             *first_, max_rows, budget_, state, [&] { return agg_new(specs); },
             [&](AggState& st, const Morsel& m, std::int64_t) {
-                agg_accumulate(st, key_series(m), {});
+                common::unwrap(agg_accumulate(st, key_series(m), {}));
             },
             [&](dstd::Vector<Morsel>& batch, AggStatePtr& st) {
                 for (auto& m : batch) spool_.add(std::move(m.columns), m.rows);
@@ -5938,7 +5938,8 @@ void agg_accumulate_chunk(AggState& state, const DataFrame& frame,
     // Pass the row count explicitly: an empty key list (a global reduce to one
     // group) carries no key column to infer the length from.
     if (dyn_prefix.empty()) {
-        agg_accumulate(state, kcols, vcols, 0, frame.num_rows());
+        common::unwrap(
+            agg_accumulate(state, kcols, vcols, 0, frame.num_rows()));
         return;
     }
     dstd::Vector<AggDynInput> dcols;
@@ -5946,7 +5947,8 @@ void agg_accumulate_chunk(AggState& state, const DataFrame& frame,
         if (frame.names[i].rfind(dyn_prefix, 0) == 0)
             dcols.push_back(
                 {frame.names[i].substr(dyn_prefix.size()), &frame.columns[i]});
-    agg_accumulate(state, kcols, vcols, dcols, 0, frame.num_rows());
+    common::unwrap(
+        agg_accumulate(state, kcols, vcols, dcols, 0, frame.num_rows()));
 }
 
 coro::CoroTask<AggStatePtr> LazyFrame::collect_group_state(

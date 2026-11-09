@@ -11,6 +11,7 @@
 #include <dftracer/utils/dataframe/kernels/stats.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dstd/deque.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
@@ -22,7 +23,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
-#include <stdexcept>
 #include <utility>
 
 namespace dftracer::utils::dataframe {
@@ -109,10 +109,9 @@ bool equal_at(const Series& v, std::int64_t a, std::int64_t b) {
         case ValueDomain::Numeric:
             return read_f64(v, a) == read_f64(v, b);
         case ValueDomain::None:
-            throw std::invalid_argument(
-                (dstd::String("column type '") + type_name(v.type()) +
-                 "' has no comparable per-row value (nested type)")
-                    .c_str());
+            dstd::fatal((dstd::String("column type '") + type_name(v.type()) +
+                         "' has no comparable per-row value (nested type)")
+                            .c_str());
     }
     return false;
 }

@@ -4,6 +4,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/view_builder.h>
@@ -12,6 +13,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 
@@ -112,7 +114,7 @@ Cells fold(const dstd::Vector<Morsel>& morsels,
         Series v = Series::flat_i64(m.vals.data(), len);
         dstd::Vector<const Series*> keys = {&k};
         if (two_keys) keys.push_back(&o);
-        agg_accumulate(*st, keys, {&v}, 0, len);
+        dftu_utils_test::ok(agg_accumulate(*st, keys, {&v}, 0, len));
     }
     DataFrame out =
         agg_finalize(*st, dstd::Vector<dstd::String>{"k", "o"}.at(0));

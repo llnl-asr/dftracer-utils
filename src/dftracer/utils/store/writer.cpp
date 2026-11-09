@@ -29,6 +29,8 @@
 namespace dftracer::utils::store::engine {
 namespace {
 
+std::atomic<std::uint64_t> g_writer_serials{0};
+
 using dftracer::utils::dstd::ByteView;
 
 constexpr std::size_t SEGMENT_HEADER_BYTES = 20;
@@ -299,6 +301,7 @@ Writer::Writer(dstd::String name, dstd::String path, std::uint32_t extent_size,
                &Writer::extents_idle),
       name_(std::move(name)),
       path_(std::move(path)),
+      serial_(g_writer_serials.fetch_add(1, std::memory_order_relaxed) + 1),
       extent_size_(extent_size),
       generations_(std::move(generations)) {}
 
@@ -429,7 +432,7 @@ Batch Writer::batch(NamespaceId namespace_id, const ScopeKey& scope,
                     std::uint64_t params_hash,
                     const dstd::Vector<SourceStat>* sources) {
     Batch batch;
-    batch.writer_ = this;
+    batch.writer_serial_ = serial_;
     batch.namespace_id_ = namespace_id.value;
     batch.scope_ = scope;
     batch.params_hash_ = params_hash;
@@ -845,7 +848,7 @@ dstd::Expected<void, dstd::Error> Writer::commit(Batch&& batch) {
     if (committer_.failed()) {
         return dstd::Unexpected<dstd::Error>(committer_.error());
     }
-    if (batch.writer_ != this) return invalid_error();
+    if (batch.writer_serial_ != serial_) return invalid_error();
     if (batch.error_) return dstd::Unexpected<dstd::Error>(*batch.error_);
 
     auto segment = build_segment(batch);

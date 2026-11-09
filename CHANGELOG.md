@@ -515,6 +515,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix `Store::commit` accepting a batch made before a `close()` when the next writer got the address of the closed one.
+  Such a batch is now refused.
 - Fix `dftracer_replay` reporting "No trace files" when it cannot read the trace directory.
   It now reports the read error.
 - Fix a compressed Python export of an aggregated view reporting success when closing the gzip file failed.

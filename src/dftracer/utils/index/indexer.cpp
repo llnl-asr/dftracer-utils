@@ -195,10 +195,10 @@ store::IndexExtension tier_extension(const dstd::String& name) {
 template <class T, class Fn>
 T block_on(Runtime& rt, const char* name, Fn fn) {
     T out;
-    rt.block_on(coro::named(
+    common::unwrap(rt.block_on(coro::named(
         name, coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
             out = co_await fn(scope);
-        })));
+        }))));
     return out;
 }
 
@@ -246,7 +246,8 @@ Indexer Indexer::open(dstd::Vector<dstd::String> paths,
         const bool is_directory = known && self.is_directory;
         const bool is_regular_file = known && self.is_regular_file;
         const auto present = dstd::fs::exists(dstd::PathView(p));
-        if (!is_directory && !is_regular_file && !(present && *present))
+        if (!is_directory && !is_regular_file &&
+            !(present.has_value() && *present))
             throw common::DFTUtilsException::cat(
                 common::ErrorCode::NotFound,
                 "Indexer::open: no such path: ", p);

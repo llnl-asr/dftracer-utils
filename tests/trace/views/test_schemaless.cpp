@@ -21,6 +21,7 @@
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -94,12 +95,12 @@ dstd::String dft_line(int pid, int tid, const char* name, std::int64_t ts,
 dataframe::DataFrame scan_only(const views::detail::scan::ScanPlan& p) {
     Runtime rt;
     dataframe::DataFrame out;
-    rt.block_on(coro::named(
+    dftu_utils_test::ok(rt.block_on(coro::named(
         "scan-only",
         coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
             auto st = co_await views::detail::build_engine_agg_state(*p);
             out = views::detail::finalize_engine_result(*st, *p);
-        })));
+        }))));
     return views::detail::apply_agg_post_ops(std::move(out), *p);
 }
 
@@ -109,10 +110,10 @@ bool partials_serve(const views::detail::scan::ScanPlan& p,
     views::detail::ensure_schema(*p);
     Runtime rt;
     bool served = false;
-    rt.block_on(coro::named(
+    dftu_utils_test::ok(rt.block_on(coro::named(
         "partials", coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
             served = co_await views::detail::partials_collect(*p, st);
-        })));
+        }))));
     return served;
 }
 
@@ -131,12 +132,12 @@ bool typed_serve(const views::detail::scan::ScanPlan& p,
     views::detail::ensure_schema(*p);
     Runtime rt;
     bool served = false;
-    rt.block_on(
+    dftu_utils_test::ok(rt.block_on(
         coro::named("typed-partials",
                     coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
                         served = co_await views::detail::partials_collect_typed(
                             *p, regular, profiles);
-                    })));
+                    }))));
     return served;
 }
 
@@ -203,10 +204,11 @@ dstd::Vector<dstd::String> path_role_lines() {
 }
 
 dstd::Map<dstd::String, double> counts_by_op(const View& v) {
-    const dataframe::DataFrame f = v.group_by({GroupKey::name()})
-                                       .agg({{AggOp::Count, "", "n"}})
-                                       .collect()
-                                       .get();
+    const dataframe::DataFrame f =
+        dftu_utils_test::ok(v.group_by({GroupKey::name()})
+                                .agg({{AggOp::Count, "", "n"}})
+                                .collect()
+                                .get());
     dstd::Map<dstd::String, double> out;
     for (std::int64_t r = 0; r < f.num_rows(); ++r)
         out[bstr(f, r, "op")] = bnum(f, r, "n");
@@ -338,16 +340,16 @@ fields:
         CHECK(flame_paths(run(vb.flamegraph().collect())) == fa);
         CHECK(fa.at("all/step/read/sys").second == 20);
 
-        const dataframe::DataFrame ga =
+        const dataframe::DataFrame ga = dftu_utils_test::ok(
             (va.group_by({GroupKey::pid(), GroupKey::tid(), GroupKey::name()})
                  .agg({{AggOp::Count, "", "n"}})
                  .collect()
-                 .get());
-        const dataframe::DataFrame gc =
+                 .get()));
+        const dataframe::DataFrame gc = dftu_utils_test::ok(
             (vc.group_by({GroupKey::pid(), GroupKey::tid(), GroupKey::name()})
                  .agg({{AggOp::Count, "", "n"}})
                  .collect()
-                 .get());
+                 .get()));
         CHECK(ga.num_rows() == 16);
         CHECK(gc.num_rows() == 16);
         CHECK(bhas(gc, "host"));
@@ -419,7 +421,9 @@ fields:
                 dstd::String(dstd::String(determine_index_path(gz, ""))))
                 .record_schema("generic");
         StringSink sink;
-        v.select({"actor.login", "x.y", "tags.1", "z"}).sink_json(sink).get();
+        dftu_utils_test::ok(v.select({"actor.login", "x.y", "tags.1", "z"})
+                                .sink_json(sink)
+                                .get());
         REQUIRE(sink.lines().size() == 1);
         CHECK(sink.lines()[0] ==
               R"({"actor.login":"u1","x.y":7,"tags.1":"q"})");
@@ -550,10 +554,10 @@ fields:
         // A filter parses every line; the unfiltered export copies lines
         // through unparsed.
         StringSink sink;
-        const auto stats =
+        const auto stats = dftu_utils_test::ok(
             v.filter(dftracer::utils::duql::parse_or_throw("exists(n)"))
                 .sink_json(sink)
-                .get();
+                .get());
         CHECK(sink.lines().size() == 3);
         CHECK(sink.lines()[0] == R"({"n":1})");
         CHECK(stats.lines_invalid == 1);
@@ -599,10 +603,10 @@ fields:
         }
         CHECK(count_of(v, "time_range 1100 .. 1200") == 100);
         const dataframe::DataFrame from_min =
-            v.time_bucket_min(60000000)
-                .agg({{AggOp::Count, "", "n"}})
-                .collect()
-                .get();
+            dftu_utils_test::ok(v.time_bucket_min(60000000)
+                                    .agg({{AggOp::Count, "", "n"}})
+                                    .collect()
+                                    .get());
         REQUIRE(from_min.num_rows() == 5);
         for (std::int64_t r = 0; r < from_min.num_rows(); ++r)
             CHECK(bnum(from_min, r, "n") == 60);
@@ -844,10 +848,11 @@ fields:
                             (i < 4 ? "f1" : "f2") + R"("})");
         using Counts = dstd::Map<dstd::String, std::int64_t>;
         auto counts = [](const View& v, GroupKey key, const char* col) {
-            const dataframe::DataFrame f = v.group_by({key})
-                                               .agg({{AggOp::Count, "", "n"}})
-                                               .collect()
-                                               .get();
+            const dataframe::DataFrame f =
+                dftu_utils_test::ok(v.group_by({key})
+                                        .agg({{AggOp::Count, "", "n"}})
+                                        .collect()
+                                        .get());
             Counts out;
             for (std::int64_t r = 0; r < f.num_rows(); ++r)
                 out[bstr(f, r, col)] =
@@ -913,7 +918,8 @@ fields:
         CHECK(count_of(vo, "where size < 50") == 50);
         CHECK(counts_by_op(vo) == counts_by_op(vs));
         StringSink sink;
-        const ExportStats st = vo.duql("size < 50").sink_json(sink).get();
+        const ExportStats st =
+            dftu_utils_test::ok(vo.duql("size < 50").sink_json(sink).get());
         CHECK(sink.lines().size() == 50);
         CHECK(st.chunks_skipped > 0);
     }
@@ -967,7 +973,7 @@ fields:
         opts.output_path = env.dir() + "/out.ndjson.gz";
         opts.build_index = true;
         opts.member_size = 40;
-        const ExportStats st = vs.sink_trace(opts).get();
+        const ExportStats st = dftu_utils_test::ok(vs.sink_trace(opts).get());
         CHECK(st.lines_invalid == 0);
 
         const dstd::String idx =
@@ -1008,7 +1014,8 @@ fields:
             const View v = View::from_file(
                 dstd::String(gz),
                 dstd::String(determine_index_path(gz, env.dir() + "/di")));
-            const dataframe::DataFrame f = v.collect().get();
+            const dataframe::DataFrame f =
+                dftu_utils_test::ok(v.collect().get());
             REQUIRE(f.num_rows() == 4);
             dstd::Map<dstd::String, std::size_t> longest;
             for (std::int64_t r = 0; r < f.num_rows(); ++r) {
@@ -1054,7 +1061,8 @@ fields:
                     dstd::String(gz),
                     dstd::String(determine_index_path(gz, env.dir() + "/pi")))
                     .record_schema("generic");
-            const dataframe::DataFrame f = v.collect().get();
+            const dataframe::DataFrame f =
+                dftu_utils_test::ok(v.collect().get());
             REQUIRE(f.num_rows() == 3);
             std::size_t long_texts = 0;
             for (std::int64_t r = 0; r < f.num_rows(); ++r)
@@ -1104,7 +1112,8 @@ fields:
             View::from_file(dstd::String(dump), dstd::String(dump_idx));
         CHECK(counts_by_op(vd) == counts_by_op(vr));
         StringSink pruned;
-        const ExportStats st = vd.duql("size < 50").sink_json(pruned).get();
+        const ExportStats st =
+            dftu_utils_test::ok(vd.duql("size < 50").sink_json(pruned).get());
         CHECK(pruned.lines().size() == 50);
         CHECK(st.chunks_skipped > 0);
 

@@ -17,6 +17,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <algorithm>
 #include <cmath>
@@ -96,9 +97,9 @@ coro::CoroTask<dstd::Vector<DataFrame>> stream_all(LazyFrame lf,
 
 dstd::Vector<DataFrame> morsels(const LazyFrame& lf,
                                 std::int64_t max_rows = 1'000'000) {
-    return dftracer::utils::default_runtime()
-        .submit(stream_all(lf, max_rows))
-        .get();
+    return dftu_utils_test::ok(dftracer::utils::default_runtime()
+                                   .submit(stream_all(lf, max_rows))
+                                   .get());
 }
 
 dstd::Vector<dstd::String> row_keys(const DataFrame& d) {

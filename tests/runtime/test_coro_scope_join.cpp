@@ -7,6 +7,7 @@
 #include <doctest/doctest.h>
 #include <no_core_dump.h>
 #include <sys/wait.h>
+#include <task_result.h>
 #include <unistd.h>
 
 #include <atomic>
@@ -48,9 +49,10 @@ TEST_CASE("a joined scope is destroyed without terminating") {
         Runtime rt(ExecutorConfig{.thread_count = 2}, false);
         auto scope = dstd::make_unique<coro::Scope>(rt.executor());
         scope->spawn([]() -> coro::CoroTask<void> { co_return; });
-        rt.block_on(coro::named("join", [&]() -> coro::CoroTask<void> {
-            co_await scope->join();
-        }()));
+        dftu_utils_test::ok(
+            rt.block_on(coro::named("join", [&]() -> coro::CoroTask<void> {
+                co_await scope->join();
+            }())));
         scope.reset();
     });
     REQUIRE(WIFEXITED(status));
@@ -61,7 +63,7 @@ TEST_CASE("with_scope joins when its body throws") {
     Runtime rt(ExecutorConfig{.thread_count = 2}, false);
     std::atomic<int> done{0};
     CHECK_THROWS_AS(
-        rt.block_on(coro::named(
+        dftu_utils_test::ok(rt.block_on(coro::named(
             "throws",
             coro::with_scope([&](coro::Scope& s) -> coro::CoroTask<void> {
                 s.spawn([&]() -> coro::CoroTask<void> {
@@ -70,7 +72,7 @@ TEST_CASE("with_scope joins when its body throws") {
                 });
                 throw std::runtime_error("body failed");
                 co_return;
-            }))),
+            })))),
         std::runtime_error);
     CHECK(done.load() == 1);
 }

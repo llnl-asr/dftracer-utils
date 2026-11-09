@@ -21,6 +21,7 @@
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
 #include <sys/stat.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <algorithm>
@@ -80,7 +81,7 @@ dstd::Vector<runtime::fs::FoundFile> scan_dir(dstd::StringView dir) {
             REQUIRE(found.has_value());
             entries = std::move(*found);
         });
-    rt.submit(std::move(task), "scan-dir").wait();
+    dftu_utils_test::ok(rt.submit(std::move(task), "scan-dir").wait());
     rt.shutdown();
     return entries;
 }
@@ -96,7 +97,7 @@ coro::CoroTask<dstd::Vector<runtime::fs::FoundFile>> cli_scan_task(
 }
 
 dstd::Vector<runtime::fs::FoundFile> cli_scan(dstd::StringView dir) {
-    return cli_scan_task(dstd::String(dir)).get();
+    return dftu_utils_test::ok(cli_scan_task(dstd::String(dir)).get());
 }
 
 dstd::Vector<dstd::String> write_view_traces(const dstd::String& dir,
@@ -132,9 +133,9 @@ void cold_count(const dstd::Vector<dstd::String>& files,
     const auto view = trace::views::View::from_files(std::move(view_files))
                           .group_by({trace::views::GroupKey::name()})
                           .agg({{trace::views::AggOp::Count, "", "n"}});
-    default_runtime().block_on(coro::named(
+    dftu_utils_test::ok(default_runtime().block_on(coro::named(
         "serial-stages-view",
-        [&]() -> coro::CoroTask<void> { (void)co_await view.collect(); }()));
+        [&]() -> coro::CoroTask<void> { (void)co_await view.collect(); }())));
 }
 
 // Written once and shared by the cases that read it.

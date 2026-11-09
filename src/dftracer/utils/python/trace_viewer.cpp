@@ -356,7 +356,8 @@ bool run_on(PyObject* runtime_arg, Make&& make, T& out) {
     dftracer::utils::dstd::SharedPtr<dftracer::utils::Runtime> rt =
         runtime_from_arg(runtime_arg);
     if (!rt) return false;
-    return run_blocking([&] { out = rt->submit(make()).get(); });
+    return run_blocking(
+        [&] { out = common::unwrap(rt->submit(make()).get()); });
 }
 
 PyObject* tv_new(PyTypeObject* type, PyObject*, PyObject*) {
@@ -391,7 +392,7 @@ int tv_init(TraceViewerObject* self, PyObject* args, PyObject* kwds) {
         const auto is_dir = dftracer::utils::dstd::fs::is_directory(
             dftracer::utils::dstd::PathView(
                 dftracer::utils::dstd::StringView(path)));
-        if (is_dir && *is_dir)
+        if (is_dir.has_value() && *is_dir)
             dir = DS(path);
         else
             paths.emplace_back(path);
@@ -404,9 +405,10 @@ int tv_init(TraceViewerObject* self, PyObject* args, PyObject* kwds) {
     View tv;
     if (dir) {
         if (!run_blocking([&] {
-                tv = python::get_default_runtime()
-                         ->submit(View::from_directory(*dir, DS(index_dir)))
-                         .get();
+                tv = common::unwrap(
+                    python::get_default_runtime()
+                        ->submit(View::from_directory(*dir, DS(index_dir)))
+                        .get());
             }))
             return -1;
     } else {
@@ -1018,8 +1020,10 @@ PyObject* tv_materialize_partials(PyObject* self, PyObject* args,
     dftracer::utils::dstd::SharedPtr<dftracer::utils::Runtime> rt =
         runtime_from_arg(runtime_arg);
     if (!rt) return nullptr;
-    if (!run_blocking(
-            [&] { rt->submit(tv_of(self).materialize_partials(parts)).get(); }))
+    if (!run_blocking([&] {
+            common::unwrap(
+                rt->submit(tv_of(self).materialize_partials(parts)).get());
+        }))
         return nullptr;
     Py_RETURN_NONE;
 }

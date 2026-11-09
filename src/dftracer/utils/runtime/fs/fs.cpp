@@ -503,7 +503,7 @@ coro::CoroTask<dstd::Expected<bool, dstd::Error>> create_directories_owned(
         if (prefix.size() <= root) continue;
         auto make_call = create_directory_owned(prefix);
         auto made = co_await std::move(make_call);
-        if (!made) co_return dstd::Unexpected(made.error());
+        if (!made.has_value()) co_return dstd::Unexpected(made.error());
         created = created || *made;
     }
     co_return created;

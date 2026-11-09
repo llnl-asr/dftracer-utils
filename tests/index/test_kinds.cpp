@@ -12,6 +12,7 @@
 #include <dftracer/utils/index/plan/prune.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 using namespace dftracer::utils;
@@ -59,7 +60,7 @@ dstd::Vector<std::uint64_t> prune(const dstd::String& index,
     auto q = duql::Query::from_string(text);
     REQUIRE(q.has_value());
     index::plan::ChunkPruner pruner;
-    auto out = pruner({index, trace, std::move(*q)}).get();
+    auto out = dftu_utils_test::ok(pruner({index, trace, std::move(*q)}).get());
     REQUIRE(out.success);
     if (out.candidate_checkpoints.empty() && out.file_may_match)
         return {0, 1, 2};

@@ -125,7 +125,8 @@ class FileDecompressorUtility {
             // Validate input file exists
             const auto found =
                 dstd::fs::exists(dstd::PathView(input.input_path));
-            if (!found) throw common::DFTUtilsException(found.error());
+            if (!found.has_value())
+                throw common::DFTUtilsException(found.error());
             if (!*found) {
                 co_return common::make_error(
                     common::ErrorCode::NotFound,

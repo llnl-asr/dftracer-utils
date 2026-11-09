@@ -151,9 +151,9 @@ dstd::Vector<LiveView::PinnedFile> LiveView::refresh() {
     in.whole_members = true;
     index::build::ResolverResult built;
     if (!files.empty()) {
-        built = default_runtime().block_on(
+        built = common::unwrap(default_runtime().block_on(
             coro::named("live_view_snapshot",
-                        index::build::resolve_and_build_index(std::move(in))));
+                        index::build::resolve_and_build_index(std::move(in)))));
     }
     if (!built.failures.empty())
         throw common::DFTUtilsException::cat(common::ErrorCode::Io, "index of ",
@@ -222,7 +222,7 @@ dstd::Vector<LiveView::PinnedFile> LiveView::refresh() {
             auto scan = index::build::find_member_after_hole(
                 file->native_handle(), st.verified_bytes, stats[i].size);
             const dstd::Optional<std::uint64_t> after =
-                default_runtime().block_on(std::move(scan));
+                common::unwrap(default_runtime().block_on(std::move(scan)));
             if (after) {
                 st.state = LiveFileState::Hole;
                 st.hole_bytes = *after - st.verified_bytes;

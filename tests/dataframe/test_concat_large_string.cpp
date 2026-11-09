@@ -6,6 +6,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/config.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 #include <stdexcept>
@@ -168,9 +169,9 @@ TEST_SUITE("concat string and large_string") {
             LazyFrame::scan(dstd::make_shared<InMemorySource>(std::move(x)));
         LazyFrame ly =
             LazyFrame::scan(dstd::make_shared<InMemorySource>(std::move(y)));
-        DataFrame out = dftracer::utils::default_runtime()
-                            .submit(lx.concat(ly).collect())
-                            .get();
+        DataFrame out = dftu_utils_test::ok(dftracer::utils::default_runtime()
+                                                .submit(lx.concat(ly).collect())
+                                                .get());
         CHECK(cells_of(out.column("s")) == Cells{"a", "b", "c"});
     }
 }

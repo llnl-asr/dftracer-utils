@@ -12,6 +12,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/open_extent.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <algorithm>
@@ -70,7 +71,7 @@ std::size_t peak_live(const dstd::Vector<dstd::String>& files,
             result =
                 co_await index::build::BatchBuilder::process(std::move(config));
         });
-        rt.submit(std::move(task), "build-peak").wait();
+        dftu_utils_test::ok(rt.submit(std::move(task), "build-peak").wait());
         rt.shutdown();
     }
     done.store(true);

@@ -18,6 +18,7 @@
 #include <dftracer/utils/store/writer.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <unistd.h>
 
@@ -176,7 +177,7 @@ dstd::Expected<void, dstd::Error> commit_waiting(engine::Writer& writer,
             !committed.error().is_code(engine::WriterErrc::Busy)) {
             return committed;
         }
-        store_runtime().submit(writer.space()).get();
+        dftu_utils_test::ok(store_runtime().submit(writer.space()).get());
     }
 }
 

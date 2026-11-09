@@ -190,7 +190,7 @@ Expected<void, Error> copy_entry(PathView from, PathView to, CopyMode mode) {
                 return Unexpected(errno_error(error, to.str()));
             }
             const Expected<bool, Error> is_dir = is_directory(to);
-            if (!is_dir) return Unexpected(is_dir.error());
+            if (!is_dir.has_value()) return Unexpected(is_dir.error());
             if (!*is_dir) return Unexpected(not_a_directory_error(to));
         }
         const Expected<Dir, Error> dir = Dir::open(from);
@@ -308,7 +308,7 @@ Expected<bool, Error> create_directories(PathView path) {
         const StringView prefix = bytes.substr(0, at);
         if (prefix.size() <= root) continue;
         const Expected<bool, Error> made = create_directory(PathView(prefix));
-        if (!made) return Unexpected(made.error());
+        if (!made.has_value()) return Unexpected(made.error());
         created = created || *made;
     }
     return created;
@@ -340,7 +340,7 @@ Expected<std::uint64_t, Error> remove_all(PathView path) {
     }
     if (found->kind != FileKind::Directory) {
         const Expected<bool, Error> removed = remove(PathView(bytes));
-        if (!removed) return Unexpected(removed.error());
+        if (!removed.has_value()) return Unexpected(removed.error());
         return static_cast<std::uint64_t>(*removed);
     }
     Expected<Dir, Error> dir = open_dir_nofollow(AT_FDCWD, bytes, bytes);

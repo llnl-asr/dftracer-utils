@@ -34,6 +34,7 @@
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
 #include <mmix_lcg.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <cstdint>
@@ -251,10 +252,11 @@ dstd::Vector<dstd::String> run_oracle(const Corpus& c) {
             const dstd::String key = base + "|" + text + "|";
 
             plan::ChunkPruner pruner;
-            auto one = pruner(plan::ChunkPrunerInput{
-                                  dstd::String(dstd::StringView(index_path)),
-                                  dstd::String(dstd::StringView(trace)), q})
-                           .get();
+            auto one = dftu_utils_test::ok(
+                pruner(plan::ChunkPrunerInput{
+                           dstd::String(dstd::StringView(index_path)),
+                           dstd::String(dstd::StringView(trace)), q})
+                    .get());
             lines.push_back(
                 key + "-|pruner|" +
                 dstd::to_string(static_cast<int>(one.success)) + "/" +
@@ -283,8 +285,10 @@ dstd::Vector<dstd::String> run_oracle(const Corpus& c) {
                 vp.time_range = tr;
                 const auto vdef = trace::views::detail::make_vdef(vp, false);
                 std::uint64_t skipped = 0;
-                auto units =
-                    trace::views::detail::gather_units(vp, vdef, skipped).get();
+                auto units = dftu_utils_test::ok(
+
+                    trace::views::detail::gather_units(vp, vdef, skipped)
+                        .get());
                 dstd::Vector<std::uint64_t> ckpts;
                 for (const auto& u : units) ckpts.push_back(u.checkpoint_idx);
                 lines.push_back(
@@ -318,7 +322,7 @@ std::size_t count_json(const dstd::String& trace, const dstd::String& index_dir,
         while (auto line = co_await gen.next()) ++n;
         co_return n;
     };
-    return run().get();
+    return dftu_utils_test::ok(run().get());
 }
 
 coro::CoroTask<std::uint64_t> scan_unit(
@@ -349,7 +353,7 @@ std::uint64_t count_view(const dstd::String& trace,
         for (const auto& u : units) n += co_await scan_unit(u, vdef);
         co_return n;
     };
-    return run().get();
+    return dftu_utils_test::ok(run().get());
 }
 
 // The View scan without pruning: the whole file as one unit.
@@ -374,7 +378,7 @@ std::uint64_t count_view_unpruned(const dstd::String& trace,
         0,
         q,
         nullptr};
-    return scan_unit(u, vdef).get();
+    return dftu_utils_test::ok(scan_unit(u, vdef).get());
 }
 
 }  // namespace
@@ -441,9 +445,9 @@ dstd::Vector<std::uint64_t> view_chunks(const dstd::String& trace,
     const auto vdef = trace::views::detail::make_vdef(vp, false);
     std::uint64_t skipped = 0;
     dstd::Vector<std::uint64_t> out;
-    for (const auto& u :
-         trace::views::detail::gather_units(vp, vdef, skipped).get())
-        out.push_back(u.checkpoint_idx);
+    const auto units = dftu_utils_test::ok(
+        trace::views::detail::gather_units(vp, vdef, skipped).get());
+    for (const auto& u : units) out.push_back(u.checkpoint_idx);
     return out;
 }
 
@@ -598,20 +602,21 @@ TEST_CASE("a spilled build indexes the corpus as an unbounded one") {
     CHECK(a == b);
 
     const auto summary = [&](const dstd::String& index_path) {
-        const auto df = trace::views::View::from_files(
-                            {{dstd::String(trace), dstd::String(index_path)}})
-                            .group_by({trace::views::GroupKey::cat(),
-                                       trace::views::GroupKey::name(),
-                                       trace::views::GroupKey::pid(),
-                                       trace::views::GroupKey::tid()})
-                            .agg({{trace::views::AggOp::Count, "", "n"},
-                                  {trace::views::AggOp::Sum, "dur", "dsum"},
-                                  {trace::views::AggOp::Min, "dur", "dmin"},
-                                  {trace::views::AggOp::Max, "dur", "dmax"},
-                                  {trace::views::AggOp::Min, "ts", "tmin"},
-                                  {trace::views::AggOp::Max, "ts", "tmax"}})
-                            .collect()
-                            .get();
+        const auto df = dftu_utils_test::ok(
+            trace::views::View::from_files(
+                {{dstd::String(trace), dstd::String(index_path)}})
+                .group_by({trace::views::GroupKey::cat(),
+                           trace::views::GroupKey::name(),
+                           trace::views::GroupKey::pid(),
+                           trace::views::GroupKey::tid()})
+                .agg({{trace::views::AggOp::Count, "", "n"},
+                      {trace::views::AggOp::Sum, "dur", "dsum"},
+                      {trace::views::AggOp::Min, "dur", "dmin"},
+                      {trace::views::AggOp::Max, "dur", "dmax"},
+                      {trace::views::AggOp::Min, "ts", "tmin"},
+                      {trace::views::AggOp::Max, "ts", "tmax"}})
+                .collect()
+                .get());
         dstd::Map<dstd::String, dstd::Vector<double>> rows;
         for (std::int64_t r = 0; r < df.num_rows(); ++r) {
             dstd::String key;
@@ -688,11 +693,11 @@ TEST_CASE("a name two traces hash differently is an arrow to both hashes") {
         CAPTURE(trace);
         const auto v = trace::views::View::from_file(dstd::String(trace),
                                                      dstd::String(index_path));
-        const auto f =
+        const auto f = dftu_utils_test::ok(
             dftracer::utils::default_runtime()
                 .submit(
                     v.duql(R"(where fhash -> files.path == "/x")").collect())
-                .get();
+                .get());
         CHECK(f.num_rows() == 20);
     }
 }

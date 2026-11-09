@@ -19,6 +19,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <algorithm>
 #include <cmath>
@@ -33,7 +34,8 @@ using namespace dftracer::utils::dataframe;
 namespace {
 
 DataFrame run(coro::CoroTask<DataFrame> t) {
-    return dftracer::utils::default_runtime().submit(std::move(t)).get();
+    return dftu_utils_test::ok(
+        dftracer::utils::default_runtime().submit(std::move(t)).get());
 }
 
 Series i64s(const dstd::Vector<std::int64_t>& v) {
@@ -759,77 +761,86 @@ TEST_SUITE("lazy frame ops") {
         const DataFrame df = make_groups();
         GroupBy g = df.group_by({"k"});
 
-        DataFrame cs = g.cumsum();
+        DataFrame cs = dftu_utils_test::ok(g.cumsum());
         CHECK(cs.names == dstd::Vector<dstd::String>{"a", "b"});
         CHECK(i64_col(cs, "a") == dstd::Vector<I>{3, 1, NI, 3, 6});
         CHECK(f64_col(cs, "b") == dstd::Vector<D>{1.0, 5.0, 3.0, 10.0, 3.5});
-        CHECK(i64_col(g.cummax(), "a") == dstd::Vector<I>{3, 1, NI, 2, 3});
-        CHECK(f64_col(g.cummax(), "b") ==
+        CHECK(i64_col(dftu_utils_test::ok(g.cummax()), "a") ==
+              dstd::Vector<I>{3, 1, NI, 2, 3});
+        CHECK(f64_col(dftu_utils_test::ok(g.cummax()), "b") ==
               dstd::Vector<D>{1.0, 5.0, 2.0, 5.0, 2.0});
-        CHECK(i64_col(g.cummin(), "a") == dstd::Vector<I>{3, 1, NI, 1, 3});
-        CHECK(f64_col(g.cummin(), "b") ==
+        CHECK(i64_col(dftu_utils_test::ok(g.cummin()), "a") ==
+              dstd::Vector<I>{3, 1, NI, 1, 3});
+        CHECK(f64_col(dftu_utils_test::ok(g.cummin()), "b") ==
               dstd::Vector<D>{1.0, 5.0, 1.0, 5.0, 0.5});
-        DataFrame cc = g.cumcount();
+        DataFrame cc = dftu_utils_test::ok(g.cumcount());
         CHECK(cc.names == dstd::Vector<dstd::String>{"cumcount"});
         CHECK(i64_col(cc, "cumcount") == dstd::Vector<I>{0, 0, 1, 1, 2});
-        CHECK(i64_col(g.ngroup(), "ngroup") == dstd::Vector<I>{0, 1, 0, 1, 0});
+        CHECK(i64_col(dftu_utils_test::ok(g.ngroup()), "ngroup") ==
+              dstd::Vector<I>{0, 1, 0, 1, 0});
 
-        DataFrame sh = g.shift();
+        DataFrame sh = dftu_utils_test::ok(g.shift());
         CHECK(sh.names == dstd::Vector<dstd::String>{"a", "b"});
         CHECK(i64_col(sh, "a") == dstd::Vector<I>{NI, NI, 3, 1, NI});
         CHECK(f64_col(sh, "b") == dstd::Vector<D>{ND, ND, 1.0, 5.0, 2.0});
-        CHECK(i64_col(g.shift(-1), "a") == dstd::Vector<I>{NI, 2, 3, NI, NI});
-        CHECK(f64_col(g.shift(-1), "b") ==
+        CHECK(i64_col(dftu_utils_test::ok(g.shift(-1)), "a") ==
+              dstd::Vector<I>{NI, 2, 3, NI, NI});
+        CHECK(f64_col(dftu_utils_test::ok(g.shift(-1)), "b") ==
               dstd::Vector<D>{2.0, 5.0, 0.5, ND, ND});
-        CHECK(i64_col(g.diff(), "a") == dstd::Vector<I>{NI, NI, NI, 1, NI});
-        CHECK(f64_col(g.diff(), "b") ==
+        CHECK(i64_col(dftu_utils_test::ok(g.diff()), "a") ==
+              dstd::Vector<I>{NI, NI, NI, 1, NI});
+        CHECK(f64_col(dftu_utils_test::ok(g.diff()), "b") ==
               dstd::Vector<D>{ND, ND, 1.0, 0.0, -1.5});
-        CHECK(f64_col(g.pct_change(), "b") ==
+        CHECK(f64_col(dftu_utils_test::ok(g.pct_change()), "b") ==
               dstd::Vector<D>{ND, ND, 1.0, 0.0, -0.75});
 
-        CHECK(f64_col(g.rank(), "a") ==
+        CHECK(f64_col(dftu_utils_test::ok(g.rank()), "a") ==
               dstd::Vector<D>{1.5, 1.0, ND, 2.0, 1.5});
-        CHECK(f64_col(g.rank(), "b") ==
+        CHECK(f64_col(dftu_utils_test::ok(g.rank()), "b") ==
               dstd::Vector<D>{2.0, 1.5, 3.0, 1.5, 1.0});
-        CHECK(f64_col(g.rank(RankMethod::Average, false), "b") ==
-              dstd::Vector<D>{2.0, 1.5, 1.0, 1.5, 3.0});
-        CHECK(f64_col(g.rank(RankMethod::Min), "b") ==
+        CHECK(f64_col(dftu_utils_test::ok(g.rank(RankMethod::Average, false)),
+                      "b") == dstd::Vector<D>{2.0, 1.5, 1.0, 1.5, 3.0});
+        CHECK(f64_col(dftu_utils_test::ok(g.rank(RankMethod::Min)), "b") ==
               dstd::Vector<D>{2.0, 1.0, 3.0, 1.0, 1.0});
-        CHECK(f64_col(g.rank(RankMethod::Dense), "a") ==
+        CHECK(f64_col(dftu_utils_test::ok(g.rank(RankMethod::Dense)), "a") ==
               dstd::Vector<D>{1.0, 1.0, ND, 2.0, 1.0});
-        CHECK(f64_col(g.rank(RankMethod::Ordinal), "a") ==
+        CHECK(f64_col(dftu_utils_test::ok(g.rank(RankMethod::Ordinal)), "a") ==
               dstd::Vector<D>{1.0, 1.0, ND, 2.0, 2.0});
-        CHECK(f64_col(g.rank(RankMethod::Ordinal, false), "b") ==
-              dstd::Vector<D>{2.0, 1.0, 1.0, 2.0, 3.0});
-        CHECK(f64_col(g.rank(RankMethod::Max), "b") ==
+        CHECK(f64_col(dftu_utils_test::ok(g.rank(RankMethod::Ordinal, false)),
+                      "b") == dstd::Vector<D>{2.0, 1.0, 1.0, 2.0, 3.0});
+        CHECK(f64_col(dftu_utils_test::ok(g.rank(RankMethod::Max)), "b") ==
               dstd::Vector<D>{2.0, 2.0, 3.0, 2.0, 1.0});
-        CHECK(f64_col(g.rank(RankMethod::Max, false), "b") ==
-              dstd::Vector<D>{2.0, 2.0, 1.0, 2.0, 3.0});
-        CHECK(f64_col(g.rank(RankMethod::Max), "a") ==
+        CHECK(f64_col(dftu_utils_test::ok(g.rank(RankMethod::Max, false)),
+                      "b") == dstd::Vector<D>{2.0, 2.0, 1.0, 2.0, 3.0});
+        CHECK(f64_col(dftu_utils_test::ok(g.rank(RankMethod::Max)), "a") ==
               dstd::Vector<D>{2.0, 1.0, ND, 2.0, 2.0});
 
-        DataFrame h2 = g.head(2);
+        DataFrame h2 = dftu_utils_test::ok(g.head(2));
         CHECK(h2.names == dstd::Vector<dstd::String>{"k", "a", "b"});
         CHECK(f64_col(h2, "b") == dstd::Vector<D>{1.0, 5.0, 2.0, 5.0});
-        CHECK(f64_col(g.tail(1), "b") == dstd::Vector<D>{5.0, 0.5});
-        CHECK(f64_col(g.nth(1), "b") == dstd::Vector<D>{2.0, 5.0});
-        CHECK(f64_col(g.nth(-1), "b") == dstd::Vector<D>{5.0, 0.5});
+        CHECK(f64_col(dftu_utils_test::ok(g.tail(1)), "b") ==
+              dstd::Vector<D>{5.0, 0.5});
+        CHECK(f64_col(dftu_utils_test::ok(g.nth(1)), "b") ==
+              dstd::Vector<D>{2.0, 5.0});
+        CHECK(f64_col(dftu_utils_test::ok(g.nth(-1)), "b") ==
+              dstd::Vector<D>{5.0, 0.5});
 
         // A trailing window within the group, null until it holds `n`
         // present values (a null inside the window counts for nothing).
-        CHECK(f64_col(g.rolling_sum(2), "b") ==
+        CHECK(f64_col(dftu_utils_test::ok(g.rolling_sum(2)), "b") ==
               dstd::Vector<D>{ND, ND, 3.0, 10.0, 2.5});
-        CHECK(i64_col(g.rolling_sum(2), "a") ==
+        CHECK(i64_col(dftu_utils_test::ok(g.rolling_sum(2)), "a") ==
               dstd::Vector<I>{NI, NI, NI, 3, NI});
-        CHECK(f64_col(g.rolling_mean(2), "b") ==
+        CHECK(f64_col(dftu_utils_test::ok(g.rolling_mean(2)), "b") ==
               dstd::Vector<D>{ND, ND, 1.5, 5.0, 1.25});
-        CHECK(f64_col(g.rolling_max(2), "b") ==
+        CHECK(f64_col(dftu_utils_test::ok(g.rolling_max(2)), "b") ==
               dstd::Vector<D>{ND, ND, 2.0, 5.0, 2.0});
-        CHECK(f64_col(g.rolling_min(2), "b") ==
+        CHECK(f64_col(dftu_utils_test::ok(g.rolling_min(2)), "b") ==
               dstd::Vector<D>{ND, ND, 1.0, 5.0, 0.5});
-        CHECK(i64_col(g.rolling_sum(1), "a") ==
+        CHECK(i64_col(dftu_utils_test::ok(g.rolling_sum(1)), "a") ==
               dstd::Vector<I>{3, 1, NI, 2, 3});
-        CHECK_THROWS_AS(g.rolling_sum(0), std::invalid_argument);
+        CHECK_THROWS_AS(dftu_utils_test::ok(g.rolling_sum(0)),
+                        std::invalid_argument);
 
         // The group-wise fills: a null before the group's first present value
         // stays null under ffill, after its last under bfill.
@@ -840,8 +851,10 @@ TEST_SUITE("lazy frame ops") {
         const std::uint8_t hvalid[1] = {0x06};
         holes.columns.push_back(Series::flat_i64(hv, 5, hvalid));
         GroupBy hg = holes.group_by({"k"});
-        CHECK(i64_col(hg.ffill(), "a") == dstd::Vector<I>{NI, 1, 2, 2, 1});
-        CHECK(i64_col(hg.bfill(), "a") == dstd::Vector<I>{2, 1, 2, NI, NI});
+        CHECK(i64_col(dftu_utils_test::ok(hg.ffill()), "a") ==
+              dstd::Vector<I>{NI, 1, 2, 2, 1});
+        CHECK(i64_col(dftu_utils_test::ok(hg.bfill()), "a") ==
+              dstd::Vector<I>{2, 1, 2, NI, NI});
 
         // The lazy object builds the same plan; the eager one collects it.
         LazyGroupBy lg = df.lazy().group_by({"k"});
@@ -859,13 +872,14 @@ TEST_SUITE("lazy frame ops") {
               4);
 
         // No keys: the whole frame is one group; ngroup has nothing to number.
-        CHECK(i64_col(df.group_by({}).cumsum(), "a") ==
+        CHECK(i64_col(dftu_utils_test::ok(df.group_by({}).cumsum()), "a") ==
               dstd::Vector<I>{3, 4, NI, 6, 9});
-        CHECK_THROWS_AS(df.group_by({}).ngroup(), std::invalid_argument);
+        CHECK_THROWS_AS(dftu_utils_test::ok(df.group_by({}).ngroup()),
+                        std::invalid_argument);
         DataFrame keys_only;
         keys_only.names = {"k"};
         keys_only.columns.push_back(Series::strings({"x", "y"}));
-        CHECK_THROWS_AS(keys_only.group_by({"k"}).cumsum(),
+        CHECK_THROWS_AS(dftu_utils_test::ok(keys_only.group_by({"k"}).cumsum()),
                         std::invalid_argument);
     }
 

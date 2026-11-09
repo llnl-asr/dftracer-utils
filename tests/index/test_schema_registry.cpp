@@ -16,6 +16,7 @@
 #include <dftracer/utils/index/source.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 using namespace dftracer::utils;
@@ -69,7 +70,7 @@ std::size_t count_rows(dstd::StringView trace, dstd::StringView index_dir,
         while (auto line = co_await gen.next()) ++n;
         co_return n;
     };
-    return run().get();
+    return dftu_utils_test::ok(run().get());
 }
 
 }  // namespace

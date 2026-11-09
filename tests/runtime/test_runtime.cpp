@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <atomic>
 #include <chrono>
@@ -50,9 +51,10 @@ TEST_CASE("Runtime - parallel_for covers the range exactly once") {
     Runtime rt(4);
     const std::int64_t n = 100000;
     dstd::Vector<std::int32_t> hits(n, 0);
-    rt.parallel_for(n, 4096, [&](std::int64_t begin, std::int64_t end) {
-        for (std::int64_t i = begin; i < end; ++i) hits[i]++;
-    });
+    dftu_utils_test::ok(
+        rt.parallel_for(n, 4096, [&](std::int64_t begin, std::int64_t end) {
+            for (std::int64_t i = begin; i < end; ++i) hits[i]++;
+        }));
     for (std::int64_t i = 0; i < n; ++i) REQUIRE(hits[i] == 1);
 }
 
@@ -61,14 +63,14 @@ TEST_CASE("Runtime - parallel_reduce matches a serial sum") {
     const std::int64_t n = 200000;
     std::int64_t expected = 0;
     for (std::int64_t i = 0; i < n; ++i) expected += i;
-    std::int64_t got = rt.parallel_reduce(
+    std::int64_t got = dftu_utils_test::ok(rt.parallel_reduce(
         n, 4096, std::int64_t{0},
         [](std::int64_t b, std::int64_t e) {
             std::int64_t s = 0;
             for (std::int64_t i = b; i < e; ++i) s += i;
             return s;
         },
-        [](std::int64_t a, std::int64_t b) { return a + b; });
+        [](std::int64_t a, std::int64_t b) { return a + b; }));
     CHECK(got == expected);
 }
 
@@ -76,11 +78,12 @@ TEST_CASE("Runtime - parallel_for is serial for a single chunk") {
     Runtime rt(4);
     // grain >= n -> one chunk -> body called once inline, no fork-join.
     int calls = 0;
-    rt.parallel_for(1000, 100000, [&](std::int64_t b, std::int64_t e) {
-        ++calls;
-        CHECK(b == 0);
-        CHECK(e == 1000);
-    });
+    dftu_utils_test::ok(
+        rt.parallel_for(1000, 100000, [&](std::int64_t b, std::int64_t e) {
+            ++calls;
+            CHECK(b == 0);
+            CHECK(e == 1000);
+        }));
     CHECK(calls == 1);
 }
 
@@ -89,62 +92,65 @@ TEST_CASE("Runtime - nested parallel_for runs the inner loop serial") {
     // The inner parallel_for must see in_parallel_region() and run inline, so
     // every outer chunk's inner call fires exactly once.
     std::atomic<int> inner_calls{0};
-    rt.parallel_for(8, 1, [&](std::int64_t, std::int64_t) {
-        rt.parallel_for(1000, 8, [&](std::int64_t, std::int64_t) {
-            inner_calls.fetch_add(1);
-        });
-    });
+    dftu_utils_test::ok(rt.parallel_for(8, 1, [&](std::int64_t, std::int64_t) {
+        dftu_utils_test::ok(rt.parallel_for(
+            1000, 8,
+            [&](std::int64_t, std::int64_t) { inner_calls.fetch_add(1); }));
+    }));
     CHECK(inner_calls.load() == 8);  // 8 outer chunks x 1 inner (serial) each
 }
 
 TEST_CASE("Runtime - submit returns correct value") {
     Runtime rt(2);
-    auto result = rt.submit(add_async(3, 4), "add").get();
+    auto result = dftu_utils_test::ok(rt.submit(add_async(3, 4), "add").get());
     CHECK(result == 7);
 }
 
 TEST_CASE("Runtime - submit void completes") {
     Runtime rt(2);
-    CHECK_NOTHROW(rt.submit(noop_async(), "noop").wait());
+    CHECK_NOTHROW(dftu_utils_test::ok(rt.submit(noop_async(), "noop").wait()));
 }
 
 TEST_CASE("Runtime - submit propagates exception") {
     Runtime rt(2);
-    CHECK_THROWS_AS(rt.submit(throw_async(), "throw").get(),
-                    std::runtime_error);
+    CHECK_THROWS_AS(
+        dftu_utils_test::ok(rt.submit(throw_async(), "throw").get()),
+        std::runtime_error);
 }
 
 TEST_CASE("Runtime - submit string result") {
     Runtime rt(2);
-    auto result = rt.submit(string_async(), "string").get();
+    auto result =
+        dftu_utils_test::ok(rt.submit(string_async(), "string").get());
     CHECK(result == "hello");
 }
 
 TEST_CASE("Runtime - submit runs async coroutine") {
     Runtime rt(2);
     auto h = rt.submit(noop_async(), "async-run");
-    h.wait();
+    dftu_utils_test::ok(h.wait());
     CHECK(h.done());
 }
 
 TEST_CASE("Runtime - multiple sequential submits") {
     Runtime rt(2);
     for (int i = 0; i < 10; ++i) {
-        auto result = rt.submit(add_async(i, i), "add").get();
+        auto result =
+            dftu_utils_test::ok(rt.submit(add_async(i, i), "add").get());
         CHECK(result == i * 2);
     }
 }
 
 TEST_CASE("Runtime - shutdown is idempotent") {
     Runtime rt(2);
-    rt.submit(noop_async(), "noop").wait();
+    dftu_utils_test::ok(rt.submit(noop_async(), "noop").wait());
     rt.shutdown();
     CHECK_NOTHROW(rt.shutdown());
 }
 
 TEST_CASE("Runtime - get_progress reports completed task") {
     Runtime rt(2);
-    rt.submit(noop_async(), "tracked").wait();
+    dftu_utils_test::ok(rt.submit(noop_async(), "tracked").wait());
     auto progress = rt.progress();
     CHECK(progress.total_tasks_submitted == 1);
     CHECK(progress.tasks_completed == 1);
@@ -162,30 +168,42 @@ TEST_CASE("Runtime - default threads uses hardware_concurrency") {
 
 TEST_CASE("Runtime - is_responsive after submit") {
     Runtime rt(2);
-    rt.submit(noop_async(), "noop").wait();
+    dftu_utils_test::ok(rt.submit(noop_async(), "noop").wait());
     CHECK(rt.is_responsive());
 }
 
-TEST_CASE("Runtime - submit after shutdown throws") {
+TEST_CASE("Runtime - submit after shutdown gives a cancelled result") {
     Runtime rt(2);
-    rt.submit(noop_async(), "noop").wait();
+    dftu_utils_test::ok(rt.submit(noop_async(), "noop").wait());
     rt.shutdown();
-    CHECK_THROWS_AS(rt.submit(noop_async(), "fail"),
-                    dftracer::utils::common::DFTUtilsException);
+    auto refused = rt.submit(noop_async(), "refused").get();
+    REQUIRE_FALSE(refused.has_value());
+    CHECK(refused.error().condition() == dstd::Condition::Cancelled);
 }
 
-TEST_CASE("Runtime - submit after shutdown throws (void)") {
+TEST_CASE("Runtime - submit of a typed task after shutdown is cancelled") {
     Runtime rt(2);
     rt.shutdown();
-    CHECK_THROWS_AS(rt.submit(noop_async(), "fail"),
-                    dftracer::utils::common::DFTUtilsException);
+    auto task = []() -> CoroTask<int> { co_return 5; };
+    auto refused = rt.submit(task(), "refused").get();
+    REQUIRE_FALSE(refused.has_value());
+    CHECK(refused.error().condition() == dstd::Condition::Cancelled);
+    auto blocked = rt.block_on(task());
+    REQUIRE_FALSE(blocked.has_value());
+    CHECK(blocked.error().condition() == dstd::Condition::Cancelled);
+}
+
+TEST_CASE("Runtime - a refused handle that nobody reads does not abort") {
+    Runtime rt(2);
+    rt.shutdown();
+    rt.submit(noop_async(), "unread");
 }
 
 TEST_CASE("Runtime - submit exception does not crash runtime") {
     Runtime rt(2);
     rt.submit(throw_void_async(), "throw");
-    rt.submit(noop_async(), "after_throw").wait();
-    CHECK_NOTHROW(rt.submit(noop_async(), "noop").wait());
+    dftu_utils_test::ok(rt.submit(noop_async(), "after_throw").wait());
+    CHECK_NOTHROW(dftu_utils_test::ok(rt.submit(noop_async(), "noop").wait()));
 }
 
 TEST_CASE("Runtime - progress starts at zero") {
@@ -220,7 +238,7 @@ TEST_CASE("Runtime - progress shows a task as running while it runs") {
     CHECK(running.root_tasks[0].worker >= 0);
 
     release.store(true);
-    handle.wait();
+    dftu_utils_test::ok(handle.wait());
     auto ended = rt.progress();
     CHECK(ended.tasks_running == 0);
     CHECK(ended.tasks_completed == 1);
@@ -237,9 +255,9 @@ TEST_CASE("Runtime - progress workers present") {
 
 TEST_CASE("Runtime - progress accumulates across submits") {
     Runtime rt(2);
-    rt.submit(noop_async(), "a").wait();
-    rt.submit(noop_async(), "b").wait();
-    rt.submit(add_async(1, 2), "c").wait();
+    dftu_utils_test::ok(rt.submit(noop_async(), "a").wait());
+    dftu_utils_test::ok(rt.submit(noop_async(), "b").wait());
+    dftu_utils_test::ok(rt.submit(add_async(1, 2), "c").wait());
     auto p = rt.progress();
     CHECK(p.total_tasks_submitted == 3);
     CHECK(p.tasks_completed == 3);
@@ -258,7 +276,7 @@ TEST_CASE("Runtime - progress tracks async submit") {
 
 TEST_CASE("Runtime - progress task details") {
     Runtime rt(2);
-    rt.submit(noop_async(), "my_task").wait();
+    dftu_utils_test::ok(rt.submit(noop_async(), "my_task").wait());
     auto p = rt.progress();
     REQUIRE(p.root_tasks.size() == 1);
     CHECK(p.root_tasks[0].name == "my_task");
@@ -270,9 +288,9 @@ TEST_CASE("Runtime - progress task details") {
 
 TEST_CASE("Runtime - progress keeps only the task history limit") {
     Runtime rt(ExecutorConfig{.thread_count = 2, .task_history = 2}, false);
-    rt.submit(noop_async(), "first").wait();
-    rt.submit(noop_async(), "second").wait();
-    rt.submit(noop_async(), "third").wait();
+    dftu_utils_test::ok(rt.submit(noop_async(), "first").wait());
+    dftu_utils_test::ok(rt.submit(noop_async(), "second").wait());
+    dftu_utils_test::ok(rt.submit(noop_async(), "third").wait());
     auto p = rt.progress();
     CHECK(p.root_tasks.size() == 2);
     CHECK(p.tasks_completed == 3);
@@ -280,10 +298,12 @@ TEST_CASE("Runtime - progress keeps only the task history limit") {
 
 TEST_CASE("Runtime - a task that raises counts as failed") {
     Runtime rt(ExecutorConfig{.thread_count = 2, .task_history = 0}, false);
-    CHECK_THROWS_AS(rt.submit(throw_async(), "throw").get(),
-                    std::runtime_error);
-    CHECK_THROWS_AS(rt.submit(throw_void_async(), "throw_void").wait(),
-                    std::runtime_error);
+    CHECK_THROWS_AS(
+        dftu_utils_test::ok(rt.submit(throw_async(), "throw").get()),
+        std::runtime_error);
+    CHECK_THROWS_AS(
+        dftu_utils_test::ok(rt.submit(throw_void_async(), "throw_void").wait()),
+        std::runtime_error);
     auto p = rt.progress();
     CHECK(p.tasks_failed == 2);
     CHECK(p.tasks_completed == 0);
@@ -291,8 +311,9 @@ TEST_CASE("Runtime - a task that raises counts as failed") {
 
 TEST_CASE("Runtime - a failed task keeps its message in the history") {
     Runtime rt(ExecutorConfig{.thread_count = 2, .task_history = 2}, false);
-    CHECK_THROWS_AS(rt.submit(throw_async(), "throw").get(),
-                    std::runtime_error);
+    CHECK_THROWS_AS(
+        dftu_utils_test::ok(rt.submit(throw_async(), "throw").get()),
+        std::runtime_error);
     auto p = rt.progress();
     REQUIRE(p.root_tasks.size() == 1);
     CHECK(p.root_tasks[0].state == TaskState::Failed);
@@ -303,9 +324,9 @@ TEST_CASE("Runtime - a failed task keeps its message in the history") {
 
 TEST_CASE("Runtime - progress multiple tasks have names") {
     Runtime rt(2);
-    rt.submit(noop_async(), "first").wait();
-    rt.submit(add_async(1, 2), "second").wait();
-    rt.submit(string_async(), "third").wait();
+    dftu_utils_test::ok(rt.submit(noop_async(), "first").wait());
+    dftu_utils_test::ok(rt.submit(add_async(1, 2), "second").wait());
+    dftu_utils_test::ok(rt.submit(string_async(), "third").wait());
     auto p = rt.progress();
     REQUIRE(p.root_tasks.size() == 3);
     dstd::Set<dstd::String> names;
@@ -321,7 +342,7 @@ TEST_CASE("Runtime - progress multiple tasks have names") {
 TEST_CASE("Runtime - progress no failures on success") {
     Runtime rt(2);
     for (int i = 0; i < 5; ++i) {
-        rt.submit(noop_async(), "ok").wait();
+        dftu_utils_test::ok(rt.submit(noop_async(), "ok").wait());
     }
     auto p = rt.progress();
     CHECK(p.tasks_failed == 0);
@@ -336,7 +357,7 @@ TEST_CASE("Runtime - progress no failures on success") {
 TEST_CASE("TaskHandle - done() returns true after wait") {
     Runtime rt(2);
     auto h = rt.submit(noop_async(), "done-check");
-    h.wait();
+    dftu_utils_test::ok(h.wait());
     CHECK(h.done());
 }
 
@@ -344,7 +365,7 @@ TEST_CASE("TaskHandle - name is preserved") {
     Runtime rt(2);
     auto h = rt.submit(noop_async(), "my-custom-name");
     CHECK(h.name == "my-custom-name");
-    h.wait();
+    dftu_utils_test::ok(h.wait());
 }
 
 TEST_CASE("TaskHandle - auto-generated name when empty") {
@@ -352,13 +373,13 @@ TEST_CASE("TaskHandle - auto-generated name when empty") {
     auto h = rt.submit(noop_async());
     CHECK(!h.name.empty());
     CHECK(h.name.substr(0, 5) == "task-");
-    h.wait();
+    dftu_utils_test::ok(h.wait());
 }
 
 TEST_CASE("TaskHandle - task_id is assigned") {
     Runtime rt(2);
     auto h = rt.submit(noop_async(), "id-check");
-    h.wait();
+    dftu_utils_test::ok(h.wait());
     // enqueue_tracked assigns ids via fetch_sub from -1000000; sentinel is -1
     CHECK(h.id != -1);
 }
@@ -366,19 +387,19 @@ TEST_CASE("TaskHandle - task_id is assigned") {
 TEST_CASE("TypedTaskHandle - get() returns correct value") {
     Runtime rt(2);
     auto h = rt.submit(add_async(10, 20), "typed-get");
-    CHECK(h.get() == 30);
+    CHECK(dftu_utils_test::ok(h.get()) == 30);
 }
 
 TEST_CASE("TypedTaskHandle - get() propagates exception") {
     Runtime rt(2);
     auto h = rt.submit(throw_async(), "typed-throw");
-    CHECK_THROWS_AS(h.get(), std::runtime_error);
+    CHECK_THROWS_AS(dftu_utils_test::ok(h.get()), std::runtime_error);
 }
 
 TEST_CASE("TypedTaskHandle - done() and name work") {
     Runtime rt(2);
     auto h = rt.submit(string_async(), "typed-name");
-    auto val = h.get();
+    auto val = dftu_utils_test::ok(h.get());
     CHECK(val == "hello");
     CHECK(h.done());
     CHECK(h.name == "typed-name");
@@ -407,7 +428,7 @@ TEST_CASE("Runtime - concurrent submits complete correctly") {
             rt.submit(add_async(i, 100), "concurrent-" + dstd::to_string(i)));
     }
     for (int i = 0; i < 10; ++i) {
-        CHECK(handles[i].get() == i + 100);
+        CHECK(dftu_utils_test::ok(handles[i].get()) == i + 100);
     }
 }
 
@@ -434,13 +455,13 @@ TEST_CASE("Runtime - auto-generated names are unique") {
 TEST_CASE("TaskHandle - void exception via wait") {
     Runtime rt(2);
     auto h = rt.submit(throw_void_async(), "void-throw");
-    CHECK_THROWS_AS(h.wait(), std::runtime_error);
+    CHECK_THROWS_AS(dftu_utils_test::ok(h.wait()), std::runtime_error);
     CHECK(h.done());
 }
 
 TEST_CASE("TaskHandle - void exception via get") {
     Runtime rt(2);
     auto h = rt.submit(throw_void_async(), "void-get-throw");
-    CHECK_THROWS_AS(h.get(), std::runtime_error);
+    CHECK_THROWS_AS(dftu_utils_test::ok(h.get()), std::runtime_error);
     CHECK(h.done());
 }

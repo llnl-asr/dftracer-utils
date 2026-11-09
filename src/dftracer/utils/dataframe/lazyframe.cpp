@@ -1646,7 +1646,8 @@ class HostCursorBridge {
     static std::uint64_t reclaim_thunk(void* self, std::uint64_t want) {
         auto* self_ = static_cast<HostCursorBridge*>(self);
         try {
-            return self_->cursor_->reclaim(want).get();
+            auto reclaimed = self_->cursor_->reclaim(want).get();
+            return reclaimed ? *reclaimed : 0;
         } catch (const std::exception&) {
             return 0;
         }

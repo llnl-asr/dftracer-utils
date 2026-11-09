@@ -24,6 +24,7 @@
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/groupmap_oracle.h>
 #include <trace/views/test_view_common.h>
@@ -108,11 +109,11 @@ using namespace dftracer::utils::trace;
 dataframe::DataFrame engine_collect(const views::detail::scan::ScanPlan& v) {
     Runtime rt;
     dataframe::DataFrame result;
-    rt.block_on(coro::named(
+    dftu_utils_test::ok(rt.block_on(coro::named(
         "engine-collect",
         coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
             result = co_await views::detail::run_collect_via_engine(*v);
-        })));
+        }))));
     return views::detail::apply_agg_post_ops(std::move(result), *v);
 }
 
@@ -122,12 +123,12 @@ dataframe::DataFrame engine_collect(const views::detail::scan::ScanPlan& v) {
 dataframe::DataFrame scan_only(const views::detail::scan::ScanPlan& v) {
     Runtime rt;
     dataframe::DataFrame result;
-    rt.block_on(coro::named(
+    dftu_utils_test::ok(rt.block_on(coro::named(
         "scan-only",
         coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
             auto st = co_await views::detail::build_engine_agg_state(*v);
             result = views::detail::finalize_engine_result(*st, *v);
-        })));
+        }))));
     return views::detail::apply_agg_post_ops(std::move(result), *v);
 }
 
@@ -212,12 +213,12 @@ TEST_SUITE("View") {
                 .agg({{AggOp::Count, "", "n"}});
         };
 
-        dataframe::DataFrame base = make().collect().get();
+        dataframe::DataFrame base = dftu_utils_test::ok(make().collect().get());
 
         // sort_by(n desc): the View plan must equal dataframe::sort_by on the
         // batch.
         dataframe::DataFrame on_view =
-            make().sort_by("n", true).collect().get();
+            dftu_utils_test::ok(make().sort_by("n", true).collect().get());
         dataframe::DataFrame on_vec = dataframe::sort_by(base, "n", true);
         REQUIRE(on_view.num_rows() == on_vec.num_rows());
         for (std::int64_t i = 0; i < on_view.num_rows(); ++i) {
@@ -227,7 +228,8 @@ TEST_SUITE("View") {
         CHECK(bnum(on_view, 0, "n") == 30);  // posix first, descending
 
         // topk(n, 1): the single largest-count group.
-        dataframe::DataFrame tk_view = make().topk("n", 1).collect().get();
+        dataframe::DataFrame tk_view =
+            dftu_utils_test::ok(make().topk("n", 1).collect().get());
         dataframe::DataFrame tk_vec = dataframe::topk(base, "n", 1, true);
         REQUIRE(tk_view.num_rows() == 1);
         CHECK(bnum(tk_view, 0, "n") == bnum(tk_vec, 0, "n"));
@@ -254,7 +256,7 @@ TEST_SUITE("View") {
                 .group_by({GroupKey::cat()})
                 .agg({{AggOp::Count, "", "n"}})
                 .lazy());
-        run.execute().get();
+        dftu_utils_test::ok(run.execute().get());
 
         REQUIRE(a->num_rows() == 2);
         CHECK(bstr(*a, 0, "cat") == "posix");  // count desc: 30 before 20
@@ -286,7 +288,7 @@ TEST_SUITE("View") {
                     []() {});
                 return s.collect({GroupKey::cat()}, {{AggOp::Count, "", "n"}});
             });
-        dataframe::DataFrame cat = plan.collect().get();
+        dataframe::DataFrame cat = dftu_utils_test::ok(plan.collect().get());
 
         // The factory fold counted every event over the same scan the collect
         // aggregated (posix 30 + stdio 20).
@@ -321,21 +323,23 @@ TEST_SUITE("View") {
                     *c = std::move(ch.get());
                 });
         });
-        plan.collect().get();
+        dftu_utils_test::ok(plan.collect().get());
 
         // Reference: collect both branches standalone, combine with the same
         // primitives the session ops wrap. The session must match exactly.
-        auto ra = View::from_file(dstd::String(gz), dstd::String(idx))
-                      .group_by(by_cat())
-                      .agg(count())
-                      .collect()
-                      .get();
-        auto rb = View::from_file(dstd::String(gz), dstd::String(idx))
-                      .filter(posix)
-                      .group_by(by_cat())
-                      .agg(count())
-                      .collect()
-                      .get();
+        auto ra = dftu_utils_test::ok(
+            View::from_file(dstd::String(gz), dstd::String(idx))
+                .group_by(by_cat())
+                .agg(count())
+                .collect()
+                .get());
+        auto rb = dftu_utils_test::ok(
+            View::from_file(dstd::String(gz), dstd::String(idx))
+                .filter(posix)
+                .group_by(by_cat())
+                .agg(count())
+                .collect()
+                .get());
         auto rj = join_batches(ra, rb, 1, JoinType::Inner);
         auto rc = comparator::CompareView::compare_batches(ra, rb, 1);
 
@@ -367,14 +371,14 @@ TEST_SUITE("View") {
                     s.collect({GroupKey::cat()}, {{AggOp::Count, "", "n"}});
                 return *foreign;
             });
-        other.collect().get();
+        dftu_utils_test::ok(other.collect().get());
         dataframe::LazyResult<dataframe::DataFrame> joined =
             base.branch<dataframe::DataFrame>([foreign](ViewSession& s) {
                 auto a =
                     s.collect({GroupKey::cat()}, {{AggOp::Count, "", "n"}});
                 return s.join(a, *foreign, JoinType::Inner);
             });
-        CHECK_THROWS_AS(joined.collect().get(),
+        CHECK_THROWS_AS(dftu_utils_test::ok(joined.collect().get()),
                         dftracer::utils::common::DFTUtilsException);
     }
 
@@ -387,19 +391,20 @@ TEST_SUITE("View") {
 
         // Named field aggregates lower to the matching AggSpec, so the F form
         // and the AggSpec form produce the same table (same default col names).
-        auto by_expr = View::from_file(dstd::String(gz), dstd::String(idx))
-                           .group_by({GroupKey::cat()})
-                           .agg(dstd::Vector<dataframe::field::FieldAggExpr>{
-                               F("dur").sum(), F("dur").mean(), F.any.count()})
-                           .collect()
-                           .get();
-        auto by_spec =
+        auto by_expr = dftu_utils_test::ok(
+            View::from_file(dstd::String(gz), dstd::String(idx))
+                .group_by({GroupKey::cat()})
+                .agg(dstd::Vector<dataframe::field::FieldAggExpr>{
+                    F("dur").sum(), F("dur").mean(), F.any.count()})
+                .collect()
+                .get());
+        auto by_spec = dftu_utils_test::ok(
             View::from_file(dstd::String(gz), dstd::String(idx))
                 .group_by({GroupKey::cat()})
                 .agg(
                     {{AggOp::Sum, "dur"}, {AggOp::Mean, "dur"}, {AggOp::Count}})
                 .collect()
-                .get();
+                .get());
         REQUIRE(by_expr.num_rows() == by_spec.num_rows());
         REQUIRE(bhas(by_expr, "sum_dur"));
         REQUIRE(bhas(by_expr, "mean_dur"));
@@ -436,11 +441,12 @@ TEST_SUITE("View") {
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         dstd::fs::remove(pfw).discard();
         const dstd::String idx = dstd::String(determine_index_path(gz, ""));
-        auto out = View::from_file(dstd::String(gz), dstd::String(idx))
-                       .group_by({GroupKey::name()})
-                       .agg({{AggOp::Sum, "dur", "t"}})
-                       .collect()
-                       .get();
+        auto out = dftu_utils_test::ok(
+            View::from_file(dstd::String(gz), dstd::String(idx))
+                .group_by({GroupKey::name()})
+                .agg({{AggOp::Sum, "dur", "t"}})
+                .collect()
+                .get());
         REQUIRE(out.num_rows() == 2);
         const dataframe::Series t = out.column("t").materialize();
         CHECK(t.type() == dataframe::TypeId::Uint64);
@@ -478,12 +484,13 @@ TEST_SUITE("View") {
         dstd::fs::remove(pfw).discard();
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        auto any = View::from_file(dstd::String(gz), dstd::String(idx))
-                       .group_by({GroupKey::cat()})
-                       .agg(dstd::Vector<dataframe::field::FieldAggExpr>{
-                           F.any.mean(), F.any.count()})
-                       .collect()
-                       .get();
+        auto any = dftu_utils_test::ok(
+            View::from_file(dstd::String(gz), dstd::String(idx))
+                .group_by({GroupKey::cat()})
+                .agg(dstd::Vector<dataframe::field::FieldAggExpr>{
+                    F.any.mean(), F.any.count()})
+                .collect()
+                .get());
         REQUIRE(
             bhas(any, "level"));  // discovered numeric arg -> per-group mean
         REQUIRE(bhas(any, "count"));
@@ -498,12 +505,12 @@ TEST_SUITE("View") {
         CHECK(level["stdio"] == doctest::Approx(101.5));  // mean 100..103
 
         // F.any.sum() applies a sum to every numeric arg (one sum_<arg>).
-        auto anysum =
+        auto anysum = dftu_utils_test::ok(
             View::from_file(dstd::String(gz), dstd::String(idx))
                 .group_by({GroupKey::cat()})
                 .agg(dstd::Vector<dataframe::field::FieldAggExpr>{F.any.sum()})
                 .collect()
-                .get();
+                .get());
         REQUIRE(bhas(anysum, "sum_level"));
         dstd::Map<dstd::String, double> slevel;
         for (std::int64_t i = 0; i < anysum.num_rows(); ++i)
@@ -513,12 +520,12 @@ TEST_SUITE("View") {
 
         // A per-arg percentile collects a per-arg sketch (p90 of posix level
         // 0..9 is ~9; DDSketch is approximate, so allow a small band).
-        auto anypct =
+        auto anypct = dftu_utils_test::ok(
             View::from_file(dstd::String(gz), dstd::String(idx))
                 .group_by({GroupKey::cat()})
                 .agg_numeric_args({AggSpec(AggOp::Pct, "", "p90", "", 0.9)})
                 .collect()
-                .get();
+                .get());
         REQUIRE(bhas(anypct, "p90_level"));
         dstd::Map<dstd::String, double> plevel;
         for (std::int64_t i = 0; i < anypct.num_rows(); ++i)
@@ -542,12 +549,13 @@ TEST_SUITE("View") {
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         // Per-cat distinct names: each cat has exactly one name here.
-        auto t = View::from_file(dstd::String(gz), dstd::String(idx))
-                     .group_by({GroupKey::cat()})
-                     .agg({{AggOp::Count, "", "n"},
-                           {AggOp::SetUnion, "name", "names"}})
-                     .collect()
-                     .get();
+        auto t = dftu_utils_test::ok(
+            View::from_file(dstd::String(gz), dstd::String(idx))
+                .group_by({GroupKey::cat()})
+                .agg({{AggOp::Count, "", "n"},
+                      {AggOp::SetUnion, "name", "names"}})
+                .collect()
+                .get());
         CHECK(bhas(t, "names"));
         dstd::Map<dstd::String, dstd::String> got;
         for (std::int64_t i = 0; i < t.num_rows(); ++i)
@@ -556,10 +564,11 @@ TEST_SUITE("View") {
         CHECK(got["stdio"] == "fwrite");
 
         // No grouping: one row unioning both names, sorted + SET_SEP-joined.
-        auto whole = View::from_file(dstd::String(gz), dstd::String(idx))
-                         .agg({{AggOp::SetUnion, "name", "names"}})
-                         .collect()
-                         .get();
+        auto whole = dftu_utils_test::ok(
+            View::from_file(dstd::String(gz), dstd::String(idx))
+                .agg({{AggOp::SetUnion, "name", "names"}})
+                .collect()
+                .get());
         REQUIRE(whole.num_rows() == 1);
         const dstd::String joined = bstr(whole, 0, "names");
         dstd::Set<dstd::String> vals;
@@ -571,11 +580,12 @@ TEST_SUITE("View") {
         CHECK(vals == dstd::Set<dstd::String>{"read", "fwrite"});
 
         // Distributed partial + merge preserves the union.
-        dstd::String p = (View::from_file(dstd::String(gz), dstd::String(idx))
-                              .agg({{AggOp::SetUnion, "name", "names"}})
-                              .aggregate_partial()
-                              .collect()
-                              .get());
+        dstd::String p = dftu_utils_test::ok(
+            (View::from_file(dstd::String(gz), dstd::String(idx))
+                 .agg({{AggOp::SetUnion, "name", "names"}})
+                 .aggregate_partial()
+                 .collect()
+                 .get()));
         auto merged = View::from_file(dstd::String(gz), dstd::String(idx))
                           .agg({{AggOp::SetUnion, "name", "names"}})
                           .merge_partials({p});
@@ -589,8 +599,8 @@ TEST_SUITE("View") {
                 .group_by({GroupKey::cat()})
                 .agg({{AggOp::SetUnion, "name", "names"}});
         };
-        make().materialize().get();
-        auto back = make().collect().get();
+        dftu_utils_test::ok(make().materialize().get());
+        auto back = dftu_utils_test::ok(make().collect().get());
         dstd::Map<dstd::String, dstd::String> rb;
         for (std::int64_t i = 0; i < back.num_rows(); ++i)
             rb[bstr(back, i, "cat")] = bstr(back, i, "names");
@@ -606,13 +616,14 @@ TEST_SUITE("View") {
 
         auto run = [&](std::uint64_t budget) {
             StringSink s;
-            View::from_file(dstd::String(gz), dstd::String(idx))
-                .phase(Phase::Counters)
-                .group_by({GroupKey::name()})
-                .agg_numeric_args()
-                .memory_budget(budget)
-                .sink_counters(s)
-                .get();
+            dftu_utils_test::ok(
+                View::from_file(dstd::String(gz), dstd::String(idx))
+                    .phase(Phase::Counters)
+                    .group_by({GroupKey::name()})
+                    .agg_numeric_args()
+                    .memory_budget(budget)
+                    .sink_counters(s)
+                    .get());
             auto l = s.lines();
             std::sort(l.begin(), l.end());
             return l;
@@ -626,17 +637,18 @@ TEST_SUITE("View") {
         // auto_spill() picks ~1/3 memory: large budget, so it runs the spill
         // path but only flushes the final run - still identical output.
         StringSink sa;
-        views::detail::scan::export_counters(
-            views::detail::scan::auto_spill(
-                views::detail::scan::agg_numeric_args(
-                    views::detail::scan::group_by(
-                        views::detail::scan::phase(
-                            views::detail::scan::from_file(dstd::String(gz),
-                                                           dstd::String(idx)),
-                            Phase::Counters),
-                        {GroupKey::name()}))),
-            sa)
-            .get();
+        dftu_utils_test::ok(
+            views::detail::scan::export_counters(
+                views::detail::scan::auto_spill(
+                    views::detail::scan::agg_numeric_args(
+                        views::detail::scan::group_by(
+                            views::detail::scan::phase(
+                                views::detail::scan::from_file(
+                                    dstd::String(gz), dstd::String(idx)),
+                                Phase::Counters),
+                            {GroupKey::name()}))),
+                sa)
+                .get());
         auto autos = sa.lines();
         std::sort(autos.begin(), autos.end());
         CHECK(autos == in_mem);
@@ -653,16 +665,17 @@ TEST_SUITE("View") {
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         auto row = [&](std::uint64_t budget) {
-            auto t = View::from_file(dstd::String(gz), dstd::String(idx))
-                         .group_by({GroupKey::cat()})
-                         .agg({{AggOp::Mean, "dur", "m"},
-                               {AggOp::Var, "dur", "v"},
-                               {AggOp::Std, "dur", "s"},
-                               {AggOp::Skew, "dur", "sk"},
-                               {AggOp::Kurt, "dur", "ku"}})
-                         .memory_budget(budget)
-                         .collect()
-                         .get();
+            auto t = dftu_utils_test::ok(
+                View::from_file(dstd::String(gz), dstd::String(idx))
+                    .group_by({GroupKey::cat()})
+                    .agg({{AggOp::Mean, "dur", "m"},
+                          {AggOp::Var, "dur", "v"},
+                          {AggOp::Std, "dur", "s"},
+                          {AggOp::Skew, "dur", "sk"},
+                          {AggOp::Kurt, "dur", "ku"}})
+                    .memory_budget(budget)
+                    .collect()
+                    .get());
             REQUIRE(t.num_rows() == 1);
             return dstd::Vector<double>{bnum(t, 0, "m"), bnum(t, 0, "v"),
                                         bnum(t, 0, "s"), bnum(t, 0, "sk"),
@@ -687,13 +700,14 @@ TEST_SUITE("View") {
         dstd::String gz = create_mixed_trace(env, 200, 0);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        auto t = View::from_file(dstd::String(gz), dstd::String(idx))
-                     .group_by({GroupKey::cat()})
-                     .agg({{AggOp::Min, "dur", "mn"},
-                           {AggOp::Max, "dur", "mx"},
-                           {AggOp::Sum, "dur", "sm"}})
-                     .collect()
-                     .get();
+        auto t = dftu_utils_test::ok(
+            View::from_file(dstd::String(gz), dstd::String(idx))
+                .group_by({GroupKey::cat()})
+                .agg({{AggOp::Min, "dur", "mn"},
+                      {AggOp::Max, "dur", "mx"},
+                      {AggOp::Sum, "dur", "sm"}})
+                .collect()
+                .get());
         REQUIRE(t.num_rows() == 1);
         // dur is a non-negative integer field, so the aggregates come back as
         // an exact Uint64 column, not a Float64 rounded through a double.
@@ -723,9 +737,11 @@ TEST_SUITE("View") {
         };
 
         // Direct fold path.
-        dataframe::DataFrame direct = make().collect().get();
+        dataframe::DataFrame direct =
+            dftu_utils_test::ok(make().collect().get());
         // Partial + merge path (serializes the accumulator and back).
-        dstd::String p = make().aggregate_partial().collect().get();
+        dstd::String p =
+            dftu_utils_test::ok(make().aggregate_partial().collect().get());
         dataframe::DataFrame merged = make().merge_partials({p});
 
         REQUIRE(direct.num_rows() == 1);
@@ -758,12 +774,13 @@ TEST_SUITE("View") {
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         auto p99 = [&](std::uint64_t budget) {
-            auto t = View::from_file(dstd::String(gz), dstd::String(idx))
-                         .group_by({GroupKey::cat()})
-                         .agg({{AggOp::Pct, "dur", "p99", "", 0.99}})
-                         .memory_budget(budget)
-                         .collect()
-                         .get();
+            auto t = dftu_utils_test::ok(
+                View::from_file(dstd::String(gz), dstd::String(idx))
+                    .group_by({GroupKey::cat()})
+                    .agg({{AggOp::Pct, "dur", "p99", "", 0.99}})
+                    .memory_budget(budget)
+                    .collect()
+                    .get());
             REQUIRE(t.num_rows() == 1);
             return bnum(t, 0, "p99");
         };
@@ -783,12 +800,13 @@ TEST_SUITE("View") {
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         auto hist = [&](std::uint64_t budget) {
-            auto t = View::from_file(dstd::String(gz), dstd::String(idx))
-                         .group_by({GroupKey::cat()})
-                         .agg({{AggOp::Hist, "dur", "h"}})
-                         .memory_budget(budget)
-                         .collect()
-                         .get();
+            auto t = dftu_utils_test::ok(
+                View::from_file(dstd::String(gz), dstd::String(idx))
+                    .group_by({GroupKey::cat()})
+                    .agg({{AggOp::Hist, "dur", "h"}})
+                    .memory_budget(budget)
+                    .collect()
+                    .get());
             REQUIRE(t.num_rows() == 1);
             REQUIRE(bhas(t, "h"));
             return hist_bins(t, 0, "h");
@@ -820,14 +838,15 @@ TEST_SUITE("View") {
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         auto run = [&](std::uint64_t budget) {
-            auto t = View::from_file(dstd::String(gz), dstd::String(idx))
-                         .group_by({GroupKey::cat()})
-                         .time_bucket(100)
-                         .agg({{AggOp::Count, "", "n"},
-                               {AggOp::Sum, "dur", "total"}})
-                         .memory_budget(budget)
-                         .collect()
-                         .get();
+            auto t = dftu_utils_test::ok(
+                View::from_file(dstd::String(gz), dstd::String(idx))
+                    .group_by({GroupKey::cat()})
+                    .time_bucket(100)
+                    .agg(
+                        {{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "total"}})
+                    .memory_budget(budget)
+                    .collect()
+                    .get());
             dstd::Vector<dstd::String> rows;
             for (std::int64_t i = 0; i < t.num_rows(); ++i) {
                 dstd::String s;
@@ -853,9 +872,9 @@ TEST_SUITE("View") {
         dstd::String gz = create_mixed_trace(env, 30, 20);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
         StringSink sink;
-        View::from_file(dstd::String(gz), dstd::String(idx))
-            .sink_json(sink)
-            .get();
+        dftu_utils_test::ok(View::from_file(dstd::String(gz), dstd::String(idx))
+                                .sink_json(sink)
+                                .get());
         views::detail::scan::ScanPlan base = views::detail::scan::rollup_root(
             views::detail::scan::from_file(dstd::String(gz), dstd::String(idx)),
             dstd::String(env.dir() + "/rollups"));
@@ -990,12 +1009,14 @@ TEST_SUITE("View") {
                 .agg({{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "total"}});
         };
 
-        auto expect = canon(make().collect().get());  // fresh, no rollup yet
+        auto expect = canon(dftu_utils_test::ok(
+            make().collect().get()));  // fresh, no rollup yet
         REQUIRE(expect.size() >= 1);
 
-        make()
-            .materialize()
-            .get();  // build-only terminal: materialize the rollup
+        dftu_utils_test::ok(
+            make()
+                .materialize()
+                .get());  // build-only terminal: materialize the rollup
         {
             auto db = dftracer::utils::index::cache::open_rollup_db(
                 dftracer::utils::index::rollups_dir(idx),
@@ -1003,7 +1024,8 @@ TEST_SUITE("View") {
             REQUIRE(db);
             CHECK_FALSE(db->usage().empty());
         }
-        CHECK(canon(make().collect().get()) == expect);  // now reads the rollup
+        CHECK(canon(dftu_utils_test::ok(make().collect().get())) ==
+              expect);  // now reads the rollup
     }
 
     TEST_CASE("View - a coarser query is served by rolling up a finer view") {
@@ -1051,13 +1073,15 @@ TEST_SUITE("View") {
                 .agg({{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "total"}});
         };
 
-        auto expect = canon(coarse().collect().get());  // fresh, no rollup
+        auto expect = canon(
+            dftu_utils_test::ok(coarse().collect().get()));  // fresh, no rollup
         REQUIRE(expect.size() >= 1);
 
-        fine().materialize().get();  // materialize only the finer rollup
+        dftu_utils_test::ok(
+            fine().materialize().get());  // materialize only the finer rollup
 
         // The coarse query is answered by re-aggregating the finer rollup.
-        CHECK(canon(coarse().collect().get()) == expect);
+        CHECK(canon(dftu_utils_test::ok(coarse().collect().get())) == expect);
     }
 
     TEST_CASE(
@@ -1102,17 +1126,23 @@ TEST_SUITE("View") {
         };
 
         // Baselines from fresh scans, before any rollup exists.
-        auto expect_coarse = canon(at_bucket(1000).collect().get());
-        auto expect_fine = canon(at_bucket(100).collect().get());
+        auto expect_coarse =
+            canon(dftu_utils_test::ok(at_bucket(1000).collect().get()));
+        auto expect_fine =
+            canon(dftu_utils_test::ok(at_bucket(100).collect().get()));
         REQUIRE(expect_coarse.size() >= 1);
         REQUIRE(expect_coarse.size() <= expect_fine.size());  // coarser folds
 
-        at_bucket(100).materialize().get();  // materialize only the finer grain
+        dftu_utils_test::ok(at_bucket(100)
+                                .materialize()
+                                .get());  // materialize only the finer grain
 
         // The coarse query re-buckets the finer rollup; the fine query reads it
         // back exactly.
-        CHECK(canon(at_bucket(1000).collect().get()) == expect_coarse);
-        CHECK(canon(at_bucket(100).collect().get()) == expect_fine);
+        CHECK(canon(dftu_utils_test::ok(at_bucket(1000).collect().get())) ==
+              expect_coarse);
+        CHECK(canon(dftu_utils_test::ok(at_bucket(100).collect().get())) ==
+              expect_fine);
     }
 
     TEST_CASE(
@@ -1158,24 +1188,26 @@ TEST_SUITE("View") {
             {dstd::String(a), dstd::String(shared)},
             {dstd::String(b), dstd::String(shared)}};
 
-        auto expect =
-            canon(view(both).collect().get());  // single-node baseline
+        auto expect = canon(dftu_utils_test::ok(
+            view(both).collect().get()));  // single-node baseline
         REQUIRE(expect.size() >= 1);
 
         // Each rank aggregates its shard; the coordinator reduces +
         // materializes.
-        dstd::String pa = view({{dstd::String(a), dstd::String(shared)}})
-                              .aggregate_partial()
-                              .collect()
-                              .get();
-        dstd::String pb = view({{dstd::String(b), dstd::String(shared)}})
-                              .aggregate_partial()
-                              .collect()
-                              .get();
-        view(both).materialize_partials({pa, pb}).get();
+        dstd::String pa =
+            dftu_utils_test::ok(view({{dstd::String(a), dstd::String(shared)}})
+                                    .aggregate_partial()
+                                    .collect()
+                                    .get());
+        dstd::String pb =
+            dftu_utils_test::ok(view({{dstd::String(b), dstd::String(shared)}})
+                                    .aggregate_partial()
+                                    .collect()
+                                    .get());
+        dftu_utils_test::ok(view(both).materialize_partials({pa, pb}).get());
 
         // The full query now reads the distributed-built rollup.
-        CHECK(canon(view(both).collect().get()) == expect);
+        CHECK(canon(dftu_utils_test::ok(view(both).collect().get())) == expect);
     }
 
     TEST_CASE("View - distributed partials merge like a single aggregation") {
@@ -1195,23 +1227,25 @@ TEST_SUITE("View") {
         };
 
         // Rank-local partials, then merge them (the transport is elided here).
-        dstd::String pa = view({{dstd::String(a), dstd::String(ia)}})
-                              .aggregate_partial()
-                              .collect()
-                              .get();
-        dstd::String pb = view({{dstd::String(b), dstd::String(ib)}})
-                              .aggregate_partial()
-                              .collect()
-                              .get();
+        dstd::String pa =
+            dftu_utils_test::ok(view({{dstd::String(a), dstd::String(ia)}})
+                                    .aggregate_partial()
+                                    .collect()
+                                    .get());
+        dstd::String pb =
+            dftu_utils_test::ok(view({{dstd::String(b), dstd::String(ib)}})
+                                    .aggregate_partial()
+                                    .collect()
+                                    .get());
         StringSink merged;
         view({}).merge_counter_partials({pa, pb}, merged);
 
         // Compare against aggregating both shards at once.
         StringSink single;
-        view({{dstd::String(a), dstd::String(ia)},
-              {dstd::String(b), dstd::String(ib)}})
-            .sink_counters(single)
-            .get();
+        dftu_utils_test::ok(view({{dstd::String(a), dstd::String(ia)},
+                                  {dstd::String(b), dstd::String(ib)}})
+                                .sink_counters(single)
+                                .get());
 
         auto ml = merged.lines();
         auto sl = single.lines();
@@ -1260,7 +1294,7 @@ TEST_SUITE("View") {
         auto a = run.collect(va.lazy());
         auto b = run.collect(vb.lazy());
         auto c = run.collect(vc.lazy());
-        run.execute().get();
+        dftu_utils_test::ok(run.execute().get());
 
         frames_equal(*a, engine_collect(pa), {"cat"});
         frames_equal(*b, engine_collect(pb), {"name"});
@@ -1344,22 +1378,24 @@ TEST_SUITE("View") {
                 .agg_numeric_args();
         };
 
-        dstd::String pa = view({{dstd::String(a), dstd::String(ia)}})
-                              .aggregate_partial()
-                              .collect()
-                              .get();
-        dstd::String pb = view({{dstd::String(b), dstd::String(ib)}})
-                              .aggregate_partial()
-                              .collect()
-                              .get();
+        dstd::String pa =
+            dftu_utils_test::ok(view({{dstd::String(a), dstd::String(ia)}})
+                                    .aggregate_partial()
+                                    .collect()
+                                    .get());
+        dstd::String pb =
+            dftu_utils_test::ok(view({{dstd::String(b), dstd::String(ib)}})
+                                    .aggregate_partial()
+                                    .collect()
+                                    .get());
         StringSink merged;
         view({}).merge_counter_partials({pa, pb}, merged);
 
         StringSink single;
-        view({{dstd::String(a), dstd::String(ia)},
-              {dstd::String(b), dstd::String(ib)}})
-            .sink_counters(single)
-            .get();
+        dftu_utils_test::ok(view({{dstd::String(a), dstd::String(ia)},
+                                  {dstd::String(b), dstd::String(ib)}})
+                                .sink_counters(single)
+                                .get());
 
         auto ml = merged.lines();
         auto sl = single.lines();
@@ -1377,7 +1413,8 @@ TEST_SUITE("View") {
                      .group_by({GroupKey::cat()})
                      .agg({{AggOp::Count, "", "n"}});
 
-        dstd::String good = v.aggregate_partial().collect().get();
+        dstd::String good =
+            dftu_utils_test::ok(v.aggregate_partial().collect().get());
         REQUIRE(!good.empty());
         dstd::String bad = good;
         bad[0] = static_cast<char>(0x7e);  // wrong version tag
@@ -1396,12 +1433,13 @@ TEST_SUITE("View") {
         dstd::String gz = create_mixed_trace(env, 30, 0);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        auto table = View::from_file(dstd::String(gz), dstd::String(idx))
-                         .group_by({GroupKey::cat()})
-                         .time_bucket(1000)
-                         .agg({{AggOp::Count, "", "n"}})
-                         .collect()
-                         .get();
+        auto table = dftu_utils_test::ok(
+            View::from_file(dstd::String(gz), dstd::String(idx))
+                .group_by({GroupKey::cat()})
+                .time_bucket(1000)
+                .agg({{AggOp::Count, "", "n"}})
+                .collect()
+                .get());
 
         REQUIRE(table.num_columns() == 3);  // time_bucket, cat, n
         CHECK(table.names[0] == "time_bucket");
@@ -1425,7 +1463,8 @@ TEST_SUITE("View") {
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         auto first_bucket = [&](View v) {
-            auto t = v.agg({{AggOp::Count, "", "n"}}).collect().get();
+            auto t = dftu_utils_test::ok(
+                v.agg({{AggOp::Count, "", "n"}}).collect().get());
             std::int64_t lo = std::numeric_limits<std::int64_t>::max();
             for (std::int64_t i = 0; i < t.num_rows(); ++i)
                 lo = std::min<std::int64_t>(
@@ -1454,10 +1493,11 @@ TEST_SUITE("View") {
         dstd::String gz = create_mixed_trace(env, 30, 20);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        auto table = View::from_file(dstd::String(gz), dstd::String(idx))
-                         .agg({{AggOp::Count, "", "n"}})
-                         .collect()
-                         .get();
+        auto table = dftu_utils_test::ok(
+            View::from_file(dstd::String(gz), dstd::String(idx))
+                .agg({{AggOp::Count, "", "n"}})
+                .collect()
+                .get());
 
         REQUIRE(table.num_rows() == 1);
         CHECK(bnum(table, 0, "n") == doctest::Approx(50));
@@ -1482,12 +1522,13 @@ TEST_SUITE("View") {
         dstd::fs::remove(pfw).discard();
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        auto table = View::from_file(dstd::String(gz), dstd::String(idx))
-                         .group_by({GroupKey::cat()})
-                         .agg({{AggOp::Max, "dur", "max_dur"},
-                               {AggOp::ArgMax, "name", "longest", "dur"}})
-                         .collect()
-                         .get();
+        auto table = dftu_utils_test::ok(
+            View::from_file(dstd::String(gz), dstd::String(idx))
+                .group_by({GroupKey::cat()})
+                .agg({{AggOp::Max, "dur", "max_dur"},
+                      {AggOp::ArgMax, "name", "longest", "dur"}})
+                .collect()
+                .get());
 
         REQUIRE(table.num_rows() == 1);
         CHECK(bhas(table, "longest"));
@@ -1520,11 +1561,12 @@ TEST_SUITE("View") {
         dstd::fs::remove(pfw).discard();
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        auto table = View::from_file(dstd::String(gz), dstd::String(idx))
-                         .group_by({GroupKey::rank()})
-                         .agg({{AggOp::Count, "", "n"}})
-                         .collect()
-                         .get();
+        auto table = dftu_utils_test::ok(
+            View::from_file(dstd::String(gz), dstd::String(idx))
+                .group_by({GroupKey::rank()})
+                .agg({{AggOp::Count, "", "n"}})
+                .collect()
+                .get());
 
         REQUIRE(bhas(table, "rank"));
         dstd::Map<dstd::String, double> n;
@@ -1557,7 +1599,7 @@ TEST_SUITE("View") {
                        : std::strtod(dstd::String(e.substr(p + 6)).c_str(),
                                      nullptr);
         };
-        auto res =
+        auto res = dftu_utils_test::ok(
             View::from_file(dstd::String(gz), dstd::String(idx))
                 .map_batches<Acc>(
                     [&](Acc& a, const dstd::Vector<dstd::StringView>& evs) {
@@ -1578,7 +1620,7 @@ TEST_SUITE("View") {
                         return std::move(x);
                     },
                     /*slot_count=*/4)
-                .get();
+                .get());
 
         // small: POSIX 10..24 (15) + STDIO 20..24 (5) = 20; sum 255 + 110.
         CHECK(res.value.small == 20);
@@ -1599,17 +1641,18 @@ TEST_SUITE("View") {
         struct Cnt {
             std::size_t n = 0;
         };
-        auto res = View::from_file(dstd::String(gz), dstd::String(idx))
-                       .map_batches<Cnt>(
-                           [](Cnt& c, const dstd::Vector<dstd::StringView>& e) {
-                               c.n += e.size();
-                           },
-                           [](Cnt&& a, Cnt&& b) {
-                               a.n += b.n;
-                               return std::move(a);
-                           },
-                           /*slot_count=*/2, /*limit=*/10)
-                       .get();
+        auto res = dftu_utils_test::ok(
+            View::from_file(dstd::String(gz), dstd::String(idx))
+                .map_batches<Cnt>(
+                    [](Cnt& c, const dstd::Vector<dstd::StringView>& e) {
+                        c.n += e.size();
+                    },
+                    [](Cnt&& a, Cnt&& b) {
+                        a.n += b.n;
+                        return std::move(a);
+                    },
+                    /*slot_count=*/2, /*limit=*/10)
+                .get());
 
         CHECK(res.stats.truncated == true);
         CHECK(res.value.n >= 10);  // cap is checked per batch, may overshoot
@@ -1663,7 +1706,7 @@ TEST_SUITE("View") {
                     return dstd::Function<void(const ExportStats&)>(
                         [&stats](const ExportStats& st) { stats = st; });
                 });
-        plan.collect().get();
+        dftu_utils_test::ok(plan.collect().get());
 
         // small: POSIX 10..24 (15) + STDIO 20..24 (5) = 20; sum 255 + 110.
         CHECK(small->n == 20);
@@ -1697,19 +1740,19 @@ TEST_SUITE("View") {
 
         // Events: the 10 ph=X reads, no counters.
         StringSink ev;
-        View::from_file(dstd::String(gz), dstd::String(idx))
-            .phase(Phase::Events)
-            .sink_json(ev)
-            .get();
+        dftu_utils_test::ok(View::from_file(dstd::String(gz), dstd::String(idx))
+                                .phase(Phase::Events)
+                                .sink_json(ev)
+                                .get());
         CHECK(ev.lines().size() == 10);
         CHECK(count_containing(ev.lines(), R"("ph":"C")") == 0);
 
         // Counters: the 2 ph=C events only.
         StringSink ct;
-        View::from_file(dstd::String(gz), dstd::String(idx))
-            .phase(Phase::Counters)
-            .sink_json(ct)
-            .get();
+        dftu_utils_test::ok(View::from_file(dstd::String(gz), dstd::String(idx))
+                                .phase(Phase::Counters)
+                                .sink_json(ct)
+                                .get());
         CHECK(ct.lines().size() == 2);
         CHECK(count_containing(ct.lines(), "cpu") == 2);
     }
@@ -1723,13 +1766,13 @@ TEST_SUITE("View") {
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         StringSink sink;
-        View::from_file(dstd::String(gz), dstd::String(idx))
-            .group_by({GroupKey::cat()})
-            .time_bucket(1000)
-            .agg(
-                {{AggOp::Count, "", "count"}, {AggOp::Sum, "dur", "total_dur"}})
-            .sink_counters(sink)
-            .get();
+        dftu_utils_test::ok(View::from_file(dstd::String(gz), dstd::String(idx))
+                                .group_by({GroupKey::cat()})
+                                .time_bucket(1000)
+                                .agg({{AggOp::Count, "", "count"},
+                                      {AggOp::Sum, "dur", "total_dur"}})
+                                .sink_counters(sink)
+                                .get());
 
         auto lines = sink.lines();
         CHECK(lines.size() >= 3);  // one counter event per interval
@@ -1745,10 +1788,11 @@ TEST_SUITE("View") {
         dftu_utils_test::write_gz_trace(out, sink.buffer);
         dstd::String out_idx = dstd::String(determine_index_path(out, ""));
         StringSink reread;
-        View::from_file(dstd::String(out), dstd::String(out_idx))
-            .phase(Phase::Counters)
-            .sink_json(reread)
-            .get();
+        dftu_utils_test::ok(
+            View::from_file(dstd::String(out), dstd::String(out_idx))
+                .phase(Phase::Counters)
+                .sink_json(reread)
+                .get());
         CHECK(reread.lines().size() == lines.size());
     }
 
@@ -1775,7 +1819,7 @@ TEST_SUITE("View") {
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         dstd::fs::remove(pfw).discard();
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
-        dataframe::DataFrame b =
+        dataframe::DataFrame b = dftu_utils_test::ok(
             View::from_file(dstd::String(gz), dstd::String(idx))
                 .time_range(900, 2200)
                 .resolution(5)
@@ -1786,7 +1830,7 @@ TEST_SUITE("View") {
                       {AggOp::Concurrency, "", "concurrency"},
                       {AggOp::Utilization, "", "utilization"}})
                 .collect()
-                .get();
+                .get());
 
         REQUIRE(bhas(b, "busy_cell_us"));
         auto row_of = [&](const dstd::String& nm) {
@@ -1874,14 +1918,14 @@ TEST_SUITE("View") {
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         dstd::fs::remove(pfw).discard();
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
-        dataframe::DataFrame b =
+        dataframe::DataFrame b = dftu_utils_test::ok(
             View::from_file(dstd::String(gz), dstd::String(idx))
                 .time_range(0, 1000000)
                 .group_by({GroupKey::name()})
                 .agg(
                     {{AggOp::Sum, "dur", "sum_dur"}, {AggOp::Busy, "", "busy"}})
                 .collect()
-                .get();
+                .get());
         REQUIRE(b.num_rows() == 1);
         CHECK(bnum(b, 0, "sum_dur") == static_cast<double>(sum_dur));
         CHECK(bnum(b, 0, "busy") == static_cast<double>(expect_union));
@@ -1902,13 +1946,13 @@ TEST_SUITE("View") {
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         dstd::fs::remove(pfw).discard();
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
-        dataframe::DataFrame b =
+        dataframe::DataFrame b = dftu_utils_test::ok(
             View::from_file(dstd::String(gz), dstd::String(idx))
                 .time_range(0, 1000000)
                 .group_by({GroupKey::name()})
                 .agg({{AggOp::Busy, "", "busy"}, {AggOp::Active, "", "active"}})
                 .collect()
-                .get();
+                .get());
         REQUIRE(b.num_rows() == 1);
         CHECK(bnum(b, 0, "busy") == static_cast<double>(expect_union));
         CHECK(bnum(b, 0, "active") == 4.0);
@@ -1928,7 +1972,7 @@ TEST_SUITE("View") {
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         dstd::fs::remove(pfw).discard();
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
-        dataframe::DataFrame b =
+        dataframe::DataFrame b = dftu_utils_test::ok(
             View::from_file(dstd::String(gz), dstd::String(idx))
                 .time_range(0, 1000000)
                 .group_by({GroupKey::name()})
@@ -1936,7 +1980,7 @@ TEST_SUITE("View") {
                       {AggOp::Busy, "", "busy"},
                       {AggOp::Active, "", "active"}})
                 .collect()
-                .get();
+                .get());
         REQUIRE(b.num_rows() == 1);
         CHECK(bnum(b, 0, "sum_dur") == static_cast<double>(sum_dur));
         CHECK(bnum(b, 0, "busy") == static_cast<double>(sum_dur));
@@ -1959,27 +2003,27 @@ TEST_SUITE("View") {
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         {
-            dataframe::DataFrame b0 =
+            dataframe::DataFrame b0 = dftu_utils_test::ok(
                 View::from_file(dstd::String(gz), dstd::String(idx))
                     .time_range(0, 1000000)
                     .group_by({GroupKey::name()})
                     .agg({{AggOp::Busy, "", "busy"}})
                     .collect()
-                    .get();
+                    .get());
             REQUIRE(bhas(b0, "busy_cell_us"));
             CHECK(bnum(b0, 0, "busy_cell_us") == 0);
             CHECK(bnum(b0, 0, "busy") == static_cast<double>(expect_exact));
         }
         {
             const std::uint64_t cell = 50;
-            dataframe::DataFrame b1 =
+            dataframe::DataFrame b1 = dftu_utils_test::ok(
                 View::from_file(dstd::String(gz), dstd::String(idx))
                     .time_range(0, 1000000)
                     .resolution(cell)
                     .group_by({GroupKey::name()})
                     .agg({{AggOp::Busy, "", "busy"}})
                     .collect()
-                    .get();
+                    .get());
             REQUIRE(bhas(b1, "busy_cell_us"));
             CHECK(bnum(b1, 0, "busy_cell_us") == static_cast<double>(cell));
             CHECK(bnum(b1, 0, "busy") >= static_cast<double>(expect_exact));
@@ -2034,7 +2078,7 @@ TEST_SUITE("View") {
         auto run = base.session();
         auto got =
             run.collect(base.group_by({GroupKey::cat()}).agg(occ).lazy());
-        run.execute().get();
+        dftu_utils_test::ok(run.execute().get());
 
         dataframe::DataFrame scanned = scan_only(views::detail::scan::agg(
             views::detail::scan::group_by(
@@ -2104,12 +2148,12 @@ TEST_SUITE("View") {
         dstd::fs::remove(pfw).discard();
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
         auto counts = [&](const dstd::String& col, const GroupKey& gk) {
-            dataframe::DataFrame b =
+            dataframe::DataFrame b = dftu_utils_test::ok(
                 View::from_file(dstd::String(gz), dstd::String(idx))
                     .group_by({gk})
                     .agg({{AggOp::Count, "", "n"}})
                     .collect()
-                    .get();
+                    .get());
             dstd::Map<dstd::String, double> m;
             for (std::int64_t i = 0; i < b.num_rows(); ++i)
                 m[bstr(b, i, col)] = bnum(b, i, "n");
@@ -2133,12 +2177,12 @@ TEST_SUITE("View") {
             CHECK(by_tag["z"] == 2);
         }
 
-        dataframe::DataFrame b =
+        dataframe::DataFrame b = dftu_utils_test::ok(
             View::from_file(dstd::String(gz), dstd::String(idx))
                 .group_by({GroupKey::field("args.meta.host")})
                 .agg({{AggOp::Mean, "args.n.v", "mv"}})
                 .collect()
-                .get();
+                .get());
         dstd::Map<dstd::String, double> mv;
         for (std::int64_t i = 0; i < b.num_rows(); ++i)
             mv[bstr(b, i, "args.meta.host")] = bnum(b, i, "mv");
@@ -2168,12 +2212,12 @@ TEST_SUITE("View") {
         dstd::fs::remove(pfw).discard();
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
         auto counts = [&](const dstd::String& col, const GroupKey& gk) {
-            dataframe::DataFrame b =
+            dataframe::DataFrame b = dftu_utils_test::ok(
                 View::from_file(dstd::String(gz), dstd::String(idx))
                     .group_by({gk})
                     .agg({{AggOp::Count, "", "n"}})
                     .collect()
-                    .get();
+                    .get());
             dstd::Map<dstd::String, double> m;
             for (std::int64_t i = 0; i < b.num_rows(); ++i)
                 m[bstr(b, i, col)] = bnum(b, i, "n");
@@ -2268,12 +2312,12 @@ TEST_SUITE("View") {
                 dstd::String(gz), dstd::String(idx));
             const auto same = [&](const dstd::Vector<GroupKey>& keys,
                                   const dstd::Vector<dstd::String>& names) {
-                const auto answer =
+                const auto answer = dftu_utils_test::ok(
                     View::from_file(dstd::String(gz), dstd::String(idx))
                         .group_by(keys)
                         .agg(aggs)
                         .collect()
-                        .get();
+                        .get());
                 frames_equal(
                     answer,
                     scan_only(views::detail::scan::agg(
@@ -2282,13 +2326,13 @@ TEST_SUITE("View") {
             };
             same({GroupKey::cat()}, {"cat"});
             same({GroupKey::cat(), GroupKey::name()}, {"cat", "name"});
-            const auto by_bucket =
+            const auto by_bucket = dftu_utils_test::ok(
                 View::from_file(dstd::String(gz), dstd::String(idx))
                     .group_by({GroupKey::cat()})
                     .time_bucket(1000000)
                     .agg(aggs)
                     .collect()
-                    .get();
+                    .get());
             frames_equal(by_bucket,
                          scan_only(views::detail::scan::agg(
                              views::detail::scan::time_bucket(
@@ -2306,14 +2350,15 @@ TEST_SUITE("View") {
         build_tier_index(gz);
         check();
         const auto counter = dstd::make_shared<ScanCounter>();
-        const auto totals = View::from_file(dstd::String(gz), dstd::String(idx))
-                                .count_scans(counter)
-                                .group_by({GroupKey::cat()})
-                                .agg({{AggOp::Count, "", "n"},
-                                      {AggOp::Sum, "dur", "total"},
-                                      {AggOp::Max, "ts", "last"}})
-                                .collect()
-                                .get();
+        const auto totals = dftu_utils_test::ok(
+            View::from_file(dstd::String(gz), dstd::String(idx))
+                .count_scans(counter)
+                .group_by({GroupKey::cat()})
+                .agg({{AggOp::Count, "", "n"},
+                      {AggOp::Sum, "dur", "total"},
+                      {AggOp::Max, "ts", "last"}})
+                .collect()
+                .get());
         // The tier answers, so no chunk is read.
         CHECK(counter->chunks_scanned.load() == 0);
         REQUIRE(totals.num_rows() == 2);

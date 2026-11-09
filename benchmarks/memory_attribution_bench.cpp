@@ -229,12 +229,15 @@ class Sampler {
 };
 
 void run_plan(const dataframe::LazyFrame& plan, std::uint64_t budget) {
-    default_runtime().submit(drain_count(plan.memory_budget(budget))).get();
+    require_ok(
+        default_runtime().submit(drain_count(plan.memory_budget(budget))).get(),
+        "task");
 }
 
 template <class Fn>
 void run_scoped(Fn fn) {
-    default_runtime().submit(coro::with_scope(std::move(fn))).wait();
+    require_ok(default_runtime().submit(coro::with_scope(std::move(fn))).wait(),
+               "task");
 }
 
 void group_by(const Sizes& s) {
@@ -291,7 +294,7 @@ coro::CoroTask<void> read_lines(dstd::String file) {
 }
 
 void json_read(const Paths& p) {
-    default_runtime().submit(read_lines(p.trace)).get();
+    require_ok(default_runtime().submit(read_lines(p.trace)).get(), "task");
 }
 
 void genesis(const Paths& p) {

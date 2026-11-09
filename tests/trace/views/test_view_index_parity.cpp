@@ -18,6 +18,7 @@
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -197,12 +198,12 @@ struct Fixture {
 dataframe::DataFrame scan_only(const views::detail::scan::ScanPlan& p) {
     static Runtime rt;
     dataframe::DataFrame out;
-    rt.block_on(coro::named(
+    dftu_utils_test::ok(rt.block_on(coro::named(
         "scan-only",
         coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
             auto st = co_await views::detail::build_engine_agg_state(*p);
             out = views::detail::finalize_engine_result(*st, *p);
-        })));
+        }))));
     return views::detail::apply_agg_post_ops(std::move(out), *p);
 }
 
@@ -369,7 +370,7 @@ Cells view_cells(const dstd::Vector<ViewFile>& files,
                  const AggSpec& spec) {
     View v = View::from_files(files);
     if (!keys.empty()) v = v.group_by(keys);
-    return cells_of(v.agg({spec}).collect().get(), columns,
+    return cells_of(dftu_utils_test::ok(v.agg({spec}).collect().get()), columns,
                     dstd::String(spec.out_name));
 }
 
@@ -450,8 +451,9 @@ TEST_SUITE("ViewIndexParity") {
                     View v = fx.view();
                     if (!sh.keys.empty()) v = v.group_by(sh.keys);
                     if (sh.window_us != 0) v = v.time_bucket(sh.window_us);
-                    got = cells_of(v.agg({ac.spec}).collect().get(), sh.columns,
-                                   dstd::String(ac.spec.out_name));
+                    got = cells_of(
+                        dftu_utils_test::ok(v.agg({ac.spec}).collect().get()),
+                        sh.columns, dstd::String(ac.spec.out_name));
                 } catch (const std::exception& e) {
                     line.status = "declined";
                     line.note = first_line(e.what());
@@ -558,12 +560,12 @@ TEST_SUITE("ViewIndexParity") {
         CHECK(bnum(trace, 0, "n") == doctest::Approx(4));
 
         const View v = View::from_file(dstd::String(gz), dstd::String(index));
-        const dataframe::DataFrame frame =
+        const dataframe::DataFrame frame = dftu_utils_test::ok(
             v.with_column("z", dataframe::expr_lit(std::int64_t{1}))
                 .group_by(dstd::Vector<dstd::String>{"z"},
                           {{dataframe::Agg::Count, "", "n"}})
                 .collect()
-                .get();
+                .get());
         REQUIRE(frame.num_rows() == 1);
         CHECK(bnum(frame, 0, "n") == doctest::Approx(1));
     }
@@ -680,9 +682,9 @@ TEST_SUITE("ViewIndexParity") {
             {"min_dur", {{"pwrite|", 5}, {"read|", 10}}},
             {"max_dur", {{"pwrite|", 20}, {"read|", 30}}}};
 
-        const dataframe::DataFrame first = ask();
+        const dataframe::DataFrame first = dftu_utils_test::ok(ask());
         CHECK(dstd::fs::exists(index).value());
-        const dataframe::DataFrame next = ask();
+        const dataframe::DataFrame next = dftu_utils_test::ok(ask());
         for (const auto& [column, cells] : want) {
             INFO(column);
             const Cells got = cells_of(first, columns, column);
@@ -788,7 +790,7 @@ TEST_SUITE("ViewIndexParity") {
         ExportStats stats;
         auto alone = [&](const Query& q) {
             dataframe::DataFrame out;
-            rt.block_on(coro::named(
+            dftu_utils_test::ok(rt.block_on(coro::named(
                 "alone",
                 coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
                     dataframe::LazyFrame plan =
@@ -800,13 +802,13 @@ TEST_SUITE("ViewIndexParity") {
                                 });
                         });
                     co_await plan.collect();
-                })));
+                }))));
             return out;
         };
 
         dataframe::DataFrame fused_stdio;
         dataframe::DataFrame fused_posix;
-        rt.block_on(coro::named(
+        dftu_utils_test::ok(rt.block_on(coro::named(
             "fused",
             coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
                 dataframe::LazyFrame plan =
@@ -821,7 +823,7 @@ TEST_SUITE("ViewIndexParity") {
                             });
                     });
                 co_await plan.collect();
-            })));
+            }))));
 
         // Both branches scanned the traces: no rollup or tier answered them.
         CHECK(stats.events_scanned > 0);

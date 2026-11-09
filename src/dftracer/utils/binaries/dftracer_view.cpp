@@ -1274,7 +1274,13 @@ int main(int argc, char** argv) {
         "MPI, run under mpirun to aggregate counters distributively.",
         [](ViewArgParse& cli) -> int {
             try {
-                return run_view(&cli).get();
+                auto code = run_view(&cli).get();
+                if (!code) {
+                    DFTRACER_UTILS_LOG_ERROR("Fatal: %s",
+                                             code.error().format().c_str());
+                    return 1;
+                }
+                return *code;
             } catch (const std::exception& e) {
                 DFTRACER_UTILS_LOG_ERROR("Fatal: %s", e.what());
                 return 1;

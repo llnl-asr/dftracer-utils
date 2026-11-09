@@ -7,6 +7,7 @@
 #include <dftracer/utils/trace/statistics/detail_stats_view.h>
 #include <doctest/doctest.h>
 #include <refused_lines.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -25,12 +26,12 @@ static statistics::DetailedStatistics run_detail(
     const statistics::DetailNeeds& needs) {
     dftracer::utils::Runtime rt;
     statistics::DetailedStatistics result;
-    rt.block_on(dftracer::utils::coro::named(
+    dftu_utils_test::ok(rt.block_on(dftracer::utils::coro::named(
         "detail", dftracer::utils::coro::with_scope(
                       [&](dftracer::utils::coro::Scope&)
                           -> dftracer::utils::coro::CoroTask<void> {
                           result = co_await sv.collect(needs);
-                      })));
+                      }))));
     return result;
 }
 

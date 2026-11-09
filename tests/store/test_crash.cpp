@@ -20,6 +20,7 @@
 #include <dftracer/utils/store/snapshot.h>
 #include <dftracer/utils/store/writer.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <algorithm>
@@ -160,7 +161,7 @@ std::uint64_t seed_of(std::size_t kill, std::size_t variant,
 template <class Handle>
 void await_handle(Handle& handle, std::chrono::seconds limit) {
     REQUIRE(handle.future.wait_for(limit) == std::future_status::ready);
-    handle.wait();
+    dftu_utils_test::ok(handle.wait());
 }
 
 dstd::Expected<void, dstd::Error> close_writer(store::engine::Writer& writer) {

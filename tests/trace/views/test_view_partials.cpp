@@ -16,6 +16,7 @@
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -143,12 +144,12 @@ dstd::Vector<AggSpec> specs() {
 dataframe::DataFrame scan_only(const views::detail::scan::ScanPlan& p) {
     Runtime rt;
     dataframe::DataFrame out;
-    rt.block_on(coro::named(
+    dftu_utils_test::ok(rt.block_on(coro::named(
         "scan-only",
         coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
             auto st = co_await views::detail::build_engine_agg_state(*p);
             out = views::detail::finalize_engine_result(*st, *p);
-        })));
+        }))));
     return views::detail::apply_agg_post_ops(std::move(out), *p);
 }
 
@@ -224,14 +225,14 @@ TEST_SUITE("ViewPartials") {
         for (std::size_t i = 0; i < groupings.size(); ++i) {
             // A scan answers over the events only. The profile counters of
             // the traces are a kind of their own in the partials.
-            const dataframe::DataFrame got =
+            const dataframe::DataFrame got = dftu_utils_test::ok(
                 fx.view()
                     .filter(Query::from_string(R"(cat in ["POSIX", "STDIO"])")
                                 .value())
                     .group_by(groupings[i])
                     .agg(specs())
                     .collect()
-                    .get();
+                    .get());
             same_rows(got, expected[i], columns[i]);
         }
     }
@@ -255,14 +256,14 @@ TEST_SUITE("ViewPartials") {
             scan_only(views::detail::scan::agg(p, stats_specs));
 
         fx.delete_traces();
-        const dataframe::DataFrame got =
+        const dataframe::DataFrame got = dftu_utils_test::ok(
             fx.view()
                 .filter(
                     Query::from_string(R"(cat in ["POSIX", "STDIO"])").value())
                 .group_by(keys)
                 .agg(stats_specs)
                 .collect()
-                .get();
+                .get());
         same_rows(got, expected, {"cat", "pid", "tid"});
     }
 
@@ -287,11 +288,11 @@ TEST_SUITE("ViewPartials") {
         const View rollup =
             View::from_files(one).group_by(keys).agg(stats_specs);
         Runtime rt;
-        rt.block_on(coro::named(
+        dftu_utils_test::ok(rt.block_on(coro::named(
             "materialize",
             coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
                 co_await rollup.materialize();
-            })));
+            }))));
         REQUIRE(rollup.reconstruct_if_cached().has_value());
         const Rows got =
             rows_of(*rollup.reconstruct_if_cached(), {"cat", "pid", "tid"});
@@ -334,7 +335,8 @@ TEST_SUITE("ViewPartials") {
             scan_events(fx, {GroupKey::name(), GroupKey::pid()}, WINDOW_US);
 
         fx.delete_traces();
-        const TypedResult typed = typed_view().collect_typed().get();
+        const TypedResult typed =
+            dftu_utils_test::ok(typed_view().collect_typed().get());
 
         auto strip = [](const dataframe::DataFrame& f) {
             // the engine columns the typed frames share with the scan
@@ -446,16 +448,19 @@ TEST_SUITE("ViewPartials") {
                 .get();
         };
         auto events_by = [&](const char* arg) {
-            return fx.view()
-                .filter(
-                    Query::from_string(R"(cat in ["POSIX", "STDIO"])").value())
-                .group_by({GroupKey::name(), GroupKey::of_arg(arg)})
-                .agg(specs())
-                .collect()
-                .get();
+            return dftu_utils_test::ok(
+                fx.view()
+                    .filter(Query::from_string(R"(cat in ["POSIX", "STDIO"])")
+                                .value())
+                    .group_by({GroupKey::name(), GroupKey::of_arg(arg)})
+                    .agg(specs())
+                    .collect()
+                    .get());
         };
-        const TypedResult before_epoch = profiles_by("epoch");
-        const TypedResult before_step = profiles_by("step");
+        const TypedResult before_epoch =
+            dftu_utils_test::ok(profiles_by("epoch"));
+        const TypedResult before_step =
+            dftu_utils_test::ok(profiles_by("step"));
         dstd::Vector<dataframe::DataFrame> expected;
         for (const char* arg : {"epoch", "step"}) {
             auto p = views::detail::scan::from_files(fx.files());
@@ -470,13 +475,15 @@ TEST_SUITE("ViewPartials") {
 
         // Three counters of each epoch, two of each step, in each file.
         const Rows by_epoch =
-            rows_of(profiles_by("epoch").aggregated, {"name", "epoch"});
+            rows_of(dftu_utils_test::ok(profiles_by("epoch")).aggregated,
+                    {"name", "epoch"});
         REQUIRE(by_epoch.size() == 2);
         CHECK(by_epoch.at("train|0|").at("n") == 3 * FILES);
         CHECK(by_epoch.at("train|1|").at("n") == 3 * FILES);
         CHECK(by_epoch.at("train|0|").at("total") == 15.0 * FILES);
         const Rows by_step =
-            rows_of(profiles_by("step").aggregated, {"name", "step"});
+            rows_of(dftu_utils_test::ok(profiles_by("step")).aggregated,
+                    {"name", "step"});
         REQUIRE(by_step.size() == 3);
         for (const char* s : {"train|0|", "train|1|", "train|2|"})
             CHECK(by_step.at(s).at("n") == 2 * FILES);
@@ -514,11 +521,12 @@ TEST_SUITE("ViewPartials") {
                   {static_cast<int>(trace::AggKind::Event), FILES * READS},
                   {static_cast<int>(trace::AggKind::Profile), FILES * MIXED}});
 
-        const TypedResult typed = fx.view()
-                                      .group_by({GroupKey::name()})
-                                      .agg({{AggOp::Count, "", "n"}})
-                                      .collect_typed()
-                                      .get();
+        const TypedResult typed =
+            dftu_utils_test::ok(fx.view()
+                                    .group_by({GroupKey::name()})
+                                    .agg({{AggOp::Count, "", "n"}})
+                                    .collect_typed()
+                                    .get());
         CHECK(rows_of(typed.regular, {"name"}).at("read|").at("n") ==
               FILES * READS);
         CHECK(rows_of(typed.aggregated, {"name"}).at("read|").at("n") ==

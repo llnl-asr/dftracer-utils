@@ -23,6 +23,7 @@
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
 #include <simdjson.h>
+#include <task_result.h>
 #include <testing_runtime.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
@@ -194,7 +195,7 @@ TEST_SUITE("BloomFold") {
             drive(fold);
             // The spills fill one run, far under the run size floor.
             CHECK(fold.spill_runs() == 1);
-            fold.write_run().get();
+            dftu_utils_test::ok(fold.write_run().get());
             CHECK(fold.spill_runs() == 1);
         }
         {
@@ -217,7 +218,7 @@ TEST_SUITE("BloomFold") {
             CHECK(fold.spill_runs() == 1);
             // The run goes into the build and is staged; the commit publishes
             // it with the chunks the fold still holds.
-            fold.write_run().get();
+            dftu_utils_test::ok(fold.write_run().get());
             fold.write(build);
             REQUIRE(build.commit().get());
         }
@@ -260,9 +261,10 @@ TEST_SUITE("BloomFold") {
         dstd::String index_path = dstd::String(determine_index_path(gz, ""));
         {
             StringSink s;
-            View::from_file(dstd::String(gz), dstd::String(index_path))
-                .sink_json(s)
-                .get();
+            dftu_utils_test::ok(
+                View::from_file(dstd::String(gz), dstd::String(index_path))
+                    .sink_json(s)
+                    .get());
         }
 
         const auto snapshot = dftu_utils_test::index_snapshot(index_path);
@@ -304,10 +306,11 @@ TEST_SUITE("BloomFold") {
             // A filtered export builds the members but attaches no index fold,
             // so the index starts without a bloom for the fold to establish.
             StringSink s;
-            View::from_file(dstd::String(gz), dstd::String(index_path))
-                .duql(R"(cat == "POSIX")")
-                .sink_json(s)
-                .get();
+            dftu_utils_test::ok(
+                View::from_file(dstd::String(gz), dstd::String(index_path))
+                    .duql(R"(cat == "POSIX")")
+                    .sink_json(s)
+                    .get());
             const auto snapshot = dftu_utils_test::index_snapshot(index_path);
             REQUIRE_FALSE(dftu_utils_test::pruning_tier_current(
                 snapshot, dftu_utils_test::require_indexed_file(snapshot, gz)));
@@ -332,7 +335,7 @@ TEST_SUITE("BloomFold") {
             FoldBatch batch{dstd::Span<const FoldEvent>(events), unit};
             fold.step(batch);
             fold.seal_unit(unit);
-            return fold.finalize(cov).get();
+            return dftu_utils_test::ok(fold.finalize(cov).get());
         };
 
         CoverageSet member_only;
@@ -367,10 +370,11 @@ TEST_SUITE("BloomFold") {
         dstd::String index_path = dstd::String(determine_index_path(gz, ""));
         {
             StringSink s;
-            View::from_file(dstd::String(gz), dstd::String(index_path))
-                .duql(R"(cat == "POSIX")")
-                .sink_json(s)
-                .get();
+            dftu_utils_test::ok(
+                View::from_file(dstd::String(gz), dstd::String(index_path))
+                    .duql(R"(cat == "POSIX")")
+                    .sink_json(s)
+                    .get());
         }
 
         ScanUnit unit;
@@ -420,10 +424,11 @@ TEST_SUITE("BloomFold") {
         dstd::String index_path = dstd::String(determine_index_path(gz, ""));
         {
             StringSink s;
-            View::from_file(dstd::String(gz), dstd::String(index_path))
-                .duql(R"(cat == "POSIX")")
-                .sink_json(s)
-                .get();
+            dftu_utils_test::ok(
+                View::from_file(dstd::String(gz), dstd::String(index_path))
+                    .duql(R"(cat == "POSIX")")
+                    .sink_json(s)
+                    .get());
         }
 
         dstd::String text =
@@ -443,8 +448,10 @@ TEST_SUITE("BloomFold") {
                             dstd::String(dstd::StringView(index_path)));
         // Split mid-way (lands inside the "read" line) to force reassembly.
         std::size_t half = text.size() / 2;
-        drv.on_chunk(text.data(), half, /*cp=*/0).get();
-        drv.on_chunk(text.data() + half, text.size() - half, /*cp=*/0).get();
+        dftu_utils_test::ok(drv.on_chunk(text.data(), half, /*cp=*/0).get());
+        dftu_utils_test::ok(
+            drv.on_chunk(text.data() + half, text.size() - half, /*cp=*/0)
+                .get());
         drv.seal();
 
         {
@@ -495,9 +502,10 @@ TEST_SUITE("BloomFold") {
         dstd::String index_path = dstd::String(determine_index_path(gz, ""));
         {
             StringSink s;
-            View::from_file(dstd::String(gz), dstd::String(index_path))
-                .sink_json(s)
-                .get();
+            dftu_utils_test::ok(
+                View::from_file(dstd::String(gz), dstd::String(index_path))
+                    .sink_json(s)
+                    .get());
         }
 
         View v = View::from_file(dstd::String(gz), dstd::String(index_path));

@@ -25,6 +25,7 @@
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
+#include <task_result.h>
 #include <testing_runtime.h>
 #include <testing_utilities.h>
 #include <trace/views/groupmap_oracle.h>
@@ -112,9 +113,10 @@ TEST_SUITE("RawGzipFuse") {
             dstd::String(determine_index_path(gz, env.dir() + "/refi"));
         {
             StringSink s;
-            View::from_file(dstd::String(gz), dstd::String(ref_idx))
-                .sink_json(s)
-                .get();
+            dftu_utils_test::ok(
+                View::from_file(dstd::String(gz), dstd::String(ref_idx))
+                    .sink_json(s)
+                    .get());
         }
         gmoracle::GroupMap ref;
         {
@@ -124,7 +126,7 @@ TEST_SUITE("RawGzipFuse") {
             gmoracle::OracleAggFold a(rp, intern);
             std::array<Fold*, 1> folds{&a};
             ViewDefinition vd = make_vdef(rp, /*for_aggregation=*/true);
-            fuse(rp, vd, folds, intern).get();
+            dftu_utils_test::ok(fuse(rp, vd, folds, intern).get());
             ref = a.map();
         }
         REQUIRE(ref.size() == 2);  // POSIX + STDIO
@@ -222,24 +224,27 @@ TEST_SUITE("RawGzipFuse") {
             dstd::String(determine_index_path(gz, env.dir() + "/ri"));
         {
             StringSink s;
-            View::from_file(dstd::String(gz), dstd::String(ref_idx))
-                .sink_json(s)
-                .get();
+            dftu_utils_test::ok(
+                View::from_file(dstd::String(gz), dstd::String(ref_idx))
+                    .sink_json(s)
+                    .get());
         }
-        auto ref = View::from_file(dstd::String(gz), dstd::String(ref_idx))
-                       .group_by({GroupKey::cat()})
-                       .agg({{AggOp::Count, "", "n"}})
-                       .collect()
-                       .get();
+        auto ref = dftu_utils_test::ok(
+            View::from_file(dstd::String(gz), dstd::String(ref_idx))
+                .group_by({GroupKey::cat()})
+                .agg({{AggOp::Count, "", "n"}})
+                .collect()
+                .get());
 
         dstd::String boot_idx =
             dstd::String(determine_index_path(gz, env.dir() + "/bi"));
         REQUIRE_FALSE(dstd::fs::exists(boot_idx).value());
-        auto boot = View::from_file(dstd::String(gz), dstd::String(boot_idx))
-                        .group_by({GroupKey::cat()})
-                        .agg({{AggOp::Count, "", "n"}})
-                        .collect()
-                        .get();
+        auto boot = dftu_utils_test::ok(
+            View::from_file(dstd::String(gz), dstd::String(boot_idx))
+                .group_by({GroupKey::cat()})
+                .agg({{AggOp::Count, "", "n"}})
+                .collect()
+                .get());
 
         CHECK(boot.names == ref.names);            // same group + value columns
         CHECK(boot.num_rows() == ref.num_rows());  // same groups, no metadata
@@ -265,9 +270,9 @@ TEST_SUITE("RawGzipFuse") {
             dstd::String(determine_index_path(gz, env.dir() + "/ei"));
         REQUIRE_FALSE(dstd::fs::exists(idx).value());
         StringSink boot;
-        View::from_file(dstd::String(gz), dstd::String(idx))
-            .sink_json(boot)
-            .get();  // bootstrap path
+        dftu_utils_test::ok(View::from_file(dstd::String(gz), dstd::String(idx))
+                                .sink_json(boot)
+                                .get());  // bootstrap path
 
         auto lines = boot.lines();
         CHECK(lines.size() == 20);
@@ -275,10 +280,10 @@ TEST_SUITE("RawGzipFuse") {
         CHECK(count_containing(lines, R"("ph":"X")") == 20);
 
         StringSink all;
-        View::from_file(dstd::String(gz), dstd::String(idx))
-            .phase(Phase::Any)
-            .sink_json(all)
-            .get();
+        dftu_utils_test::ok(View::from_file(dstd::String(gz), dstd::String(idx))
+                                .phase(Phase::Any)
+                                .sink_json(all)
+                                .get());
         CHECK(all.lines().size() == 22);
         CHECK(count_containing(all.lines(), R"("name":"FH")") == 1);
         CHECK(count_containing(all.lines(), R"("name":"HH")") == 1);
@@ -319,9 +324,9 @@ TEST_SUITE("RawGzipFuse") {
         dstd::String idx =
             dstd::String(determine_index_path(gz, env.dir() + "/ei"));
         StringSink boot;
-        View::from_file(dstd::String(gz), dstd::String(idx))
-            .sink_json(boot)
-            .get();
+        dftu_utils_test::ok(View::from_file(dstd::String(gz), dstd::String(idx))
+                                .sink_json(boot)
+                                .get());
         const auto lines = boot.lines();
         CHECK(lines.size() == 5);
         CHECK(count_containing(lines, R"("ph":"M")") == 0);
@@ -358,9 +363,9 @@ TEST_SUITE("RawGzipFuse") {
         dstd::String idx =
             dstd::String(determine_index_path(gz, env.dir() + "/ei"));
         StringSink boot;
-        View::from_file(dstd::String(gz), dstd::String(idx))
-            .sink_json(boot)
-            .get();
+        dftu_utils_test::ok(View::from_file(dstd::String(gz), dstd::String(idx))
+                                .sink_json(boot)
+                                .get());
         const auto lines = boot.lines();
         CHECK(lines.size() == 4);
         CHECK(count_containing(lines, R"("ph":"M")") == 0);
@@ -380,27 +385,30 @@ TEST_SUITE("RawGzipFuse") {
             dstd::String(determine_index_path(gz, env.dir() + "/fr"));
         {
             StringSink s;
-            View::from_file(dstd::String(gz), dstd::String(ref_idx))
-                .sink_json(s)
-                .get();
+            dftu_utils_test::ok(
+                View::from_file(dstd::String(gz), dstd::String(ref_idx))
+                    .sink_json(s)
+                    .get());
         }
-        auto ref = View::from_file(dstd::String(gz), dstd::String(ref_idx))
-                       .duql(R"(cat == "POSIX")")
-                       .group_by({GroupKey::cat()})
-                       .agg({{AggOp::Count, "", "n"}})
-                       .collect()
-                       .get();
+        auto ref = dftu_utils_test::ok(
+            View::from_file(dstd::String(gz), dstd::String(ref_idx))
+                .duql(R"(cat == "POSIX")")
+                .group_by({GroupKey::cat()})
+                .agg({{AggOp::Count, "", "n"}})
+                .collect()
+                .get());
         REQUIRE(ref.num_rows() == 1);  // only POSIX
 
         dstd::String fresh =
             dstd::String(determine_index_path(gz, env.dir() + "/ff"));
         REQUIRE_FALSE(dstd::fs::exists(fresh).value());
-        auto got = View::from_file(dstd::String(gz), dstd::String(fresh))
-                       .duql(R"(cat == "POSIX")")
-                       .group_by({GroupKey::cat()})
-                       .agg({{AggOp::Count, "", "n"}})
-                       .collect()
-                       .get();
+        auto got = dftu_utils_test::ok(
+            View::from_file(dstd::String(gz), dstd::String(fresh))
+                .duql(R"(cat == "POSIX")")
+                .group_by({GroupKey::cat()})
+                .agg({{AggOp::Count, "", "n"}})
+                .collect()
+                .get());
         CHECK(got.num_rows() == ref.num_rows());  // filter applied: 1 group
         CHECK(rows_equal(got, ref));              // same counts
 
@@ -422,25 +430,28 @@ TEST_SUITE("RawGzipFuse") {
             dstd::String(determine_index_path(gz, env.dir() + "/nr"));
         {
             StringSink s;
-            View::from_file(dstd::String(gz), dstd::String(ref_idx))
-                .sink_json(s)
-                .get();
+            dftu_utils_test::ok(
+                View::from_file(dstd::String(gz), dstd::String(ref_idx))
+                    .sink_json(s)
+                    .get());
         }
-        auto ref = View::from_file(dstd::String(gz), dstd::String(ref_idx))
-                       .duql(R"(fhash == "fh1")")
-                       .group_by({GroupKey::cat()})
-                       .agg({{AggOp::Count, "", "n"}})
-                       .collect()
-                       .get();
+        auto ref = dftu_utils_test::ok(
+            View::from_file(dstd::String(gz), dstd::String(ref_idx))
+                .duql(R"(fhash == "fh1")")
+                .group_by({GroupKey::cat()})
+                .agg({{AggOp::Count, "", "n"}})
+                .collect()
+                .get());
 
         dstd::String fresh =
             dstd::String(determine_index_path(gz, env.dir() + "/nf"));
-        auto got = View::from_file(dstd::String(gz), dstd::String(fresh))
-                       .duql(R"(fhash == "fh1")")
-                       .group_by({GroupKey::cat()})
-                       .agg({{AggOp::Count, "", "n"}})
-                       .collect()
-                       .get();
+        auto got = dftu_utils_test::ok(
+            View::from_file(dstd::String(gz), dstd::String(fresh))
+                .duql(R"(fhash == "fh1")")
+                .group_by({GroupKey::cat()})
+                .agg({{AggOp::Count, "", "n"}})
+                .collect()
+                .get());
         CHECK(rows_equal(got, ref));  // correctly filtered via the fallback
     }
 }
@@ -570,12 +581,13 @@ TEST_CASE("a first-touch query under a small budget spills the same index") {
     REQUIRE(env.is_valid());
     const dstd::String gz = write_multi_member(env.dir());
     auto count = [&](const dstd::String& idx, std::uint64_t budget) {
-        return View::from_file(dstd::String(gz), dstd::String(idx))
-            .memory_budget(budget)
-            .group_by({GroupKey::cat()})
-            .agg({{AggOp::Count, "", "n"}})
-            .collect()
-            .get()
+        return dftu_utils_test::ok(
+                   View::from_file(dstd::String(gz), dstd::String(idx))
+                       .memory_budget(budget)
+                       .group_by({GroupKey::cat()})
+                       .agg({{AggOp::Count, "", "n"}})
+                       .collect()
+                       .get())
             .num_rows();
     };
     const dstd::String held =

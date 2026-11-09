@@ -7,6 +7,7 @@
 #include <dftracer/utils/index/plan/condition.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -65,36 +66,36 @@ TEST_SUITE("Row set arrows") {
         TestEnvironment env(10);
         const auto gz = write_trace(env);
 
-        const auto rows =
+        const auto rows = dftu_utils_test::ok(
             view_of(gz)
                 .duql(R"(where fhash -> files.path == "/data/f10")"
                       " | select name, p = fhash -> files.path,"
                       " h = hhash -> hosts.name")
                 .collect()
-                .get();
+                .get());
         REQUIRE(rows.num_rows() == 2);
         for (std::int64_t r = 0; r < 2; ++r) {
             CHECK(bstr(rows, r, "p") == "/data/f10");
             CHECK(bstr(rows, r, "h") == "node0");
         }
 
-        const auto grouped =
+        const auto grouped = dftu_utils_test::ok(
             view_of(gz)
                 .duql(R"(where fhash -> files.path == "/data/f10")")
                 .group_by({GroupKey::file_path()})
                 .agg({{AggOp::Count, "", "n"}})
                 .collect()
-                .get();
+                .get());
         REQUIRE(grouped.num_rows() == 1);
         CHECK(bstr(grouped, 0, "file_path") == "/data/f10");
         CHECK(bnum(grouped, 0, "n") == 2);
 
-        const auto exec =
+        const auto exec = dftu_utils_test::ok(
             view_of(gz)
                 .duql(R"(where exec_hash -> strings(shash).value like)"
                       R"( "%laghos%")")
                 .collect()
-                .get();
+                .get());
         REQUIRE(exec.num_rows() == 1);
         CHECK(bstr(exec, 0, "name") == "start");
     }
@@ -110,17 +111,19 @@ TEST_SUITE("Row set arrows") {
         const dstd::String wide =
             R"(where fhash -> files.path like "/data/f%")";
         static_assert(FILES > dftracer::utils::index::plan::SEMI_JOIN_CAP);
-        CHECK(view_of(gz).duql(wide).collect().get().num_rows() == EVENTS);
+        CHECK(dftu_utils_test::ok(view_of(gz).duql(wide).collect().get())
+                  .num_rows() == EVENTS);
     }
 
     TEST_CASE("a resolved name fails and names the arrow") {
         TestEnvironment env(10);
         const auto gz = write_trace(env);
         try {
-            view_of(gz)
-                .duql(R"(where resolved.fhash.path == "/data/f10")")
-                .collect()
-                .get();
+            dftu_utils_test::ok(
+                view_of(gz)
+                    .duql(R"(where resolved.fhash.path == "/data/f10")")
+                    .collect()
+                    .get());
             FAIL("no error");
         } catch (const std::exception& e) {
             CAPTURE(e.what());

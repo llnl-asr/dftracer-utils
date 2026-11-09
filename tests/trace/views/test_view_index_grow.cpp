@@ -12,6 +12,7 @@
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -153,15 +154,16 @@ View dir_view(const dstd::String& dir) {
 }
 
 std::size_t rows(const dstd::String& dir, const dstd::String& q) {
-    return dir_view(dir).duql(q).collect().get().num_rows();
+    return dftu_utils_test::ok(dir_view(dir).duql(q).collect().get())
+        .num_rows();
 }
 
 std::int64_t count_of(const dstd::String& dir, const dstd::String& cat) {
-    const auto df = dir_view(dir)
-                        .group_by({GroupKey::cat()})
-                        .agg({{AggOp::Count, "", "n"}})
-                        .collect()
-                        .get();
+    const auto df = dftu_utils_test::ok(dir_view(dir)
+                                            .group_by({GroupKey::cat()})
+                                            .agg({{AggOp::Count, "", "n"}})
+                                            .collect()
+                                            .get());
     for (std::int64_t i = 0; i < df.num_rows(); ++i)
         if (bstr(df, i, "cat") == cat)
             return static_cast<std::int64_t>(bnum(df, i, "n"));
@@ -264,8 +266,8 @@ TEST_SUITE("ViewIndexGrow") {
         struct NullSink : ExportSink {
             void write(dstd::StringView) override {}
         } sink;
-        const auto stats =
-            dir_view(dir).duql(R"(name == "second")").sink_json(sink).get();
+        const auto stats = dftu_utils_test::ok(
+            dir_view(dir).duql(R"(name == "second")").sink_json(sink).get());
         CHECK(stats.events_matched == MEMBER_EVENTS);
         CHECK(stats.chunks_skipped > 0);
     }
@@ -401,7 +403,8 @@ TEST_SUITE("ViewIndexGrow") {
         utilities::reader::TraceReader reader({.file_path = gz});
         utilities::reader::ReadConfig config;
         config.query = R"(name == "split")";
-        CHECK(count_json(reader.read_json(config)).get() == 1);
+        CHECK(dftu_utils_test::ok(count_json(reader.read_json(config)).get()) ==
+              1);
         CHECK(rows(dir, R"(ts >= 1000)") == MEMBER_EVENTS + 1);
         const Rebuilt fresh(gz);
         CHECK(all_lines(dir) == all_lines(fresh.dir));
@@ -472,7 +475,8 @@ TEST_SUITE("ViewIndexGrow") {
             utilities::reader::TraceReader reader({.file_path = gz});
             utilities::reader::ReadConfig config;
             config.query = dstd::String(R"(name == "n_)") + name + R"(")";
-            CHECK(count_json(reader.read_json(config)).get() == 1);
+            CHECK(dftu_utils_test::ok(
+                      count_json(reader.read_json(config)).get()) == 1);
         }
         CHECK(split_lines > 0);
     }

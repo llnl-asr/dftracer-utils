@@ -15,6 +15,7 @@
 #include <doctest/doctest.h>
 #include <signal.h>
 #include <sys/wait.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <unistd.h>
 
@@ -531,7 +532,7 @@ void run_child(const dstd::String& root, int child, int round,
     if (workload.future.wait_for(CHILD_LIMIT) != std::future_status::ready) {
         child_fail("workload timed out");
     }
-    if (workload.get() != 0) {
+    if (dftu_utils_test::ok(workload.get()) != 0) {
         child_fail(failure.message.empty() ? "workload failed"
                                            : failure.message);
     }

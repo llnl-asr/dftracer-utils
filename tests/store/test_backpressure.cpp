@@ -21,6 +21,7 @@
 #include <dftracer/utils/store/writer_extents.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <algorithm>
@@ -174,7 +175,7 @@ bool is_busy(const dstd::Error& error) {
 template <class Handle>
 void await_handle(Handle& handle, std::chrono::seconds limit) {
     REQUIRE(handle.future.wait_for(limit) == std::future_status::ready);
-    handle.wait();
+    handle.wait().discard();
 }
 
 void await_space(engine::Writer& writer) {

@@ -7,6 +7,7 @@
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <dftracer/utils/utilities/trace_gen/fake_trace_writer.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <cstdint>
@@ -62,7 +63,8 @@ TEST_SUITE("trace_gen::TraceWriter") {
         TraceReader reader({.file_path = dstd::String(gz_path)});
         CHECK_FALSE(reader.has_index());
 
-        auto lines = collect_lines(reader.read_lines()).get();
+        auto lines =
+            dftu_utils_test::ok(collect_lines(reader.read_lines()).get());
 
         std::size_t event_lines = 0;
         bool saw_metadata = false;
@@ -90,7 +92,8 @@ TEST_SUITE("trace_gen::TraceWriter") {
         }
 
         TraceReader reader({.file_path = dstd::String(gz_path)});
-        auto lines = collect_lines(reader.read_lines()).get();
+        auto lines =
+            dftu_utils_test::ok(collect_lines(reader.read_lines()).get());
 
         REQUIRE(lines.size() == 1);
         CHECK(lines[0].find(R"("name":"a\nb\u0001c\td")") !=

@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/views/result_join.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/agg_parity_common.h>
 
@@ -462,7 +463,8 @@ TEST_SUITE("View") {
                 // index, so comparing a first-touch run against a second-touch
                 // run would compare two different origins, not the same
                 // formula.
-                views::detail::scan::collect(build()).collect().get();
+                dftu_utils_test::ok(
+                    views::detail::scan::collect(build()).collect().get());
                 dataframe::DataFrame legacy = collect_groupmap_plan(build());
                 dataframe::DataFrame engine = collect_engine_plan(build());
                 dstd::Vector<dstd::String> keys = {"time_bucket"};
@@ -644,10 +646,11 @@ TEST_SUITE("View") {
             dataframe::DataFrame expect = collect_groupmap_plan(coarse());
             // The plan collect routes through collect_frame, where the engine
             // materialize persist lives (collect_engine bypasses it).
-            views::detail::scan::collect(
-                views::detail::scan::materialize(fine(), 0, 0))
-                .collect()
-                .get();
+            dftu_utils_test::ok(
+                views::detail::scan::collect(
+                    views::detail::scan::materialize(fine(), 0, 0))
+                    .collect()
+                    .get());
             dataframe::DataFrame engine_served = collect_engine_plan(coarse());
             check_match(expect, engine_served, "cat");
         }
@@ -1079,7 +1082,8 @@ TEST_SUITE("View") {
 
         SUBCASE("collect") {
             for (const Probe& p : probes)
-                CHECK(groups(view(p.gb).collect().get(), p.cols) == p.want);
+                CHECK(groups(dftu_utils_test::ok(view(p.gb).collect().get()),
+                             p.cols) == p.want);
         }
         SUBCASE("engine collect, forced spill") {
             for (const Probe& p : probes)
@@ -1097,24 +1101,26 @@ TEST_SUITE("View") {
         }
         SUBCASE("distributed partials") {
             for (const Probe& p : probes) {
-                const auto part =
-                    view(p.gb).aggregate_partial().collect().get();
+                const auto part = dftu_utils_test::ok(
+                    view(p.gb).aggregate_partial().collect().get());
                 CHECK(groups(view(p.gb).merge_partials({part}), p.cols) ==
                       p.want);
             }
         }
         SUBCASE("rollup: coarsened and same grain") {
-            views::detail::scan::collect(
-                views::detail::scan::materialize(plan(probes[5].gb), 0, 0))
-                .collect()
-                .get();
+            dftu_utils_test::ok(
+                views::detail::scan::collect(
+                    views::detail::scan::materialize(plan(probes[5].gb), 0, 0))
+                    .collect()
+                    .get());
             CHECK(groups(collect_engine_plan(plan(probes[0].gb)),
                          probes[0].cols) == probes[0].want);
             for (const Probe& p : probes) {
-                views::detail::scan::collect(
-                    views::detail::scan::materialize(plan(p.gb), 0, 0))
-                    .collect()
-                    .get();
+                dftu_utils_test::ok(
+                    views::detail::scan::collect(
+                        views::detail::scan::materialize(plan(p.gb), 0, 0))
+                        .collect()
+                        .get());
                 CHECK(groups(collect_engine_plan(plan(p.gb)), p.cols) ==
                       p.want);
             }
@@ -1122,12 +1128,12 @@ TEST_SUITE("View") {
         SUBCASE("a transformed key keeps null") {
             GroupKey gk = GroupKey::field("args.s");
             gk.transform = GroupKey::Transform::Basename;
-            CHECK(groups(view({gk}).collect().get(), {"args.s"}) ==
-                  probes[0].want);
+            CHECK(groups(dftu_utils_test::ok(view({gk}).collect().get()),
+                         {"args.s"}) == probes[0].want);
         }
         SUBCASE("join matches null to null, never to \"\"") {
-            const dataframe::DataFrame r =
-                view({GroupKey::field("args.s")}).collect().get();
+            const dataframe::DataFrame r = dftu_utils_test::ok(
+                view({GroupKey::field("args.s")}).collect().get());
             const dataframe::DataFrame j =
                 join_batches(r, r, 1, JoinType::Inner);
             REQUIRE(j.num_rows() == 3);
@@ -1142,7 +1148,8 @@ TEST_SUITE("View") {
         }
         SUBCASE("counters write a null key as JSON null") {
             StringSink sink;
-            view({GroupKey::field("args.s")}).sink_counters(sink).get();
+            dftu_utils_test::ok(
+                view({GroupKey::field("args.s")}).sink_counters(sink).get());
             const auto lines = sink.lines();
             REQUIRE(lines.size() == 3);
             CHECK(count_containing(lines, R"("args.s":null)") == 1);

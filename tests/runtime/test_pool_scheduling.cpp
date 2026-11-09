@@ -8,6 +8,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_runtime.h>
 
 #include <algorithm>
@@ -44,7 +45,7 @@ TEST_SUITE("PoolScheduling") {
         Runtime rt(THREADS);
         std::atomic<std::size_t> started{0};
         std::atomic<bool> all_met{true};
-        rt.block_on(
+        dftu_utils_test::ok(rt.block_on(
             coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
                 for (std::size_t i = 0; i < THREADS; ++i) {
                     scope.spawn([&]() -> coro::CoroTask<void> {
@@ -62,7 +63,7 @@ TEST_SUITE("PoolScheduling") {
                     });
                 }
                 co_return;
-            }));
+            })));
         CHECK(all_met.load());
     }
 
@@ -73,7 +74,7 @@ TEST_SUITE("PoolScheduling") {
         std::atomic<std::int64_t> woken_at{0};
         coro::AsyncSemaphore gate(1);
         REQUIRE(gate.try_acquire(1));
-        rt.block_on(
+        dftu_utils_test::ok(rt.block_on(
             coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
                 scope.spawn([&]() -> coro::CoroTask<void> {
                     co_await gate.acquire(1);
@@ -92,7 +93,7 @@ TEST_SUITE("PoolScheduling") {
                     co_return;
                 });
                 co_return;
-            }));
+            })));
     }
 
     TEST_CASE("two tasks that wake each other do not starve a queued task") {
@@ -101,7 +102,7 @@ TEST_SUITE("PoolScheduling") {
         coro::AsyncSemaphore first(1);
         coro::AsyncSemaphore second(1);
         REQUIRE(second.try_acquire(1));
-        rt.block_on(
+        dftu_utils_test::ok(rt.block_on(
             coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
                 scope.spawn([&]() -> coro::CoroTask<void> {
                     co_await coro::yield();
@@ -110,7 +111,7 @@ TEST_SUITE("PoolScheduling") {
                 scope.spawn(relay_until(first, second, stop));
                 scope.spawn(relay_until(second, first, stop));
                 co_return;
-            }));
+            })));
         CHECK(stop.load());
     }
 
@@ -129,8 +130,8 @@ TEST_SUITE("PoolScheduling") {
         TaskHandle spin = rt.submit(spinner(), "Spinner");
         std::this_thread::sleep_for(10ms);
         TaskHandle set = rt.submit(setter(), "Setter");
-        set.wait();
-        spin.wait();
+        dftu_utils_test::ok(set.wait());
+        dftu_utils_test::ok(spin.wait());
         CHECK(stop.load());
     }
 
@@ -145,7 +146,7 @@ TEST_SUITE("PoolScheduling") {
         for (int round = 0; round < ROUNDS; ++round) {
             std::this_thread::sleep_for(1ms);
             const auto start = Clock::now();
-            rt.submit(tiny(), "Tiny").wait();
+            dftu_utils_test::ok(rt.submit(tiny(), "Tiny").wait());
             latencies.push_back(Clock::now() - start);
         }
         // A round or two can stall on a loaded machine. Lost wakes repeat.
@@ -171,7 +172,7 @@ TEST_SUITE("PoolScheduling") {
                 for (std::size_t i = 0; i < TASKS; ++i) {
                     handles.push_back(rt.submit(tiny(), "Tiny"));
                 }
-                for (auto& handle : handles) handle.wait();
+                for (auto& handle : handles) dftu_utils_test::ok(handle.wait());
             });
         }
         for (auto& sender : senders) sender.join();

@@ -21,8 +21,7 @@ class Executor;
  */
 class AsyncEvent {
    public:
-    /// co_await throws a cancelled error (see coro::is_cancelled) when the
-    /// executor shuts down while it waits.
+    /// The awaiting task stops when the executor shuts down while it waits.
     class WaitAwaitable {
        public:
         explicit WaitAwaitable(AsyncEvent& event) noexcept : event_(event) {}

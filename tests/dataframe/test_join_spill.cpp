@@ -16,6 +16,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <mmix_lcg.h>
+#include <task_result.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -28,7 +29,8 @@ using namespace dftracer::utils::dataframe;
 namespace {
 
 DataFrame run(coro::CoroTask<DataFrame> t) {
-    return dftracer::utils::default_runtime().submit(std::move(t)).get();
+    return dftu_utils_test::ok(
+        dftracer::utils::default_runtime().submit(std::move(t)).get());
 }
 
 struct Rng {

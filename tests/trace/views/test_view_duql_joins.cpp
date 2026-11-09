@@ -10,6 +10,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/indexer.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -981,8 +982,10 @@ TEST_SUITE("View duql joins") {
         const dstd::String sub =
             "name in (from data | where name == \"a\" | select name)";
         NullSink sink;
-        const auto pushed = v.duql("where " + sub).sink_json(sink).get();
-        const auto kept = v.duql("where name != \"z\"").sink_json(sink).get();
+        const auto pushed =
+            dftu_utils_test::ok(v.duql("where " + sub).sink_json(sink).get());
+        const auto kept = dftu_utils_test::ok(
+            v.duql("where name != \"z\"").sink_json(sink).get());
         CHECK(pushed.events_matched == 400);
         CHECK(kept.events_matched == 1600);
         CHECK(pushed.chunks_skipped > 0);
@@ -994,7 +997,7 @@ TEST_SUITE("View duql joins") {
         const dstd::String arrow =
             "let first = where i == 0 | select name, tag = name; where name -> "
             "first.tag == \"b\"";
-        const auto a = v.duql(arrow).sink_json(sink).get();
+        const auto a = dftu_utils_test::ok(v.duql(arrow).sink_json(sink).get());
         CHECK(a.events_matched == 400);
         CHECK(a.chunks_skipped > 0);
     }
@@ -1009,15 +1012,15 @@ TEST_SUITE("View duql joins") {
         const View v =
             view_of(write_records(env, "z", lines, 4096, 4096, {"zonemap"}));
         NullSink sink;
-        const auto listed = v.duql("where blk in [3, 4]").sink_json(sink).get();
+        const auto listed = dftu_utils_test::ok(
+            v.duql("where blk in [3, 4]").sink_json(sink).get());
         CHECK(listed.events_matched == 200);
         CHECK(listed.chunks_skipped > 0);
-        const auto joined =
-            v.duql(
-                 "where blk in (from data | where i == 350 or i == 450 | "
-                 "select blk)")
+        const auto joined = dftu_utils_test::ok(
+            v.duql("where blk in (from data | where i == 350 or i == 450 | "
+                   "select blk)")
                 .sink_json(sink)
-                .get();
+                .get());
         CHECK(joined.events_matched == 200);
         CHECK(joined.chunks_skipped == listed.chunks_skipped);
     }

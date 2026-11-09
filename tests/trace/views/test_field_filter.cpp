@@ -4,6 +4,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/indexer.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -17,10 +18,11 @@ TEST_SUITE("View unified F filter") {
     TEST_CASE("F predicate pushes down like the query DSL") {
         const auto& s = shared_trace();
         StringSink sink;
-        auto stats = View::from_file(dstd::String(s.gz), dstd::String(s.idx))
-                         .filter(dataframe::field::F("cat") == "POSIX")
-                         .sink_json(sink)
-                         .get();
+        auto stats = dftu_utils_test::ok(
+            View::from_file(dstd::String(s.gz), dstd::String(s.idx))
+                .filter(dataframe::field::F("cat") == "POSIX")
+                .sink_json(sink)
+                .get());
 
         auto lines = sink.lines();
         CHECK(lines.size() == 30);
@@ -33,10 +35,11 @@ TEST_SUITE("View unified F filter") {
         const auto& s = shared_trace();
         StringSink sink;
         // POSIX dur is 10..39, STDIO dur is 20..39; dur >= 30 keeps a subset.
-        View::from_file(dstd::String(s.gz), dstd::String(s.idx))
-            .filter(dataframe::field::F("dur") >= 30)
-            .sink_json(sink)
-            .get();
+        dftu_utils_test::ok(
+            View::from_file(dstd::String(s.gz), dstd::String(s.idx))
+                .filter(dataframe::field::F("dur") >= 30)
+                .sink_json(sink)
+                .get());
         CHECK(sink.lines().size() > 0);
         CHECK(sink.lines().size() < 50);
     }
@@ -89,21 +92,24 @@ TEST_SUITE("View unified F filter") {
         const auto& s = shared_trace();
 
         StringSink pos;
-        View::from_file(dstd::String(s.gz), dstd::String(s.idx))
-            .filter(dataframe::field::F("dur") >= 30)
-            .sink_json(pos)
-            .get();
+        dftu_utils_test::ok(
+            View::from_file(dstd::String(s.gz), dstd::String(s.idx))
+                .filter(dataframe::field::F("dur") >= 30)
+                .sink_json(pos)
+                .get());
 
         StringSink neg;
-        View::from_file(dstd::String(s.gz), dstd::String(s.idx))
-            .filter(!(dataframe::field::F("dur") >= 30))
-            .sink_json(neg)
-            .get();
+        dftu_utils_test::ok(
+            View::from_file(dstd::String(s.gz), dstd::String(s.idx))
+                .filter(!(dataframe::field::F("dur") >= 30))
+                .sink_json(neg)
+                .get());
 
         StringSink all;
-        View::from_file(dstd::String(s.gz), dstd::String(s.idx))
-            .sink_json(all)
-            .get();
+        dftu_utils_test::ok(
+            View::from_file(dstd::String(s.gz), dstd::String(s.idx))
+                .sink_json(all)
+                .get());
 
         CHECK(pos.lines().size() > 0);
         CHECK(neg.lines().size() > 0);

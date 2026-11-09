@@ -199,10 +199,9 @@ class TaskExecutor : public coro::Executor {
     static void set_current_backend(TaskExecutor* executor) noexcept;
 };
 
-/// Marks the tracked task @p id as failed with the what() of @p error, or
-/// "Unknown exception" for an error that is not a std::exception.
+/// Marks the tracked task @p id as failed with the text of @p error.
 void mark_coro_failed(TaskExecutor& executor, common::TaskIndex id,
-                      std::exception_ptr error) noexcept;
+                      const dstd::Error& error) noexcept;
 
 /// Build the executor described by `config`. The implementation is chosen
 /// here so callers never name a concrete executor type.

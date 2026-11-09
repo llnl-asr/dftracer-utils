@@ -76,7 +76,7 @@ coro::CoroTask<int> PartitionWriter::open(dstd::StringView output_dir,
 
     auto creating = runtime::fs::create_directories(dstd::PathView(output_dir));
     auto created = co_await std::move(creating);
-    if (!created) co_return -1;
+    if (!created.has_value()) co_return -1;
 
     output_dir_ = output_dir;
     chunk_size_bytes_ = chunk_size_bytes;

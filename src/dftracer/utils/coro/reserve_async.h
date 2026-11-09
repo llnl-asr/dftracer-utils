@@ -139,24 +139,14 @@ class ReserveAsync {
         }
         state->listed.store(true, std::memory_order_release);
         if (deadline == Clock::time_point::max()) return true;
-        try {
-            TimerService& timers = *state->timers;
-            timers.start();
-            dstd::WeakPtr<detail::ReserveWaitState> weak = state;
-            TimerService::TimerId id =
-                timers.register_timeout(deadline - Clock::now(), [weak] {
-                    if (auto s = weak.lock()) s->on_timeout();
-                });
-            state->timer.store(id, std::memory_order_release);
-        } catch (...) {
-            // A grant that already won owns the resume. Else the frame
-            // resumes here with the error.
-            if (!state->node->cancel()) return true;
-            state->self.reset();
-            if (park_) exec->unpark(park_);
-            park_ = nullptr;
-            throw;
-        }
+        TimerService& timers = *state->timers;
+        timers.start();
+        dstd::WeakPtr<detail::ReserveWaitState> weak = state;
+        TimerService::TimerId id =
+            timers.register_timeout(deadline - Clock::now(), [weak] {
+                if (auto s = weak.lock()) s->on_timeout();
+            });
+        state->timer.store(id, std::memory_order_release);
         if (state->node->state() != memory::detail::WaitState::Waiting) {
             state->cancel_timer();
         }

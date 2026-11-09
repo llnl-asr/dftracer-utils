@@ -346,14 +346,16 @@ dftu_dataframe* dftu_dataframe_group_transform(const dftu_dataframe* df,
         !group_transform_args_ok(kind, rank_method))
         return nullptr;
     try {
-        return wrap(
+        auto out =
             dftracer::utils::dataframe::GroupBy(df->df, key_names(keys, n_keys))
                 .transform(
                     static_cast<dftracer::utils::dataframe::GroupwiseOp>(kind),
                     n,
                     static_cast<dftracer::utils::dataframe::RankMethod>(
                         rank_method),
-                    ascending != 0));
+                    ascending != 0);
+        if (!out) return nullptr;
+        return wrap(std::move(*out));
     } catch (const std::exception&) {
         return nullptr;
     }
@@ -541,10 +543,11 @@ dftu_dataframe* dftu_lazyframe_collect(dftu_lazyframe* lf,
                                        int64_t morsel_rows) {
     if (!lf) return nullptr;
     try {
-        DataFrame out = dftracer::utils::default_runtime()
-                            .submit(lf->lf.collect(morsel_rows))
-                            .get();
-        return wrap(std::move(out));
+        auto out = dftracer::utils::default_runtime()
+                       .submit(lf->lf.collect(morsel_rows))
+                       .get();
+        if (!out) return nullptr;
+        return wrap(std::move(*out));
     } catch (const std::exception&) {
         return nullptr;
     }

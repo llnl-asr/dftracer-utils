@@ -36,8 +36,8 @@ dstd::String to_string(const char* p, std::int32_t n) {
 template <class Fn>
 bool run_sync(const char* name, Fn body) {
     try {
-        default_runtime().block_on(
-            coro::named(name, coro::with_scope(std::move(body))));
+        common::unwrap(default_runtime().block_on(
+            coro::named(name, coro::with_scope(std::move(body)))));
         return true;
     } catch (const std::exception&) {
         return false;

@@ -23,6 +23,7 @@
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 #include <utility>
@@ -117,11 +118,12 @@ dftu_plugin make_agg_plugin() {
 
 void finalize_now(plugins::PluginFold& f) {
     Runtime rt(1);
-    rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                  co_await f.finalize(trace::views::detail::CoverageSet{});
-              }),
-              "fin")
-        .wait();
+    dftu_utils_test::ok(
+        rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                      co_await f.finalize(trace::views::detail::CoverageSet{});
+                  }),
+                  "fin")
+            .wait());
     rt.shutdown();
 }
 

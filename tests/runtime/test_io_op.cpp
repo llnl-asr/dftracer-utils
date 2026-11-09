@@ -24,6 +24,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <task_result.h>
 #include <unistd.h>
 
 #ifdef __linux__
@@ -192,13 +193,13 @@ void check_more_ops_than_ring(runtime::io::IoBackendType type) {
     }
     Runtime rt = make_runtime(type);
     std::atomic<int> bad{0};
-    rt.block_on(
+    dftu_utils_test::ok(rt.block_on(
         coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
             for (std::uint32_t i = 0; i < OPS; ++i) {
                 scope.spawn(read_one(file.fd(), i, bad));
             }
             co_return;
-        }));
+        })));
     CHECK(bad.load() == 0);
 }
 
@@ -265,7 +266,7 @@ void check_call_runs_off_worker(runtime::io::IoBackendType type) {
         BlockingFn fn = &note_thread;
         co_await runtime::io::call(fn, &called);
     };
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     CHECK(called != worker);
 }
 
@@ -439,7 +440,7 @@ TEST_CASE("io op: a user backend from the options runs the operations") {
     auto body = [&]() -> coro::CoroTask<void> {
         got = co_await runtime::io::pread(file.fd(), read_back, 3, 0);
     };
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     CHECK(got == 3);
     CHECK(std::strcmp(read_back, "abc") == 0);
     CHECK(ops.load() == 1);
@@ -488,7 +489,7 @@ TEST_CASE("io op: a cached read on a worker ends inside its flush") {
         CHECK(op.result == static_cast<ssize_t>(sizeof(data)));
         co_return;
     };
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
 }
 
 TEST_CASE("io op: a read on tmpfs gives the right bytes") {
@@ -507,7 +508,7 @@ TEST_CASE("io op: a read on tmpfs gives the right bytes") {
         got = co_await runtime::io::pread(file.fd(), read_back,
                                           sizeof(read_back), 0);
     };
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     CHECK(got == static_cast<ssize_t>(sizeof(text)));
     CHECK(std::strcmp(read_back, text) == 0);
 }
@@ -516,7 +517,7 @@ TEST_CASE("io op: a parked worker resumes when its own fsync ends") {
     TempFile file;
     std::atomic<int> bad{0};
     Runtime rt(ExecutorConfig{.thread_count = 1}, false);
-    rt.block_on(sync_many(file.fd(), 200, bad));
+    dftu_utils_test::ok(rt.block_on(sync_many(file.fd(), 200, bad)));
     CHECK(bad.load() == 0);
 }
 
@@ -547,7 +548,7 @@ TEST_CASE("io op: a completion arrives while its worker never reaps") {
         while (done.load(std::memory_order_acquire) == 0) ::usleep(1000);
         co_return;
     };
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     CHECK(arrived);
     CHECK(done.load() == 1);
 }
@@ -570,13 +571,13 @@ TEST_CASE("io op: a retired worker's writes all end") {
             for (int i = 0; i < 6; ++i) pool->retire_worker();
         }
     });
-    rt.block_on(
+    dftu_utils_test::ok(rt.block_on(
         coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
             for (int task = 0; task < 64; ++task) {
                 scope.spawn(sync_many(file.fd(), 128, bad));
             }
             co_return;
-        }));
+        })));
     stop.store(true, std::memory_order_release);
     churn.join();
     CHECK(bad.load() == 0);
@@ -608,7 +609,7 @@ TEST_CASE("io op: new work wakes a worker parked on its own ring") {
         backend.flush();
         co_return;
     };
-    rt.block_on(start());
+    dftu_utils_test::ok(rt.block_on(start()));
 
     constexpr int ROUNDS = 20;
     int ran = 0;
@@ -619,7 +620,7 @@ TEST_CASE("io op: new work wakes a worker parked on its own ring") {
             ++ran;
             co_return;
         };
-        rt.block_on(step());
+        dftu_utils_test::ok(rt.block_on(step()));
     }
     const auto elapsed = std::chrono::steady_clock::now() - began;
     CHECK(ran == ROUNDS);
@@ -876,17 +877,17 @@ TEST_CASE("io op: a polled ring runs ops after its kernel thread sleeps") {
         return;
     }
     TempDir dir;
-    CHECK(rt.block_on(run_after_idle(dir, 5)) == 5);
+    CHECK(dftu_utils_test::ok(rt.block_on(run_after_idle(dir, 5))) == 5);
     // More requests at once than the SQ holds, to reach the wait for SQ room.
     const dstd::String file = dir.join("polled");
     const int fd = ::open(file.c_str(), O_RDONLY);
     REQUIRE(fd >= 0);
     std::atomic<int> good{0};
-    rt.block_on(
+    dftu_utils_test::ok(rt.block_on(
         coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
             for (int i = 0; i < 400; ++i) scope.spawn(polled_reader(fd, good));
             co_return;
-        }));
+        })));
     ::close(fd);
     CHECK(good.load() == 400 * 200);
 }
@@ -950,7 +951,7 @@ TEST_CASE("io op: a kernel without unfixed files on SQPOLL runs without it") {
         static_cast<runtime::io::IoUringBackend&>(rt.executor()->io_backend());
     CHECK_FALSE(backend.is_sq_polled());
     TempDir dir;
-    CHECK(rt.block_on(run_after_idle(dir, 1)) == 1);
+    CHECK(dftu_utils_test::ok(rt.block_on(run_after_idle(dir, 1))) == 1);
 }
 
 TEST_CASE("io op: completions past a full CQ show after a flush") {
@@ -1081,7 +1082,7 @@ TEST_CASE("io op: a timed park ends with nothing done, with no timed enter") {
         }
         co_return;
     };
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     REQUIRE(::write(fds[1], "x", 1) == 1);
     while (done.load(std::memory_order_acquire) == 0) ::usleep(100);
     ::close(fds[0]);
@@ -1130,7 +1131,7 @@ TEST_CASE("io op: a long armed timeout does not hold a shorter park") {
         CHECK(elapsed < std::chrono::milliseconds(LONG_MS / 2));
         co_return;
     };
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     REQUIRE(::write(fds[1], "x", 1) == 1);
     while (done.load(std::memory_order_acquire) == 0) ::usleep(100);
     ::close(fds[0]);
@@ -1147,7 +1148,7 @@ TEST_CASE("io op: a parked worker resumes, with no timed enter") {
     Runtime rt(ExecutorConfig{.thread_count = 1,
                               .io_backend_factory = &make_no_timed_enter},
                false);
-    rt.block_on(sync_many(file.fd(), 200, bad));
+    dftu_utils_test::ok(rt.block_on(sync_many(file.fd(), 200, bad)));
     CHECK(bad.load() == 0);
 }
 #endif
@@ -1164,7 +1165,7 @@ TEST_CASE("io op: unlink removes a file, and a missing one gives -ENOENT") {
             unlinked = co_await runtime::io::unlink(path.c_str());
             unlink_missing = co_await runtime::io::unlink(missing.c_str());
         };
-        rt.block_on(body());
+        dftu_utils_test::ok(rt.block_on(body()));
         CHECK(unlinked == 0);
         CHECK_FALSE(is_on_disk(path));
         CHECK(unlink_missing == -ENOENT);
@@ -1181,7 +1182,7 @@ TEST_CASE("io op: the renamed file is found under its new name") {
         auto body = [&]() -> coro::CoroTask<void> {
             renamed = co_await runtime::io::rename(from.c_str(), to.c_str());
         };
-        rt.block_on(body());
+        dftu_utils_test::ok(rt.block_on(body()));
         CHECK(renamed == 0);
         CHECK_FALSE(is_on_disk(from));
         CHECK(read_text(to) == "moved bytes");
@@ -1210,7 +1211,7 @@ TEST_CASE("io op: mkdir makes a directory and rmdir refuses a full one") {
             emptied = co_await runtime::io::unlink(inside.c_str());
             removed = co_await runtime::io::rmdir(sub.c_str());
         };
-        rt.block_on(body());
+        dftu_utils_test::ok(rt.block_on(body()));
         CHECK(made == 0);
         CHECK(was_directory);
         CHECK(made_again == -EEXIST);
@@ -1236,7 +1237,7 @@ TEST_CASE("io op: ftruncate changes the size of a file") {
             grown = co_await runtime::io::ftruncate(file.fd(), 64);
             if (::fstat(file.fd(), &info) == 0) grown_size = info.st_size;
         };
-        rt.block_on(body());
+        dftu_utils_test::ok(rt.block_on(body()));
         CHECK(shrunk == 0);
         CHECK(shrunk_size == 4);
         CHECK(grown == 0);
@@ -1255,7 +1256,7 @@ TEST_CASE("io op: fadvise gives zero") {
             advised_long = co_await runtime::io::fadvise(
                 file.fd(), 0, std::uint64_t{5} << 30, 0);
         };
-        rt.block_on(body());
+        dftu_utils_test::ok(rt.block_on(body()));
         CHECK(advised == 0);
         CHECK(advised_long == 0);
     });
@@ -1322,7 +1323,7 @@ TEST_CASE("io op: linkat makes a second name and symlinkat a link") {
             symlinked_again = co_await runtime::io::symlinkat(
                 from.c_str(), AT_FDCWD, soft.c_str());
         };
-        rt.block_on(body());
+        dftu_utils_test::ok(rt.block_on(body()));
         CHECK(linked == 0);
         CHECK(linked_again == -EEXIST);
         CHECK(symlinked == 0);
@@ -1353,7 +1354,7 @@ TEST_CASE("io op: madvise gives zero, and -EINVAL for an advice it lacks") {
             advised = co_await runtime::io::madvise(page, BYTES, MADV_WILLNEED);
             refused = co_await runtime::io::madvise(page, BYTES, 9999);
         };
-        rt.block_on(body());
+        dftu_utils_test::ok(rt.block_on(body()));
         ::munmap(page, BYTES);
         CHECK(advised == 0);
         CHECK(refused == -EINVAL);
@@ -1442,7 +1443,7 @@ TEST_CASE("io op: a socket connects, sends, receives and sees a shutdown") {
                 sizeof(gone_address));
             ::close(static_cast<int>(probe_fd));
         };
-        rt.block_on(body());
+        dftu_utils_test::ok(rt.block_on(body()));
         for (const int fd : {listener, client, server, duplicate}) {
             if (fd >= 0) ::close(fd);
         }
@@ -1476,7 +1477,7 @@ TEST_CASE("io op: poll_add gives the events of a pipe that a writer fills") {
             readable = co_await runtime::io::poll_add(fds[0], POLLIN);
             bad = co_await runtime::io::poll_add(-1, POLLIN);
         };
-        rt.block_on(body());
+        dftu_utils_test::ok(rt.block_on(body()));
         char byte = 0;
         CHECK(::read(fds[0], &byte, 1) == 1);
         ::close(fds[0]);
@@ -1506,7 +1507,7 @@ TEST_CASE("io op: waitid waits for a forked child and reads its status") {
             waited_again = co_await runtime::io::waitid(
                 P_PID, static_cast<id_t>(child), &none, WEXITED);
         };
-        rt.block_on(body());
+        dftu_utils_test::ok(rt.block_on(body()));
         CHECK(waited == 0);
         CHECK(info.si_pid == child);
         CHECK(info.si_code == CLD_EXITED);
@@ -1537,7 +1538,7 @@ TEST_CASE("io op: statx matches stat, and a missing path gives -ENOENT") {
                 AT_FDCWD, missing.c_str(), 0, runtime::io::STATX_BASIC_MASK,
                 &none);
         };
-        rt.block_on(body());
+        dftu_utils_test::ok(rt.block_on(body()));
         CHECK(found_rc == 0);
         CHECK(found.size == static_cast<std::uint64_t>(expected.st_size));
         CHECK(found.mode == (expected.st_mode & 0xffffU));
@@ -1553,7 +1554,7 @@ TEST_CASE("io op: fallocate grows a file") {
         auto body = [&]() -> coro::CoroTask<void> {
             grown = co_await runtime::io::fallocate(file.fd(), 0, 0, 8192);
         };
-        rt.block_on(body());
+        dftu_utils_test::ok(rt.block_on(body()));
         if (grown == -EOPNOTSUPP || grown == -ENOSYS) {
             MESSAGE("skipped: the file system has no fallocate");
             return;
@@ -1576,7 +1577,7 @@ TEST_CASE("io op: sync_file_range gives zero, and -EBADF for a bad fd") {
                 file.fd(), 0, 10, SYNC_FILE_RANGE_WRITE);
             bad = co_await runtime::io::sync_file_range(-1, 0, 10, 0);
         };
-        rt.block_on(body());
+        dftu_utils_test::ok(rt.block_on(body()));
         if (synced == -EOPNOTSUPP || synced == -ENOSYS) {
             MESSAGE("skipped: the file system has no sync_file_range");
             return;
@@ -1597,7 +1598,7 @@ TEST_CASE("io op: splice moves the bytes of a file into a pipe") {
             moved =
                 co_await runtime::io::splice(file.fd(), 0, fds[1], -1, 9, 0);
         };
-        rt.block_on(body());
+        dftu_utils_test::ok(rt.block_on(body()));
         char bytes[16] = {};
         const ssize_t got = ::read(fds[0], bytes, sizeof(bytes));
         ::close(fds[0]);
@@ -1700,7 +1701,7 @@ TEST_CASE("io op: a send to a closed peer gives EPIPE, not a signal") {
             sent = co_await runtime::io::send(fds[0], &byte, 1, 0);
             sent_message = co_await runtime::io::sendmsg(fds[0], &message, 0);
         };
-        rt.block_on(body());
+        dftu_utils_test::ok(rt.block_on(body()));
         ::close(fds[0]);
         CHECK(sent == -EPIPE);
         CHECK(sent_message == -EPIPE);
@@ -1777,7 +1778,7 @@ TEST_CASE("io op: openat2 opens a file, and its resolve flags refuse a link") {
             absent =
                 co_await runtime::io::openat2(AT_FDCWD, missing.c_str(), plain);
         };
-        rt.block_on(body());
+        dftu_utils_test::ok(rt.block_on(body()));
         if (opened == -ENOSYS) {
             MESSAGE("skipped: this kernel has no openat2");
             return;
@@ -1835,7 +1836,7 @@ TEST_CASE("io op: an extended attribute is set, read back and missing") {
             again_rc =
                 co_await runtime::io::setxattr(path.c_str(), create_again);
         };
-        rt.block_on(body());
+        dftu_utils_test::ok(rt.block_on(body()));
         ::close(fd);
         if (set_rc == -EOPNOTSUPP || set_rc == -ENOSYS) {
             MESSAGE("skipped: the file system has no user attributes");
@@ -1871,7 +1872,7 @@ TEST_CASE("io op: pipe makes a pipe and tee copies its bytes without taking") {
             teed = co_await runtime::io::tee(source[0], copy[1], 6, 0);
             not_a_pipe = co_await runtime::io::tee(file.fd(), copy[1], 6, 0);
         };
-        rt.block_on(body());
+        dftu_utils_test::ok(rt.block_on(body()));
         REQUIRE(made == 0);
         REQUIRE(made_copy == 0);
         char first[16] = {};
@@ -1900,7 +1901,7 @@ TEST_CASE("io op: a futex wait ends when a futex wake comes") {
             mismatch = co_await runtime::io::futex_wait(&other, 0);
             empty_wake = co_await runtime::io::futex_wake(&other, 1);
         };
-        rt.block_on(probe());
+        dftu_utils_test::ok(rt.block_on(probe()));
         if (mismatch == -ENOSYS) {
             MESSAGE("skipped: this kernel has no futex");
             return;
@@ -1912,12 +1913,12 @@ TEST_CASE("io op: a futex wait ends when a futex wake comes") {
         std::atomic<bool> waiting{false};
         ssize_t wait_rc = 1;
         ssize_t woken = -1;
-        rt.block_on(
+        dftu_utils_test::ok(rt.block_on(
             coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
                 scope.spawn(futex_waiter(&word, waiting, wait_rc));
                 scope.spawn(futex_waker(&word, waiting, woken));
                 co_return;
-            }));
+            })));
         // The wait queues long before the wake. If it did not, the word had
         // changed already, and the wait gave -EAGAIN with no one to wake.
         CHECK((wait_rc == 0 || wait_rc == -EAGAIN));
@@ -1935,7 +1936,7 @@ TEST_CASE("io op: futex_waitv gives the index of the futex that woke") {
         auto probe = [&]() -> coro::CoroTask<void> {
             mismatch = co_await runtime::io::futex_waitv(stale, 2);
         };
-        rt.block_on(probe());
+        dftu_utils_test::ok(rt.block_on(probe()));
         if (mismatch == -ENOSYS) {
             MESSAGE("skipped: this kernel has no futex_waitv");
             return;
@@ -1948,12 +1949,12 @@ TEST_CASE("io op: futex_waitv gives the index of the futex that woke") {
         std::atomic<bool> waiting{false};
         ssize_t wait_rc = 1;
         ssize_t woken = -1;
-        rt.block_on(
+        dftu_utils_test::ok(rt.block_on(
             coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
                 scope.spawn(futexv_waiter(waiters, waiting, wait_rc));
                 scope.spawn(futex_waker(&words[1], waiting, woken));
                 co_return;
-            }));
+            })));
         CHECK((wait_rc == 1 || wait_rc == -EAGAIN));
         CHECK(woken == (wait_rc == 1 ? 1 : 0));
     });
@@ -1983,7 +1984,7 @@ TEST_CASE("io op: epoll_ctl adds a pipe and epoll_wait sees it ready") {
             removed = co_await runtime::io::epoll_ctl(epoll_fd, EPOLL_CTL_DEL,
                                                       fds[0], &interest);
         };
-        rt.block_on(body());
+        dftu_utils_test::ok(rt.block_on(body()));
         char byte = 0;
         CHECK(::read(fds[0], &byte, 1) == 1);
         ::close(fds[0]);

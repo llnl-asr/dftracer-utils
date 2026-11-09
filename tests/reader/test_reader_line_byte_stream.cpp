@@ -10,6 +10,7 @@
 #include <dftracer/utils/utilities/reader/internal/stream.h>
 #include <dftracer/utils/utilities/reader/internal/stream_type.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <algorithm>
@@ -111,7 +112,8 @@ TEST_CASE("LINE_BYTES Stream - Sequential Read Tests") {
         dstd::String result;
 
         while (!stream->done()) {
-            std::size_t bytes_read = stream->read(buffer.data(), buffer.size());
+            std::size_t bytes_read =
+                dftu_utils_test::ok(stream->read(buffer.data(), buffer.size()));
             if (bytes_read > 0) {
                 result.append(buffer.data(), bytes_read);
             }
@@ -159,8 +161,8 @@ TEST_CASE("LINE_BYTES Stream - Sequential Read Tests") {
         dstd::Vector<char> buffer(1024 * 1024);
         dstd::String chunk1;
         while (!stream1->done()) {
-            std::size_t bytes_read =
-                stream1->read(buffer.data(), buffer.size());
+            std::size_t bytes_read = dftu_utils_test::ok(
+                stream1->read(buffer.data(), buffer.size()));
             if (bytes_read > 0) {
                 chunk1.append(buffer.data(), bytes_read);
             }
@@ -176,8 +178,8 @@ TEST_CASE("LINE_BYTES Stream - Sequential Read Tests") {
 
         dstd::String chunk2;
         while (!stream2->done()) {
-            std::size_t bytes_read =
-                stream2->read(buffer.data(), buffer.size());
+            std::size_t bytes_read = dftu_utils_test::ok(
+                stream2->read(buffer.data(), buffer.size()));
             if (bytes_read > 0) {
                 chunk2.append(buffer.data(), bytes_read);
             }
@@ -234,8 +236,8 @@ TEST_CASE("LINE_BYTES Stream - Sequential Read Tests") {
                                           .to(mid_point));
         dstd::String chunk1;
         while (!stream1->done()) {
-            std::size_t bytes_read =
-                stream1->read(buffer.data(), buffer.size());
+            std::size_t bytes_read = dftu_utils_test::ok(
+                stream1->read(buffer.data(), buffer.size()));
             if (bytes_read > 0) {
                 chunk1.append(buffer.data(), bytes_read);
             }
@@ -249,8 +251,8 @@ TEST_CASE("LINE_BYTES Stream - Sequential Read Tests") {
                                           .to(max_bytes));
         dstd::String chunk2;
         while (!stream2->done()) {
-            std::size_t bytes_read =
-                stream2->read(buffer.data(), buffer.size());
+            std::size_t bytes_read = dftu_utils_test::ok(
+                stream2->read(buffer.data(), buffer.size()));
             if (bytes_read > 0) {
                 chunk2.append(buffer.data(), bytes_read);
             }
@@ -265,8 +267,8 @@ TEST_CASE("LINE_BYTES Stream - Sequential Read Tests") {
                                .to(max_bytes));
         dstd::String full;
         while (!stream_full->done()) {
-            std::size_t bytes_read =
-                stream_full->read(buffer.data(), buffer.size());
+            std::size_t bytes_read = dftu_utils_test::ok(
+                stream_full->read(buffer.data(), buffer.size()));
             if (bytes_read > 0) {
                 full.append(buffer.data(), bytes_read);
             }
@@ -342,8 +344,8 @@ TEST_CASE("LINE_BYTES Stream - Sequential Read Tests") {
 
             dstd::String chunk;
             while (!stream->done()) {
-                std::size_t bytes_read =
-                    stream->read(buffer.data(), buffer.size());
+                std::size_t bytes_read = dftu_utils_test::ok(
+                    stream->read(buffer.data(), buffer.size()));
                 if (bytes_read > 0) {
                     chunk.append(buffer.data(), bytes_read);
                 }
@@ -444,8 +446,8 @@ TEST_CASE("LINE_BYTES Stream - Parallel/Threaded Read Tests" *
                     dstd::String& chunk = chunks[i];
 
                     while (!stream->done()) {
-                        std::size_t bytes_read =
-                            stream->read(buffer.data(), buffer.size());
+                        std::size_t bytes_read = dftu_utils_test::ok(
+                            stream->read(buffer.data(), buffer.size()));
                         if (bytes_read > 0) {
                             chunk.append(buffer.data(), bytes_read);
                         }
@@ -555,8 +557,8 @@ TEST_CASE("LINE_BYTES Stream - Parallel/Threaded Read Tests" *
                     dstd::String& chunk = chunks[i];
 
                     while (!stream->done()) {
-                        std::size_t bytes_read =
-                            stream->read(buffer.data(), buffer.size());
+                        std::size_t bytes_read = dftu_utils_test::ok(
+                            stream->read(buffer.data(), buffer.size()));
                         if (bytes_read > 0) {
                             chunk.append(buffer.data(), bytes_read);
                         }
@@ -654,8 +656,8 @@ TEST_CASE("LINE_BYTES Stream - Parallel/Threaded Read Tests" *
                     dstd::String& result = results[i];
 
                     while (!stream->done()) {
-                        std::size_t bytes_read =
-                            stream->read(buffer.data(), buffer.size());
+                        std::size_t bytes_read = dftu_utils_test::ok(
+                            stream->read(buffer.data(), buffer.size()));
                         if (bytes_read > 0) {
                             result.append(buffer.data(), bytes_read);
                         }
@@ -733,7 +735,8 @@ TEST_CASE("LINE_BYTES Stream - Edge Cases") {
         dstd::String result;
 
         while (!stream->done()) {
-            std::size_t bytes_read = stream->read(buffer.data(), buffer.size());
+            std::size_t bytes_read =
+                dftu_utils_test::ok(stream->read(buffer.data(), buffer.size()));
             if (bytes_read > 0) {
                 result.append(buffer.data(), bytes_read);
             }
@@ -793,16 +796,16 @@ TEST_CASE("LINE_BYTES Stream - Edge Cases") {
         dstd::String chunk1, chunk2;
 
         while (!stream1->done()) {
-            std::size_t bytes_read =
-                stream1->read(buffer.data(), buffer.size());
+            std::size_t bytes_read = dftu_utils_test::ok(
+                stream1->read(buffer.data(), buffer.size()));
             if (bytes_read > 0) {
                 chunk1.append(buffer.data(), bytes_read);
             }
         }
 
         while (!stream2->done()) {
-            std::size_t bytes_read =
-                stream2->read(buffer.data(), buffer.size());
+            std::size_t bytes_read = dftu_utils_test::ok(
+                stream2->read(buffer.data(), buffer.size()));
             if (bytes_read > 0) {
                 chunk2.append(buffer.data(), bytes_read);
             }
@@ -846,7 +849,8 @@ TEST_CASE("LINE_BYTES Stream - Edge Cases") {
         dstd::String result;
 
         while (!stream->done()) {
-            std::size_t bytes_read = stream->read(buffer.data(), buffer.size());
+            std::size_t bytes_read =
+                dftu_utils_test::ok(stream->read(buffer.data(), buffer.size()));
             if (bytes_read > 0) {
                 result.append(buffer.data(), bytes_read);
             }
@@ -898,8 +902,8 @@ TEST_CASE("LINE_BYTES Stream - Arbitrary Boundary Tests" *
                                    .to(boundary));
             dstd::String chunk1;
             while (!stream1->done()) {
-                std::size_t bytes_read =
-                    stream1->read(buffer.data(), buffer.size());
+                std::size_t bytes_read = dftu_utils_test::ok(
+                    stream1->read(buffer.data(), buffer.size()));
                 if (bytes_read > 0) {
                     chunk1.append(buffer.data(), bytes_read);
                 }
@@ -914,8 +918,8 @@ TEST_CASE("LINE_BYTES Stream - Arbitrary Boundary Tests" *
                                    .to(max_bytes));
             dstd::String chunk2;
             while (!stream2->done()) {
-                std::size_t bytes_read =
-                    stream2->read(buffer.data(), buffer.size());
+                std::size_t bytes_read = dftu_utils_test::ok(
+                    stream2->read(buffer.data(), buffer.size()));
                 if (bytes_read > 0) {
                     chunk2.append(buffer.data(), bytes_read);
                 }
@@ -985,14 +989,14 @@ TEST_CASE("LINE_BYTES Stream - Arbitrary Boundary Tests" *
             dstd::String chunk1, chunk2;
 
             while (!stream1->done()) {
-                std::size_t bytes_read =
-                    stream1->read(buffer.data(), buffer.size());
+                std::size_t bytes_read = dftu_utils_test::ok(
+                    stream1->read(buffer.data(), buffer.size()));
                 if (bytes_read > 0) chunk1.append(buffer.data(), bytes_read);
             }
 
             while (!stream2->done()) {
-                std::size_t bytes_read =
-                    stream2->read(buffer.data(), buffer.size());
+                std::size_t bytes_read = dftu_utils_test::ok(
+                    stream2->read(buffer.data(), buffer.size()));
                 if (bytes_read > 0) chunk2.append(buffer.data(), bytes_read);
             }
 
@@ -1008,8 +1012,8 @@ TEST_CASE("LINE_BYTES Stream - Arbitrary Boundary Tests" *
                                    .to(max_bytes));
             dstd::String full;
             while (!stream_full->done()) {
-                std::size_t bytes_read =
-                    stream_full->read(buffer.data(), buffer.size());
+                std::size_t bytes_read = dftu_utils_test::ok(
+                    stream_full->read(buffer.data(), buffer.size()));
                 if (bytes_read > 0) full.append(buffer.data(), bytes_read);
             }
 
@@ -1075,11 +1079,13 @@ TEST_CASE("LINE_BYTES Stream - Arbitrary Boundary Tests" *
 
             dstd::String c1, c2;
             while (!s1->done()) {
-                std::size_t br = s1->read(buffer.data(), buffer.size());
+                std::size_t br =
+                    dftu_utils_test::ok(s1->read(buffer.data(), buffer.size()));
                 if (br > 0) c1.append(buffer.data(), br);
             }
             while (!s2->done()) {
-                std::size_t br = s2->read(buffer.data(), buffer.size());
+                std::size_t br =
+                    dftu_utils_test::ok(s2->read(buffer.data(), buffer.size()));
                 if (br > 0) c2.append(buffer.data(), br);
             }
 
@@ -1134,8 +1140,8 @@ TEST_CASE("LINE_BYTES Stream - Multiple Worker Counts") {
         dstd::Vector<char> buffer(512 * 1024);
         dstd::String full_content;
         while (!stream_ref->done()) {
-            std::size_t bytes_read =
-                stream_ref->read(buffer.data(), buffer.size());
+            std::size_t bytes_read = dftu_utils_test::ok(
+                stream_ref->read(buffer.data(), buffer.size()));
             if (bytes_read > 0) {
                 full_content.append(buffer.data(), bytes_read);
             }
@@ -1179,7 +1185,8 @@ TEST_CASE("LINE_BYTES Stream - Multiple Worker Counts") {
 
                     dstd::Vector<char> buf(256 * 1024);
                     while (!stream->done()) {
-                        std::size_t br = stream->read(buf.data(), buf.size());
+                        std::size_t br = dftu_utils_test::ok(
+                            stream->read(buf.data(), buf.size()));
                         if (br > 0) chunks[i].append(buf.data(), br);
                     }
                 });
@@ -1254,8 +1261,8 @@ TEST_CASE("LINE_BYTES Stream - Event Ordering Verification") {
                                              .to(end));
             dstd::String chunk;
             while (!stream->done()) {
-                std::size_t bytes_read =
-                    stream->read(buffer.data(), buffer.size());
+                std::size_t bytes_read = dftu_utils_test::ok(
+                    stream->read(buffer.data(), buffer.size()));
                 if (bytes_read > 0) {
                     chunk.append(buffer.data(), bytes_read);
                 }
@@ -1271,8 +1278,8 @@ TEST_CASE("LINE_BYTES Stream - Event Ordering Verification") {
                                              .to(max_bytes));
         dstd::String sequential;
         while (!stream_seq->done()) {
-            std::size_t bytes_read =
-                stream_seq->read(buffer.data(), buffer.size());
+            std::size_t bytes_read = dftu_utils_test::ok(
+                stream_seq->read(buffer.data(), buffer.size()));
             if (bytes_read > 0) {
                 sequential.append(buffer.data(), bytes_read);
             }
@@ -1353,8 +1360,8 @@ TEST_CASE("LINE_BYTES Stream - Buffer Size Tests") {
         dstd::Vector<char> buffer(512 * 1024);
         dstd::String reference_content;
         while (!ref_stream->done()) {
-            std::size_t bytes_read =
-                ref_stream->read(buffer.data(), buffer.size());
+            std::size_t bytes_read = dftu_utils_test::ok(
+                ref_stream->read(buffer.data(), buffer.size()));
             if (bytes_read > 0) {
                 reference_content.append(buffer.data(), bytes_read);
             }
@@ -1396,8 +1403,8 @@ TEST_CASE("LINE_BYTES Stream - Buffer Size Tests") {
 
             dstd::String content;
             while (!stream->done()) {
-                std::size_t bytes_read =
-                    stream->read(buffer.data(), buffer.size());
+                std::size_t bytes_read = dftu_utils_test::ok(
+                    stream->read(buffer.data(), buffer.size()));
                 if (bytes_read > 0) {
                     content.append(buffer.data(), bytes_read);
                 }
@@ -1465,8 +1472,8 @@ TEST_CASE("LINE_BYTES Stream - Buffer Size Tests") {
 
                 dstd::String chunk1;
                 while (!stream1->done()) {
-                    std::size_t bytes_read =
-                        stream1->read(read_buffer.data(), read_buffer.size());
+                    std::size_t bytes_read = dftu_utils_test::ok(
+                        stream1->read(read_buffer.data(), read_buffer.size()));
                     if (bytes_read > 0) {
                         chunk1.append(read_buffer.data(), bytes_read);
                     }
@@ -1487,8 +1494,8 @@ TEST_CASE("LINE_BYTES Stream - Buffer Size Tests") {
 
                 dstd::String chunk2;
                 while (!stream2->done()) {
-                    std::size_t bytes_read =
-                        stream2->read(read_buffer.data(), read_buffer.size());
+                    std::size_t bytes_read = dftu_utils_test::ok(
+                        stream2->read(read_buffer.data(), read_buffer.size()));
                     if (bytes_read > 0) {
                         chunk2.append(read_buffer.data(), bytes_read);
                     }
@@ -1509,8 +1516,9 @@ TEST_CASE("LINE_BYTES Stream - Buffer Size Tests") {
 
                 dstd::String full;
                 while (!stream_full->done()) {
-                    std::size_t bytes_read = stream_full->read(
-                        read_buffer.data(), read_buffer.size());
+                    std::size_t bytes_read =
+                        dftu_utils_test::ok(stream_full->read(
+                            read_buffer.data(), read_buffer.size()));
                     if (bytes_read > 0) {
                         full.append(read_buffer.data(), bytes_read);
                     }

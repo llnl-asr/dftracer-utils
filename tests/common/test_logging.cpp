@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstddef>
 #include <cstdio>
@@ -198,7 +199,8 @@ TEST_CASE("TRACE_SCOPE is frame-safe across coroutine suspension") {
          .color = dftracer::utils::common::logger::ColorMode::Never},
         [] {
             dftracer::utils::Runtime rt(2);
-            int r = rt.submit(traced_root(), "traced").get();
+            int r =
+                dftu_utils_test::ok(rt.submit(traced_root(), "traced").get());
             CHECK(r == 60);  // (10*2) + (20*2); wrong value => frame corruption
         });
     CHECK(contains(out, "-> traced_root: root"));

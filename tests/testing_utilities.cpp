@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
@@ -91,7 +92,8 @@ bool build_index(const dstd::String& gz, const dstd::String& index_dir,
             ok = (r.indexed + r.skipped) >= 1 && r.failed == 0;
             co_return;
         });
-    rt.submit(std::move(task), "test-build-index").wait();
+    dftracer::utils::common::unwrap(
+        rt.submit(std::move(task), "test-build-index").wait());
     rt.shutdown();
     return ok;
 }

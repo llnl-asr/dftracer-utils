@@ -11,6 +11,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <algorithm>
@@ -79,7 +80,7 @@ TEST_SUITE("IndexParserReuse") {
             result =
                 co_await index::build::BatchBuilder::process(std::move(config));
         });
-        rt.submit(std::move(task), "parser-reuse").wait();
+        dftu_utils_test::ok(rt.submit(std::move(task), "parser-reuse").wait());
 
         REQUIRE(result.indexed == FILES + 1);
         const auto created =

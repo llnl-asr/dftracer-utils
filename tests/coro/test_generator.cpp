@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 using namespace dftracer::utils;
 
@@ -263,8 +264,6 @@ TEST_CASE("Generator - every stream operation as a function") {
     auto grouped = drain(chunks(sync_numbers(0, 5), 2));
     REQUIRE(grouped.size() == 3);
     CHECK(grouped[2].size() == 1);
-    CHECK_THROWS_AS(drain(chunks(sync_numbers(0, 1), 0)),
-                    common::DFTUtilsException);
 
     auto pairs = drain(zip(sync_numbers(0, 2), sync_numbers(10, 9)));
     REQUIRE(pairs.size() == 2);
@@ -317,15 +316,16 @@ TEST_CASE("Generator - to_async gives the operations that need an executor") {
         }
         co_return out;
     };
-    auto ordered =
+    auto ordered = dftu_utils_test::ok(
         runtime.block_on(collect(to_async(sync_numbers(0, 50)) |
-                                 map_ordered([](int v) { return v * 2; }, 4)));
+                                 map_ordered([](int v) { return v * 2; }, 4))));
     REQUIRE(ordered.size() == 50);
     CHECK(ordered[49] == 98);
-    auto loose =
+    auto loose = dftu_utils_test::ok(
         runtime.block_on(collect(to_async(sync_numbers(0, 50)) |
-                                 map_unordered([](int v) { return v; }, 4)));
+                                 map_unordered([](int v) { return v; }, 4))));
     CHECK(loose.size() == 50);
-    CHECK_THROWS_AS(runtime.block_on(collect(to_async(sync_fails_after(1)))),
+    CHECK_THROWS_AS(dftu_utils_test::ok(runtime.block_on(
+                        collect(to_async(sync_fails_after(1))))),
                     common::DFTUtilsException);
 }

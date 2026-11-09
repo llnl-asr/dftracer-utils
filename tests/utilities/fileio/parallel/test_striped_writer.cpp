@@ -10,6 +10,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/utilities/fileio/parallel/parallel_writer.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <cstdio>
@@ -52,7 +53,8 @@ TEST_CASE("StripedWriter - header, chunks, footer land in single file") {
         co_return 0;
     };
 
-    CHECK(runtime.submit(task(), "striped_basic").get() == 0);
+    CHECK(dftu_utils_test::ok(runtime.submit(task(), "striped_basic").get()) ==
+          0);
 
     auto content = read_all(path);
     // All bytes must be present regardless of interleave order.
@@ -90,7 +92,8 @@ TEST_CASE("StripedWriter - empty chunks are no-ops") {
         if (co_await w->close() != 0) co_return 4;
         co_return 0;
     };
-    CHECK(runtime.submit(task(), "striped_empty").get() == 0);
+    CHECK(dftu_utils_test::ok(runtime.submit(task(), "striped_empty").get()) ==
+          0);
     CHECK(dstd::fs::exists(path).value());
     CHECK(dstd::fs::file_size(path).value() == 0);
     dstd::fs::remove(path).discard();
@@ -110,7 +113,8 @@ TEST_CASE("StripedWriter - output_paths returns single entry") {
         co_await w->close();
         co_return 0;
     };
-    CHECK(runtime.submit(task(), "striped_paths").get() == 0);
+    CHECK(dftu_utils_test::ok(runtime.submit(task(), "striped_paths").get()) ==
+          0);
     REQUIRE(paths.size() == 1);
     CHECK(paths[0] == path);
     dstd::fs::remove(path).discard();

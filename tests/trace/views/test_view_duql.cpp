@@ -12,6 +12,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/indexer.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -815,7 +816,8 @@ TEST_SUITE("View duql pipeline") {
                                         dstd::String(dstd::String(
                                             determine_index_path(gz, ""))))
                             .duql(q);
-                    const dstd::String got = text(rt.submit(v.collect()).get());
+                    const dstd::String got =
+                        text(dftu_utils_test::ok(rt.submit(v.collect()).get()));
                     if (!want) want = got;
                     CHECK_MESSAGE(got == *want, gz, " workers ", workers, ": ",
                                   got.substr(0, 200), " vs ",
@@ -2452,7 +2454,8 @@ TEST_SUITE("View duql reshape determinism") {
                                         dstd::String(dstd::String(
                                             determine_index_path(gz, ""))))
                             .duql(q);
-                    const dstd::String got = rows(rt.submit(v.collect()).get());
+                    const dstd::String got =
+                        rows(dftu_utils_test::ok(rt.submit(v.collect()).get()));
                     if (!want) want = got;
                     CHECK_MESSAGE(got == *want, gz, " workers ", workers, ": ",
                                   got.substr(0, 200), " vs ",
@@ -2960,8 +2963,8 @@ TEST_SUITE("View duql session") {
             for (const auto& gz : files)
                 for (std::size_t workers : {1, 2, 8}) {
                     dftracer::utils::Runtime rt(workers);
-                    const dstd::String got =
-                        rows(rt.submit(view_of(gz).duql(q).collect()).get());
+                    const dstd::String got = rows(dftu_utils_test::ok(
+                        rt.submit(view_of(gz).duql(q).collect()).get()));
                     if (!want) want = got;
                     CHECK(got == *want);
                 }

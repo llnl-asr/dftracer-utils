@@ -19,6 +19,7 @@
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <algorithm>
@@ -78,7 +79,7 @@ dstd::String density_body(Router& router, const dstd::String& target) {
         body = resp.body;
         co_return;
     });
-    rt.submit(std::move(task), "density").wait();
+    dftu_utils_test::ok(rt.submit(std::move(task), "density").wait());
     rt.shutdown();
     return body;
 }
@@ -93,7 +94,7 @@ dstd::UniquePtr<TraceIndex> build_index(const dstd::String& content,
     auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
         co_await index->initialize();
     });
-    rt.submit(std::move(task), "setup").wait();
+    dftu_utils_test::ok(rt.submit(std::move(task), "setup").wait());
     rt.shutdown();
     return index;
 }

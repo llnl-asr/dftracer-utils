@@ -44,6 +44,12 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
+void require_ran(const dstd::Result<void>& ran) {
+    if (ran.has_value()) return;
+    std::fprintf(stderr, "pool_bench: %s\n", ran.error().format().c_str());
+    std::exit(1);
+}
+
 struct Config {
     std::size_t threads = 4;
     std::size_t scale_percent = 100;
@@ -106,13 +112,13 @@ Outcome yield_storm(const Config& config, Runtime& rt) {
     const std::size_t tasks = 4 * config.threads;
     const std::size_t rounds = scaled(config, 20000);
     std::atomic<std::uint64_t> counted{0};
-    rt.block_on(
+    require_ran(rt.block_on(
         coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
             for (std::size_t i = 0; i < tasks; ++i) {
                 scope.spawn(yielder(rounds, counted));
             }
             co_return;
-        }));
+        })));
     return {tasks * rounds, counted.load()};
 }
 
@@ -126,7 +132,7 @@ Outcome spawn_join(const Config& config, Runtime& rt) {
             co_await std::move(children);
         }
     };
-    rt.block_on(body());
+    require_ran(rt.block_on(body()));
     return {rounds * CHILDREN, counted.load()};
 }
 
@@ -134,13 +140,13 @@ Outcome wave(const Config& config, Runtime& rt) {
     const std::size_t tasks = 4 * config.threads;
     const std::size_t rounds = scaled(config, 5000);
     std::atomic<std::uint64_t> counted{0};
-    rt.block_on(
+    require_ran(rt.block_on(
         coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
             for (std::size_t i = 0; i < tasks; ++i) {
                 scope.spawn(waver(rounds, counted));
             }
             co_return;
-        }));
+        })));
     return {tasks * rounds, counted.load()};
 }
 
@@ -154,14 +160,14 @@ Outcome relay(const Config& config, Runtime& rt) {
         // A capacity of zero would clamp every acquire to nothing.
         if (i != 0 && !gates.back()->try_acquire(1)) return {};
     }
-    rt.block_on(
+    require_ran(rt.block_on(
         coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
             for (std::size_t i = 0; i < HOPS; ++i) {
                 scope.spawn(relay_hop(*gates[i], *gates[(i + 1) % HOPS], rounds,
                                       counted));
             }
             co_return;
-        }));
+        })));
     return {HOPS * rounds, counted.load()};
 }
 
@@ -170,7 +176,7 @@ Outcome spread(const Config& config, Runtime& rt) {
     constexpr std::size_t CHILDREN = 1000;
     std::atomic<std::uint64_t> counted{0};
     for (std::size_t i = 0; i < rounds; ++i) {
-        rt.block_on(spawn_children(CHILDREN, counted));
+        require_ran(rt.block_on(spawn_children(CHILDREN, counted)));
         std::this_thread::sleep_for(std::chrono::microseconds(200));
     }
     return {rounds * CHILDREN, counted.load()};

@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_VIEW_SOURCE_H
 #define DFTRACER_UTILS_TRACE_VIEWS_VIEW_SOURCE_H
 
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -219,7 +220,7 @@ class ViewSource : public dftracer::utils::dataframe::Source {
         if (!buf_)
             buf_ =
                 dstd::make_shared<const dftracer::utils::dataframe::DataFrame>(
-                    run_alone().get());
+                    common::unwrap(run_alone().get()));
         return buf_;
     }
 

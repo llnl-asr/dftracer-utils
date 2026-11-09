@@ -7,6 +7,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/chunk_extractor_utility.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <unistd.h>
 
@@ -55,7 +56,8 @@ AdmittedRun run_admitted(const dstd::String& file, const dstd::String& out_dir,
         }
         run.outputs = co_await coro::when_all(std::move(tasks));
     };
-    rt.submit(coro::with_scope(body), "AdmittedExtract").wait();
+    dftu_utils_test::ok(
+        rt.submit(coro::with_scope(body), "AdmittedExtract").wait());
     rt.shutdown();
     run.peak_in_flight = admission.peak_in_flight();
     run.peak_reserved = admission.peak_reserved_bytes();
@@ -76,7 +78,7 @@ TEST_SUITE("ChunkExtractor") {
                 .with_app_name("test");
 
         ChunkExtractorUtility extractor;
-        auto output = extractor(input).get();
+        auto output = dftu_utils_test::ok(extractor(input).get());
 
         CHECK(output.chunk_index == 0);
         CHECK(output.success == true);
@@ -100,7 +102,7 @@ TEST_SUITE("ChunkExtractor") {
                 .with_chunk_size(128 * 1024);
 
         ChunkExtractorUtility extractor;
-        auto output = extractor(input).get();
+        auto output = dftu_utils_test::ok(extractor(input).get());
 
         REQUIRE(output.success);
         CHECK(output.chunks.size() >= 2);
@@ -119,22 +121,24 @@ TEST_SUITE("ChunkExtractor") {
         dstd::String second = env.create_dft_test_gzip_file(40);
 
         ChunkExtractorUtility extractor;
-        auto one = extractor(ChunkExtractorUtilityInput::from_files(
-                                 0, {dstd::String(first)})
-                                 .with_output_dir(dstd::String(env.dir()))
-                                 .with_app_name("one"))
-                       .get();
-        auto two = extractor(ChunkExtractorUtilityInput::from_files(
-                                 0, {dstd::String(second)})
-                                 .with_output_dir(dstd::String(env.dir()))
-                                 .with_app_name("two"))
-                       .get();
-        auto both =
+        auto one = dftu_utils_test::ok(
+            extractor(
+                ChunkExtractorUtilityInput::from_files(0, {dstd::String(first)})
+                    .with_output_dir(dstd::String(env.dir()))
+                    .with_app_name("one"))
+                .get());
+        auto two = dftu_utils_test::ok(
+            extractor(ChunkExtractorUtilityInput::from_files(
+                          0, {dstd::String(second)})
+                          .with_output_dir(dstd::String(env.dir()))
+                          .with_app_name("two"))
+                .get());
+        auto both = dftu_utils_test::ok(
             extractor(ChunkExtractorUtilityInput::from_files(
                           0, {dstd::String(first), dstd::String(second)})
                           .with_output_dir(dstd::String(env.dir()))
                           .with_app_name("both"))
-                .get();
+                .get());
 
         REQUIRE(one.success);
         REQUIRE(two.success);
@@ -151,7 +155,7 @@ TEST_SUITE("ChunkExtractor") {
                          .with_app_name("test");
 
         ChunkExtractorUtility extractor;
-        auto output = extractor(input).get();
+        auto output = dftu_utils_test::ok(extractor(input).get());
 
         CHECK(output.success == false);
         CHECK(output.chunks.empty());
@@ -172,7 +176,7 @@ TEST_SUITE("ChunkExtractor") {
                 .with_app_name("test");
 
         ChunkExtractorUtility extractor;
-        auto output = extractor(input).get();
+        auto output = dftu_utils_test::ok(extractor(input).get());
 
         CHECK(output.success == false);
     }

@@ -31,7 +31,7 @@ class CheckpointIndexer {
     // Core indexer operations
     virtual coro::CoroTask<void> build_async() const = 0;
 
-    void build() const { build_async().get(); }
+    void build() const { common::unwrap(build_async().get()); }
     virtual bool need_rebuild() const = 0;
     virtual bool exists() const = 0;
 

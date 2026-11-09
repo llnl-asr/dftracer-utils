@@ -8,6 +8,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 
@@ -57,9 +58,9 @@ coro::CoroTask<DrainResult> drain(dstd::UniquePtr<Cursor> cur,
 }
 
 DrainResult run_drain(dstd::UniquePtr<Cursor> cur, std::int64_t max_rows) {
-    return dftracer::utils::default_runtime()
-        .submit(drain(std::move(cur), max_rows))
-        .get();
+    return dftu_utils_test::ok(dftracer::utils::default_runtime()
+                                   .submit(drain(std::move(cur), max_rows))
+                                   .get());
 }
 
 }  // namespace

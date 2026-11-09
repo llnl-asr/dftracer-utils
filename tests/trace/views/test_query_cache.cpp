@@ -12,6 +12,7 @@
 #include <dftracer/utils/index/cache/rollup_store.h>
 #include <dftracer/utils/store/store.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -82,10 +83,11 @@ dstd::Vector<dstd::String> canon(const dataframe::DataFrame& df) {
 dstd::String indexed_trace(TestEnvironment& env) {
     dstd::String gz = create_mixed_trace(env, 30, 20);
     StringSink warm;
-    View::from_file(dstd::String(gz),
-                    dstd::String(dstd::String(determine_index_path(gz, ""))))
-        .sink_json(warm)
-        .get();
+    dftu_utils_test::ok(
+        View::from_file(dstd::String(gz), dstd::String(dstd::String(
+                                              determine_index_path(gz, ""))))
+            .sink_json(warm)
+            .get());
     return gz;
 }
 
@@ -95,7 +97,7 @@ TEST_SUITE("QueryCache") {
     TEST_CASE("rollups go in the index root, not in its store") {
         TestEnvironment env(200);
         const auto gz = indexed_trace(env);
-        by_cat(gz, "dur >= 0").materialize().get();
+        dftu_utils_test::ok(by_cat(gz, "dur >= 0").materialize().get());
         CHECK(
             dftracer::utils::index::cache::CacheStore::exists(rollups_of(gz)));
         CHECK(rollup_sigs(gz).size() == 1);
@@ -123,30 +125,34 @@ TEST_SUITE("QueryCache") {
         TestEnvironment env(200);
         const auto gz = indexed_trace(env);
         const dstd::String idx = dstd::String(determine_index_path(gz, ""));
-        const auto agg = canon(by_cat(gz, "dur >= 0").collect().get());
+        const auto agg =
+            canon(dftu_utils_test::ok(by_cat(gz, "dur >= 0").collect().get()));
         StringSink rows;
-        View::from_file(dstd::String(gz), dstd::String(idx))
-            .duql(R"(name == "read")")
-            .sink_json(rows)
-            .get();
+        dftu_utils_test::ok(View::from_file(dstd::String(gz), dstd::String(idx))
+                                .duql(R"(name == "read")")
+                                .sink_json(rows)
+                                .get());
 
-        by_cat(gz, "dur >= 0").materialize().get();
-        View::from_file(dstd::String(gz), dstd::String(idx))
-            .duql(R"(name == "read")")
-            .materialize()
-            .get();
+        dftu_utils_test::ok(by_cat(gz, "dur >= 0").materialize().get());
+        dftu_utils_test::ok(View::from_file(dstd::String(gz), dstd::String(idx))
+                                .duql(R"(name == "read")")
+                                .materialize()
+                                .get());
         REQUIRE(dstd::fs::exists(dstd::Path(views_of(gz))).value());
-        CHECK(canon(by_cat(gz, "dur >= 0").collect().get()) == agg);
+        CHECK(canon(dftu_utils_test::ok(
+                  by_cat(gz, "dur >= 0").collect().get())) == agg);
 
         // Both caches are disposable. The index itself is not part of them.
         dstd::fs::remove_all(rollups_of(gz)).has_value();
         dstd::fs::remove_all(views_of(gz)).discard();
-        CHECK(canon(by_cat(gz, "dur >= 0").collect().get()) == agg);
+        CHECK(canon(dftu_utils_test::ok(
+                  by_cat(gz, "dur >= 0").collect().get())) == agg);
         StringSink again;
-        const auto st = View::from_file(dstd::String(gz), dstd::String(idx))
-                            .duql(R"(name == "read")")
-                            .sink_json(again)
-                            .get();
+        const auto st = dftu_utils_test::ok(
+            View::from_file(dstd::String(gz), dstd::String(idx))
+                .duql(R"(name == "read")")
+                .sink_json(again)
+                .get());
         CHECK(again.lines() == rows.lines());
         CHECK(st.events_scanned == 50);
     }
@@ -155,7 +161,7 @@ TEST_SUITE("QueryCache") {
         TestEnvironment env(200);
         const auto gz = create_mixed_trace(env, 30, 20);
         const dstd::String idx = dstd::String(determine_index_path(gz, ""));
-        by_cat(gz, "dur >= 0").materialize().get();
+        dftu_utils_test::ok(by_cat(gz, "dur >= 0").materialize().get());
         const dstd::Path store = dstd::Path(idx) / "store";
         REQUIRE(dstd::fs::exists(store).value());
 
@@ -165,10 +171,11 @@ TEST_SUITE("QueryCache") {
         REQUIRE_FALSE(dstd::fs::exists(store).value());
 
         StringSink rows;
-        const auto st = View::from_file(dstd::String(gz), dstd::String(idx))
-                            .duql(R"(name == "read")")
-                            .sink_json(rows)
-                            .get();
+        const auto st = dftu_utils_test::ok(
+            View::from_file(dstd::String(gz), dstd::String(idx))
+                .duql(R"(name == "read")")
+                .sink_json(rows)
+                .get());
         CHECK(rows.lines().size() == 30);
         CHECK(st.events_scanned == 50);
         CHECK(dstd::fs::exists(store).value());
@@ -177,11 +184,14 @@ TEST_SUITE("QueryCache") {
     TEST_CASE("a rollup store that cannot be opened does not fail the query") {
         TestEnvironment env(200);
         const auto gz = indexed_trace(env);
-        const auto want = canon(by_cat(gz, "dur >= 0").collect().get());
+        const auto want =
+            canon(dftu_utils_test::ok(by_cat(gz, "dur >= 0").collect().get()));
         REQUIRE(dstd::fs::create_directories(cache_of(gz)).has_value());
         dftu_utils_test::FileOut(rollups_of(gz)) << "x";
-        CHECK_NOTHROW(by_cat(gz, "dur >= 0").materialize().get());
-        CHECK(canon(by_cat(gz, "dur >= 0").collect().get()) == want);
+        CHECK_NOTHROW(
+            dftu_utils_test::ok(by_cat(gz, "dur >= 0").materialize().get()));
+        CHECK(canon(dftu_utils_test::ok(
+                  by_cat(gz, "dur >= 0").collect().get())) == want);
     }
 
     TEST_CASE("the rollup store evicts the least recently used rollup") {
@@ -232,9 +242,9 @@ TEST_SUITE("QueryCache") {
             return v.group_by(dstd::Vector<dstd::String>{"cat"},
                               {{dataframe::Agg::Count, "", "n"}});
         };
-        view(false).materialize().get();
+        dftu_utils_test::ok(view(false).materialize().get());
         REQUIRE(rollup_sigs(gz).size() == 1);
-        view(true).materialize().get();
+        dftu_utils_test::ok(view(true).materialize().get());
         CHECK(rollup_sigs(gz).size() == 2);
     }
 
@@ -243,10 +253,10 @@ TEST_SUITE("QueryCache") {
         const auto gz = indexed_trace(env);
         const dstd::String idx = dstd::String(determine_index_path(gz, ""));
         ::setenv("DFTRACER_UTILS_CACHE_MAX_BYTES", "1", 1);
-        View::from_file(dstd::String(gz), dstd::String(idx))
-            .duql(R"(name == "read")")
-            .materialize()
-            .get();
+        dftu_utils_test::ok(View::from_file(dstd::String(gz), dstd::String(idx))
+                                .duql(R"(name == "read")")
+                                .materialize()
+                                .get());
         ::unsetenv("DFTRACER_UTILS_CACHE_MAX_BYTES");
         dstd::Vector<dstd::String> views;
         for (const auto& e :
@@ -254,10 +264,11 @@ TEST_SUITE("QueryCache") {
             views.push_back(dstd::String(e.path.str()));
         CHECK(views.empty());
         StringSink rows;
-        const auto st = View::from_file(dstd::String(gz), dstd::String(idx))
-                            .duql(R"(name == "read")")
-                            .sink_json(rows)
-                            .get();
+        const auto st = dftu_utils_test::ok(
+            View::from_file(dstd::String(gz), dstd::String(idx))
+                .duql(R"(name == "read")")
+                .sink_json(rows)
+                .get());
         CHECK(rows.lines().size() == 30);
         CHECK(st.events_scanned == 50);
     }

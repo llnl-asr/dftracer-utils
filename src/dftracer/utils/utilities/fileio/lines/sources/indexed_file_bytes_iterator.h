@@ -148,8 +148,8 @@ class IndexedFileBytesIterator {
         }
 
         // LINE_BYTES stream returns one complete line per read()
-        std::size_t bytes_read = stream_->read(
-            const_cast<char*>(stream_buffer_.data()), stream_buffer_.size());
+        std::size_t bytes_read = common::unwrap(stream_->read(
+            const_cast<char*>(stream_buffer_.data()), stream_buffer_.size()));
 
         if (bytes_read == 0) {
             stream_done_ = true;

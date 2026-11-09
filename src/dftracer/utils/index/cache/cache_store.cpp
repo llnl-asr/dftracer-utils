@@ -154,7 +154,7 @@ std::uint64_t cache_max_bytes() {
 
 bool CacheStore::exists(dstd::StringView path) {
     const auto found = dstd::fs::exists(dstd::PathView(store_dir(path)));
-    return found && *found;
+    return found.has_value() && *found;
 }
 
 dstd::SharedPtr<CacheStore> CacheStore::open(dstd::StringView path, Mode mode) {

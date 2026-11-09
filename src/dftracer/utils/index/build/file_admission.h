@@ -4,7 +4,6 @@
 
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/coro/cancelled.h>
 #include <dftracer/utils/coro/reserve_async.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/index/build/index_fold_driver.h>
@@ -129,7 +128,7 @@ class FileAdmission {
                                       PLAINTEXT_PER_COMPRESSED_BYTE;
     }
 
-    /// Throws a cancelled error when the executor shuts down first.
+    /// Stops the task when the executor shuts down first.
     coro::CoroTask<Ticket> admit(std::uint64_t plaintext) {
         Ticket ticket;
         if (!pool_) {
@@ -145,8 +144,9 @@ class FileAdmission {
         auto got = co_await coro::reserve_async(
             *pool_, want, std::chrono::steady_clock::time_point::max());
         if (!got) {
-            if (got.error() == memory::Status::Cancelled)
-                coro::throw_cancelled("file admission cancelled");
+            if (got.error() == memory::Status::Cancelled) {
+                co_await coro::stop_here();
+            }
             throw common::DFTUtilsException(
                 common::ErrorCode::MemoryBudgetExceeded,
                 "a file does not fit the memory budget");

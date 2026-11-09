@@ -16,6 +16,7 @@
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <algorithm>
@@ -28,7 +29,8 @@ namespace test_view_common {
 
 template <class T>
 T run(dftracer::utils::coro::CoroTask<T> task) {
-    return dftracer::utils::default_runtime().submit(std::move(task)).get();
+    return dftu_utils_test::ok(
+        dftracer::utils::default_runtime().submit(std::move(task)).get());
 }
 
 // A trace mixing POSIX and STDIO events so filters have something to cut.
@@ -260,11 +262,11 @@ struct SharedIndexedTrace {
         gz = create_mixed_trace(env, 30, 20);
         idx = dftracer::utils::trace::internal::determine_index_path(gz, "");
         StringSink sink;
-        dftracer::utils::trace::views::View::from_file(
-            dftracer::utils::dstd::String(gz),
-            dftracer::utils::dstd::String(idx))
-            .sink_json(sink)
-            .get();
+        dftu_utils_test::ok(dftracer::utils::trace::views::View::from_file(
+                                dftracer::utils::dstd::String(gz),
+                                dftracer::utils::dstd::String(idx))
+                                .sink_json(sink)
+                                .get());
     }
 };
 

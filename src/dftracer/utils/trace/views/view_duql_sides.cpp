@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/env.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/internal/frame_native.h>
@@ -104,11 +105,11 @@ dstd::SharedPtr<const dataframe::DataFrame> Sides::frame(std::size_t i) {
 dstd::SharedPtr<const dataframe::DataFrame> Sides::probe(std::size_t i) const {
     const dataframe::LazyFrame plan = views[i]->head(TYPE_PROBE_ROWS).lazy();
     dataframe::DataFrame f;
-    dftracer::utils::default_runtime().block_on(
+    common::unwrap(dftracer::utils::default_runtime().block_on(
         coro::named("duql_side_types", [&]() -> coro::CoroTask<void> {
             f = co_await plan.collect();
             co_return;
-        }()));
+        }())));
     return dstd::make_shared<const dataframe::DataFrame>(std::move(f));
 }
 
@@ -161,7 +162,7 @@ dstd::SharedPtr<const dataframe::DataFrame> Sides::distinct(std::size_t i) {
     dstd::Vector<dataframe::DataFrame> parts;
     std::uint64_t bytes = 0;
     const dataframe::LazyFrame plan = views[i]->lazy();
-    dftracer::utils::default_runtime().block_on(
+    common::unwrap(dftracer::utils::default_runtime().block_on(
         coro::named("duql_key_set", [&]() -> coro::CoroTask<void> {
             auto gen = plan.stream();
             dstd::String row_key;
@@ -194,7 +195,7 @@ dstd::SharedPtr<const dataframe::DataFrame> Sides::distinct(std::size_t i) {
                 parts.push_back(std::move(kept));
             }
             co_return;
-        }()));
+        }())));
     if (parts.empty()) {
         dataframe::DataFrame none;
         for (const auto& c : columns[i]) {
@@ -238,11 +239,11 @@ dstd::SharedPtr<const dataframe::DataFrame> Sides::run(std::size_t i) {
         }
     const dataframe::LazyFrame plan = views[i]->head(limit + 1).lazy();
     dataframe::DataFrame f;
-    dftracer::utils::default_runtime().block_on(
+    common::unwrap(dftracer::utils::default_runtime().block_on(
         coro::named("duql_lookup_side", [&]() -> coro::CoroTask<void> {
             f = co_await plan.collect();
             co_return;
-        }()));
+        }())));
     caps.check_rows(name, static_cast<std::uint64_t>(f.num_rows()));
     f = duql::flat_frame(std::move(f));
     caps.check_bytes(name, duql::frame_bytes(f));

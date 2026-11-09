@@ -36,6 +36,7 @@
 #include <dftracer/utils/trace/views/view_executor.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/trace/views/view_scan.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <unistd.h>
 
@@ -1008,7 +1009,7 @@ inline dftracer::utils::dataframe::DataFrame groupmap_oracle(
     }
     static dftracer::utils::Runtime rt;
     dftracer::utils::dataframe::DataFrame result;
-    rt.block_on(dftracer::utils::coro::named(
+    dftu_utils_test::ok(rt.block_on(dftracer::utils::coro::named(
         "groupmap-oracle",
         dftracer::utils::coro::with_scope(
             [&](dftracer::utils::coro::Scope&)
@@ -1021,7 +1022,7 @@ inline dftracer::utils::dataframe::DataFrame groupmap_oracle(
                     plan, vdef, folds, intern);
                 resolve_group_keys(agg.map(), plan, agg.maps());
                 result = to_batch(agg.map(), plan);
-            })));
+            }))));
     return dftracer::utils::trace::views::detail::apply_agg_post_ops(
         std::move(result), plan);
 }

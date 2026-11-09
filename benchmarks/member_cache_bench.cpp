@@ -37,6 +37,14 @@ using Bytes = dstd::SharedPtr<const dstd::Vector<std::uint8_t>>;
 
 namespace {
 
+template <class T>
+void require_ok(const dstd::Expected<T, dstd::Error>& result,
+                const char* what) {
+    if (result.has_value()) return;
+    std::fprintf(stderr, "%s failed: %s\n", what, result.error().c_str());
+    std::exit(1);
+}
+
 std::atomic<std::uint64_t> g_decodes{0};
 
 // A compressed gzip member plus its decoded size, shared by all keys.
@@ -151,7 +159,7 @@ double run_round(Runtime& rt, Strategy& strat, const Blob& blob, int members,
         co_await coro::when_all(std::move(tasks));
         co_return;
     });
-    rt.submit(std::move(task), "bench").wait();
+    require_ok(rt.submit(std::move(task), "bench").wait(), "task");
 
     auto t1 = std::chrono::steady_clock::now();
     return std::chrono::duration<double, std::milli>(t1 - t0).count();
@@ -196,7 +204,7 @@ double bench_mutex_wake(Runtime& rt, int rounds, int waiters) {
             }
             co_return;
         });
-    rt.submit(std::move(task), "bench").wait();
+    require_ok(rt.submit(std::move(task), "bench").wait(), "task");
     auto t1 = std::chrono::steady_clock::now();
     return std::chrono::duration<double, std::milli>(t1 - t0).count();
 }
@@ -219,7 +227,7 @@ double bench_once_wake(Runtime& rt, int rounds, int waiters) {
             }
             co_return;
         });
-    rt.submit(std::move(task), "bench").wait();
+    require_ok(rt.submit(std::move(task), "bench").wait(), "task");
     auto t1 = std::chrono::steady_clock::now();
     return std::chrono::duration<double, std::milli>(t1 - t0).count();
 }

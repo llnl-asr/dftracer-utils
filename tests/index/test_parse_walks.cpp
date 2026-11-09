@@ -23,6 +23,7 @@
 #include <doctest/doctest.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <cstdint>
@@ -138,7 +139,7 @@ index::build::IndexBuildBatchResult build_one(const dstd::String& file,
         result =
             co_await index::build::BatchBuilder::process(std::move(config));
     });
-    rt.submit(std::move(task), "parse-walks").wait();
+    dftu_utils_test::ok(rt.submit(std::move(task), "parse-walks").wait());
     rt.shutdown();
     REQUIRE(result.indexed == 1);
     return result;
@@ -407,7 +408,8 @@ TEST_SUITE("IndexParseWalks") {
                 const auto found = [&](const dstd::String& query) {
                     utilities::reader::ReadConfig rc;
                     rc.query = query;
-                    return count_json(reader.read_json(rc)).get();
+                    return dftu_utils_test::ok(
+                        count_json(reader.read_json(rc)).get());
                 };
                 CHECK(found(common::str_cat(where, "tag == \"", odd.needle,
                                             '"')) == 1);
@@ -534,7 +536,8 @@ TEST_SUITE("IndexParseWalks") {
             utilities::reader::ReadConfig rc;
             rc.query = common::str_cat("args.tag == \"", tag, '"');
             INFO(tag);
-            CHECK(count_json(reader.read_json(rc)).get() == 1);
+            CHECK(dftu_utils_test::ok(count_json(reader.read_json(rc)).get()) ==
+                  1);
         }
     }
 
@@ -577,7 +580,8 @@ TEST_SUITE("IndexParseWalks") {
             utilities::reader::ReadConfig rc;
             rc.query = common::str_cat("args.tag == \"", tag, '"');
             INFO(tag);
-            CHECK(count_json(reader.read_json(rc)).get() == 1);
+            CHECK(dftu_utils_test::ok(count_json(reader.read_json(rc)).get()) ==
+                  1);
         }
     }
 

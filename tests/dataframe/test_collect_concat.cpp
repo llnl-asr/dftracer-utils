@@ -11,6 +11,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 #include <stdexcept>
@@ -94,9 +95,9 @@ class PartsSource : public Source {
 
 DataFrame collect(const dstd::Vector<DataFrame>& parts, std::size_t leading) {
     auto source = dstd::make_shared<PartsSource>(parts, leading);
-    return dftracer::utils::default_runtime()
-        .submit(LazyFrame::scan(source).collect())
-        .get();
+    return dftu_utils_test::ok(dftracer::utils::default_runtime()
+                                   .submit(LazyFrame::scan(source).collect())
+                                   .get());
 }
 
 DataFrame serial(const dstd::Vector<DataFrame>& parts, ConcatHow how) {

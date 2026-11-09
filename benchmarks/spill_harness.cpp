@@ -45,6 +45,7 @@
 //   spill_harness --case NAME BUDGET_BYTES
 //                            one case in this process; prints RESULT
 
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
@@ -535,7 +536,8 @@ int run_one(dftracer::utils::dstd::StringView name, std::uint64_t budget) {
         const std::uint64_t base = current_rss();
         const std::uint64_t written = bytes_written();
         auto start = Clock::now();
-        const std::int64_t out = runtime.submit(drain(std::move(plan))).get();
+        const std::int64_t out =
+            common::unwrap(runtime.submit(drain(std::move(plan))).get());
         auto end = Clock::now();
         const std::uint64_t spilled = bytes_written() - written;
         const std::uint64_t peak = peak_rss();
@@ -677,7 +679,7 @@ int smoke() {
         bool ok = false;
         std::int64_t out = -1;
         try {
-            out = runtime.submit(drain(c.plan(in))).get();
+            out = common::unwrap(runtime.submit(drain(c.plan(in))).get());
             ok = c.rows_ok(out, in);
         } catch (const std::exception& e) {
             std::fprintf(stderr, "%s: %s\n", c.name.c_str(), e.what());

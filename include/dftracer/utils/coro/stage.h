@@ -7,14 +7,15 @@
 #include <dftracer/utils/coro/adaptor.h>
 #include <dftracer/utils/coro/async_generator.h>
 #include <dftracer/utils/coro/async_semaphore.h>
-#include <dftracer/utils/coro/cancelled.h>
 #include <dftracer/utils/coro/combinators.h>
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/stream.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/time.h>
 #include <dftracer/utils/dstd/either.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 
 #include <chrono>
@@ -453,21 +454,17 @@ namespace detail {
 
 template <class T, class F>
 CoroTask<T> recover_task(CoroTask<T> task, F handler) {
-    std::exception_ptr failure;
-    try {
+    auto settled = co_await settle(std::move(task));
+    if (settled.stopped) co_await stop_here();
+    if (!settled.exception) {
         if constexpr (std::is_void_v<T>) {
-            co_await std::move(task);
             co_return;
         } else {
-            T value = co_await std::move(task);
-            co_return value;
+            co_return std::move(*settled.value);
         }
-    } catch (...) {
-        failure = std::current_exception();
     }
-    if (is_cancelled_error(failure)) common::rethrow_and_clear(failure);
-    dstd::Error error = error_from_exception(failure);
-    failure = nullptr;
+    dstd::Error error = common::error_of_exception(settled.exception);
+    settled.exception = nullptr;
     using R = std::invoke_result_t<F&, dstd::Error>;
     if constexpr (is_coro_task_v<R>) {
         co_return co_await handler(std::move(error));
@@ -496,6 +493,8 @@ AsyncGenerator<T> limit_stream(dstd::SharedPtr<AsyncSemaphore> slots,
 
 struct NamedPolicy {
     static constexpr bool STREAMS = true;
+    template <class O>
+    using Out = O;
     dstd::StringView label;
 
     template <class S>
@@ -519,6 +518,8 @@ struct NamedPolicy {
 template <class F>
 struct RecoverPolicy {
     static constexpr bool STREAMS = false;
+    template <class O>
+    using Out = O;
     F handler;
 
     template <class S>
@@ -538,6 +539,9 @@ struct RecoverPolicy {
 template <class Rep, class Period>
 struct TimeoutPolicy {
     static constexpr bool STREAMS = true;
+    /// A timeout is a value in the output.
+    template <class O>
+    using Out = dstd::Result<O>;
     std::chrono::duration<Rep, Period> wait;
 
     template <class S>
@@ -564,6 +568,8 @@ struct TimeoutPolicy {
 
 struct LimitPolicy {
     static constexpr bool STREAMS = true;
+    template <class O>
+    using Out = O;
     dstd::SharedPtr<AsyncSemaphore> slots;
 
     template <class S>
@@ -592,7 +598,7 @@ template <class S, class W>
 class WrappedStage {
    public:
     using Input = typename S::Input;
-    using Output = typename S::Output;
+    using Output = typename W::template Out<typename S::Output>;
 
     WrappedStage(S inner, W policy)
         : inner_(std::move(inner)), policy_(std::move(policy)) {}
@@ -642,8 +648,8 @@ auto apply_wrap(X&& x, W policy) {
  * @brief Adaptor that runs @p handler when what it is applied to fails.
  *
  * Applies to a @ref CoroTask and to a batch stage. @p handler takes the
- * dstd::Error and returns the value or a @ref CoroTask of it. A cancelled
- * task stays cancelled and never reaches @p handler.
+ * dstd::Error and returns the value or a @ref CoroTask of it. A stopped task
+ * stays stopped and never reaches @p handler.
  */
 template <class F>
 auto recover(F handler) {
@@ -681,7 +687,8 @@ inline auto named(dstd::StringView label) {
  *
  * On a @ref CoroTask and a batch stage it bounds the run, as @ref with_timeout.
  * On an @ref AsyncGenerator and a stream stage it bounds the wait for each
- * item, as @ref with_item_timeout.
+ * item, as @ref with_item_timeout. The output of a stage becomes a
+ * dstd::Result of it.
  */
 template <class Rep, class Period>
 auto timeout(std::chrono::duration<Rep, Period> wait) {
@@ -695,14 +702,11 @@ auto timeout(std::chrono::duration<Rep, Period> wait) {
  * @brief Adaptor that lets at most @p runs of the things it is applied to run
  * at once, across all copies of the adaptor and everything built from them.
  *
- * A stream holds its slot until it ends, fails or is dropped. Raises
- * dstd::Condition::InvalidArgument when @p runs is 0.
+ * A stream holds its slot until it ends, fails or is dropped. A @p runs of 0
+ * is misuse and ends the process.
  */
 inline auto limit(std::size_t runs) {
-    if (runs == 0) {
-        throw common::DFTUtilsException(dstd::Error{
-            dstd::Condition::InvalidArgument, "limit needs at least one run"});
-    }
+    if (runs == 0) dstd::fatal("coro: limit needs at least one run");
     auto slots = dstd::make_shared<AsyncSemaphore>(runs);
     return detail::make_adaptor([slots](auto&& x) {
         return detail::apply_wrap(std::forward<decltype(x)>(x),
@@ -742,11 +746,7 @@ class ParallelStage {
 
 template <bool ORDERED>
 auto parallel_adaptor(std::size_t tokens) {
-    if (tokens == 0) {
-        throw common::DFTUtilsException(
-            dstd::Error{dstd::Condition::InvalidArgument,
-                        "a stage needs at least 1 token"});
-    }
+    if (tokens == 0) dstd::fatal("coro: a stage needs at least 1 token");
     return make_adaptor([tokens](auto&& x) {
         auto stage = as_stage(std::forward<decltype(x)>(x));
         return ParallelStage<decltype(stage), ORDERED>(std::move(stage),
@@ -761,7 +761,7 @@ auto parallel_adaptor(std::size_t tokens) {
  * up to @p tokens items at once and keeps the input order.
  *
  * @p tokens bounds the running items plus the results that wait for an earlier
- * one. See @ref map_ordered. Raises dstd::Condition::InvalidArgument on 0.
+ * one. See @ref map_ordered. A @p tokens of 0 is misuse and ends the process.
  */
 inline auto ordered(std::size_t tokens) {
     return detail::parallel_adaptor<true>(tokens);

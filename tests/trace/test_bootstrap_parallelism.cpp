@@ -11,6 +11,7 @@
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_executor.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/bootstrap_test_common.h>
 #include <trace/views/test_view_common.h>
@@ -72,11 +73,11 @@ dstd::Vector<dstd::String> export_lines(const dstd::Vector<dstd::String>& files,
     const auto view =
         View::from_files(bootstrap_test::view_files_of(files, index_dir));
     LineSink sink;
-    default_runtime().block_on(
+    dftu_utils_test::ok(default_runtime().block_on(
         coro::named("bootstrap-export",
                     coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
                         co_await view.sink_json(sink);
-                    })));
+                    }))));
     return sink.lines();
 }
 

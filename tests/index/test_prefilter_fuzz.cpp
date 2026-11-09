@@ -14,6 +14,7 @@
 #include <doctest/doctest.h>
 #include <duql/eval_json.h>
 #include <simdjson.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <cstdint>
@@ -215,7 +216,7 @@ ViewCounts view_counts(const dstd::String& gz, const duql::Query& q) {
         }
         co_return out;
     };
-    return run().get();
+    return dftu_utils_test::ok(run().get());
 }
 
 std::size_t reader_count(dstd::StringView gz, const dstd::String& text) {
@@ -229,7 +230,7 @@ std::size_t reader_count(dstd::StringView gz, const dstd::String& text) {
         while (auto line = co_await gen.next()) ++n;
         co_return n;
     };
-    return run().get();
+    return dftu_utils_test::ok(run().get());
 }
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
@@ -244,7 +245,7 @@ std::int64_t arrow_count(dstd::StringView gz, const dstd::String& text) {
         while (auto b = co_await gen.next()) n += b->num_rows();
         co_return n;
     };
-    return run().get();
+    return dftu_utils_test::ok(run().get());
 }
 #endif
 

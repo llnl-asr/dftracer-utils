@@ -8,6 +8,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <unistd.h>
 
@@ -55,7 +56,7 @@ static BuildResult run_builder(const dstd::String& gz,
             }
         });
 
-    rt.submit(std::move(task), "index-build").wait();
+    dftu_utils_test::ok(rt.submit(std::move(task), "index-build").wait());
     rt.shutdown();
     return out;
 }

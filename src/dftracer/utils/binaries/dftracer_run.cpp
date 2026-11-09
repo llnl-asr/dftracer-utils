@@ -351,7 +351,13 @@ int main(int argc, char** argv) {
         [&plugin_args](RunArgParse& cli) -> int {
             if (cli.describe) return describe_plugins(plugin_args);
             try {
-                return run_plugins(&cli, &plugin_args).get();
+                auto code = run_plugins(&cli, &plugin_args).get();
+                if (!code) {
+                    DFTRACER_UTILS_LOG_ERROR("Fatal: %s",
+                                             code.error().format().c_str());
+                    return 1;
+                }
+                return *code;
             } catch (const std::exception& e) {
                 DFTRACER_UTILS_LOG_ERROR("Fatal: %s", e.what());
                 return 1;

@@ -16,6 +16,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -203,8 +204,8 @@ LazyFrame declared_scan(bool with_list = false) {
 }
 
 DataFrame run(const LazyFrame& lf) {
-    DataFrame out =
-        dftracer::utils::default_runtime().submit(lf.collect()).get();
+    DataFrame out = dftu_utils_test::ok(
+        dftracer::utils::default_runtime().submit(lf.collect()).get());
     for (Series& c : out.columns) c = c.materialize();
     return out;
 }

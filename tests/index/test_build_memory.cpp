@@ -23,6 +23,7 @@
 #include <dftracer/utils/trace/internal/utils.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <atomic>
@@ -89,7 +90,7 @@ index::build::IndexBuildBatchResult run_build(
         config->bloom_config.path_budget = path_budget;
         out = co_await index::build::BatchBuilder::process(std::move(config));
     });
-    rt.submit(std::move(task), "test-build-memory").wait();
+    dftu_utils_test::ok(rt.submit(std::move(task), "test-build-memory").wait());
     rt.shutdown();
     for (const auto& file : out.results)
         if (!file.success) MESSAGE("build failed: " << file.error_message);

@@ -10,6 +10,7 @@
 #include <dftracer/utils/memory/detail/heap.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 using namespace dftracer::utils;
@@ -57,7 +58,8 @@ TEST_SUITE("IndexParseAllocations") {
             result =
                 co_await index::build::BatchBuilder::process(std::move(config));
         });
-        rt.submit(std::move(task), "parse-allocations").wait();
+        dftu_utils_test::ok(
+            rt.submit(std::move(task), "parse-allocations").wait());
         const auto pool =
             memory::detail::debug_allocation_count() - pool_before;
         REQUIRE(pool > 0);
@@ -93,7 +95,8 @@ TEST_SUITE("IndexParseAllocations") {
             result =
                 co_await index::build::BatchBuilder::process(std::move(config));
         });
-        rt.submit(std::move(task), "parse-allocations-small").wait();
+        dftu_utils_test::ok(
+            rt.submit(std::move(task), "parse-allocations-small").wait());
         const auto pool =
             memory::detail::debug_allocation_count() - pool_before;
         REQUIRE(pool > 0);

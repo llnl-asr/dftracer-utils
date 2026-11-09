@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/coro/cancelled.h>
 #include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/coro/detail/resumption_helper.h>
 #include <dftracer/utils/coro/executor.h>
@@ -59,11 +58,7 @@ coro::CoroTask<void> wait_for(std::chrono::microseconds wait) {
         std::this_thread::sleep_for(wait);
         co_return;
     }
-    try {
-        co_await coro::timeout(wait, executor->timers());
-    } catch (const common::DFTUtilsException& e) {
-        if (coro::is_cancelled(e)) throw;
-    }
+    co_await coro::timeout(wait, executor->timers());
 }
 
 }  // anonymous namespace
@@ -234,13 +229,18 @@ ReplayResult ReplayEngine::replay_file_sync(dstd::StringView trace_file,
     auto start_time = std::chrono::steady_clock::now();
 
     try {
-        read_file_events(dstd::String(trace_file), dstd::String(index_file),
-                         [this, &lane](json::JsonParser& parser) {
-                             Trace trace;
-                             if (parse_trace_json(parser, trace))
-                                 replay_one_trace(trace, lane);
-                         })
-            .get();
+        auto read =
+            read_file_events(dstd::String(trace_file), dstd::String(index_file),
+                             [this, &lane](json::JsonParser& parser) {
+                                 Trace trace;
+                                 if (parse_trace_json(parser, trace))
+                                     replay_one_trace(trace, lane);
+                             })
+                .get();
+        if (!read) {
+            lane.result.error_messages.push_back(
+                "Replay stopped: " + dstd::String(read.error().format()));
+        }
     } catch (const std::exception& e) {
         lane.result.error_messages.push_back("Exception during replay: " +
                                              dstd::String(e.what()));
@@ -642,7 +642,7 @@ ReplayResult ReplayEngine::replay_with_call_tree(
 
         // Read every event once.
         dstd::Vector<Trace> events;
-        [&]() -> coro::CoroTask<void> {
+        auto read_events = [&]() -> coro::CoroTask<void> {
             for (const dstd::String& file : files) {
                 auto gen = stream_traces(file);
                 for (;;) {
@@ -653,7 +653,12 @@ ReplayResult ReplayEngine::replay_with_call_tree(
             }
             co_return;
         }()
-                     .get();
+                                        .get();
+        if (!read_events) {
+            result.error_messages.push_back(common::str_cat(
+                "Reading the traces stopped: ", read_events.error().message()));
+            return std::move(lane.result);
+        }
 
         const std::int64_t n = static_cast<std::int64_t>(events.size());
         auto start = [&](std::int64_t i) {

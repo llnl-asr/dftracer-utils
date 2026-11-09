@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/scratch.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
@@ -340,14 +341,15 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
 
     IndexBuildBatchResult result;
     if (!run_blocking([&] {
-            rt->submit(dftracer::utils::coro::with_scope(
-                           [cfg = batch_config,
-                            out = &result](dftracer::utils::coro::Scope &)
-                               -> dftracer::utils::coro::CoroTask<void> {
-                               *out = co_await BatchBuilder::process(cfg);
-                           }),
-                       "build-index-batch")
-                .get();
+            dftracer::utils::common::unwrap(
+                rt->submit(dftracer::utils::coro::with_scope(
+                               [cfg = batch_config,
+                                out = &result](dftracer::utils::coro::Scope &)
+                                   -> dftracer::utils::coro::CoroTask<void> {
+                                   *out = co_await BatchBuilder::process(cfg);
+                               }),
+                           "build-index-batch")
+                    .get());
         })) {
         return NULL;
     }

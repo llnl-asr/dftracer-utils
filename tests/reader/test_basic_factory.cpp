@@ -6,6 +6,7 @@
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 using namespace dftracer::utils;
@@ -86,8 +87,8 @@ TEST_CASE("Basic Reading Operations") {
     SUBCASE("Line-based reading") {
         std::size_t line_count = reader->line_count();
         if (line_count > 0) {
-            dstd::String content = reader->read_lines(
-                1, std::min(line_count, static_cast<std::size_t>(5)));
+            dstd::String content = dftu_utils_test::ok(reader->read_lines(
+                1, std::min(line_count, static_cast<std::size_t>(5))));
             CHECK(!content.empty());
             CHECK(content.find("\"id\":") != dstd::String::npos);
         }
@@ -97,9 +98,9 @@ TEST_CASE("Basic Reading Operations") {
         std::size_t max_bytes = reader->max_bytes();
         if (max_bytes > 0) {
             dstd::Vector<char> buffer(1024);
-            std::size_t bytes_read = reader->read(
+            std::size_t bytes_read = dftu_utils_test::ok(reader->read(
                 0, std::min(max_bytes, static_cast<std::size_t>(1024)),
-                buffer.data(), buffer.size());
+                buffer.data(), buffer.size()));
             CHECK(bytes_read > 0);
         }
     }

@@ -12,6 +12,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/python/columnar_eval.h>
@@ -379,8 +380,12 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
 void runtime_backend(void*, std::int64_t n, std::int64_t grain,
                      void (*body)(void*, std::int64_t, std::int64_t),
                      void* bctx) {
-    dftracer::utils::default_runtime().parallel_for(
+    const auto ran = dftracer::utils::default_runtime().parallel_for(
         n, grain, [&](std::int64_t b, std::int64_t e) { body(bctx, b, e); });
+    if (!ran) {
+        dftracer::utils::dstd::fatal(
+            "parallel_for: the runtime stopped during a fork-join");
+    }
 }
 
 }  // namespace

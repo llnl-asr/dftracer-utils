@@ -9,6 +9,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/scheduler/thread_pool_executor.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <atomic>
 #include <chrono>
@@ -37,14 +38,14 @@ bool settle(ThreadPoolExecutor* exec, std::size_t cap) {
 
 // Synchronously waits, on a worker thread, on an inner scope.
 coro::CoroTask<void> outer_task(Runtime& rt, std::atomic<int>& inner_done) {
-    rt.block_on(coro::named(
+    dftu_utils_test::ok(rt.block_on(coro::named(
         "inner", coro::with_scope([&](coro::Scope& is) -> coro::CoroTask<void> {
             is.spawn([&]() -> coro::CoroTask<void> {
                 inner_done.fetch_add(1, std::memory_order_relaxed);
                 co_return;
             });
             co_return;
-        })));
+        }))));
     co_return;
 }
 
@@ -97,21 +98,20 @@ TEST_SUITE("BlockingHandoff") {
                     reached.fetch_add(1, std::memory_order_relaxed);
                     return;
                 }
-                rt.block_on(coro::named(
-                    "level",
-                    coro::with_scope(
-                        [&, d](coro::Scope& s) -> coro::CoroTask<void> {
-                            s.spawn([&, d]() -> coro::CoroTask<void> {
-                                nest(d - 1);
-                                co_return;
-                            });
+                dftu_utils_test::ok(rt.block_on(coro::named(
+                    "level", coro::with_scope([&, d](coro::Scope& s)
+                                                  -> coro::CoroTask<void> {
+                        s.spawn([&, d]() -> coro::CoroTask<void> {
+                            nest(d - 1);
                             co_return;
-                        })));
+                        });
+                        co_return;
+                    }))));
             };
             nest(DEPTH);
             co_return;
         };
-        rt.block_on(coro::named("root", root()));
+        dftu_utils_test::ok(rt.block_on(coro::named("root", root())));
 
         CHECK(reached.load() == 1);
         CHECK(settle(exec, 2));

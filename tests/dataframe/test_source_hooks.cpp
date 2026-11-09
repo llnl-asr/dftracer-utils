@@ -20,6 +20,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 #include <memory>
@@ -33,7 +34,8 @@ namespace {
 
 template <class T>
 T run(coro::CoroTask<T> t) {
-    T out = dftracer::utils::default_runtime().submit(std::move(t)).get();
+    T out = dftu_utils_test::ok(
+        dftracer::utils::default_runtime().submit(std::move(t)).get());
     if constexpr (std::is_same_v<T, DataFrame>)
         for (Series& c : out.columns) c = c.materialize();
     return out;

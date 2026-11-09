@@ -103,6 +103,18 @@ struct CoroPromise : FrameAllocation {
     /// FinalAwaiter uses this to schedule deferred destruction.
     bool released{false};
 
+    /// Set by the creator of a frame that may end at a cancelled wait, as a
+    /// pump of a stream does. Any other frame has no way to finish early, and a
+    /// cancel that reaches its wait ends the process.
+    bool stoppable{false};
+
+    bool refuses_stop() const noexcept { return !stoppable; }
+    bool cancel_requested() const noexcept { return false; }
+
+    /// Ends the frame at its current wait as if it had returned, so the wait
+    /// never resumes and the locals die with the frame.
+    void finish_cancelled() noexcept;
+
     Coro get_return_object() {
         return Coro{std::coroutine_handle<CoroPromise>::from_promise(*this)};
     }
@@ -120,12 +132,28 @@ struct CoroPromise : FrameAllocation {
         std::coroutine_handle<> await_suspend(
             std::coroutine_handle<CoroPromise> h) noexcept;
 
+        /// What the final suspend does, and the join waiter to resume.
+        static std::coroutine_handle<> finish(
+            std::coroutine_handle<CoroPromise> h) noexcept;
+
         void await_resume() noexcept {}
     };
 
     FinalAwaiter final_suspend() noexcept { return {}; }
     void return_void() noexcept {}
-    void unhandled_exception() { exception = std::current_exception(); }
+    /// Told of an exception that ends the frame, in place of holding it. Set
+    /// by whoever reports the failures of the frame, such as a @ref Scope.
+    void (*exception_sink)(void* owner,
+                           std::exception_ptr error) noexcept {nullptr};
+    void* sink_owner{nullptr};
+
+    void unhandled_exception() {
+        exception = std::current_exception();
+        if (exception_sink != nullptr) {
+            exception_sink(sink_owner, std::move(exception));
+            exception = nullptr;
+        }
+    }
 };
 
 /// Out-of-line: needs @ref CoroPromise to be complete.

@@ -10,6 +10,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/scheduler/thread_pool_executor.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <algorithm>
 #include <atomic>
@@ -61,7 +62,7 @@ coro::CoroTask<void> event_wait(coro::AsyncEvent* event) {
 }
 
 coro::CoroTask<void> get_event(coro::AsyncEvent* event) {
-    event_wait(event).get();
+    dftu_utils_test::ok(event_wait(event).get());
     co_return;
 }
 
@@ -144,7 +145,8 @@ TEST_SUITE("DynamicWorkers") {
             }
             co_return;
         };
-        for (int round = 0; round < 4; ++round) rt.block_on(nested());
+        for (int round = 0; round < 4; ++round)
+            dftu_utils_test::ok(rt.block_on(nested()));
 
         // A lost permit leaves room for one task at a time.
         std::atomic<int> arrived{0};
@@ -160,8 +162,8 @@ TEST_SUITE("DynamicWorkers") {
         };
         auto first = rt.submit(meet(arrived));
         auto second = rt.submit(meet(arrived));
-        CHECK(first.get());
-        CHECK(second.get());
+        CHECK(dftu_utils_test::ok(first.get()));
+        CHECK(dftu_utils_test::ok(second.get()));
     }
 
     TEST_CASE("retire while idle (parked worker observes retire)") {
@@ -223,7 +225,7 @@ TEST_SUITE("DynamicWorkers") {
         while (!setter.done() && std::chrono::steady_clock::now() < limit)
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         REQUIRE(setter.done());
-        waiter.wait();
+        dftu_utils_test::ok(waiter.wait());
         CHECK(waiter.done());
     }
 }

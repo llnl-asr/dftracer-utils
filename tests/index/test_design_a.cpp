@@ -19,6 +19,7 @@
 #include <dftracer/utils/trace/internal/utils.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <algorithm>
@@ -100,7 +101,7 @@ index::build::IndexBuildBatchResult build_with(
         result =
             co_await index::build::BatchBuilder::process(std::move(config));
     });
-    rt.submit(std::move(task), "design-a").wait();
+    dftu_utils_test::ok(rt.submit(std::move(task), "design-a").wait());
     rt.shutdown();
     return result;
 }

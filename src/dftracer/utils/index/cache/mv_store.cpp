@@ -229,7 +229,7 @@ dstd::Optional<std::uint64_t> parse_hex(dstd::StringView text) {
 dstd::Optional<Manifest> read_manifest(dstd::StringView dir) {
     const dstd::Path path = manifest_path(dir);
     const auto found = dstd::fs::exists(path.view());
-    if (!found || !*found) return dstd::nullopt;
+    if (!found.has_value() || !*found) return dstd::nullopt;
     try {
         simdjson::dom::parser parser;
         simdjson::dom::element root = parser.load(path.c_str());
@@ -487,7 +487,7 @@ bool view_is_fresh(const trace::views::detail::ViewPlan& plan) {
     if (root.empty()) return false;
     const dstd::Path dir = dstd::PathView(root) / view_slug(plan);
     const auto present = dstd::fs::exists(manifest_path(dir.str()).view());
-    return present && *present &&
+    return present.has_value() && *present &&
            !gather_view_files(dstd::String(dir.str())).empty();
 }
 
@@ -498,8 +498,8 @@ dstd::File lock_view_dir(dstd::StringView dir) {
                                        .creation = dstd::Creation::IfNeeded});
     if (!file) return {};
     const auto locked = file->try_lock();
-    if (!locked || !*locked) return {};  // another builder holds it
-    return std::move(*file);             // released by unlock_view_dir
+    if (!locked.has_value() || !*locked) return {};  // another builder holds it
+    return std::move(*file);  // released by unlock_view_dir
 }
 
 void unlock_view_dir(dstd::File& lock) {
@@ -514,7 +514,8 @@ dstd::String materialize_view_dir(const trace::views::detail::ViewPlan& plan) {
     const dstd::Path dir = dstd::PathView(root) / view_slug(plan);
     dstd::String dir_text(dir.str());
     if (!dstd::fs::create_directories(
-            dstd::PathView(index::view_parts_dir(dir_text)))) {
+             dstd::PathView(index::view_parts_dir(dir_text)))
+             .has_value()) {
         return {};
     }
     return dir_text;
@@ -565,7 +566,7 @@ dstd::Optional<dstd::Vector<trace::views::ViewFile>> find_subsuming_view(
     const dstd::String root = views_root(plan);
     if (root.empty()) return dstd::nullopt;
     const auto root_is_dir = dstd::fs::is_directory(dstd::PathView(root));
-    if (!root_is_dir || !*root_is_dir) return dstd::nullopt;
+    if (!root_is_dir.has_value() || !*root_is_dir) return dstd::nullopt;
 
     const auto q_bases = plan_bases(plan);
     if (q_bases.size() != plan.files.size())

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -78,11 +79,11 @@ PyObject* jit_run_op(PyObject*, PyObject* args) {
                     compose->run(host.h, op, in_data, out_buf.data(), &rc);
                 if (task) {
                     Py_BEGIN_ALLOW_THREADS;
-                    default_runtime().block_on(
+                    common::unwrap(default_runtime().block_on(
                         coro::named("jit-op", [&]() -> coro::CoroTask<void> {
                             co_await *reinterpret_cast<coro::CoroTask<void>*>(
                                 task);
-                        }()));
+                        }())));
                     Py_END_ALLOW_THREADS;
                 }
                 ran = true;

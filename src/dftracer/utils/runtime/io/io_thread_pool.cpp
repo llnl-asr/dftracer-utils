@@ -40,7 +40,8 @@ dstd::Result<void> IoThreadPool::start() {
     threads_.reserve(count);
     for (std::size_t i = 0; i < count; ++i) {
         auto spawned = spawn_locked();
-        if (!spawned) return dstd::Unexpected<dstd::Error>(spawned.error());
+        if (!spawned.has_value())
+            return dstd::Unexpected<dstd::Error>(spawned.error());
         if (!*spawned) break;
     }
     return {};
@@ -57,7 +58,7 @@ void IoThreadPool::grow(std::size_t threads, bool eager) {
     const std::size_t cap = thread_count_.load(std::memory_order_acquire);
     while (live_.load(std::memory_order_relaxed) < cap) {
         auto spawned = spawn_locked();
-        if (!spawned) fail_spawn(spawned.error());
+        if (!spawned.has_value()) fail_spawn(spawned.error());
         if (!*spawned) break;
     }
 }
@@ -121,7 +122,7 @@ void IoThreadPool::submit(dstd::Function<void()> fn) {
             queue_.size() > idle_ &&
             live_.load(std::memory_order_relaxed) <
                 thread_count_.load(std::memory_order_relaxed))
-            if (auto spawned = spawn_locked(); !spawned) {
+            if (auto spawned = spawn_locked(); !spawned.has_value()) {
                 fail_spawn(spawned.error());
             }
         const unsigned unflushed =

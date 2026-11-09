@@ -93,12 +93,13 @@ struct Options {
 
 template <class T>
 T run(coro::CoroTask<T> t) {
-    return default_runtime().submit(std::move(t)).get();
+    return common::unwrap(default_runtime().submit(std::move(t)).get());
 }
 
 template <class Fn>
 void run_scoped(Fn fn) {
-    default_runtime().submit(coro::with_scope(std::move(fn))).wait();
+    common::unwrap(
+        default_runtime().submit(coro::with_scope(std::move(fn))).wait());
 }
 
 double seconds(dstd::FunctionRef<void()> f) {
@@ -467,8 +468,9 @@ Result measure(const Options& opt, const dstd::String& input,
             for (const auto& f : files) in.items.push_back({f, parsed});
             dftracer::utils::index::plan::ChunkPruner pruner;
             Samples per_file;
-            for (double s : timed([&] { pruner.process_batch(in); },
-                                  opt.warmups, opt.runs))
+            for (double s :
+                 timed([&] { common::unwrap(pruner.process_batch(in)); },
+                       opt.warmups, opt.runs))
                 per_file.push_back(s * 1e6 / static_cast<double>(files.size()));
             r.prune_us_per_file[key] = std::move(per_file);
         }

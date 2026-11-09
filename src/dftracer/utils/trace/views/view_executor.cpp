@@ -1859,12 +1859,13 @@ void add_materialize_branch(ViewSessionState& state,
         if (rdir.empty()) return;
         try {
             dataframe::AggStatePtr state_out;
-            dftracer::utils::default_runtime().block_on(coro::named(
-                "session_materialize", [&]() -> coro::CoroTask<void> {
-                    state_out = co_await build_engine_agg_state(*plan);
-                    co_return;
-                }()));
-            if (!state_out) return;
+            const auto ran =
+                dftracer::utils::default_runtime().block_on(coro::named(
+                    "session_materialize", [&]() -> coro::CoroTask<void> {
+                        state_out = co_await build_engine_agg_state(*plan);
+                        co_return;
+                    }()));
+            if (!ran || !state_out) return;
             auto db = dftracer::utils::index::cache::open_rollup_db(
                 rdir,
                 dftracer::utils::index::cache::CacheStore::Mode::ReadWrite);

@@ -19,6 +19,7 @@
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <utilities/plugins/test_plugin_common.h>
 
@@ -122,7 +123,7 @@ ExportStats run_host(dstd::Vector<dftu_plugin*> plugins,
         if (run) stats = run->stats;
         co_return;
     });
-    rt.submit(std::move(task), "plugin-planner").wait();
+    dftu_utils_test::ok(rt.submit(std::move(task), "plugin-planner").wait());
     rt.shutdown();
     return stats;
 }
@@ -331,7 +332,8 @@ TEST_SUITE("PluginAttachHandle") {
             co_await plan.collect();
             co_return;
         });
-        rt.submit(std::move(task), "plugin-attach-solo").wait();
+        dftu_utils_test::ok(
+            rt.submit(std::move(task), "plugin-attach-solo").wait());
         rt.shutdown();
 
         CHECK(st.total.load() == N);  // the plugin's own filter still applies
@@ -389,7 +391,8 @@ TEST_SUITE("PluginAttachHandle") {
                 plugin_plan, all_plan));
             co_return;
         });
-        rt.submit(std::move(task), "plugin-attach-coscan").wait();
+        dftu_utils_test::ok(
+            rt.submit(std::move(task), "plugin-attach-coscan").wait());
         rt.shutdown();
 
         CHECK(st.total.load() == N);  // plugin's own filter is unaffected

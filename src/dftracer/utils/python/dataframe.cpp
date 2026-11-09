@@ -486,10 +486,11 @@ PyObject* DataFrame_group_transform(PyObject* self, PyObject* args,
                                                        names_from_obj, a))
         return nullptr;
     return run_batch_op([&] {
-        return dataframe::GroupBy(to_dataframe(b), a.keys)
-            .transform(static_cast<dataframe::GroupwiseOp>(a.kind), a.n,
-                       static_cast<dataframe::RankMethod>(a.method),
-                       a.ascending != 0);
+        return common::unwrap(
+            dataframe::GroupBy(to_dataframe(b), a.keys)
+                .transform(static_cast<dataframe::GroupwiseOp>(a.kind), a.n,
+                           static_cast<dataframe::RankMethod>(a.method),
+                           a.ascending != 0));
     });
 }
 

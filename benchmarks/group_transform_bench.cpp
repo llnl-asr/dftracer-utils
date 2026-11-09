@@ -10,6 +10,7 @@
 // With `op` (cumsum, cummax, cumcount, shift(1), diff, ffill) only that op
 // runs.
 
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/native_transform.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
@@ -37,9 +38,9 @@ namespace {
 constexpr std::int64_t MORSEL_ROWS = 65536;
 
 DataFrame collect(LazyFrame plan) {
-    return dftracer::utils::default_runtime()
-        .submit(plan.collect(MORSEL_ROWS))
-        .get();
+    return common::unwrap(dftracer::utils::default_runtime()
+                              .submit(plan.collect(MORSEL_ROWS))
+                              .get());
 }
 
 double median_ms(dftracer::utils::dstd::Vector<double> ms) {

@@ -9,6 +9,7 @@
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -92,7 +93,7 @@ View full_index(const dstd::String& gz, const dstd::String& schema) {
 }
 
 dataframe::DataFrame frame(const View& v, const dstd::String& q) {
-    return v.duql(q).collect().get();
+    return dftu_utils_test::ok(v.duql(q).collect().get());
 }
 
 bool has(const dataframe::DataFrame& f, const dstd::String& n) {
@@ -320,9 +321,11 @@ TEST_SUITE("DropRenameViews") {
     TEST_CASE("fill_null keeps the undeclared columns") {
         TestEnvironment full_env(10);
         const View f = full_index(genesis_trace(full_env), "genesis");
-        const auto want = f.lazy().fill_null(0).collect().get();
+        const auto want =
+            dftu_utils_test::ok(f.lazy().fill_null(0).collect().get());
         const Fresh p = fresh(genesis_trace, "genesis");
-        const auto got = p.view.lazy().fill_null(0).collect().get();
+        const auto got =
+            dftu_utils_test::ok(p.view.lazy().fill_null(0).collect().get());
         REQUIRE(sorted(got.names) == sorted(want.names));
         CHECK(has(got, "v.p50"));
         same_rows(got, want);

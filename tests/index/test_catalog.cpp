@@ -18,6 +18,7 @@
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <algorithm>
@@ -103,7 +104,7 @@ std::size_t count_rows(const dstd::String& trace, const dstd::String& index_dir,
         while (auto line = co_await gen.next()) ++n;
         co_return n;
     };
-    return run().get();
+    return dftu_utils_test::ok(run().get());
 }
 
 index::IndexerOptions options(const dstd::String& index_dir,

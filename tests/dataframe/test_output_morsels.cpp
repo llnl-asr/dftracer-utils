@@ -20,6 +20,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -42,9 +43,9 @@ coro::CoroTask<dstd::Vector<DataFrame>> stream_all(LazyFrame lf,
 
 dstd::Vector<DataFrame> morsels(const LazyFrame& lf,
                                 std::int64_t max_rows = MAX_ROWS) {
-    return dftracer::utils::default_runtime()
-        .submit(stream_all(lf, max_rows))
-        .get();
+    return dftu_utils_test::ok(dftracer::utils::default_runtime()
+                                   .submit(stream_all(lf, max_rows))
+                                   .get());
 }
 
 std::int64_t most_rows(const dstd::Vector<DataFrame>& parts) {
@@ -184,9 +185,10 @@ TEST_SUITE("output morsels") {
                 dstd::make_shared<CountedTimes>(MORSELS, 1000, pulled))
                 .memory_budget(1 << 20)
                 .group_by_dynamic("t", 10, 30, {GroupAgg{Agg::Sum, "v", "s"}});
-        const std::int64_t at = dftracer::utils::default_runtime()
+        const std::int64_t at =
+            dftu_utils_test::ok(dftracer::utils::default_runtime()
                                     .submit(pulled_at_first(plan, pulled))
-                                    .get();
+                                    .get());
         CHECK(at < MORSELS / 2);
     }
 

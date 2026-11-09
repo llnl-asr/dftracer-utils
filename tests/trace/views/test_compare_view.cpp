@@ -4,6 +4,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/comparator/compare_view.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <trace/views/test_view_common.h>
 
 using namespace dftracer::utils;
@@ -47,7 +48,7 @@ TEST_SUITE("CompareView") {
 
         dftracer::utils::Runtime rt;
         dataframe::DataFrame result;
-        rt.block_on(coro::named(
+        dftu_utils_test::ok(rt.block_on(coro::named(
             "compare",
             coro::with_scope(
                 [&](coro::Scope&) -> dftracer::utils::coro::CoroTask<void> {
@@ -59,7 +60,7 @@ TEST_SUITE("CompareView") {
                                     .group_by({GroupKey::cat()})
                                     .agg({AggSpec(AggOp::Count, "", "count")});
                     result = co_await view.collect();
-                })));
+                }))));
 
         REQUIRE(result.num_rows() == 2);  // posix, stdio
 

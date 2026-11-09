@@ -149,16 +149,19 @@ void group_by(const Sizes& s) {
         gen(s.frame_rows, s.frame_rows, 1)
             .group_by(dstd::Vector<dstd::String>{"k", "v"},
                       {dataframe::GroupAgg{dataframe::Agg::Sum, "t", "t_sum"}});
-    default_runtime()
-        .submit(drain_count(plan.memory_budget(PLAN_BUDGET)))
-        .get();
+    require_ok(default_runtime()
+                   .submit(drain_count(plan.memory_budget(PLAN_BUDGET)))
+                   .get(),
+               "task");
 }
 
 void genesis(const dstd::String& root) {
-    default_runtime()
-        .submit(coro::with_scope(
-            [&](coro::Scope& ctx) { return genesis_run(ctx, root); }))
-        .wait();
+    require_ok(default_runtime()
+                   .submit(coro::with_scope([&](coro::Scope& ctx) {
+                       return genesis_run(ctx, root);
+                   }))
+                   .wait(),
+               "task");
 }
 
 dstd::String prepare_genesis(const dstd::String& dir, const Sizes& s) {

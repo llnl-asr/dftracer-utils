@@ -22,6 +22,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -34,8 +35,8 @@ using namespace dftracer::utils::dataframe;
 namespace {
 
 DataFrame run(coro::CoroTask<DataFrame> t) {
-    DataFrame out =
-        dftracer::utils::default_runtime().submit(std::move(t)).get();
+    DataFrame out = dftu_utils_test::ok(
+        dftracer::utils::default_runtime().submit(std::move(t)).get());
     for (Series& c : out.columns) c = c.materialize();
     return out;
 }
@@ -145,9 +146,9 @@ coro::CoroTask<dstd::Pair<dstd::Vector<std::int64_t>, DataFrame>> probe_stream(
 
 dstd::Pair<dstd::Vector<std::int64_t>, DataFrame> run_stream_probe(
     dftracer::utils::coro::AsyncGenerator<DataFrame> gen) {
-    return dftracer::utils::default_runtime()
-        .submit(probe_stream(std::move(gen)))
-        .get();
+    return dftu_utils_test::ok(dftracer::utils::default_runtime()
+                                   .submit(probe_stream(std::move(gen)))
+                                   .get());
 }
 
 coro::CoroTask<dstd::Vector<DataFrame>> stream_parts(
@@ -158,9 +159,9 @@ coro::CoroTask<dstd::Vector<DataFrame>> stream_parts(
 }
 
 dstd::Vector<DataFrame> run_stream(const LazyFrame& lf, std::int64_t rows) {
-    return dftracer::utils::default_runtime()
-        .submit(stream_parts(lf.stream(rows)))
-        .get();
+    return dftu_utils_test::ok(dftracer::utils::default_runtime()
+                                   .submit(stream_parts(lf.stream(rows)))
+                                   .get());
 }
 
 DataFrame make_df() {
@@ -2827,9 +2828,10 @@ TEST_SUITE("lazyframe") {
         REQUIRE(r.filters.size() == 1);
         CHECK(r.filters[0] == Pushed::No);
 
-        DataFrame got = dftracer::utils::default_runtime()
-                            .submit(drain_cursor(std::move(r.cursor)))
-                            .get();
+        DataFrame got =
+            dftu_utils_test::ok(dftracer::utils::default_runtime()
+                                    .submit(drain_cursor(std::move(r.cursor)))
+                                    .get());
         REQUIRE(got.num_columns() == 1);  // only "b" was harvested
         REQUIRE(got.num_rows() == 6);
         const std::int64_t* bv = got.columns[0].data<std::int64_t>();

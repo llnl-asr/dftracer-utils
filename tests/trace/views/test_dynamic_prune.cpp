@@ -27,6 +27,7 @@
 #include <dftracer/utils/trace/views/view_scanner_utility.h>
 #include <dftracer/utils/trace/views/view_source.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -441,8 +442,9 @@ TEST_SUITE("Dynamic filter pushdown") {
             ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
             std::uint64_t skipped = 0;
             std::uint64_t matched = 0;
-            for (const ScanUnit& u : gather_units(plan, vdef, skipped).get())
-                matched += scan_unit_events(u, vdef).get();
+            for (const ScanUnit& u :
+                 dftu_utils_test::ok(gather_units(plan, vdef, skipped).get()))
+                matched += dftu_utils_test::ok(scan_unit_events(u, vdef).get());
             return matched;
         };
         const std::uint64_t expected = scan_all();

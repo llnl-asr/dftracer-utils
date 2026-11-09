@@ -22,6 +22,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <atomic>
@@ -76,7 +77,8 @@ index::build::IndexBuildBatchResult run_build(
         config->agg_fold_factory = std::move(agg_fold_factory);
         out = co_await index::build::BatchBuilder::process(std::move(config));
     });
-    rt.submit(std::move(task), "test-spill-publish").wait();
+    dftu_utils_test::ok(
+        rt.submit(std::move(task), "test-spill-publish").wait());
     rt.shutdown();
     for (const auto& result : out.results)
         if (!result.success) MESSAGE("build failed: " << result.error_message);

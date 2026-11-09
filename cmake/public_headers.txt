@@ -16,7 +16,6 @@ dftracer/utils/coro/async_latch.h
 dftracer/utils/coro/async_mutex.h
 dftracer/utils/coro/async_once.h
 dftracer/utils/coro/async_semaphore.h
-dftracer/utils/coro/cancelled.h
 dftracer/utils/coro/combinators.h
 dftracer/utils/coro/channel.h
 dftracer/utils/coro/completion_latch.h

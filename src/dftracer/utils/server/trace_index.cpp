@@ -793,8 +793,13 @@ coro::CoroTask<void> TraceIndex::initialize() {
             co_return;
         };
 
-        configure_default_runtime(settings).block_on(
+        const auto ran = configure_default_runtime(settings).block_on(
             coro::named("TraceIndexInit", coro::with_scope(init_task)));
+        if (!ran) {
+            DFTRACER_UTILS_LOG_ERROR("TraceIndex: init failed: %s",
+                                     ran.error().format().c_str());
+            co_await coro::stop_here();
+        }
     }
 
     // One time unit per trace: resolve it once from the first file's CM.

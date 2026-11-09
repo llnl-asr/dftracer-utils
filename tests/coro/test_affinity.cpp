@@ -5,6 +5,7 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 using namespace dftracer::utils;
 
@@ -39,7 +40,7 @@ coro::CoroTask<coro::Executor*> query() {
 
 TEST_CASE("this_coro::executor names the runtime that runs the task") {
     Runtime rt(2);
-    coro::Executor* ex = rt.submit(query()).get();
+    coro::Executor* ex = dftu_utils_test::ok(rt.submit(query()).get());
     CHECK(ex == rt.executor());
 }
 
@@ -48,7 +49,8 @@ TEST_CASE(
     Runtime home(2);
     Runtime away(2);
     Seen seen;
-    int got = home.submit(parent(*away.executor(), seen)).get();
+    int got =
+        dftu_utils_test::ok(home.submit(parent(*away.executor(), seen)).get());
     CHECK(got == 7);
     CHECK(seen.before == home.executor());
     CHECK(seen.child_current == away.executor());

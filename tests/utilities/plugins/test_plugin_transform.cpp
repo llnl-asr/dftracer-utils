@@ -23,6 +23,7 @@
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
 // arrow_abi.
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <utilities/plugins/test_plugin_common.h>
 
@@ -218,7 +219,7 @@ void run_host(dstd::Vector<dftu_plugin*> plugins,
         REQUIRE(run.has_value());
         co_return;
     });
-    rt.submit(std::move(task), "plugin-transform").wait();
+    dftu_utils_test::ok(rt.submit(std::move(task), "plugin-transform").wait());
     rt.shutdown();
 }
 

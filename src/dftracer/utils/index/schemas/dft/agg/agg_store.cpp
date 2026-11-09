@@ -30,19 +30,19 @@ constexpr std::array<dstd::StringView, 2> META_NAMES = {CONFIG_NAME,
 void publish_meta(const Index& index, dstd::StringView name,
                   dstd::StringView value) {
     dstd::Expected<void, dstd::Error> published;
-    default_runtime().block_on(
+    common::unwrap(default_runtime().block_on(
         coro::named("aggregation meta", [&]() -> coro::CoroTask<void> {
             published = co_await put_agg_meta(index, name, value);
-        }()));
+        }())));
     common::unwrap(std::move(published));
 }
 
 void drop_meta(const Index& index, dstd::StringView name) {
     dstd::Expected<void, dstd::Error> dropped;
-    default_runtime().block_on(
+    common::unwrap(default_runtime().block_on(
         coro::named("aggregation meta drop", [&]() -> coro::CoroTask<void> {
             dropped = co_await delete_agg_meta(index, name);
-        }()));
+        }())));
     common::unwrap(std::move(dropped));
 }
 
@@ -118,11 +118,11 @@ void clear(const Index& index) {
     const dstd::Span<const dstd::StringView> listed(paths.data(), paths.size());
 
     dstd::Expected<void, dstd::Error> dropped;
-    default_runtime().block_on(
+    common::unwrap(default_runtime().block_on(
         coro::named("aggregation tier clear", [&]() -> coro::CoroTask<void> {
             dropped = co_await remove_extension(
                 index, index::store::layout::Ext::Agg, listed);
-        }()));
+        }())));
     common::unwrap(std::move(dropped));
     for (const dstd::StringView name : META_NAMES) drop_meta(index, name);
 }

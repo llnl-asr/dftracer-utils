@@ -13,6 +13,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 #include <cstring>
@@ -182,7 +183,7 @@ TEST_SUITE("frame ops") {
         dataframe::LazyFrame plan =
             scan(make_events()).frame_op("dftu.frame.window", warg);
         CHECK(plan.schema().empty());
-        DataFrame w = run(plan.collect(1));
+        DataFrame w = dftu_utils_test::ok(run(plan.collect(1)));
         CHECK(w.names ==
               dstd::Vector<dstd::String>{"pid", "ts", "dur", "rn", "cum"});
         CHECK(i64_col(w, "cum") == dstd::Vector<I>{1, 3, 6, 4});
@@ -192,10 +193,10 @@ TEST_SUITE("frame ops") {
             .strlist(3, pid, 1)
             .i32(4, DFTU_ASOF_BACKWARD)
             .f64(5, -1);
-        DataFrame a =
+        DataFrame a = dftu_utils_test::ok(
             run(scan(make_events())
                     .frame_op("dftu.frame.asof", aarg, {scan(make_events())})
-                    .collect(1));
+                    .collect(1)));
         CHECK(i64_col(a, "dur_right") == dstd::Vector<I>{1, 2, 3, 4});
     }
 

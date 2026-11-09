@@ -9,6 +9,7 @@
 #include <dftracer/utils/utilities/fileio/lines/sources/indexed_file_bytes_iterator.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 using namespace dftracer::utils::utilities::fileio::lines::sources;
@@ -63,7 +64,7 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
 
             auto gen = async_indexed_file_bytes(reader, 0, file_size);
             auto task = collect_lines(std::move(gen));
-            auto lines = task.get();
+            auto lines = dftu_utils_test::ok(task.get());
 
             REQUIRE(lines.size() == 10);
             CHECK(lines[0] == "{\"id\": 1, \"message\": \"Test message 1\"}");
@@ -85,7 +86,7 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
             // Read first 300 bytes
             auto gen = async_indexed_file_bytes(reader, 0, 300);
             auto task = collect_lines(std::move(gen));
-            auto lines = task.get();
+            auto lines = dftu_utils_test::ok(task.get());
 
             CHECK(lines.size() > 0);
             CHECK(lines.size() <= 20);
@@ -107,7 +108,7 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
             // Read bytes 200-400 (should skip some initial lines)
             auto gen = async_indexed_file_bytes(reader, 200, 400);
             auto task = collect_lines(std::move(gen));
-            auto lines = task.get();
+            auto lines = dftu_utils_test::ok(task.get());
 
             CHECK(lines.size() > 0);
         }
@@ -130,7 +131,7 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
 
             auto gen = async_indexed_file_bytes(reader, 0, file_size);
             auto task = collect_line_copies(std::move(gen));
-            auto lines = task.get();
+            auto lines = dftu_utils_test::ok(task.get());
 
             REQUIRE(lines.size() == 10);
             for (std::size_t i = 0; i < lines.size(); ++i) {
@@ -156,7 +157,7 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
 
             auto gen = async_indexed_file_bytes(reader, 0, file_size, 256);
             auto task = collect_lines(std::move(gen));
-            auto lines = task.get();
+            auto lines = dftu_utils_test::ok(task.get());
 
             CHECK(lines.size() == 10);
         }
@@ -178,7 +179,7 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
             auto gen =
                 async_indexed_file_bytes(reader, 0, file_size, 1024 * 1024);
             auto task = collect_lines(std::move(gen));
-            auto lines = task.get();
+            auto lines = dftu_utils_test::ok(task.get());
 
             CHECK(lines.size() == 10);
         }
@@ -193,7 +194,8 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
                 co_return;
             }(std::move(gen));
 
-            CHECK_THROWS_AS(task.get(), common::DFTUtilsException);
+            CHECK_THROWS_AS(dftu_utils_test::ok(task.get()),
+                            common::DFTUtilsException);
         }
 
         SUBCASE("Invalid byte range throws on first next()") {
@@ -216,7 +218,8 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
                 co_return;
             }(std::move(gen));
 
-            CHECK_THROWS_AS(task.get(), common::DFTUtilsException);
+            CHECK_THROWS_AS(dftu_utils_test::ok(task.get()),
+                            common::DFTUtilsException);
         }
 
         SUBCASE("Byte range beyond file size handles gracefully") {
@@ -235,7 +238,7 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
 
             auto gen = async_indexed_file_bytes(reader, 0, file_size * 2);
             auto task = collect_lines(std::move(gen));
-            auto lines = task.get();
+            auto lines = dftu_utils_test::ok(task.get());
 
             CHECK(lines.size() == 5);
         }
@@ -257,7 +260,7 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
             // Read bytes 5000-10000
             auto gen = async_indexed_file_bytes(reader, 5000, 10000);
             auto task = collect_lines(std::move(gen));
-            auto lines = task.get();
+            auto lines = dftu_utils_test::ok(task.get());
 
             CHECK(lines.size() > 0);
             CHECK(lines.size() < 1000);
@@ -294,7 +297,7 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
             // Async path
             auto gen = async_indexed_file_bytes(reader2, 0, file_size);
             auto task = collect_lines(std::move(gen));
-            auto async_lines = task.get();
+            auto async_lines = dftu_utils_test::ok(task.get());
 
             REQUIRE(sync_lines.size() == async_lines.size());
             for (std::size_t i = 0; i < sync_lines.size(); ++i) {
@@ -339,7 +342,7 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
                 co_return;
             }(std::move(gen));
 
-            task.get();
+            dftu_utils_test::ok(task.get());
         }
 
         SUBCASE("Move semantics") {
@@ -360,7 +363,7 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
             auto gen2 = std::move(gen1);  // Move construct
 
             auto task = collect_lines(std::move(gen2));
-            auto lines = task.get();
+            auto lines = dftu_utils_test::ok(task.get());
 
             REQUIRE(lines.size() == 5);
         }
@@ -382,7 +385,7 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
             // Read just 50 bytes
             auto gen = async_indexed_file_bytes(reader, 0, 50);
             auto task = collect_lines(std::move(gen));
-            auto lines = task.get();
+            auto lines = dftu_utils_test::ok(task.get());
 
             CHECK(lines.size() > 0);
             CHECK(lines[0] == "{\"id\": 1, \"message\": \"Test message 1\"}");
@@ -405,7 +408,7 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
             // Start at byte 50 (likely mid-line)
             auto gen = async_indexed_file_bytes(reader, 50, file_size);
             auto task = collect_lines(std::move(gen));
-            auto lines = task.get();
+            auto lines = dftu_utils_test::ok(task.get());
 
             CHECK(lines.size() > 0);
         }

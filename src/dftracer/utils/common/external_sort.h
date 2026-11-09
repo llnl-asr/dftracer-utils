@@ -146,7 +146,7 @@ class ExternalSorter {
         dstd::PriorityQueue<std::size_t, decltype(after)> heap(after);
         for (std::size_t i = 0; i < runs_.size(); ++i) {
             auto more = refill(i, readers[i], chunk);
-            if (!more) return dstd::Unexpected(more.error());
+            if (!more.has_value()) return dstd::Unexpected(more.error());
             if (*more) heap.push(i);
         }
         while (!heap.empty()) {
@@ -159,7 +159,7 @@ class ExternalSorter {
                 continue;
             }
             auto more = refill(i, rd, chunk);
-            if (!more) return dstd::Unexpected(more.error());
+            if (!more.has_value()) return dstd::Unexpected(more.error());
             if (*more) heap.push(i);
         }
         return {};

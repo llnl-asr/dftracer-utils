@@ -20,6 +20,7 @@
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 #include <variant>
@@ -71,11 +72,12 @@ dstd::Vector<trace::views::detail::FoldEvent> make_events(std::uint64_t count) {
 
 void finalize_now(plugins::PluginFold& f) {
     Runtime rt(1);
-    rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                  co_await f.finalize(trace::views::detail::CoverageSet{});
-              }),
-              "fin")
-        .wait();
+    dftu_utils_test::ok(
+        rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                      co_await f.finalize(trace::views::detail::CoverageSet{});
+                  }),
+                  "fin")
+            .wait());
     rt.shutdown();
 }
 

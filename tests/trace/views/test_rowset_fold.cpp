@@ -12,6 +12,7 @@
 #include <dftracer/utils/trace/views/fold.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -211,7 +212,8 @@ TEST_SUITE("RowSetFold") {
                 .agg({{AggOp::Count, "", "n"}});
         for (int touch = 0; touch < 2; ++touch) {
             CAPTURE(touch);
-            const dataframe::DataFrame f = v.collect().get();
+            const dataframe::DataFrame f =
+                dftu_utils_test::ok(v.collect().get());
             CHECK(rows_of(f) == dstd::Vector<dstd::String>{"gtype=func;n=30;"});
         }
     }
@@ -302,17 +304,17 @@ TEST_SUITE("RowSetFold") {
         const View v = View::from_file(
             dstd::String(gz),
             dstd::String(dstd::String(determine_index_path(gz, ""))));
-        const dataframe::DataFrame f =
+        const dataframe::DataFrame f = dftu_utils_test::ok(
             v.duql("where dur.sketch == \"SK7\" | select path, dur.count")
                 .collect()
-                .get();
+                .get());
         REQUIRE(f.num_rows() == 1);
-        const dataframe::DataFrame all =
+        const dataframe::DataFrame all = dftu_utils_test::ok(
             v.duql("where dur.sketch in [\"SK7\", \"SK8\", \"SK99\"]")
                 .group_by({GroupKey::field("gtype")})
                 .agg({{AggOp::Count, "", "n"}})
                 .collect()
-                .get();
+                .get());
         CHECK(rows_of(all) == dstd::Vector<dstd::String>{"gtype=func;n=2;"});
     }
 }

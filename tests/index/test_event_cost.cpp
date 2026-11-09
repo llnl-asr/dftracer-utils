@@ -17,6 +17,7 @@
 #include <doctest/doctest.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <cstdint>
@@ -83,7 +84,7 @@ void build_one(const dstd::String& file, const dstd::String& index_dir) {
         result =
             co_await index::build::BatchBuilder::process(std::move(config));
     });
-    rt.submit(std::move(task), "event-cost").wait();
+    dftu_utils_test::ok(rt.submit(std::move(task), "event-cost").wait());
     rt.shutdown();
     REQUIRE(result.indexed == 1);
 }

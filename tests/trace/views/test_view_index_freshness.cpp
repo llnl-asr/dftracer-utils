@@ -9,6 +9,7 @@
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/build/resolver.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -94,7 +95,7 @@ coro::CoroTask<dftracer::utils::index::build::ResolverResult> resolve_files(
 }
 
 std::size_t rows(const View& v, const dstd::String& q) {
-    return v.duql(q).collect().get().num_rows();
+    return dftu_utils_test::ok(v.duql(q).collect().get()).num_rows();
 }
 
 View dir_view(const dstd::String& dir, const dstd::String& root = "") {
@@ -109,10 +110,10 @@ std::int64_t count_by(const dataframe::DataFrame& df, const dstd::String& cat) {
 }
 
 dataframe::DataFrame by_cat(const View& v) {
-    return v.group_by({GroupKey::cat()})
-        .agg({{AggOp::Count, "", "n"}})
-        .collect()
-        .get();
+    return dftu_utils_test::ok(v.group_by({GroupKey::cat()})
+                                   .agg({{AggOp::Count, "", "n"}})
+                                   .collect()
+                                   .get());
 }
 
 struct NullSink : ExportSink {
@@ -253,10 +254,10 @@ TEST_SUITE("ViewIndexFreshness") {
         REQUIRE(dftu_utils_test::build_index(gz));
 
         NullSink sink;
-        const auto stats = View::from_file(dstd::String(gz))
-                               .duql(R"(cat == "RARE")")
-                               .sink_json(sink)
-                               .get();
+        const auto stats = dftu_utils_test::ok(View::from_file(dstd::String(gz))
+                                                   .duql(R"(cat == "RARE")")
+                                                   .sink_json(sink)
+                                                   .get());
         CHECK(stats.events_matched == 3);
         CHECK(stats.chunks_skipped > 0);
     }

@@ -15,6 +15,7 @@
 #include <dftracer/utils/utilities/reader/internal/reader.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <algorithm>
@@ -272,8 +273,8 @@ TEST_CASE("Robustness - Large file continuous stride reading") {
             // Read this chunk
             std::size_t offset = current_start;
             while (offset < current_end &&
-                   (bytes_written = reader->read_line_bytes(
-                        offset, current_end, buffer.data(), buffer.size())) >
+                   (bytes_written = dftu_utils_test::ok(reader->read_line_bytes(
+                        offset, current_end, buffer.data(), buffer.size()))) >
                        0) {
                 content.append(buffer.data(), bytes_written);
                 offset += bytes_written;
@@ -336,8 +337,8 @@ TEST_CASE("Robustness - Large file continuous stride reading") {
 
         std::size_t offset = 0;
         while (offset < large_read_size &&
-               (bytes_written = reader->read_line_bytes(
-                    offset, large_read_size, buffer.data(), buffer.size())) >
+               (bytes_written = dftu_utils_test::ok(reader->read_line_bytes(
+                    offset, large_read_size, buffer.data(), buffer.size()))) >
                    0) {
             single_read_content.append(buffer.data(), bytes_written);
             offset += bytes_written;
@@ -366,8 +367,10 @@ TEST_CASE("Robustness - Large file continuous stride reading") {
 
             std::size_t chunk_offset = start;
             while (chunk_offset < end &&
-                   (bytes_written = stride_reader->read_line_bytes(
-                        chunk_offset, end, buffer.data(), buffer.size())) > 0) {
+                   (bytes_written =
+                        dftu_utils_test::ok(stride_reader->read_line_bytes(
+                            chunk_offset, end, buffer.data(), buffer.size()))) >
+                       0) {
                 chunk_content.append(buffer.data(), bytes_written);
                 chunk_offset += bytes_written;
             }
@@ -433,8 +436,10 @@ TEST_CASE("Robustness - Different buffer sizes consistency") {
 
             std::size_t offset = start_pos;
             while (offset < end_pos &&
-                   (bytes_written = test_reader->read_line_bytes(
-                        offset, end_pos, buffer.data(), buffer.size())) > 0) {
+                   (bytes_written =
+                        dftu_utils_test::ok(test_reader->read_line_bytes(
+                            offset, end_pos, buffer.data(), buffer.size()))) >
+                       0) {
                 content.append(buffer.data(), bytes_written);
                 offset += bytes_written;
             }
@@ -496,9 +501,10 @@ TEST_CASE("Robustness - Boundary edge cases") {
                 // Read 100 bytes starting at position
                 std::size_t offset = pos;
                 while (offset < pos + 100 &&
-                       (bytes_written = reader->read_line_bytes(
-                            offset, pos + 100, buffer.data(), buffer.size())) >
-                           0) {
+                       (bytes_written =
+                            dftu_utils_test::ok(reader->read_line_bytes(
+                                offset, pos + 100, buffer.data(),
+                                buffer.size()))) > 0) {
                     content.append(buffer.data(), bytes_written);
                     offset += bytes_written;
                 }
@@ -539,10 +545,11 @@ TEST_CASE("Robustness - Boundary edge cases") {
                 // Read 100 bytes starting at position
                 std::size_t end_pos = pos + env.bytes_per_line();
                 std::size_t offset = pos;
-                while (offset < end_pos &&
-                       (bytes_written = reader->read_line_bytes(
-                            offset, end_pos, buffer.data(), buffer.size())) >
-                           0) {
+                while (
+                    offset < end_pos &&
+                    (bytes_written = dftu_utils_test::ok(
+                         reader->read_line_bytes(offset, end_pos, buffer.data(),
+                                                 buffer.size()))) > 0) {
                     content.append(buffer.data(), bytes_written);
                     offset += bytes_written;
                 }
@@ -579,8 +586,8 @@ TEST_CASE("Robustness - Boundary edge cases") {
 
             std::size_t offset = start;
             while (offset < end &&
-                   (bytes_written = reader->read_line_bytes(
-                        offset, end, buffer.data(), buffer.size())) > 0) {
+                   (bytes_written = dftu_utils_test::ok(reader->read_line_bytes(
+                        offset, end, buffer.data(), buffer.size()))) > 0) {
                 content.append(buffer.data(), bytes_written);
                 offset += bytes_written;
             }
@@ -645,8 +652,8 @@ TEST_CASE("Robustness - Complete file sequential read") {
 
             std::size_t offset = current_pos;
             while (offset < end_pos &&
-                   (bytes_written = reader->read_line_bytes(
-                        offset, end_pos, buffer.data(), buffer.size())) > 0) {
+                   (bytes_written = dftu_utils_test::ok(reader->read_line_bytes(
+                        offset, end_pos, buffer.data(), buffer.size()))) > 0) {
                 content.append(buffer.data(), bytes_written);
                 offset += bytes_written;
             }
@@ -706,8 +713,8 @@ TEST_CASE("Robustness - Complete file sequential read") {
 
         std::size_t offset = 0;
         while (offset < max_bytes &&
-               (bytes_written = reader->read_line_bytes(
-                    offset, max_bytes, buffer.data(), buffer.size())) > 0) {
+               (bytes_written = dftu_utils_test::ok(reader->read_line_bytes(
+                    offset, max_bytes, buffer.data(), buffer.size()))) > 0) {
             complete_content.append(buffer.data(), bytes_written);
             offset += bytes_written;
         }
@@ -734,9 +741,10 @@ TEST_CASE("Robustness - Complete file sequential read") {
 
             std::size_t chunk_offset = current_pos;
             while (chunk_offset < end_pos &&
-                   (bytes_written = chunked_reader->read_line_bytes(
-                        chunk_offset, end_pos, buffer.data(), buffer.size())) >
-                       0) {
+                   (bytes_written =
+                        dftu_utils_test::ok(chunked_reader->read_line_bytes(
+                            chunk_offset, end_pos, buffer.data(),
+                            buffer.size()))) > 0) {
                 chunk_content.append(buffer.data(), bytes_written);
                 chunk_offset += bytes_written;
             }
@@ -795,9 +803,10 @@ TEST_CASE("Robustness - JSON validation and consistency") {
 
                 std::size_t offset = range.first;
                 while (offset < range.second &&
-                       (bytes_written = test_reader->read_line_bytes(
-                            offset, range.second, buffer.data(),
-                            buffer.size())) > 0) {
+                       (bytes_written =
+                            dftu_utils_test::ok(test_reader->read_line_bytes(
+                                offset, range.second, buffer.data(),
+                                buffer.size()))) > 0) {
                     content.append(buffer.data(), bytes_written);
                     offset += bytes_written;
                 }
@@ -835,8 +844,10 @@ TEST_CASE("Robustness - JSON validation and consistency") {
 
             std::size_t offset = start_pos;
             while (offset < end_pos &&
-                   (bytes_written = test_reader->read_line_bytes(
-                        offset, end_pos, buffer.data(), buffer.size())) > 0) {
+                   (bytes_written =
+                        dftu_utils_test::ok(test_reader->read_line_bytes(
+                            offset, end_pos, buffer.data(), buffer.size()))) >
+                       0) {
                 content.append(buffer.data(), bytes_written);
                 offset += bytes_written;
             }
@@ -876,8 +887,8 @@ TEST_CASE("Robustness - JSON validation and consistency") {
 
         std::size_t offset = 0;
         while (offset < test_size &&
-               (bytes_written = seq_reader->read_line_bytes(
-                    offset, test_size, buffer.data(), buffer.size())) > 0) {
+               (bytes_written = dftu_utils_test::ok(seq_reader->read_line_bytes(
+                    offset, test_size, buffer.data(), buffer.size()))) > 0) {
             sequential_content.append(buffer.data(), bytes_written);
             offset += bytes_written;
         }
@@ -908,9 +919,10 @@ TEST_CASE("Robustness - JSON validation and consistency") {
 
                 std::size_t chunk_offset = current_pos;
                 while (chunk_offset < end_pos &&
-                       (bytes_written = chunked_reader->read_line_bytes(
-                            chunk_offset, end_pos, buffer.data(),
-                            buffer.size())) > 0) {
+                       (bytes_written =
+                            dftu_utils_test::ok(chunked_reader->read_line_bytes(
+                                chunk_offset, end_pos, buffer.data(),
+                                buffer.size()))) > 0) {
                     chunk_content.append(buffer.data(), bytes_written);
                     chunk_offset += bytes_written;
                 }
@@ -982,8 +994,8 @@ TEST_CASE("Robustness - Complete file reading equivalence") {
 
         std::size_t offset = 0;
         while (offset < max_bytes &&
-               (bytes_written = reader->read_line_bytes(
-                    offset, max_bytes, buffer.data(), buffer.size())) > 0) {
+               (bytes_written = dftu_utils_test::ok(reader->read_line_bytes(
+                    offset, max_bytes, buffer.data(), buffer.size()))) > 0) {
             complete_content.append(buffer.data(), bytes_written);
             offset += bytes_written;
         }
@@ -1015,9 +1027,10 @@ TEST_CASE("Robustness - Complete file reading equivalence") {
 
                 std::size_t chunk_offset = current_pos;
                 while (chunk_offset < end_pos &&
-                       (bytes_written = stride_reader->read_line_bytes(
-                            chunk_offset, end_pos, buffer.data(),
-                            buffer.size())) > 0) {
+                       (bytes_written =
+                            dftu_utils_test::ok(stride_reader->read_line_bytes(
+                                chunk_offset, end_pos, buffer.data(),
+                                buffer.size()))) > 0) {
                     chunk_content.append(buffer.data(), bytes_written);
                     chunk_offset += bytes_written;
                 }
@@ -1088,9 +1101,10 @@ TEST_CASE("Robustness - Complete file reading equivalence") {
 
                 std::size_t offset = current_pos;
                 while (offset < end_pos &&
-                       (bytes_written = test_reader->read_line_bytes(
-                            offset, end_pos, buffer.data(), buffer.size())) >
-                           0) {
+                       (bytes_written =
+                            dftu_utils_test::ok(test_reader->read_line_bytes(
+                                offset, end_pos, buffer.data(),
+                                buffer.size()))) > 0) {
                     content.append(buffer.data(), bytes_written);
                     offset += bytes_written;
                 }
@@ -1162,8 +1176,9 @@ TEST_CASE("Robustness - Memory and performance stress") {
 
                 std::size_t offset = start;
                 while (offset < end &&
-                       (bytes_written = reader->read_line_bytes(
-                            offset, end, buffer.data(), buffer.size())) > 0) {
+                       (bytes_written = dftu_utils_test::ok(
+                            reader->read_line_bytes(offset, end, buffer.data(),
+                                                    buffer.size()))) > 0) {
                     content.append(buffer.data(), bytes_written);
                     offset += bytes_written;
                     total_bytes_written += bytes_written;
@@ -1199,8 +1214,8 @@ TEST_CASE("Robustness - Memory and performance stress") {
 
             std::size_t offset = 0;
             while (offset < 1024 * 1024 &&
-                   (bytes_written = reader->read(
-                        offset, 1024 * 1024, buffer.data(), buffer.size())) >
+                   (bytes_written = dftu_utils_test::ok(reader->read(
+                        offset, 1024 * 1024, buffer.data(), buffer.size()))) >
                        0) {
                 content.append(buffer.data(), bytes_written);
                 offset += bytes_written;
@@ -1232,9 +1247,10 @@ TEST_CASE("Robustness - Memory and performance stress") {
 
                 std::size_t offset = 0;
                 while (offset < max_bytes &&
-                       (bytes_written = thread_reader->read_line_bytes(
-                            offset, max_bytes, buffer.data(), buffer.size())) >
-                           0) {
+                       (bytes_written =
+                            dftu_utils_test::ok(thread_reader->read_line_bytes(
+                                offset, max_bytes, buffer.data(),
+                                buffer.size()))) > 0) {
                     content.append(buffer.data(), bytes_written);
                     offset += bytes_written;
                 }
@@ -1277,9 +1293,10 @@ TEST_CASE("Robustness - Memory and performance stress") {
 
                 std::size_t offset = 0;
                 while (offset < max_bytes &&
-                       (bytes_written = async_reader->read_line_bytes(
-                            offset, max_bytes, buffer.data(), buffer.size())) >
-                           0) {
+                       (bytes_written =
+                            dftu_utils_test::ok(async_reader->read_line_bytes(
+                                offset, max_bytes, buffer.data(),
+                                buffer.size()))) > 0) {
                     content.append(buffer.data(), bytes_written);
                     offset += bytes_written;
                 }
@@ -1361,7 +1378,8 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
             std::size_t end_line = start_line + range_size - 1;
 
             try {
-                dstd::String result = reader->read_lines(start_line, end_line);
+                dstd::String result = dftu_utils_test::ok(
+                    reader->read_lines(start_line, end_line));
 
                 // Count actual lines returned
                 std::size_t line_count = 0;
@@ -1434,8 +1452,8 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
         for (auto range : large_ranges) {
             if (range.first <= range.second && range.second <= total_lines) {
                 try {
-                    dstd::String result =
-                        reader->read_lines(range.first, range.second);
+                    dstd::String result = dftu_utils_test::ok(
+                        reader->read_lines(range.first, range.second));
 
                     // Count lines
                     std::size_t line_count = 0;
@@ -1503,8 +1521,8 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
         for (std::size_t line_num : test_lines) {
             if (line_num <= total_lines && line_num > 0) {
                 try {
-                    dstd::String result =
-                        reader->read_lines(line_num, line_num);
+                    dstd::String result = dftu_utils_test::ok(
+                        reader->read_lines(line_num, line_num));
 
                     // Should have exactly one line
                     std::size_t line_count = 0;
@@ -1550,13 +1568,13 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
         // Test boundary conditions
         try {
             // First line
-            dstd::String first = reader->read_lines(1, 1);
+            dstd::String first = dftu_utils_test::ok(reader->read_lines(1, 1));
             CHECK(first.find("\"name\":\"name_1\"") != dstd::String::npos);
 
             // Last line
             if (total_lines > 0) {
-                dstd::String last =
-                    reader->read_lines(total_lines, total_lines);
+                dstd::String last = dftu_utils_test::ok(
+                    reader->read_lines(total_lines, total_lines));
                 dstd::String expected =
                     "\"name\":\"name_" + dstd::to_string(total_lines) + "\"";
                 CHECK(last.find(expected) != dstd::String::npos);
@@ -1564,7 +1582,8 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
 
             // First few lines
             if (total_lines >= 5) {
-                dstd::String first_few = reader->read_lines(1, 5);
+                dstd::String first_few =
+                    dftu_utils_test::ok(reader->read_lines(1, 5));
                 std::size_t line_count = 0;
                 for (char c : first_few) {
                     if (c == '\n') line_count++;
@@ -1575,7 +1594,8 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
             // Last few lines
             if (total_lines >= 5) {
                 std::size_t start = total_lines - 4;
-                dstd::String last_few = reader->read_lines(start, total_lines);
+                dstd::String last_few =
+                    dftu_utils_test::ok(reader->read_lines(start, total_lines));
                 std::size_t line_count = 0;
                 for (char c : last_few) {
                     if (c == '\n') line_count++;
@@ -1602,16 +1622,18 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
         // Test error conditions
 
         // Invalid line numbers (0-based should fail)
-        CHECK_THROWS(reader->read_lines(0, 5));
-        CHECK_THROWS(reader->read_lines(1, 0));
+        CHECK_THROWS(dftu_utils_test::ok(reader->read_lines(0, 5)));
+        CHECK_THROWS(dftu_utils_test::ok(reader->read_lines(1, 0)));
 
         // start > end
-        CHECK_THROWS(reader->read_lines(10, 5));
+        CHECK_THROWS(dftu_utils_test::ok(reader->read_lines(10, 5)));
 
         if (total_lines > 0) {
             // Beyond file bounds
-            CHECK_THROWS(reader->read_lines(total_lines + 1, total_lines + 10));
-            CHECK_THROWS(reader->read_lines(1, total_lines + 1));
+            CHECK_THROWS(dftu_utils_test::ok(
+                reader->read_lines(total_lines + 1, total_lines + 10)));
+            CHECK_THROWS(
+                dftu_utils_test::ok(reader->read_lines(1, total_lines + 1)));
         }
 
         // Very large range (should handle gracefully)
@@ -1619,7 +1641,7 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
             try {
                 // This might succeed or fail depending on memory, but shouldn't
                 // crash
-                reader->read_lines(1, total_lines);
+                dftu_utils_test::ok(reader->read_lines(1, total_lines));
             } catch (const std::exception& e) {
                 // Acceptable to fail with large ranges
                 INFO("Large range failed (acceptable): " << e.what());
@@ -1659,8 +1681,8 @@ TEST_CASE("Robustness - Line reading consistency across multiple readers") {
                 // Read same range with all readers
                 for (auto& reader : readers) {
                     try {
-                        dstd::String result =
-                            reader->read_lines(range.first, range.second);
+                        dstd::String result = dftu_utils_test::ok(
+                            reader->read_lines(range.first, range.second));
                         results.push_back(result);
                     } catch (const std::exception& e) {
                         INFO("Reader failed for range [" << range.first << ", "
@@ -1705,7 +1727,8 @@ TEST_CASE("Robustness - Line reading consistency across multiple readers") {
                 if (thread_start <= thread_end && thread_start > 0) {
                     try {
                         dstd::String result =
-                            thread_reader->read_lines(thread_start, thread_end);
+                            dftu_utils_test::ok(thread_reader->read_lines(
+                                thread_start, thread_end));
 
                         // Validate result
                         std::size_t line_count = 0;
@@ -1764,7 +1787,8 @@ TEST_CASE("Robustness - Line reading consistency across multiple readers") {
             std::size_t end = std::min(start + chunk_size - 1, total_lines);
 
             try {
-                dstd::String result = reader->read_lines(start, end);
+                dstd::String result =
+                    dftu_utils_test::ok(reader->read_lines(start, end));
                 sequential_results.push_back(result);
             } catch (const std::exception& e) {
                 sequential_results.push_back("");  // Mark failed
@@ -1796,7 +1820,8 @@ TEST_CASE("Robustness - Line reading consistency across multiple readers") {
             std::size_t end = std::min(start + chunk_size - 1, total_lines);
 
             try {
-                dstd::String result = random_reader->read_lines(start, end);
+                dstd::String result =
+                    dftu_utils_test::ok(random_reader->read_lines(start, end));
                 random_results.push_back(result);
             } catch (const std::exception& e) {
                 random_results.push_back("");  // Mark failed

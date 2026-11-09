@@ -228,11 +228,12 @@ dftu_view* dftu_view_from_directory(const char* dir, const char* index_path,
                                     dftu_runtime* rt) {
     if (!dir) return nullptr;
     try {
-        trace::views::detail::scan::ScanPlan v =
-            runtime_of(rt)
-                .submit(trace::views::detail::scan::from_directory(
-                    dir, index_path ? index_path : ""))
-                .get();
+        auto planned = runtime_of(rt)
+                           .submit(trace::views::detail::scan::from_directory(
+                               dir, index_path ? index_path : ""))
+                           .get();
+        if (!planned) return nullptr;
+        trace::views::detail::scan::ScanPlan v = std::move(*planned);
         if (v->files.empty()) return nullptr;
         return wrap(std::move(v));
     } catch (const std::exception&) {
@@ -399,10 +400,12 @@ dftu_view* dftu_view_agg(const dftu_view* v, const dftu_view_agg_spec* specs,
 dftu_dataframe* dftu_view_collect(const dftu_view* v, dftu_runtime* rt) {
     if (!v) return nullptr;
     try {
-        return dataframe_handle_wrap(
+        auto frame =
             runtime_of(rt)
                 .submit(trace::views::detail::scan::collect_frame(v->p))
-                .get());
+                .get();
+        if (!frame) return nullptr;
+        return dataframe_handle_wrap(std::move(*frame));
     } catch (const std::exception&) {
         return nullptr;
     }

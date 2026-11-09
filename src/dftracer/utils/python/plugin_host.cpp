@@ -114,7 +114,7 @@ coro::CoroTask<void> run_host_scan(
     for (const auto& p : inputs) {
         const auto is_dir = dftracer::utils::dstd::fs::is_directory(
             dftracer::utils::dstd::PathView(p));
-        if (is_dir && *is_dir) {
+        if (is_dir.has_value() && *is_dir) {
             dftracer::utils::runtime::fs::FindOptions options;
             options.patterns = dftracer::utils::runtime::fs::names_of(
                 dftracer::utils::common::constants::indexer::
@@ -372,15 +372,16 @@ PyObject* ph_run(PluginHostObject* self, PyObject* args, PyObject* kwds) {
     dftracer::utils::dstd::String index_dir_s = index_dir ? index_dir : "";
     PluginRun run;
     if (!run_blocking([&] {
-            rt->submit(dftracer::utils::coro::with_scope(
-                           [&](dftracer::utils::coro::Scope& scope) {
-                               return run_host_scan(scope, std::move(inputs),
-                                                    std::move(index_dir_s),
-                                                    plugins, auto_index != 0,
-                                                    &run);
-                           }),
-                       "plugin-host-run")
-                .get();
+            common::unwrap(
+                rt->submit(dftracer::utils::coro::with_scope(
+                               [&](dftracer::utils::coro::Scope& scope) {
+                                   return run_host_scan(
+                                       scope, std::move(inputs),
+                                       std::move(index_dir_s), plugins,
+                                       auto_index != 0, &run);
+                               }),
+                           "plugin-host-run")
+                    .get());
         }))
         return nullptr;
 

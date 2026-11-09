@@ -35,10 +35,10 @@ bool writable_dir(dstd::PathView dir) {
     // A failed create_directories shows up as a missing directory below.
     dstd::fs::create_directories(dir).discard();
     const auto is_dir = dstd::fs::is_directory(dir);
-    if (!is_dir || !*is_dir) return false;
+    if (!is_dir.has_value() || !*is_dir) return false;
     const dstd::Path probe =
         dir / str_cat(".dftracer_probe_", static_cast<long>(::getpid()));
-    if (!dstd::fs::create_directory(probe.view())) return false;
+    if (!dstd::fs::create_directory(probe.view()).has_value()) return false;
     dstd::fs::remove(probe.view()).discard();
     return true;
 }
@@ -150,9 +150,9 @@ dstd::Path compute_local_spill_root() {
     joined /= "dftracer-utils";
     joined /= "spill";
     const dstd::Path dir = dstd::normalize(joined.view());
-    if (!dstd::fs::create_directories(dir.view())) return {};
+    if (!dstd::fs::create_directories(dir.view()).has_value()) return {};
     const auto is_dir = dstd::fs::is_directory(dir.view());
-    if (!is_dir || !*is_dir) return {};
+    if (!is_dir.has_value() || !*is_dir) return {};
     return dir;
 }
 
@@ -217,9 +217,9 @@ ScratchSession::ScratchSession(std::uint64_t estimated_bytes) {
     joined /= "dftracer-utils";
     joined /= str_cat(static_cast<long>(::getpid()), "_", id);
     const dstd::Path dir = dstd::normalize(joined.view());
-    if (!dstd::fs::create_directories(dir.view())) return;
+    if (!dstd::fs::create_directories(dir.view()).has_value()) return;
     const auto is_dir = dstd::fs::is_directory(dir.view());
-    if (is_dir && *is_dir) dir_ = dir;
+    if (is_dir.has_value() && *is_dir) dir_ = dir;
 }
 
 ScratchSession::ScratchSession(ScratchSession&& other) noexcept

@@ -140,7 +140,7 @@ dstd::Optional<IndexShardManifest> read_shard_manifest(dstd::StringView root) {
     const dstd::Path path{shard_manifest_path(root)};
     // An unreadable path reads as no manifest.
     const auto found = dstd::fs::exists(path.view());
-    if (!found || !*found) return dstd::nullopt;
+    if (!found.has_value() || !*found) return dstd::nullopt;
 
     simdjson::padded_string contents;
     auto load_err = simdjson::padded_string::load(path.str()).get(contents);
@@ -156,7 +156,7 @@ dstd::Optional<IndexShardManifest> read_shard_manifest(dstd::StringView root) {
 bool has_shard_manifest(dstd::StringView root) {
     const auto found =
         dstd::fs::exists(dstd::PathView(shard_manifest_path(root)));
-    return found && *found;
+    return found.has_value() && *found;
 }
 
 dstd::String resolve_shard_set_root(dstd::StringView target) {

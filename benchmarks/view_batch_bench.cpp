@@ -61,7 +61,9 @@ void require_ok(const dstd::Expected<T, dstd::Error>& result,
 
 template <class T>
 T run(coro::CoroTask<T> t) {
-    return default_runtime().submit(std::move(t)).get();
+    auto result = default_runtime().submit(std::move(t)).get();
+    require_ok(result, "run");
+    if constexpr (!std::is_void_v<T>) return std::move(*result);
 }
 
 // POSIX/STDIO reads and writes across pids with a string and a numeric arg,

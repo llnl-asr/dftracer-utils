@@ -11,6 +11,7 @@
 //
 //   view_api_bench [events] [workdir] [case-substring]
 
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
@@ -61,7 +62,7 @@ constexpr double MAX_SLOWDOWN = 0.05;
 
 template <class T>
 T run(coro::CoroTask<T> t) {
-    return default_runtime().submit(std::move(t)).get();
+    return common::unwrap(default_runtime().submit(std::move(t)).get());
 }
 
 // A multi-member trace: POSIX/STDIO reads and writes across pids with a

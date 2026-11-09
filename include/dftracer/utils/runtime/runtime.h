@@ -101,22 +101,20 @@ class Runtime {
     TypedTaskHandle<T> submit(coro::CoroTask<T> task,
                               dstd::StringView name = "");
 
-    /// Runs `task` as a tracked task and blocks until it ends, raising its
-    /// error. Called from one of this runtime's own workers it hands off the
+    /// Runs `task` as a tracked task and blocks until it ends. Gives its value
+    /// as a @ref coro::TaskResult, which holds dstd::Condition::Cancelled when
+    /// the task was stopped. An exception the task raised is rethrown. Called
+    /// from one of this runtime's own workers it hands off the
     /// worker's run slot for the wait, so the pool keeps its capacity.
     template <typename T>
-    T block_on(coro::Named<coro::CoroTask<T>> task) {
+    coro::TaskResult<T> block_on(coro::Named<coro::CoroTask<T>> task) {
         const bool reentrant = coro::Executor::current() == executor_.get();
         coro::BlockingRegion block(reentrant ? executor_.get() : nullptr);
-        if constexpr (std::is_void_v<T>) {
-            submit(std::move(task.value), task.name).wait();
-        } else {
-            return submit(std::move(task.value), task.name).get();
-        }
+        return submit(std::move(task.value), task.name).get();
     }
 
     template <typename T>
-    T block_on(coro::CoroTask<T> task) {
+    coro::TaskResult<T> block_on(coro::CoroTask<T> task) {
         return block_on(coro::Named<coro::CoroTask<T>>{{}, std::move(task)});
     }
 
@@ -131,17 +129,18 @@ class Runtime {
     /// sub-ranges.
     template <typename Body>
         requires std::is_invocable_v<Body, std::int64_t, std::int64_t>
-    void parallel_for(std::int64_t n, std::int64_t grain, Body body) {
-        if (n <= 0) return;
+    dstd::Result<void> parallel_for(std::int64_t n, std::int64_t grain,
+                                    Body body) {
+        if (n <= 0) return {};
         const std::int64_t chunks = (n + grain - 1) / grain;
         if (chunks <= 1 || detail::in_parallel_region()) {
             body(0, n);
-            return;
+            return {};
         }
         const std::int64_t workers = std::min<std::int64_t>(
             chunks, static_cast<std::int64_t>(threads()));
         std::atomic<std::int64_t> next{0};
-        block_on(coro::named(
+        return block_on(coro::named(
             "parallel_for",
             coro::with_scope([&](coro::Scope& s) -> coro::CoroTask<void> {
                 for (std::int64_t w = 0; w < workers; ++w)
@@ -161,8 +160,8 @@ class Runtime {
     /// per-worker partials are combined. `T` must be copyable (for the identity
     /// seed).
     template <typename T, typename Map, typename Combine>
-    T parallel_reduce(std::int64_t n, std::int64_t grain, T identity, Map map,
-                      Combine combine) {
+    dstd::Result<T> parallel_reduce(std::int64_t n, std::int64_t grain,
+                                    T identity, Map map, Combine combine) {
         if (n <= 0) return identity;
         const std::int64_t chunks = (n + grain - 1) / grain;
         if (chunks <= 1 || detail::in_parallel_region())
@@ -171,7 +170,7 @@ class Runtime {
             chunks, static_cast<std::int64_t>(threads()));
         std::atomic<std::int64_t> next{0};
         dstd::Vector<T> partials(static_cast<std::size_t>(workers), identity);
-        block_on(coro::named(
+        auto ran = block_on(coro::named(
             "parallel_reduce",
             coro::with_scope([&](coro::Scope& s) -> coro::CoroTask<void> {
                 for (std::int64_t w = 0; w < workers; ++w)
@@ -187,6 +186,7 @@ class Runtime {
                     });
                 co_return;
             })));
+        if (!ran) return dstd::Unexpected<dstd::Error>(ran.error());
         T acc = std::move(identity);
         for (T& p : partials) acc = combine(std::move(acc), std::move(p));
         return acc;
@@ -232,7 +232,7 @@ class Runtime {
     bool process_runtime_ = false;
     std::atomic<bool> shutdown_called_{false};
     std::atomic<uint64_t> task_name_counter_{0};
-    dstd::Vector<dstd::SharedFuture<void>> outstanding_futures_;
+    dstd::Vector<dstd::SharedFuture<dstd::Result<void>>> outstanding_futures_;
     std::mutex futures_mutex_;
 };
 
@@ -256,17 +256,14 @@ dstd::SharedPtr<Runtime> peek_default_runtime();
 template <typename T>
 TypedTaskHandle<T> Runtime::submit(coro::CoroTask<T> task,
                                    dstd::StringView name) {
-    if (shutdown_called_.load(std::memory_order_acquire)) {
-        throw common::DFTUtilsException(common::ErrorCode::Pipeline,
-                                        "Runtime is shut down");
-    }
+    using R = coro::TaskResult<T>;
     // The handle, its shared state and the futures list outlive the
     // submitting thread's pool scope, so they charge the general pool.
     dstd::String task_name;
-    dstd::SharedPtr<dstd::Promise<dstd::SharedPtr<T>>> typed_promise;
-    dstd::SharedFuture<dstd::SharedPtr<T>> typed_future;
-    dstd::SharedPtr<dstd::Promise<void>> void_promise;
-    dstd::SharedFuture<void> void_future;
+    dstd::SharedPtr<dstd::Promise<dstd::SharedPtr<R>>> typed_promise;
+    dstd::SharedFuture<dstd::SharedPtr<R>> typed_future;
+    dstd::SharedPtr<dstd::Promise<dstd::Result<void>>> void_promise;
+    dstd::SharedFuture<dstd::Result<void>> void_future;
     dstd::SharedPtr<std::atomic<common::TaskIndex>> tid;
     {
         memory::detail::Scope bookkeeping_scope{
@@ -276,37 +273,51 @@ TypedTaskHandle<T> Runtime::submit(coro::CoroTask<T> task,
         } else {
             task_name.assign(name.data(), name.size());
         }
-        typed_promise = dstd::make_shared<dstd::Promise<dstd::SharedPtr<T>>>();
+        typed_promise = dstd::make_shared<dstd::Promise<dstd::SharedPtr<R>>>();
         typed_future = typed_promise->get_future().share();
         // void future for outstanding_futures_ tracking
-        void_promise = dstd::make_shared<dstd::Promise<void>>();
+        void_promise = dstd::make_shared<dstd::Promise<dstd::Result<void>>>();
         void_future = void_promise->get_future().share();
         tid = dstd::make_shared<std::atomic<common::TaskIndex>>(-1);
     }
 
+    if (shutdown_called_.load(std::memory_order_acquire)) {
+        auto refused = dstd::make_shared<R>(dstd::Unexpected<dstd::Error>(
+            dstd::Error{dstd::Condition::Cancelled, "Runtime is shut down"}));
+        refused->discard();
+        typed_promise->set_value(std::move(refused));
+        return TypedTaskHandle<T>{typed_future, -1, std::move(task_name)};
+    }
+
     auto wrapper = [](coro::CoroTask<T> t,
-                      dstd::SharedPtr<dstd::Promise<dstd::SharedPtr<T>>> tp,
-                      dstd::SharedPtr<dstd::Promise<void>> vp,
+                      dstd::SharedPtr<dstd::Promise<dstd::SharedPtr<R>>> tp,
+                      dstd::SharedPtr<dstd::Promise<dstd::Result<void>>> vp,
                       TaskExecutor* exec,
                       dstd::SharedPtr<std::atomic<common::TaskIndex>> task_id)
         -> coro::detail::Coro {
         exec->mark_coro_started(task_id->load(std::memory_order_acquire));
-        try {
-            T val = co_await std::move(t);
-            t = coro::CoroTask<T>{std::coroutine_handle<
-                typename coro::CoroTask<T>::promise_type>{}};
-            exec->mark_coro_completed(task_id->load(std::memory_order_acquire));
-            tp->set_value(dstd::make_shared<T>(std::move(val)));
-        } catch (...) {
-            t = coro::CoroTask<T>{std::coroutine_handle<
-                typename coro::CoroTask<T>::promise_type>{}};
+        auto settled = co_await coro::settle(std::move(t));
+        if (settled.exception) {
             mark_coro_failed(*exec, task_id->load(std::memory_order_acquire),
-                             std::current_exception());
-            tp->set_exception(std::current_exception());
-            vp->set_value();
+                             common::error_of_exception(settled.exception));
+            tp->set_exception(std::move(settled.exception));
+            vp->set_value(dstd::Result<void>{});
             co_return;
         }
-        vp->set_value();
+        if (settled.stopped) {
+            const dstd::Error error = coro::detail::stopped_error();
+            mark_coro_failed(*exec, task_id->load(std::memory_order_acquire),
+                             error);
+            auto stopped =
+                dstd::make_shared<R>(dstd::Unexpected<dstd::Error>(error));
+            stopped->discard();
+            tp->set_value(std::move(stopped));
+            vp->set_value(dstd::Result<void>{});
+            co_return;
+        }
+        exec->mark_coro_completed(task_id->load(std::memory_order_acquire));
+        tp->set_value(dstd::make_shared<R>(std::move(*settled.value)));
+        vp->set_value(dstd::Result<void>{});
     };
 
     // Set the executor on the task's promise so awaitables (e.g. channels)

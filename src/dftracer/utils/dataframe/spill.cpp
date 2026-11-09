@@ -654,7 +654,7 @@ int Dir::next_run() { return runs_.fetch_add(1); }
 void Dir::remove_run(const dstd::String& path) const noexcept {
     const auto size = dstd::fs::file_size(dstd::PathView(path));
     const auto removed = dstd::fs::remove(dstd::PathView(path));
-    if (removed && *removed && size) dir_.charge().release(*size);
+    if (removed.has_value() && *removed && size) dir_.charge().release(*size);
 }
 
 dstd::String Dir::run_path(int id) const {

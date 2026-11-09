@@ -24,6 +24,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/utilities/replay/replay.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <algorithm>
@@ -120,9 +121,9 @@ void run_pipelined(ReplayEngine& engine,
                    const dstd::Vector<dstd::String>& files,
                    ReplayResult& result, std::size_t threads) {
     Runtime rt(threads);
-    rt.block_on(coro::with_scope([&](coro::Scope& scope) {
+    dftu_utils_test::ok(rt.block_on(coro::with_scope([&](coro::Scope& scope) {
         return engine.run_pipelined(scope, files, result, /*cap=*/64);
-    }));
+    })));
 }
 
 bool is_ci_env() {
@@ -243,9 +244,9 @@ TEST_CASE("Replay fidelity - pipelined path") {
     dstd::Vector<dstd::String> files = {dstd::String(trace_file)};
 
     Runtime rt(4);
-    rt.block_on(coro::with_scope([&](coro::Scope& scope) {
+    dftu_utils_test::ok(rt.block_on(coro::with_scope([&](coro::Scope& scope) {
         return engine.run_pipelined(scope, files, result, /*cap=*/64);
-    }));
+    })));
 
     CHECK(result.total_events == N);
     auto stats = analyze(rec.samples);

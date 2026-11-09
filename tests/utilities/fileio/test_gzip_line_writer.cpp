@@ -15,6 +15,7 @@
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 #include <doctest/doctest.h>
 #include <sys/stat.h>
+#include <task_result.h>
 #include <testing_runtime.h>
 #include <testing_utilities.h>
 #include <unistd.h>
@@ -862,19 +863,20 @@ TEST_CASE("GzipLineWriter - a drop without close on an executor joins") {
     o.workers = 2;
     std::atomic<bool> on_executor{false};
     Runtime rt(4);
-    rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                  {
-                      auto wr = co_await GzipLineWriter::open(
-                          dstd::String(path.str()), std::move(o));
-                      REQUIRE(wr.has_value());
-                      for (std::size_t i = 0; i < 100; ++i)
-                          REQUIRE(co_await wr->append(line(i, 40)));
-                      on_executor = coro::Executor::current() != nullptr;
-                  }
-                  co_return;
-              }),
-              "glw_dropped")
-        .wait();
+    dftu_utils_test::ok(
+        rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                      {
+                          auto wr = co_await GzipLineWriter::open(
+                              dstd::String(path.str()), std::move(o));
+                          REQUIRE(wr.has_value());
+                          for (std::size_t i = 0; i < 100; ++i)
+                              REQUIRE(co_await wr->append(line(i, 40)));
+                          on_executor = coro::Executor::current() != nullptr;
+                      }
+                      co_return;
+                  }),
+                  "glw_dropped")
+            .wait());
     const auto deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(30);
     while (dstd::fs::exists(path).value() &&

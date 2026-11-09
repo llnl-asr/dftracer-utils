@@ -372,8 +372,9 @@ LazyFrame LazyGroupBy::transform(GroupwiseOp kind, std::int64_t n,
     return composed;
 }
 
-DataFrame GroupBy::transform(GroupwiseOp kind, std::int64_t n,
-                             RankMethod method, bool ascending) const {
+dstd::Result<DataFrame> GroupBy::transform(GroupwiseOp kind, std::int64_t n,
+                                           RankMethod method,
+                                           bool ascending) const {
     return dftracer::utils::default_runtime()
         .submit(LazyGroupBy(frame_.lazy(), keys_)
                     .transform(kind, n, method, ascending)

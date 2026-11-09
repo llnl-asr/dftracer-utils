@@ -9,6 +9,7 @@
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/trace/views/live_view.h>
+#include <task_result.h>
 #include <trace/views/test_view_common.h>
 #include <zlib.h>
 
@@ -58,8 +59,8 @@ dstd::Map<dstd::String, std::uint64_t> leaf_counts(const View& v) {
 }
 
 dstd::Map<std::int64_t, std::int64_t> bucket_counts(const View& v) {
-    const auto df =
-        v.time_bucket_min(100).agg({{AggOp::Count, "", "n"}}).collect().get();
+    const auto df = dftu_utils_test::ok(
+        v.time_bucket_min(100).agg({{AggOp::Count, "", "n"}}).collect().get());
     dstd::Map<std::int64_t, std::int64_t> out;
     const auto& b = df.columns[df.column_index("time_bucket")];
     const auto& n = df.columns[df.column_index("n")];
@@ -74,7 +75,8 @@ void put(const dstd::String& path, const dstd::String& bytes) {
 }
 
 std::int64_t count(const View& v) {
-    return static_cast<std::int64_t>(v.collect().get().num_rows());
+    return static_cast<std::int64_t>(
+        dftu_utils_test::ok(v.collect().get()).num_rows());
 }
 
 std::uint64_t verified(const LiveView& live) {
@@ -92,10 +94,10 @@ std::uint64_t skipped(const LiveView& live) {
 double total_rows(const View& v,
                   const dstd::SharedPtr<ScanCounter>& counter = nullptr) {
     const View counted = counter ? v.count_scans(counter) : v;
-    const auto df = counted.group_by({GroupKey::cat()})
-                        .agg({{AggOp::Count, "", "n"}})
-                        .collect()
-                        .get();
+    const auto df = dftu_utils_test::ok(counted.group_by({GroupKey::cat()})
+                                            .agg({{AggOp::Count, "", "n"}})
+                                            .collect()
+                                            .get());
     double n = 0;
     for (std::int64_t r = 0; r < df.num_rows(); ++r) n += bnum(df, r, "n");
     return n;

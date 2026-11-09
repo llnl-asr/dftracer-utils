@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/coro/async_mutex.h>
 #include <dftracer/utils/coro/async_semaphore.h>
@@ -825,10 +826,11 @@ namespace {
 template <typename T, typename F>
 dstd::Result<T> run_on_default(const char* name, F&& f) {
     dstd::Optional<dstd::Result<T>> out;
-    default_runtime().block_on(coro::named(name, [&]() -> coro::CoroTask<void> {
-        out.emplace(co_await f());
-        co_return;
-    }()));
+    common::unwrap(default_runtime().block_on(
+        coro::named(name, [&]() -> coro::CoroTask<void> {
+            out.emplace(co_await f());
+            co_return;
+        }())));
     return std::move(*out);
 }
 }  // namespace

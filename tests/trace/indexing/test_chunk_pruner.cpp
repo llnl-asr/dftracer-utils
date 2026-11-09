@@ -11,6 +11,7 @@
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 using namespace dftracer::utils;
@@ -152,7 +153,7 @@ static ChunkPrunerOutput run_pruner(const dstd::String& index_path,
     ChunkPrunerInput input{index_path, file_path, std::move(*q), nullptr};
 
     ChunkPruner pruner;
-    return pruner(input).get();
+    return dftu_utils_test::ok(pruner(input).get());
 }
 
 TEST_SUITE("ChunkPruner") {

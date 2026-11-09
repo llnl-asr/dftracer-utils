@@ -8,6 +8,7 @@
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -66,20 +67,21 @@ TEST_SUITE("GenericView") {
         const dstd::Set<dstd::String> paths{"host", "io.off", "lat",
                                             "name", "op",     "t"};
 
-        auto all = view_of(gz).collect().get();
+        auto all = dftu_utils_test::ok(view_of(gz).collect().get());
         CHECK(all.num_rows() == RECORDS);
         CHECK(names_of(all) == paths);
         auto streamed = run(view_of(gz).lazy().collect());
         CHECK(streamed.num_rows() == RECORDS);
         CHECK(names_of(streamed) == paths);
 
-        CHECK(view_of(gz).duql(R"(op == "read")").collect().get().num_rows() ==
-              RECORDS / 3);
+        CHECK(dftu_utils_test::ok(
+                  view_of(gz).duql(R"(op == "read")").collect().get())
+                  .num_rows() == RECORDS / 3);
         std::int64_t deep = 0;
         for (int i = 0; i < RECORDS; ++i) deep += i * 4096 > 12000000 ? 1 : 0;
-        CHECK(
-            view_of(gz).duql("io.off > 12000000").collect().get().num_rows() ==
-            deep);
+        CHECK(dftu_utils_test::ok(
+                  view_of(gz).duql("io.off > 12000000").collect().get())
+                  .num_rows() == deep);
 
         dstd::Set<dstd::String> schema;
         for (const auto& c : view_of(gz).column_info())
@@ -118,7 +120,8 @@ TEST_SUITE("GenericView") {
                          .agg({{AggOp::Count, "", "n"},
                                {AggOp::Sum, "lat", "s"},
                                {AggOp::Max, "io.off", "m"}});
-            auto df = streamed ? run(v.lazy().collect()) : v.collect().get();
+            auto df = streamed ? run(v.lazy().collect())
+                               : dftu_utils_test::ok(v.collect().get());
             REQUIRE(df.num_rows() == 3);
             double total = 0;
             for (std::int64_t r = 0; r < 3; ++r) {
@@ -131,11 +134,11 @@ TEST_SUITE("GenericView") {
         }
 
         // `name` is a path of these records, not dftracer's event name.
-        auto by_name = view_of(gz)
-                           .group_by({GroupKey::name()})
-                           .agg({{AggOp::Count, "", "n"}})
-                           .collect()
-                           .get();
+        auto by_name = dftu_utils_test::ok(view_of(gz)
+                                               .group_by({GroupKey::name()})
+                                               .agg({{AggOp::Count, "", "n"}})
+                                               .collect()
+                                               .get());
         CHECK(by_name.num_rows() == 5);
         CHECK(bhas(by_name, "name"));
     }
@@ -178,7 +181,7 @@ TEST_SUITE("GenericView") {
              {dstd::String(dft),
               dstd::String(dstd::String(determine_index_path(dft, "")))}});
         try {
-            v.collect().get();
+            dftu_utils_test::ok(v.collect().get());
             FAIL("no error");
         } catch (const std::exception& e) {
             const dstd::String what = e.what();
@@ -192,7 +195,7 @@ TEST_SUITE("GenericView") {
         TestEnvironment env(10);
         write_ndjson(env, "d");
         View v = run(View::from_directory(dstd::String(env.dir())));
-        CHECK(v.collect().get().num_rows() == RECORDS);
+        CHECK(dftu_utils_test::ok(v.collect().get()).num_rows() == RECORDS);
     }
 
     TEST_CASE("files without records take no vote") {
@@ -211,10 +214,10 @@ TEST_SUITE("GenericView") {
         }
         // Unindexed, then indexed with each file's own detection.
         auto rows = [&] {
-            return run(View::from_directory(
-                           dstd::String(dstd::String(dir.str()))))
-                .collect()
-                .get()
+            return dftu_utils_test::ok(run(View::from_directory(dstd::String(
+                                               dstd::String(dir.str()))))
+                                           .collect()
+                                           .get())
                 .num_rows();
         };
         CHECK(rows() == 10);
@@ -227,7 +230,7 @@ TEST_SUITE("GenericView") {
         dftu_utils_test::FileOut(empty_env.dir() + "/a.pfw.gz");
         dftu_utils_test::FileOut(empty_env.dir() + "/b.pfw.gz");
         View empty = run(View::from_directory(dstd::String(empty_env.dir())));
-        CHECK(empty.collect().get().num_rows() == 0);
+        CHECK(dftu_utils_test::ok(empty.collect().get()).num_rows() == 0);
     }
 
     TEST_CASE(
@@ -236,7 +239,10 @@ TEST_SUITE("GenericView") {
         dftu_utils_test::FileOut(env.dir() + "/plain.jsonl.gz")
             << R"({"k":1})" << "\n";
         try {
-            run(View::from_directory(dstd::String(env.dir()))).collect().get();
+            dftu_utils_test::ok(
+                run(View::from_directory(dstd::String(env.dir())))
+                    .collect()
+                    .get());
             FAIL("no error");
         } catch (const std::exception& e) {
             CAPTURE(e.what());

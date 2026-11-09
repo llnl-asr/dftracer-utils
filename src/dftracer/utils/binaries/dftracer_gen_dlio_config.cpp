@@ -229,8 +229,13 @@ int main(int argc, char** argv) {
                 resolver_input.require_checkpoints = false;
                 const auto resolved =
                     index::build::Resolver{}(resolver_input).get();
+                if (!resolved) {
+                    DFTRACER_UTILS_LOG_ERROR("%s",
+                                             resolved.error().format().c_str());
+                    return 1;
+                }
                 dstd::Vector<dstd::String> files;
-                for (const auto& f : resolved.all_files) files.emplace_back(f);
+                for (const auto& f : resolved->all_files) files.emplace_back(f);
                 traces = utilities::dlio::load_aggregated_traces(
                     index_path, files, query_config, loader_opts);
             } catch (const std::exception& e) {

@@ -202,7 +202,8 @@ int PartitionRouter::open(dstd::StringView output_dir,
                           IpcCompression compression) {
     if (is_open_) return -1;
 
-    if (!dstd::fs::create_directories(dstd::PathView(output_dir))) return -1;
+    if (!dstd::fs::create_directories(dstd::PathView(output_dir)).has_value())
+        return -1;
 
     output_dir_ = output_dir;
     config_ = config;

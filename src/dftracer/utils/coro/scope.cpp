@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/coro/cancelled.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/fatal.h>
 
 #include <cstdlib>
 #include <exception>
@@ -45,32 +45,23 @@ bool Scope::stop_requested() const noexcept {
     return token && token->load(std::memory_order_acquire);
 }
 
-std::exception_ptr Scope::refusal() const {
+bool Scope::is_refused() const {
     if (closed_.load(std::memory_order_acquire)) {
-        return std::make_exception_ptr(common::DFTUtilsException(
-            common::ErrorCode::Pipeline,
-            "Cannot spawn coroutine: scope is closed"));
+        dstd::fatal("coro: a spawn into a closed scope");
     }
     if (executor_ == nullptr) {
-        return std::make_exception_ptr(common::DFTUtilsException(
-            common::ErrorCode::Pipeline,
-            "Cannot spawn coroutine: executor is not running"));
+        dstd::fatal("coro: a spawn into a scope without a running executor");
     }
     auto token = executor_->shutdown_token();
-    if (token && token->load(std::memory_order_acquire)) {
-        return std::make_exception_ptr(common::DFTUtilsException(
-            common::ErrorCode::Pipeline,
-            "Cannot spawn coroutine: executor is not running"));
-    }
-    return nullptr;
+    return token && token->load(std::memory_order_acquire);
 }
 
 bool Scope::admit() {
-    std::exception_ptr refused = refusal();
-    if (!refused) return true;
-    // Counted as spawned, so a refused spawn is still reported by join().
+    if (!is_refused()) return true;
+    // Counted as spawned, so a refused spawn still needs the join.
     spawned_.store(true, std::memory_order_release);
-    fail(std::move(refused));
+    note_child_stopped();
+    if (mode_ == ScopeMode::FailFast) request_stop();
     return false;
 }
 
@@ -81,48 +72,43 @@ void Scope::fail(std::exception_ptr error) noexcept {
     if (mode_ == ScopeMode::FailFast) request_stop();
 }
 
+void Scope::child_sink(void* scope, std::exception_ptr error) noexcept {
+    static_cast<Scope*>(scope)->child_failed(std::move(error));
+}
+
 void Scope::child_failed(std::exception_ptr error) noexcept {
-    if (!detail::is_cancelled_error(error)) {
-        fail(std::move(error));
-        return;
-    }
-    // The stop that ended this child is not its error, or a sibling's error
-    // would lose to it and a plain request_stop would fail the join.
+    fail(std::move(error));
+}
+
+void Scope::note_child_stopped() noexcept {
+    // The stop that ended this child is not an event, or a plain request_stop
+    // would stop the task that holds the scope. A stop from outside, such as
+    // at shutdown, is: the siblings get their own cancel, and a stop here
+    // would also end the ones that are not parked and would have finished.
     if (stop_.load(std::memory_order_acquire)) return;
-    // Cancelled from outside, such as at shutdown. Join still reports it, but
-    // the siblings get their own cancel, and a stop here would also end the
-    // ones that are not parked and would have finished.
-    if (!failed_.exchange(true, std::memory_order_acq_rel)) {
-        error_ = std::move(error);
-    }
+    child_stopped_.store(true, std::memory_order_release);
 }
 
 void Scope::start(detail::Coro& child) {
     join_.track(child);
+    auto& promise = child.handle().promise();
+    if (promise.exception_sink == nullptr) {
+        promise.exception_sink = &Scope::child_sink;
+        promise.sink_owner = this;
+    }
     spawned_.store(true, std::memory_order_release);
     child.handle().promise().executor = executor_;
     executor_->post(child.release());
 }
 
-void Scope::finish_join(bool self_join) {
-    if (self_join) {
-        throw common::DFTUtilsException(
-            common::ErrorCode::Pipeline,
-            "A task cannot join the scope that spawned it");
-    }
+void Scope::finish_join() noexcept {
     joined_ = true;
     close();
-    if (error_) common::rethrow_and_clear(error_);
 }
 
 detail::Coro Scope::run_child(CoroTask<void> task, Scope* scope) {
-    std::exception_ptr error;
-    try {
-        co_await std::move(task);
-    } catch (...) {
-        error = std::current_exception();
-    }
-    if (error) scope->child_failed(std::move(error));
+    auto outcome = co_await settle(std::move(task));
+    scope->finish_child(std::move(outcome));
 }
 
 }  // namespace dftracer::utils::coro

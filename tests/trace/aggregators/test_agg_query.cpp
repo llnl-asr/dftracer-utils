@@ -33,6 +33,7 @@
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <doctest/doctest.h>
 #include <mmix_lcg.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/aggregators/aggregation_oracle.h>
 
@@ -514,7 +515,7 @@ AggQueryResult run(const AggQuery& q) {
     Runtime& rt = shared_runtime();
     AggQueryResult out;
     dstd::String error;
-    rt.block_on(
+    dftu_utils_test::ok(rt.block_on(
         coro::named("agg-query",
                     coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
                         auto r = co_await trace::run_agg_query(q);
@@ -523,7 +524,7 @@ AggQueryResult run(const AggQuery& q) {
                         else
                             error = r.error().format();
                         co_return;
-                    })));
+                    }))));
     REQUIRE_MESSAGE(error.empty(), error);
     return out;
 }
@@ -781,7 +782,7 @@ TEST_SUITE("AggQuery") {
         dstd::StringIntern strings;
         trace::comparator::SideAggregate side;
         dstd::String error;
-        shared_runtime().block_on(coro::named(
+        dftu_utils_test::ok(shared_runtime().block_on(coro::named(
             "comparator-side",
             coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
                 auto r = co_await trace::comparator::aggregate_side(
@@ -793,7 +794,7 @@ TEST_SUITE("AggQuery") {
                 else
                     error = r.error().format();
                 co_return;
-            })));
+            }))));
         REQUIRE_MESSAGE(error.empty(), error);
         CHECK(side.metadata_chunks_reread == 0);
         CHECK(side.group_chunks_reread == 0);
@@ -1196,10 +1197,10 @@ TEST_SUITE("AggQuery") {
 
         auto indexer = dstd::make_shared<index::gzip::GzipIndexer>(
             fx->files[0], fx->index_path, std::size_t{512} << 10, true);
-        shared_runtime().block_on(
+        dftu_utils_test::ok(shared_runtime().block_on(
             coro::named("reindex", coro::with_scope([&](coro::Scope&) {
                             return indexer->build_async();
-                        })));
+                        }))));
 
         Ask ask;
         ask.window = FIVE_SECONDS_US;

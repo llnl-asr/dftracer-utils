@@ -314,7 +314,7 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
         dstd::Vector<FileDecision> decisions(input.files.size());
         std::exception_ptr failure;
         std::mutex failure_mutex;
-        default_runtime().parallel_for(
+        common::unwrap(default_runtime().parallel_for(
             static_cast<std::int64_t>(input.files.size()), DECIDE_GRAIN,
             [&](std::int64_t begin, std::int64_t end) {
                 try {
@@ -327,7 +327,7 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
                     std::lock_guard<std::mutex> lock(failure_mutex);
                     if (!failure) failure = std::current_exception();
                 }
-            });
+            }));
         if (failure) std::rethrow_exception(failure);
 
         dstd::Vector<dstd::Pair<FileWorkItem, bool>> agg_candidates;

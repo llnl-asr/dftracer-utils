@@ -6,6 +6,7 @@
 #include <dftracer/utils/trace/metadata_collector_utility.h>
 #include <doctest/doctest.h>
 #include <refused_lines.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <unistd.h>
 
@@ -27,7 +28,8 @@ TEST_SUITE("EventCollector") {
             MetadataCollectorUtilityInput::from_file(dstd::String(test_file))
                 .with_compute_hash(true);
         MetadataCollectorUtility meta_collector;
-        auto meta_output = meta_collector(meta_input).get();
+        auto meta_output =
+            dftu_utils_test::ok(meta_collector(meta_input).get());
 
         // Now collect events from metadata
         dstd::Vector<MetadataCollectorUtilityOutput> metadata_vec = {
@@ -37,7 +39,7 @@ TEST_SUITE("EventCollector") {
                 metadata_vec);
 
         EventCollectorFromMetadataUtility collector;
-        auto event_ids = collector(input).get();
+        auto event_ids = dftu_utils_test::ok(collector(input).get());
 
         // Verify we got events
         CHECK(event_ids.size() > 0);
@@ -67,18 +69,18 @@ TEST_SUITE("EventCollector") {
         const dstd::String gz = pfw + ".gz";
         REQUIRE(compress_file_to_gzip(pfw, gz));
 
-        auto meta_output =
+        auto meta_output = dftu_utils_test::ok(
             MetadataCollectorUtility()(
                 MetadataCollectorUtilityInput::from_file(dstd::String(gz))
                     .with_compute_hash(true))
-                .get();
+                .get());
         dstd::Vector<MetadataCollectorUtilityOutput> metadata_vec = {
             meta_output};
-        auto ids =
+        auto ids = dftu_utils_test::ok(
             EventCollectorFromMetadataUtility()(
                 EventCollectorFromMetadataCollectorUtilityInput::from_metadata(
                     metadata_vec))
-                .get();
+                .get());
 
         REQUIRE(ids.size() == 5 + REFUSED_KINDS);
         for (int i = 0; i < 5; ++i) {

@@ -13,6 +13,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <atomic>
 #include <chrono>
@@ -173,10 +174,20 @@ CoroTask<int> fan(S stage, int count) {
     co_return sum;
 }
 
+// The condition of the error a task raised, or of the error it gave as a
+// value.
 template <typename F>
 dstd::Condition condition_of(Runtime& runtime, F&& make_task) {
+    using R = decltype(runtime.block_on(make_task()));
     try {
-        runtime.block_on(make_task());
+        if constexpr (std::is_void_v<R>) {
+            runtime.block_on(make_task());
+        } else {
+            auto result = runtime.block_on(make_task());
+            if constexpr (requires { result.error().condition(); }) {
+                if (!result) return result.error().condition();
+            }
+        }
     } catch (const common::DFTUtilsException& e) {
         return e.condition();
     }
@@ -222,26 +233,31 @@ TEST_CASE("x | adaptor is adaptor(x) and joined adaptors apply in order") {
 
 TEST_CASE("then on a task takes a function, a task function and a stage") {
     Runtime runtime(2);
-    CHECK(runtime.block_on(value_task(4) | then([](int v) { return v + 1; })) ==
-          5);
-    CHECK(runtime.block_on(value_task(4) | then([](int v) {
-                               return value_task(v * 3);
-                           })) == 12);
-    CHECK(runtime.block_on(value_task(4) | then(Doubler{})) == 8);
-    CHECK(runtime.block_on(then(value_task(4), Doubler{})) == 8);
-    auto text = runtime.block_on(value_task(0) | then(ToText{}));
+    CHECK(dftu_utils_test::ok(runtime.block_on(
+              value_task(4) | then([](int v) { return v + 1; }))) == 5);
+    CHECK(dftu_utils_test::ok(runtime.block_on(value_task(4) | then([](int v) {
+                                                   return value_task(v * 3);
+                                               }))) == 12);
+    CHECK(dftu_utils_test::ok(
+              runtime.block_on(value_task(4) | then(Doubler{}))) == 8);
+    CHECK(dftu_utils_test::ok(
+              runtime.block_on(then(value_task(4), Doubler{}))) == 8);
+    auto text =
+        dftu_utils_test::ok(runtime.block_on(value_task(0) | then(ToText{})));
     CHECK(text == "zero");
 }
 
 TEST_CASE("then on a generator runs per item or on the whole stream") {
     Runtime runtime(2);
-    auto per_stage = runtime.block_on(collect(numbers(1, 3) | then(Doubler{})));
+    auto per_stage = dftu_utils_test::ok(
+        runtime.block_on(collect(numbers(1, 3) | then(Doubler{}))));
     REQUIRE(per_stage.size() == 3);
     CHECK(per_stage[2] == 6);
-    auto per_fn = runtime.block_on(
-        collect(numbers(1, 3) | then([](int v) { return v + 100; })));
+    auto per_fn = dftu_utils_test::ok(runtime.block_on(
+        collect(numbers(1, 3) | then([](int v) { return v + 100; }))));
     CHECK(per_fn[0] == 101);
-    auto whole = runtime.block_on(collect(numbers(1, 3) | then(TimesTen{})));
+    auto whole = dftu_utils_test::ok(
+        runtime.block_on(collect(numbers(1, 3) | then(TimesTen{}))));
     REQUIRE(whole.size() == 3);
     CHECK(whole[1] == 20);
 }
@@ -252,28 +268,30 @@ TEST_CASE("then on stages composes by kind and keeps the first name") {
     static_assert(BatchStage<decltype(batch)>);
     static_assert(std::is_same_v<decltype(batch)::Output, int>);
     CHECK(stage_name(batch) == "doubler");
-    CHECK(runtime.block_on(batch.run(2)) == 12);
+    CHECK(dftu_utils_test::ok(runtime.block_on(batch.run(2))) == 12);
 
     auto texty = Doubler{} | then(ToText{});
     static_assert(std::is_same_v<decltype(texty)::Output, dstd::String>);
-    CHECK(runtime.block_on(texty.run(0)) == "zero");
+    CHECK(dftu_utils_test::ok(runtime.block_on(texty.run(0))) == "zero");
 
     auto streams = TimesTen{} | then(PassStream{});
     static_assert(StreamStage<decltype(streams)>);
     CHECK(stage_name(streams) == "times_ten");
-    auto out = runtime.block_on(collect(streams.run(numbers(1, 3))));
+    auto out = dftu_utils_test::ok(
+        runtime.block_on(collect(streams.run(numbers(1, 3)))));
     REQUIRE(out.size() == 3);
     CHECK(out[2] == 30);
 
     auto mixed = TimesTen{} | then(Doubler{});
     static_assert(StreamStage<decltype(mixed)>);
-    auto per_item = runtime.block_on(collect(mixed.run(numbers(1, 3))));
+    auto per_item = dftu_utils_test::ok(
+        runtime.block_on(collect(mixed.run(numbers(1, 3)))));
     REQUIRE(per_item.size() == 3);
     CHECK(per_item[2] == 60);
 
     auto with_fn = Doubler{} | then([](int v) { return v + 1; });
     static_assert(BatchStage<decltype(with_fn)>);
-    CHECK(runtime.block_on(with_fn.run(5)) == 11);
+    CHECK(dftu_utils_test::ok(runtime.block_on(with_fn.run(5))) == 11);
 }
 
 TEST_CASE("recover hands the error to the handler") {
@@ -283,15 +301,18 @@ TEST_CASE("recover hands the error to the handler") {
         seen = error.condition();
         return -5;
     };
-    CHECK(runtime.block_on(failing_task() | recover(handler)) == -5);
+    CHECK(dftu_utils_test::ok(
+              runtime.block_on(failing_task() | recover(handler))) == -5);
     CHECK(seen == dstd::Condition::Io);
-    CHECK(runtime.block_on(failing_task() | recover(counting_handler)) == -1);
+    CHECK(dftu_utils_test::ok(runtime.block_on(
+              failing_task() | recover(counting_handler))) == -1);
     g_handler_calls = 0;
-    CHECK(runtime.block_on(value_task(3) | recover(counting_handler)) == 3);
+    CHECK(dftu_utils_test::ok(runtime.block_on(
+              value_task(3) | recover(counting_handler))) == 3);
     CHECK(g_handler_calls.load() == 0);
     auto guarded = Failing{} | recover([](dstd::Error) { return 9; });
     static_assert(BatchStage<decltype(guarded)>);
-    CHECK(runtime.block_on(guarded.run(1)) == 9);
+    CHECK(dftu_utils_test::ok(runtime.block_on(guarded.run(1))) == 9);
 }
 
 TEST_CASE("recover does not swallow a cancel") {
@@ -305,20 +326,17 @@ TEST_CASE("recover does not swallow a cancel") {
     CHECK(g_handler_calls.load() == 0);
 
     bool cancelled = false;
-    runtime.block_on([&]() -> CoroTask<void> {
+    dftu_utils_test::ok(runtime.block_on([&]() -> CoroTask<void> {
         Scope scope;
         auto waiting = scope.spawn_future([]() -> CoroTask<int> {
             return slow_value(30s, 1) | recover(counting_handler);
         });
         co_await sleep(5ms);
         scope.request_stop();
-        try {
-            co_await waiting;
-        } catch (const common::DFTUtilsException& e) {
-            cancelled = is_cancelled(e);
-        }
+        auto settled = co_await settle_in_place(waiting);
+        cancelled = settled.stopped;
         co_await scope.join();
-    }());
+    }()));
     CHECK(cancelled);
     CHECK(g_handler_calls.load() == 0);
 }
@@ -340,7 +358,9 @@ TEST_CASE("wrappers keep the kind and the outermost name wins") {
     CHECK(stage_name(Doubler{}) == "doubler");
 
     Runtime runtime(2);
-    CHECK(runtime.block_on(outer_last.run(4)) == 8);
+    auto bounded = runtime.block_on(outer_last.run(4));
+    REQUIRE(bounded);
+    CHECK(*bounded == 8);
 }
 
 TEST_CASE("limit never exceeds n and frees its permit after an error") {
@@ -349,12 +369,12 @@ TEST_CASE("limit never exceeds n and frees its permit after an error") {
     g_peak = 0;
     auto limited = Gauge{} | limit(2);
     auto copy = limited;
-    runtime.block_on([&]() -> CoroTask<void> {
+    dftu_utils_test::ok(runtime.block_on([&]() -> CoroTask<void> {
         auto a = fan(limited, 10);
         auto b = fan(copy, 10);
         auto both = co_await when_all(std::move(a), std::move(b));
         (void)both;
-    }());
+    }()));
     CHECK(g_peak.load() == 2);
     CHECK(g_active.load() == 0);
 
@@ -364,14 +384,12 @@ TEST_CASE("limit never exceeds n and frees its permit after an error") {
             runtime, [&] { return with_timeout(single.run(1), 2s); });
         CHECK(condition == dstd::Condition::Io);
     }
-
-    CHECK_THROWS_AS(limit(0), common::DFTUtilsException);
 }
 
 TEST_CASE("a stream frees its limit slot when it is dropped early") {
     Runtime runtime(2);
     auto limited = PassStream{} | limit(1);
-    runtime.block_on([&]() -> CoroTask<void> {
+    dftu_utils_test::ok(runtime.block_on([&]() -> CoroTask<void> {
         {
             auto stream = limited.run(numbers(0, 100));
             auto first = co_await stream.next();
@@ -379,8 +397,9 @@ TEST_CASE("a stream frees its limit slot when it is dropped early") {
         }
         auto all =
             co_await with_timeout(collect(limited.run(numbers(0, 3))), 2s);
-        CHECK(all.size() == 3);
-    }());
+        REQUIRE(all);
+        CHECK(all->size() == 3);
+    }()));
 }
 
 TEST_CASE("timeout ends a slow batch stage and a slow task") {
@@ -393,8 +412,9 @@ TEST_CASE("timeout ends a slow batch stage and a slow task") {
               return slow_value(30s, 1) | timeout(10ms);
           }) == dstd::Condition::Timeout);
     CHECK(std::chrono::steady_clock::now() - start < 5s);
-    auto chained = Doubler{} | timeout(5s) | then(Tripler{});
-    CHECK(runtime.block_on(chained.run(1)) == 6);
+    auto chained = Doubler{} | timeout(5s) |
+                   then([](dstd::Result<int> doubled) { return *doubled * 3; });
+    CHECK(dftu_utils_test::ok(runtime.block_on(chained.run(1))) == 6);
 }
 
 TEST_CASE("maybe applies the adaptor or passes the value through") {
@@ -402,10 +422,12 @@ TEST_CASE("maybe applies the adaptor or passes the value through") {
     CHECK((5 | maybe(true, add_one)) == 6);
     CHECK((5 | maybe(false, add_one)) == 5);
     Runtime runtime(2);
-    CHECK(runtime.block_on(value_task(1) | maybe(true, timeout(5s))) == 1);
-    CHECK(runtime.block_on(value_task(1) | maybe(false, timeout(5s))) == 1);
-    auto out = runtime.block_on(collect(numbers(0, 3) | maybe(true, limit(1)) |
-                                        maybe(false, limit(1))));
+    CHECK(dftu_utils_test::ok(
+              runtime.block_on(value_task(1) | maybe(true, limit(1)))) == 1);
+    CHECK(dftu_utils_test::ok(
+              runtime.block_on(value_task(1) | maybe(false, limit(1)))) == 1);
+    auto out = dftu_utils_test::ok(runtime.block_on(collect(
+        numbers(0, 3) | maybe(true, limit(1)) | maybe(false, limit(1)))));
     CHECK(out.size() == 3);
 }
 
@@ -428,8 +450,8 @@ TEST_CASE("either holds only the chosen side") {
 
 TEST_CASE("co_await on an Either of tasks gives an Either of values") {
     Runtime runtime(2);
-    CHECK(runtime.block_on(await_either(true)));
-    CHECK(runtime.block_on(await_either(false)));
+    CHECK(dftu_utils_test::ok(runtime.block_on(await_either(true))));
+    CHECK(dftu_utils_test::ok(runtime.block_on(await_either(false))));
 }
 
 TEST_CASE("an Either of stages works where a stage is taken") {
@@ -437,27 +459,29 @@ TEST_CASE("an Either of stages works where a stage is taken") {
     auto same = either(true, Doubler{}, Tripler{});
     auto composed = same | then([](int v) { return v + 1; });
     static_assert(BatchStage<decltype(composed)>);
-    CHECK(runtime.block_on(composed.run(5)) == 11);
+    CHECK(dftu_utils_test::ok(runtime.block_on(composed.run(5))) == 11);
     auto other = either(false, Doubler{}, Tripler{}) | named("pick");
     CHECK(stage_name(other) == "pick");
-    CHECK(runtime.block_on(other.run(5)) == 15);
+    CHECK(dftu_utils_test::ok(runtime.block_on(other.run(5))) == 15);
 
     auto mixed = as_stage(either(false, Doubler{}, ToText{}));
     static_assert(std::is_same_v<decltype(mixed)::Output,
                                  dstd::Either<int, dstd::String>>);
-    auto picked = runtime.block_on(mixed.run(0));
+    auto picked = dftu_utils_test::ok(runtime.block_on(mixed.run(0)));
     REQUIRE(picked.is_right());
     CHECK(picked.right() == "zero");
-    auto left =
-        runtime.block_on(as_stage(either(true, Doubler{}, ToText{})).run(4));
+    auto left = dftu_utils_test::ok(
+        runtime.block_on(as_stage(either(true, Doubler{}, ToText{})).run(4)));
     REQUIRE(left.is_left());
     CHECK(left.left() == 8);
     CHECK(stage_name(mixed) == "to_text");
 
     auto limited = either(true, Doubler{}, Tripler{}) | limit(1) | timeout(5s);
-    CHECK(runtime.block_on(limited.run(2)) == 4);
+    auto bounded = runtime.block_on(limited.run(2));
+    REQUIRE(bounded);
+    CHECK(*bounded == 4);
     auto erased = erase(either(false, Doubler{}, Tripler{}));
-    CHECK(runtime.block_on(erased.run(2)) == 6);
+    CHECK(dftu_utils_test::ok(runtime.block_on(erased.run(2))) == 6);
 }
 
 TEST_CASE("erase moves, runs and forwards the name") {
@@ -468,7 +492,7 @@ TEST_CASE("erase moves, runs and forwards the name") {
     static_assert(std::is_nothrow_move_constructible_v<decltype(erased)>);
     CHECK(stage_name(erased) == "doubler");
     auto moved = std::move(erased);
-    CHECK(runtime.block_on(moved.run(21)) == 42);
+    CHECK(dftu_utils_test::ok(runtime.block_on(moved.run(21))) == 42);
 
     auto wrapped = erase(Doubler{} | named("custom"));
     CHECK(stage_name(wrapped) == "custom");
@@ -477,21 +501,25 @@ TEST_CASE("erase moves, runs and forwards the name") {
     static_assert(StreamStage<decltype(stream)>);
     CHECK(stage_name(stream) == "times_ten");
     auto stream_moved = std::move(stream);
-    auto out = runtime.block_on(collect(stream_moved.run(numbers(1, 3))));
+    auto out = dftu_utils_test::ok(
+        runtime.block_on(collect(stream_moved.run(numbers(1, 3)))));
     REQUIRE(out.size() == 3);
     CHECK(out[2] == 30);
 
     auto chained = erase(Doubler{}) | then(Tripler{});
-    CHECK(runtime.block_on(chained.run(1)) == 6);
+    CHECK(dftu_utils_test::ok(runtime.block_on(chained.run(1))) == 6);
 }
 
 TEST_CASE("a move-only value passes through then and erase") {
     Runtime runtime(2);
-    CHECK(runtime.block_on(boxed(4) | then(SumBox{})) == 5);
+    CHECK(dftu_utils_test::ok(runtime.block_on(boxed(4) | then(SumBox{}))) ==
+          5);
     auto erased = erase(SumBox{});
-    CHECK(runtime.block_on(erased.run(dstd::make_unique<int>(9))) == 10);
+    CHECK(dftu_utils_test::ok(
+              runtime.block_on(erased.run(dstd::make_unique<int>(9)))) == 10);
     auto composed = SumBox{} | then(Doubler{});
-    CHECK(runtime.block_on(composed.run(dstd::make_unique<int>(1))) == 4);
+    CHECK(dftu_utils_test::ok(
+              runtime.block_on(composed.run(dstd::make_unique<int>(1)))) == 4);
 }
 
 TEST_CASE("timeout bounds each item of a stream") {
@@ -504,23 +532,24 @@ TEST_CASE("timeout bounds each item of a stream") {
     dstd::Condition condition = dstd::Condition::Unknown;
     int seen = 0;
     const auto start = std::chrono::steady_clock::now();
-    try {
-        runtime.block_on([&]() -> CoroTask<void> {
-            auto stream = slow_stream() | timeout(20ms);
-            for (;;) {
-                auto item = co_await stream.next();
-                if (!item) break;
-                ++seen;
+    dftu_utils_test::ok(runtime.block_on([&]() -> CoroTask<void> {
+        auto stream = slow_stream() | timeout(20ms);
+        for (;;) {
+            auto item = co_await stream.next();
+            if (!item) break;
+            if (!*item) {
+                condition = item->error().condition();
+                break;
             }
-        }());
-    } catch (const common::DFTUtilsException& e) {
-        condition = e.condition();
-    }
+            ++seen;
+        }
+    }()));
     CHECK(seen == 1);
     CHECK(condition == dstd::Condition::Timeout);
     CHECK(std::chrono::steady_clock::now() - start < 400ms);
 
-    auto fast = runtime.block_on(collect(numbers(0, 100) | timeout(5s)));
+    auto fast = dftu_utils_test::ok(
+        runtime.block_on(collect(numbers(0, 100) | timeout(5s))));
     CHECK(fast.size() == 100);
 }
 
@@ -528,26 +557,29 @@ TEST_CASE("timeout keeps a stream stage a stream stage") {
     Runtime runtime(2);
     auto bounded = PassStream{} | timeout(5s);
     static_assert(StreamStage<decltype(bounded)>);
-    auto out = runtime.block_on(collect(bounded.run(numbers(0, 6))));
+    auto out = dftu_utils_test::ok(
+        runtime.block_on(collect(bounded.run(numbers(0, 6)))));
     CHECK(out.size() == 6);
 }
 
 TEST_CASE("then takes a move-only stage and its adaptor applies many times") {
     Runtime runtime(2);
     auto triple = then(erase(Tripler{}));
-    CHECK(runtime.block_on(value_task(2) | triple) == 6);
+    CHECK(dftu_utils_test::ok(runtime.block_on(value_task(2) | triple)) == 6);
     auto composed = Doubler{} | triple;
     static_assert(BatchStage<decltype(composed)>);
-    CHECK(runtime.block_on(composed.run(1)) == 6);
-    auto per_item = runtime.block_on(collect(numbers(1, 2) | triple));
+    CHECK(dftu_utils_test::ok(runtime.block_on(composed.run(1))) == 6);
+    auto per_item =
+        dftu_utils_test::ok(runtime.block_on(collect(numbers(1, 2) | triple)));
     REQUIRE(per_item.size() == 2);
     CHECK(per_item[1] == 6);
 
     auto stream_next = PassStream{} | then(erase(PassStream{}));
     static_assert(StreamStage<decltype(stream_next)>);
-    auto passed = runtime.block_on(collect(stream_next.run(numbers(0, 3))));
+    auto passed = dftu_utils_test::ok(
+        runtime.block_on(collect(stream_next.run(numbers(0, 3)))));
     CHECK(passed.size() == 3);
 
     auto two_arg = then(Doubler{}, erase(Tripler{}));
-    CHECK(runtime.block_on(two_arg.run(1)) == 6);
+    CHECK(dftu_utils_test::ok(runtime.block_on(two_arg.run(1))) == 6);
 }

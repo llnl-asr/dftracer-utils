@@ -8,6 +8,7 @@
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 using namespace dftracer::utils;
@@ -52,8 +53,8 @@ TEST_SUITE("AsyncStreamingGzLineGenerator") {
         append_member(file, "line6\n");
         const dstd::String path = write_gz(file);
 
-        auto lines =
-            collect_lines(async_streaming_gz_lines(dstd::String(path))).get();
+        auto lines = dftu_utils_test::ok(
+            collect_lines(async_streaming_gz_lines(dstd::String(path))).get());
         REQUIRE(lines.size() == 6);
         CHECK(lines[0] == "line1");
         CHECK(lines[2] == "line3");
@@ -67,9 +68,9 @@ TEST_SUITE("AsyncStreamingGzLineGenerator") {
         append_member(file, "d\ne\nf\n");
         const dstd::String path = write_gz(file);
 
-        auto lines =
+        auto lines = dftu_utils_test::ok(
             collect_lines(async_streaming_gz_lines(dstd::String(path), 2, 5))
-                .get();
+                .get());
         REQUIRE(lines.size() == 4);
         CHECK(lines.front() == "b");
         CHECK(lines.back() == "e");
@@ -81,8 +82,8 @@ TEST_SUITE("AsyncStreamingGzLineGenerator") {
         append_member(file, "z");  // no trailing newline
         const dstd::String path = write_gz(file);
 
-        auto lines =
-            collect_lines(async_streaming_gz_lines(dstd::String(path))).get();
+        auto lines = dftu_utils_test::ok(
+            collect_lines(async_streaming_gz_lines(dstd::String(path))).get());
         REQUIRE(lines.size() == 3);
         CHECK(lines.back() == "z");
     }
@@ -92,8 +93,8 @@ TEST_SUITE("AsyncStreamingGzLineGenerator") {
         append_member(file, "only1\nonly2\n");
         const dstd::String path = write_gz(file);
 
-        auto lines =
-            collect_lines(async_streaming_gz_lines(dstd::String(path))).get();
+        auto lines = dftu_utils_test::ok(
+            collect_lines(async_streaming_gz_lines(dstd::String(path))).get());
         REQUIRE(lines.size() == 2);
         CHECK(lines[0] == "only1");
         CHECK(lines[1] == "only2");

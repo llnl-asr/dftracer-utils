@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -878,7 +879,8 @@ TEST_SUITE("AggParity") {
         for (const auto& q : queries) {
             SUBCASE(q.file) {
                 View base = View::from_files(view_files(fx.baseline_files));
-                const dataframe::DataFrame t = q.build(base).collect().get();
+                const dataframe::DataFrame t =
+                    dftu_utils_test::ok(q.build(base).collect().get());
                 const dstd::String produced = table_text(t, q.keys);
                 const dstd::String ref = reference(q.file, produced);
                 if (!ref.empty()) compare_table(q.file, ref, produced, q.keys);

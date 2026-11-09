@@ -341,9 +341,10 @@ void ensure_indexes_fresh(const dstd::Vector<ViewFile>& files) {
         in.require_checkpoints = true;
         for (const auto& p : pending)
             in.files.emplace_back(dstd::StringView(p.file));
-        index::build::ResolverResult result = default_runtime().block_on(
-            coro::named("view_index_freshness",
-                        index::build::resolve_and_build_index(std::move(in))));
+        index::build::ResolverResult result =
+            common::unwrap(default_runtime().block_on(coro::named(
+                "view_index_freshness",
+                index::build::resolve_and_build_index(std::move(in)))));
         if (!result.failures.empty())
             throw common::DFTUtilsException::cat(
                 common::ErrorCode::Io, "index of ",
@@ -419,10 +420,11 @@ dstd::Vector<TraceConfig> config(const ScanPlan& plan) {
             dstd::String buf;
             void write(dstd::StringView d) override { buf.append(d); }
         } sink;
-        export_json(filter(from_file(f.file_path, f.index_path),
-                           duql::parse_or_throw(R"(name == "end")")),
-                    sink)
-            .get();
+        common::unwrap(
+            export_json(filter(from_file(f.file_path, f.index_path),
+                               duql::parse_or_throw(R"(name == "end")")),
+                        sink)
+                .get());
         std::size_t pos = 0;
         while (pos < sink.buf.size()) {
             std::size_t nl = sink.buf.find('\n', pos);
@@ -499,38 +501,42 @@ ColTypeMap harvest_column_types(const ViewPlan& plan) {
 
     if (!roots.empty()) {
         const auto n = static_cast<std::int64_t>(roots.size());
-        ColTypeMap harvested = default_runtime().parallel_reduce<ColTypeMap>(
-            n, 1, ColTypeMap{},
-            [&](std::int64_t begin, std::int64_t end) {
-                ColTypeMap local;
-                for (std::int64_t i = begin; i < end; ++i) {
-                    const index::Snapshot snapshot = common::unwrap(
-                        snapshot_of(plan, roots[static_cast<std::size_t>(i)]));
-                    for (const dstd::String& logical :
-                         root_files[static_cast<std::size_t>(i)]) {
-                        const auto file = snapshot.file(logical);
-                        if (!file) continue;
-                        ColTypeMap one;
-                        for (auto& [path, t] : common::unwrap(
-                                 index::file_column_types(snapshot, *file))) {
-                            dstd::StringView name(path.data(), path.size());
-                            if (name.starts_with("args."))
-                                name.remove_prefix(5);
-                            auto [at, fresh] =
-                                one.emplace(dstd::String(name), t);
-                            if (!fresh)
-                                at->second = index::store::merge_column_type(
-                                    at->second, t);
+        ColTypeMap harvested =
+            common::unwrap(default_runtime().parallel_reduce<ColTypeMap>(
+                n, 1, ColTypeMap{},
+                [&](std::int64_t begin, std::int64_t end) {
+                    ColTypeMap local;
+                    for (std::int64_t i = begin; i < end; ++i) {
+                        const index::Snapshot snapshot =
+                            common::unwrap(snapshot_of(
+                                plan, roots[static_cast<std::size_t>(i)]));
+                        for (const dstd::String& logical :
+                             root_files[static_cast<std::size_t>(i)]) {
+                            const auto file = snapshot.file(logical);
+                            if (!file) continue;
+                            ColTypeMap one;
+                            for (auto& [path, t] :
+                                 common::unwrap(index::file_column_types(
+                                     snapshot, *file))) {
+                                dstd::StringView name(path.data(), path.size());
+                                if (name.starts_with("args."))
+                                    name.remove_prefix(5);
+                                auto [at, fresh] =
+                                    one.emplace(dstd::String(name), t);
+                                if (!fresh)
+                                    at->second =
+                                        index::store::merge_column_type(
+                                            at->second, t);
+                            }
+                            fold_col_map(local, one);
                         }
-                        fold_col_map(local, one);
                     }
-                }
-                return local;
-            },
-            [](ColTypeMap a, ColTypeMap b) {
-                fold_col_map(a, b);
-                return a;
-            });
+                    return local;
+                },
+                [](ColTypeMap a, ColTypeMap b) {
+                    fold_col_map(a, b);
+                    return a;
+                }));
         fold_col_map(merged, harvested);
     }
     return merged;
@@ -658,10 +664,10 @@ void ensure_catalog(const ScanPlan& plan) {
     snapshots.clear();
     if (only->files.empty()) return;
     dftracer::utils::dstd::StringIntern intern;
-    default_runtime().block_on(
+    common::unwrap(default_runtime().block_on(
         coro::named("view_ensure_catalog", [&]() -> coro::CoroTask<void> {
             co_await detail::run_folds(*only, {}, intern, nullptr, nullptr);
-        }()));
+        }())));
 }
 
 dstd::Vector<SchemaLeaf> schema_tree(const ScanPlan& plan) {
@@ -690,11 +696,11 @@ dstd::Vector<SchemaLeaf> catalog_tree(const ScanPlan& plan) {
         dftracer::utils::dstd::StringIntern intern;
         index::extensions::CatalogFold fold(intern, 0, false);
         const dstd::Vector<detail::Fold*> folds{&fold};
-        default_runtime().block_on(
+        common::unwrap(default_runtime().block_on(
             coro::named("view_scan_catalog", [&]() -> coro::CoroTask<void> {
                 co_await detail::run_folds(*past_pin, folds, intern, nullptr,
                                            nullptr);
-            }()));
+            }())));
         for (const auto& [path, stat] : fold.paths())
             index::extensions::add_path_stat(merged, path, stat);
     }

@@ -9,6 +9,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
+#include <task_result.h>
 #include <trace/views/test_view_common.h>
 
 #include <cstdint>
@@ -50,13 +51,14 @@ inline dftracer::utils::dataframe::DataFrame count_by_name(
             .group_by({dftracer::utils::trace::views::GroupKey::name()})
             .agg({{dftracer::utils::trace::views::AggOp::Count, "", "n"}});
     dftracer::utils::dataframe::DataFrame out;
-    dftracer::utils::default_runtime().block_on(dftracer::utils::coro::named(
-        "bootstrap-parallelism",
-        dftracer::utils::coro::with_scope(
-            [&](dftracer::utils::coro::Scope&)
-                -> dftracer::utils::coro::CoroTask<void> {
-                out = co_await view.collect();
-            })));
+    dftu_utils_test::ok(dftracer::utils::default_runtime().block_on(
+        dftracer::utils::coro::named(
+            "bootstrap-parallelism",
+            dftracer::utils::coro::with_scope(
+                [&](dftracer::utils::coro::Scope&)
+                    -> dftracer::utils::coro::CoroTask<void> {
+                    out = co_await view.collect();
+                }))));
     return out;
 }
 

@@ -486,7 +486,7 @@ dstd::Expected<std::size_t, dstd::Error> move_data_files(dstd::StringView from,
     const dstd::PathView from_dir(from);
     const dstd::PathView to_dir(to);
     const auto made = dstd::fs::create_directories(to_dir);
-    if (!made) {
+    if (!made.has_value()) {
         return io_error("store: cannot create the directory ", to,
                         made.error().message());
     }
@@ -1348,7 +1348,8 @@ dstd::Expected<DataFileReader, dstd::Error> DataFileReader::open(
     if (file_size < FILE_HEADER_BYTES) return parse_error();
 
     auto direct = direct_reads_wanted();
-    if (!direct) return dstd::Unexpected<dstd::Error>(direct.error());
+    if (!direct.has_value())
+        return dstd::Unexpected<dstd::Error>(direct.error());
 
     DataFileReader reader;
     reader.file_ = std::move(*opened);
@@ -1363,7 +1364,8 @@ dstd::Expected<DataFileReader, dstd::Error> DataFileReader::open(
     // One bounded read of the file end.
     if (footer == FooterItems::Directory) {
         auto light = reader.open_light(file_size);
-        if (!light) return dstd::Unexpected<dstd::Error>(light.error());
+        if (!light.has_value())
+            return dstd::Unexpected<dstd::Error>(light.error());
         if (*light) return reader;
     }
 
@@ -1610,7 +1612,8 @@ dstd::Expected<void, dstd::Error> DataFileReader::read_at(
     const dstd::File& file, std::uint64_t offset, std::size_t length,
     std::uint8_t* dest, BlockReads* reads) const {
     auto direct = read_direct(offset, length, dest, reads);
-    if (!direct) return dstd::Unexpected<dstd::Error>(direct.error());
+    if (!direct.has_value())
+        return dstd::Unexpected<dstd::Error>(direct.error());
     if (*direct) return {};
     std::size_t done = 0;
     while (done < length) {
@@ -1679,11 +1682,13 @@ dstd::Expected<DataFileReader, dstd::Error> DataFileReader::from_summary(
     reader.path_.assign(path.data(), path.size());
     reader.open_mutex_ = dstd::make_unique<std::mutex>();
     auto direct = direct_reads_wanted();
-    if (!direct) return dstd::Unexpected<dstd::Error>(direct.error());
+    if (!direct.has_value())
+        return dstd::Unexpected<dstd::Error>(direct.error());
     if (*direct) reader.direct_ = dstd::make_unique<DirectReads>();
     auto applied =
         reader.apply_footer(entry.footer, entry.sequence, entry.needed_bytes);
-    if (!applied) return dstd::Unexpected<dstd::Error>(applied.error());
+    if (!applied.has_value())
+        return dstd::Unexpected<dstd::Error>(applied.error());
     if (!*applied) return parse_error();
     return reader;
 }

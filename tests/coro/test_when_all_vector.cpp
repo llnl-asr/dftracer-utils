@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <coro/stopped.h>
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/coro/cancelled.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/coro/when_any.h>
@@ -10,6 +10,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <atomic>
 #include <coroutine>
@@ -56,20 +57,15 @@ CoroTask<void> count_yielded(std::atomic<int>* ran) {
     co_return;
 }
 
-// Ends at once as cancelled, as a stopped child does.
-struct CancelledAtOnce {
-    using result_type = int;
-
-    bool await_ready() const noexcept { return true; }
-    void await_suspend(std::coroutine_handle<>) const noexcept {}
-    int await_resume() const noexcept { return 0; }
-    bool cancelled() const noexcept { return true; }
-};
+CoroTask<int> stopped_at_once() {
+    co_await stop_here();
+    co_return 0;
+}
 
 template <typename Body>
 void run_on_pool(Body& body) {
     Runtime rt(4);
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
 }
 
 }  // namespace
@@ -230,22 +226,16 @@ TEST_CASE("when_any delivers the exception of a winner that threw") {
     CHECK(other.load() == 0);
 }
 
-TEST_CASE("when_any reports a cancelled winner") {
-    std::atomic<int> cancelled{0};
-    std::atomic<int> other{0};
-    auto body = [&cancelled, &other]() -> CoroTask<void> {
-        dstd::Vector<CancelledAtOnce> children(2);
-        try {
-            co_await when_any(std::move(children));
-        } catch (const common::DFTUtilsException& e) {
-            if (is_cancelled(e)) {
-                cancelled.fetch_add(1);
-            } else {
-                other.fetch_add(1);
-            }
-        }
+TEST_CASE("when_any stops its task when the winner stopped") {
+    Runtime rt(4);
+    std::atomic<int> resumed{0};
+    auto body = [&resumed]() -> CoroTask<void> {
+        dstd::Vector<CoroTask<int>> children;
+        children.push_back(stopped_at_once());
+        children.push_back(stopped_at_once());
+        co_await when_any(std::move(children));
+        resumed.fetch_add(1);
     };
-    run_on_pool(body);
-    CHECK(cancelled.load() == 1);
-    CHECK(other.load() == 0);
+    CHECK(dftu_utils_test::ok(rt.block_on(coro_test::ended_stopped(body()))));
+    CHECK(resumed.load() == 0);
 }

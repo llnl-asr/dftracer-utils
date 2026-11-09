@@ -26,6 +26,7 @@
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <chrono>
@@ -81,9 +82,9 @@ dataframe::DataFrame counters_of(const dstd::Vector<dstd::String>& traces) {
     dstd::Vector<trace::views::ViewFile> files;
     for (const auto& t : traces)
         files.push_back({dstd::String(t), dstd::String(index_of(t))});
-    return trace::views::View::from_files(std::move(files))
-        .collect_typed()
-        .get()
+    return dftu_utils_test::ok(trace::views::View::from_files(std::move(files))
+                                   .collect_typed()
+                                   .get())
         .counters;
 }
 
@@ -162,12 +163,13 @@ double count_reads(const dstd::Vector<dstd::String>& traces) {
     dstd::Vector<trace::views::ViewFile> files;
     for (const auto& t : traces)
         files.push_back({dstd::String(t), dstd::String(index_of(t))});
-    const auto df = trace::views::View::from_files(std::move(files))
-                        .phase(trace::views::Phase::Events)
-                        .group_by({trace::views::GroupKey::name()})
-                        .agg({{trace::views::AggOp::Count, "", "n"}})
-                        .collect()
-                        .get();
+    const auto df =
+        dftu_utils_test::ok(trace::views::View::from_files(std::move(files))
+                                .phase(trace::views::Phase::Events)
+                                .group_by({trace::views::GroupKey::name()})
+                                .agg({{trace::views::AggOp::Count, "", "n"}})
+                                .collect()
+                                .get());
     REQUIRE(df.num_rows() == 1);
     for (std::size_t i = 0; i < df.names.size(); ++i)
         if (df.names[i] == "n") {

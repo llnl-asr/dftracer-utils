@@ -24,6 +24,7 @@
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <algorithm>
@@ -260,10 +261,11 @@ TEST_SUITE("CountersColumns") {
         Indexer::open({dstd::String(dstd::StringView(gz))},
                       with_aggregation(idx))
             .build();
-        const auto typed = trace::views::View::from_files(
-                               {{dstd::String(gz), dstd::String(idx)}})
-                               .collect_typed()
-                               .get();
+        const auto typed =
+            dftu_utils_test::ok(trace::views::View::from_files(
+                                    {{dstd::String(gz), dstd::String(idx)}})
+                                    .collect_typed()
+                                    .get());
         check_against(typed.counters, expected_groups());
 
         // The trace spans several chunks, and the counters still come out as
@@ -281,10 +283,11 @@ TEST_SUITE("CountersColumns") {
         Indexer::open({dstd::String(dstd::StringView(gz))},
                       with_aggregation(idx))
             .build();
-        const auto whole = trace::views::View::from_files(
-                               {{dstd::String(gz), dstd::String(idx)}})
-                               .collect_typed()
-                               .get();
+        const auto whole =
+            dftu_utils_test::ok(trace::views::View::from_files(
+                                    {{dstd::String(gz), dstd::String(idx)}})
+                                    .collect_typed()
+                                    .get());
         check_against(whole.counters, expected_groups());
 
         // The split falls on the second shard the groups name, so both halves
@@ -301,14 +304,16 @@ TEST_SUITE("CountersColumns") {
         CHECK_FALSE(lo.empty());
         CHECK_FALSE(hi.empty());
 
-        const auto first = trace::views::View::from_files(
-                               {{dstd::String(gz), dstd::String(idx)}})
-                               .collect_typed(0, boundary)
-                               .get();
-        const auto second = trace::views::View::from_files(
-                                {{dstd::String(gz), dstd::String(idx)}})
-                                .collect_typed(boundary, 4096)
-                                .get();
+        const auto first =
+            dftu_utils_test::ok(trace::views::View::from_files(
+                                    {{dstd::String(gz), dstd::String(idx)}})
+                                    .collect_typed(0, boundary)
+                                    .get());
+        const auto second =
+            dftu_utils_test::ok(trace::views::View::from_files(
+                                    {{dstd::String(gz), dstd::String(idx)}})
+                                    .collect_typed(boundary, 4096)
+                                    .get());
         check_against(first.counters, lo);
         check_against(second.counters, hi);
 

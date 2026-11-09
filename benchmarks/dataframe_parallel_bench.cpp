@@ -43,7 +43,12 @@ namespace {
 // runtime; the bench installs its own thread backend but the runtime itself
 // is single-threaded here, so this just blocks for the result.
 DataFrame run(dftracer::utils::coro::CoroTask<DataFrame> t) {
-    return dftracer::utils::default_runtime().submit(std::move(t)).get();
+    auto result = dftracer::utils::default_runtime().submit(std::move(t)).get();
+    if (!result.has_value()) {
+        std::fprintf(stderr, "run: %s\n", result.error().c_str());
+        std::exit(1);
+    }
+    return std::move(*result);
 }
 
 int g_threads = 1;

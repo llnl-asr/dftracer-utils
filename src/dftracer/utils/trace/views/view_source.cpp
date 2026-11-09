@@ -17,6 +17,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -354,13 +355,19 @@ dstd::Optional<Pushable> translate_pred(
     return Pushable{std::move(*leaf), true};
 }
 
-coro::detail::Coro run_detached(coro::CoroTask<void> task,
-                                dstd::SharedPtr<dstd::Promise<void>> done) {
-    try {
-        co_await std::move(task);
-        done->set_value();
-    } catch (...) {
-        done->set_exception(std::current_exception());
+coro::detail::Coro run_detached(
+    coro::CoroTask<void> task,
+    dstd::SharedPtr<dstd::Promise<dstd::Result<void>>> done,
+    dstd::SharedFuture<dstd::Result<void>> fut) {
+    auto settled = co_await coro::settle(std::move(task));
+    if (settled.exception) {
+        done->set_exception(std::move(settled.exception));
+    } else if (settled.stopped) {
+        dftracer::utils::detail::fulfill(
+            *done, fut,
+            dstd::Unexpected<dstd::Error>(coro::detail::stopped_error()));
+    } else {
+        dftracer::utils::detail::fulfill(*done, fut, dstd::Result<void>{});
     }
 }
 
@@ -368,14 +375,15 @@ coro::detail::Coro run_detached(coro::CoroTask<void> task,
 // producer shares whatever is pulling the cursor - a real pool, or the ad hoc
 // coro::RunLoop a bare CoroTask::get() stands up, which cannot wait across
 // pools.
-dstd::SharedFuture<void> spawn_on_current_executor(coro::CoroTask<void> task) {
+dstd::SharedFuture<dstd::Result<void>> spawn_on_current_executor(
+    coro::CoroTask<void> task) {
     dftracer::utils::coro::Executor* exec =
         dftracer::utils::coro::Executor::current();
     if (!exec) exec = dftracer::utils::default_runtime().executor();
     if (task.handle()) task.handle().promise().set_executor(exec);
-    auto done = dstd::make_shared<dstd::Promise<void>>();
-    dstd::SharedFuture<void> fut = done->get_future().share();
-    coro::detail::Coro c = run_detached(std::move(task), std::move(done));
+    auto done = dstd::make_shared<dstd::Promise<dstd::Result<void>>>();
+    dstd::SharedFuture<dstd::Result<void>> fut = done->get_future().share();
+    coro::detail::Coro c = run_detached(std::move(task), std::move(done), fut);
     exec->post(c.release());
     return fut;
 }
@@ -412,7 +420,7 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
             coro::UnboundedChannel<dftracer::utils::dataframe::Morsel>>
             channel,
         dstd::SharedPtr<coro::AsyncSemaphore> budget,
-        dstd::SharedFuture<void> producer,
+        dstd::SharedFuture<dstd::Result<void>> producer,
         dstd::SharedPtr<std::atomic<bool>> stop,
         dstd::SharedPtr<detail::DynamicPrune> dyn_prune,
         dstd::Vector<ViewFile> files, double time_scale,
@@ -461,8 +469,8 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
                 budget_->release(owed);
                 item->batch_index = next_index_++;
                 item->ordering = ordering;
-            } else {
-                producer_.get();
+            } else if (!producer_.get()) {
+                co_await coro::stop_here();
             }
             co_return item;
         }
@@ -470,7 +478,7 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
         if (!pending_ || offset_ >= pending_->rows) {
             auto item = co_await receive(pending_bytes_);
             if (!item) {
-                producer_.get();
+                if (!producer_.get()) co_await coro::stop_here();
                 co_return dstd::nullopt;
             }
             pending_ = std::move(item);
@@ -606,7 +614,7 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
     dstd::SharedPtr<coro::UnboundedChannel<dftracer::utils::dataframe::Morsel>>
         channel_;
     dstd::SharedPtr<coro::AsyncSemaphore> budget_;
-    dstd::SharedFuture<void> producer_;
+    dstd::SharedFuture<dstd::Result<void>> producer_;
     dstd::SharedPtr<std::atomic<bool>> stop_;
     dstd::SharedPtr<detail::DynamicPrune> dyn_prune_;
     dstd::Vector<ViewFile> files_;
@@ -1154,7 +1162,7 @@ ViewSource::open_batch(
     dstd::Vector<dataframe::Schema> schemas;
     for (const ViewSource* v : views) schemas.push_back(v->schema());
 
-    dstd::SharedFuture<void> producer =
+    dstd::SharedFuture<dstd::Result<void>> producer =
         spawn_on_current_executor(run_open_batch(
             session, std::move(frames), std::move(schemas), channels, budgets));
     dstd::Vector<dstd::UniquePtr<dataframe::Cursor>> cursors;
@@ -1458,7 +1466,7 @@ dstd::UniquePtr<dftracer::utils::dataframe::Cursor> ViewSource::open_stream(
     }(scan_view, time_scale, channel, budget, intern, dyn_prune, emit_dyn_,
                                                      gate);
 
-    dstd::SharedFuture<void> producer =
+    dstd::SharedFuture<dstd::Result<void>> producer =
         spawn_on_current_executor(std::move(task));
     return dstd::make_unique<StreamViewCursor>(
         std::move(channel), std::move(budget), std::move(producer),

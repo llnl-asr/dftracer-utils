@@ -9,6 +9,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- End a cancelled task at its wait, in place of resuming it with an exception: the frame is destroyed, and the stop moves up to the first scope or combinator.
+  `coro::with_timeout`, `coro::with_deadline`, `JoinSet::next_within` and `coro::with_item_timeout` give a `dstd::Result` with `dstd::Condition::Timeout` in place of raising, and the `timeout` adaptor of a stage gives a `dstd::Result` of its output.
+  `coro::throw_cancelled`, `coro::is_cancelled` and `coro/cancelled.h` are gone.
+  A misuse of a coro API, such as a zero size or limit, a join of the scope that spawned the task, or a spawn into a closed scope, ends the process in place of raising.
+- Return a `dstd::Result` from `CoroTask::get()`, `coro::sync_wait`, `Runtime::block_on`, `TaskHandle::get()` and `TypedTaskHandle::get()`, and from `Runtime::parallel_for` and `parallel_reduce`.
+  A task that a stop ended gives `dstd::Condition::Cancelled`, and a runtime that was shut down refuses a task with the same condition, in place of raising.
+  A task that returns a `dstd::Expected<V, dstd::Error>` gives that type itself. An exception that a task raises is still rethrown from the calling code.
+  `GroupBy::transform` and the eager group-by methods, and the sync wrappers of `TraceReader`, give a `dstd::Result` too.
+  A `Runtime` built with a bad memory setting in the environment ends the process with the error in place of raising.
 - Make `dftu_op_desc::fn` a function pointer of the new type `dftu_op_generic_fn` in place of `const void*`, so a plugin author casts an op function with `(dftu_op_generic_fn)&my_op`.
 - Make `dstd::Expected` our own class and remove the vendored `tl::expected`.
   `value()` and `error()` on the wrong side now end the process with the message and a stack trace, where `value()` threw before.

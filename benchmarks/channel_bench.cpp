@@ -144,7 +144,7 @@ int main(int argc, char** argv) {
             const std::uint64_t instr_start =
                 dftu::bench::instructions_retired();
             const auto start = std::chrono::steady_clock::now();
-            runtime.block_on(run_case(c, items, sum, seen));
+            common::unwrap(runtime.block_on(run_case(c, items, sum, seen)));
             const auto stop = std::chrono::steady_clock::now();
             const std::uint64_t instr_stop =
                 dftu::bench::instructions_retired();

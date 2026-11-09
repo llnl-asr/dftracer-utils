@@ -22,6 +22,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <stdlib.h>
+#include <task_result.h>
 #include <testing_runtime.h>
 #include <unistd.h>
 
@@ -206,8 +207,8 @@ TEST_CASE("merged sort runs leave the spill slot before the query ends") {
                                          .sort_by("k")
                                          .memory_budget(SMALL_SORT_BUDGET)
                                          .open_cursor();
-    dstd::Optional<Morsel> first =
-        dftracer::utils::default_runtime().submit(cursor->next(ROWS)).get();
+    dstd::Optional<Morsel> first = dftu_utils_test::ok(
+        dftracer::utils::default_runtime().submit(cursor->next(ROWS)).get());
     REQUIRE(first.has_value());
     const std::size_t after_merge = spill_slot_bytes();
     REQUIRE(before_merge > 0);

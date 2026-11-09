@@ -4,6 +4,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <trace/views/test_view_common.h>
 
 #include <chrono>
@@ -50,14 +51,14 @@ TEST_SUITE("View - streaming early-out") {
                     .memory_budget(4096)
                     .cancel_when([keep = sentinel.strong] { return false; });
 
-            auto pulled =
+            auto pulled = dftu_utils_test::ok(
                 dftracer::utils::default_runtime()
                     .submit([](View vv) -> coro::CoroTask<std::int64_t> {
                         auto gen = vv.stream(64);
                         auto first = co_await gen.next();
                         co_return first ? first->num_rows() : 0;
                     }(v))
-                    .get();
+                    .get());
             CHECK(pulled > 0);
         }
         sentinel.strong.reset();
@@ -76,7 +77,7 @@ TEST_SUITE("View - streaming early-out") {
         View v = View::from_file(dstd::String(gz), dstd::String(idx))
                      .memory_budget(4096);
 
-        const std::int64_t rows =
+        const std::int64_t rows = dftu_utils_test::ok(
             dftracer::utils::default_runtime()
                 .submit([](View vv) -> coro::CoroTask<std::int64_t> {
                     std::int64_t n = 0;
@@ -85,7 +86,7 @@ TEST_SUITE("View - streaming early-out") {
                         n += chunk->num_rows();
                     co_return n;
                 }(v))
-                .get();
+                .get());
         CHECK(rows == 500);
     }
 }

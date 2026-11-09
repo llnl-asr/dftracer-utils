@@ -21,6 +21,7 @@
 #include <fcntl.h>
 #include <refused_lines.h>
 #include <sys/wait.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <unistd.h>
 
@@ -61,9 +62,10 @@ dstd::String make_multimember_pfw_gz(dftu_utils_test::TestEnvironment& env,
     dstd::String single = create_pfw_gz(env, event_count, id);
     if (single.empty()) return "";
     dstd::String mm = env.dir() + "/mm_" + dstd::to_string(id) + ".pfw.gz";
-    utilities::fileio::compress::gzip_rechunk_to_members(
-        dstd::String(single), dstd::String(mm), member_bytes, 6)
-        .get();
+    dftu_utils_test::ok(
+        utilities::fileio::compress::gzip_rechunk_to_members(
+            dstd::String(single), dstd::String(mm), member_bytes, 6)
+            .get());
     dstd::fs::remove(single).discard();
     return mm;
 }

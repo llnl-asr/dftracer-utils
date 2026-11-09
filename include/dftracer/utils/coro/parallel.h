@@ -2,7 +2,6 @@
 #ifndef DFTRACER_UTILS_CORO_PARALLEL_H
 #define DFTRACER_UTILS_CORO_PARALLEL_H
 
-#include <dftracer/utils/coro/cancelled.h>
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
@@ -43,7 +42,7 @@ struct ChunkPlan {
     std::size_t workers{0};
     Partition partition{Partition::Dynamic};
 
-    /// Raises an invalid-argument error when the grain is below 1.
+    /// Ends the process when the grain is below 1.
     static ChunkPlan make(std::int64_t size, const ParallelForOptions& options,
                           const Executor* executor);
 
@@ -86,8 +85,9 @@ CoroTask<void> run_chunks(const ChunkPlan& plan, F& fn) {
     }
     co_await scope.join();
     // A worker stops without an error on a stop from outside.
-    if (state.ran.load(std::memory_order_relaxed) < plan.chunks) {
-        throw_cancelled("parallel range stopped");
+    if (scope.child_stopped() ||
+        state.ran.load(std::memory_order_relaxed) < plan.chunks) {
+        co_await stop_here();
     }
 }
 
@@ -98,9 +98,9 @@ CoroTask<void> run_chunks(const ChunkPlan& plan, F& fn) {
  * holding a thread.
  *
  * `body` runs at the same time on separate parts and does not wait, so a long
- * part holds its worker. A stop or a cancel starts no more parts. The first
- * error is raised after the running parts end. Raises an invalid-argument error
- * on a grain below 1.
+ * part holds its worker. A stop or a cancel starts no more parts and stops this
+ * task. The first error is raised after the running parts end. A grain below 1
+ * is misuse and ends the process.
  */
 template <class Body>
 CoroTask<void> parallel_for(std::int64_t size, Body body,

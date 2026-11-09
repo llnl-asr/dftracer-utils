@@ -42,8 +42,10 @@ coro::CoroTask<int> as_valued(coro::CoroTask<void> t) {
     co_return 0;
 }
 
-coro::CoroTask<void> await_one(coro::CoroTask<void>* task) {
-    co_await std::move(*task);
+// A task the host owns ends the call with -1 when it stops or raises.
+coro::CoroTask<void> await_one(coro::CoroTask<void>* task, int* rc) {
+    auto settled = co_await coro::settle(std::move(*task));
+    *rc = settled.stopped || settled.exception ? -1 : 0;
 }
 
 coro::CoroTask<void> await_all(dstd::Vector<coro::CoroTask<void>> inner) {
@@ -88,15 +90,12 @@ int dftu_task_run(dftu_runtime* rt, dftu_task* t) {
     if (!t) return -1;
     auto* runtime = rt ? reinterpret_cast<Runtime*>(rt) : &default_runtime();
     auto* task = reinterpret_cast<coro::CoroTask<void>*>(t);
-    int rc = 0;
-    try {
-        runtime->block_on(
-            coro::named("dftu_task_run", [&]() -> coro::CoroTask<void> {
-                return dftracer::utils::await_one(task);
-            }()));
-    } catch (...) {
-        rc = -1;
-    }
+    int rc = -1;
+    const auto ran = runtime->block_on(
+        coro::named("dftu_task_run", [&]() -> coro::CoroTask<void> {
+            return dftracer::utils::await_one(task, &rc);
+        }()));
+    if (!ran) rc = -1;
     dstd::UniquePtr<coro::CoroTask<void>>(task).reset();
     return rc;
 }

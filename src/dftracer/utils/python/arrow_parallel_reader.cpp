@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
@@ -54,8 +55,8 @@ static PyObject* py_read_arrow_files_parallel(PyObject* /*self*/,
     if (!run_blocking_r(
             [&] {
                 auto task = read_arrow_files_parallel(std::move(paths));
-                return runtime->submit(std::move(task), "read_arrow_files")
-                    .get();
+                return common::unwrap(
+                    runtime->submit(std::move(task), "read_arrow_files").get());
             },
             result)) {
         return nullptr;

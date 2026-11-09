@@ -17,6 +17,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 #include <cstring>
@@ -382,12 +383,13 @@ TEST_SUITE("slice views") {
         df.columns.push_back(
             strings_of(rows, TypeId::String).dictionary_encode());
 
-        DataFrame lazy = dftracer::utils::default_runtime()
-                             .submit(df.lazy()
-                                         .filter(col(0) > std::int64_t{10})
-                                         .with_column("j", col(0) + col(0))
-                                         .collect(7))
-                             .get();
+        DataFrame lazy = dftu_utils_test::ok(
+            dftracer::utils::default_runtime()
+                .submit(df.lazy()
+                            .filter(col(0) > std::int64_t{10})
+                            .with_column("j", col(0) + col(0))
+                            .collect(7))
+                .get());
 
         dstd::Vector<const Series*> in;
         for (const Series& c : df.columns) in.push_back(&c);

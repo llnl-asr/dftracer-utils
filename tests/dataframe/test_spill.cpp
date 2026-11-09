@@ -14,6 +14,7 @@
 #include <doctest/doctest.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <task_result.h>
 #include <unistd.h>
 
 #include <atomic>
@@ -29,7 +30,8 @@ using namespace dftracer::utils::dataframe;
 namespace {
 dstd::Optional<Morsel> run(
     dftracer::utils::coro::CoroTask<dstd::Optional<Morsel>> t) {
-    return dftracer::utils::default_runtime().submit(std::move(t)).get();
+    return dftu_utils_test::ok(
+        dftracer::utils::default_runtime().submit(std::move(t)).get());
 }
 }  // namespace
 

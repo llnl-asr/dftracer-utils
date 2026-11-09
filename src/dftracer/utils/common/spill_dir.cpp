@@ -32,7 +32,7 @@ dstd::Result<dstd::Path> choose_spill_dir(
         dstd::StringView reason;
         const dstd::Path env_path{env};
         const auto made = dstd::fs::create_directories(env_path.view());
-        if (!made)
+        if (!made.has_value())
             reason = made.error().message();
         else if (::access(env_path.c_str(), W_OK | X_OK) != 0)
             reason = "Permission denied";
@@ -48,7 +48,7 @@ dstd::Result<dstd::Path> choose_spill_dir(
     // since.
     if (!local_root.empty()) {
         const auto made = dstd::fs::create_directories(local_root.view());
-        if (made && ::access(local_root.c_str(), W_OK | X_OK) == 0)
+        if (made.has_value() && ::access(local_root.c_str(), W_OK | X_OK) == 0)
             return local_root;
     }
     // Spilled bytes on a RAM-backed file system stay in memory, which is what
@@ -58,11 +58,12 @@ dstd::Result<dstd::Path> choose_spill_dir(
         if (dir.empty()) continue;
         const dstd::PathView parent = dir.view().parent();
         const auto present = dstd::fs::exists(dir.view());
-        const dstd::Path probe = (present && *present) || parent.empty()
-                                     ? dir
-                                     : dstd::Path(parent.str());
+        const dstd::Path probe =
+            (present.has_value() && *present) || parent.empty()
+                ? dir
+                : dstd::Path(parent.str());
         if (is_memory_filesystem(filesystem_kind(probe))) continue;
-        if (!dstd::fs::create_directories(dir.view()) ||
+        if (!dstd::fs::create_directories(dir.view()).has_value() ||
             ::access(dir.c_str(), W_OK | X_OK) != 0)
             continue;
         return dir;
@@ -83,7 +84,7 @@ dstd::Result<dstd::Path> spill_dir() {
     dstd::Vector<dstd::Path> fallbacks;
     const dstd::Path tmp = dstd::fs::temp_directory();
     const auto tmp_is_dir = dstd::fs::is_directory(tmp.view());
-    if (tmp_is_dir && *tmp_is_dir) fallbacks.push_back(tmp);
+    if (tmp_is_dir.has_value() && *tmp_is_dir) fallbacks.push_back(tmp);
     if (const auto home = Env::get("HOME"); home && !home->empty()) {
         dstd::Path spill{dstd::StringView(*home)};
         spill /= ".cache";
@@ -259,7 +260,7 @@ dstd::Result<ScopedSpillSubdir> ScopedSpillSubdir::create(
         root->view() / str_cat(prefix, "_", host_tag(), "_", ::getpid(), "_",
                                counter.fetch_add(1));
     const auto made = dstd::fs::create_directories(dir.view());
-    if (!made)
+    if (!made.has_value())
         return make_error(
             ErrorCode::Io,
             str_cat("spill: cannot create '", dir.str(), "' (",

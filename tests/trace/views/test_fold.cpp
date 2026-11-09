@@ -9,6 +9,7 @@
 #include <dftracer/utils/trace/views/fold.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -187,9 +188,10 @@ TEST_SUITE("Fold") {
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
         {
             StringSink s;
-            View::from_file(dstd::String(gz), dstd::String(idx))
-                .sink_json(s)
-                .get();
+            dftu_utils_test::ok(
+                View::from_file(dstd::String(gz), dstd::String(idx))
+                    .sink_json(s)
+                    .get());
         }
 
         ViewPlan plan;
@@ -203,7 +205,7 @@ TEST_SUITE("Fold") {
         dstd::StringIntern intern;
         CountingFold cf;
         std::array<Fold*, 1> folds{&cf};
-        auto stats = fuse(plan, vdef, folds, intern).get();
+        auto stats = dftu_utils_test::ok(fuse(plan, vdef, folds, intern).get());
 
         CHECK(cf.count == 50);
         CHECK(stats.events_matched == 50);
@@ -233,9 +235,10 @@ TEST_SUITE("Fold") {
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
         {
             StringSink s;
-            View::from_file(dstd::String(gz), dstd::String(idx))
-                .sink_json(s)
-                .get();
+            dftu_utils_test::ok(
+                View::from_file(dstd::String(gz), dstd::String(idx))
+                    .sink_json(s)
+                    .get());
         }
 
         // A minimal dictionary fold: collects (type -> {name -> value}) from
@@ -290,7 +293,7 @@ TEST_SUITE("Fold") {
         dstd::StringIntern intern;
         DictProbe probe(intern);
         std::array<Fold*, 1> folds{&probe};
-        fuse(plan, vdef, folds, intern).get();
+        dftu_utils_test::ok(fuse(plan, vdef, folds, intern).get());
 
         REQUIRE(probe.got.count("FH") == 1);
         CHECK(probe.got["FH"].first == "/data/a.bin");

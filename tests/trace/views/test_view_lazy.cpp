@@ -15,6 +15,7 @@
 #include <dftracer/utils/trace/views/view_source.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -1492,7 +1493,8 @@ TEST_SUITE("View - computed columns over a trace scan") {
             for (std::size_t workers : {1, 2, 8}) {
                 CAPTURE(workers);
                 dftracer::utils::Runtime rt(workers);
-                dataframe::DataFrame out = rt.submit(grouped.collect()).get();
+                dataframe::DataFrame out =
+                    dftu_utils_test::ok(rt.submit(grouped.collect()).get());
                 CHECK(cells(out, "f") == want_f);
                 CHECK(cells(out, "l") == want_l);
             }

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
 #include <dftracer/utils/runtime/scheduler/thread_pool_executor.h>
@@ -22,14 +23,8 @@ void TaskExecutor::set_current_backend(TaskExecutor* executor) noexcept {
 }
 
 void mark_coro_failed(TaskExecutor& executor, common::TaskIndex id,
-                      std::exception_ptr error) noexcept {
-    try {
-        std::rethrow_exception(error);
-    } catch (const std::exception& e) {
-        executor.mark_coro_failed(id, e.what());
-    } catch (...) {
-        executor.mark_coro_failed(id, "Unknown exception");
-    }
+                      const dstd::Error& error) noexcept {
+    executor.mark_coro_failed(id, error.message());
 }
 
 dstd::StringView task_state_name(TaskState state) noexcept {

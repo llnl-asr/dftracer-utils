@@ -182,10 +182,16 @@ class DFTUtilsException : public std::exception {
 /// exceptions, so a header that calls it holds no `throw`.
 [[noreturn]] void throw_error(const dstd::Error& error);
 
+/// The error an exception stands for: the error of a @ref DFTUtilsException,
+/// the what() of another std::exception as dstd::Condition::Unknown, and
+/// "unknown error" for anything else. Defined in a source built with
+/// exceptions, so code that cannot catch can still read an exception.
+dstd::Error error_of_exception(const std::exception_ptr& error) noexcept;
+
 /// The value of `r`, or throws @ref DFTUtilsException with its error.
 template <typename T>
 T unwrap(dstd::Result<T>&& r) {
-    if (!r) throw_error(r.error());
+    if (!r.has_value()) throw_error(r.error());
     if constexpr (!std::is_void_v<T>) return std::move(*r);
 }
 

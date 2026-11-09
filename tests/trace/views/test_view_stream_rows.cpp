@@ -16,6 +16,7 @@
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <dftracer/utils/trace/views/view_source.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -256,7 +257,7 @@ TEST_SUITE("trace scan - streaming row query") {
         };
 
         dstd::Vector<dstd::Tuple<dstd::String, double, double>> via_stream =
-            drain(v);
+            dftu_utils_test::ok(drain(v));
         std::sort(via_stream.begin(), via_stream.end());
         dataframe::DataFrame via_collect =
             run(views::detail::scan::collect(v).collect());
@@ -291,7 +292,7 @@ TEST_SUITE("trace scan - streaming row query") {
                                            dstd::String(s.idx)),
             {"cat", "name"});
 
-        auto [chunks, rows] =
+        auto [chunks, rows] = dftu_utils_test::ok(
             dftracer::utils::default_runtime()
                 .submit([](views::detail::scan::ScanPlan vv)
                             -> coro::CoroTask<
@@ -305,7 +306,7 @@ TEST_SUITE("trace scan - streaming row query") {
                     }
                     co_return dstd::make_pair(n, nrows);
                 }(v))
-                .get();
+                .get());
 
         dataframe::DataFrame via_collect =
             run(views::detail::scan::collect(v).collect());
@@ -326,7 +327,7 @@ TEST_SUITE("trace scan - streaming row query") {
                 "dur", /*descending=*/true),
             20);
 
-        auto [chunks, rows] =
+        auto [chunks, rows] = dftu_utils_test::ok(
             dftracer::utils::default_runtime()
                 .submit([](views::detail::scan::ScanPlan vv)
                             -> coro::CoroTask<
@@ -340,7 +341,7 @@ TEST_SUITE("trace scan - streaming row query") {
                     }
                     co_return dstd::make_pair(n, nrows);
                 }(v))
-                .get();
+                .get());
 
         dataframe::DataFrame via_collect =
             run(views::detail::scan::collect(v).collect());
@@ -770,17 +771,18 @@ TEST_SUITE("trace scan - streaming row query") {
                 {GroupKey::cat()}),
             {{AggOp::Hist, "dur", "h"}});
 
-        std::size_t chunks = dftracer::utils::default_runtime()
-                                 .submit([](views::detail::scan::ScanPlan vv)
-                                             -> coro::CoroTask<std::size_t> {
-                                     std::size_t n = 0;
-                                     auto gen =
-                                         views::detail::scan::stream(vv, 1);
-                                     while (auto chunk = co_await gen.next())
-                                         ++n;
-                                     co_return n;
-                                 }(v))
-                                 .get();
+        std::size_t chunks =
+            dftu_utils_test::ok(dftracer::utils::default_runtime()
+                                    .submit([](views::detail::scan::ScanPlan vv)
+                                                -> coro::CoroTask<std::size_t> {
+                                        std::size_t n = 0;
+                                        auto gen =
+                                            views::detail::scan::stream(vv, 1);
+                                        while (auto chunk = co_await gen.next())
+                                            ++n;
+                                        co_return n;
+                                    }(v))
+                                    .get());
 
         CHECK(chunks == 1);
     }
@@ -797,11 +799,11 @@ TEST_SUITE("trace scan - streaming row query") {
         // than data-dependent.
         {
             StringSink sink;
-            views::detail::scan::export_json(
-                views::detail::scan::from_file(dstd::String(gz),
-                                               dstd::String(idx)),
-                sink)
-                .get();
+            dftu_utils_test::ok(views::detail::scan::export_json(
+                                    views::detail::scan::from_file(
+                                        dstd::String(gz), dstd::String(idx)),
+                                    sink)
+                                    .get());
         }
 
         views::detail::scan::ScanPlan v = views::detail::scan::select(

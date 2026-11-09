@@ -16,6 +16,7 @@
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -76,9 +77,10 @@ TEST_SUITE("hash arena") {
         df.names = {"a", "b"};
         df.columns.push_back(Series::strings(a));
         df.columns.push_back(Series::strings(b));
-        DataFrame out = dftracer::utils::default_runtime()
-                            .submit(df.lazy().unique().collect(2))
-                            .get();
+        DataFrame out =
+            dftu_utils_test::ok(dftracer::utils::default_runtime()
+                                    .submit(df.lazy().unique().collect(2))
+                                    .get());
         REQUIRE(out.num_rows() == 4);
         const dstd::Vector<dstd::Pair<dstd::String, dstd::String>> want{
             {"ab", "c"}, {"a", "bc"}, {"xy", "zz"}, {"xy", "zw"}};

@@ -278,9 +278,9 @@ Limit how long a task runs:
    using namespace std::chrono_literals;
 
    co_await coro::sleep(10ms);
-   int value = co_await coro::with_timeout(read_value(), 5s);
+   dstd::Result<int> value = co_await coro::with_timeout(read_value(), 5s);
 
-``with_timeout`` raises an error whose condition is ``dstd::Condition::Timeout``.
+``with_timeout`` gives a ``dstd::Result``. On a timeout the result holds an error whose condition is ``dstd::Condition::Timeout``.
 It wakes the task if the task is parked on a channel, an event, a semaphore, a mutex, a sleep or a spawned future.
 A task that computes without a wait, or that waits on I/O, ends only when it reaches its next wait.
 
@@ -297,7 +297,8 @@ Retry a failing task:
    auto data = co_await coro::retry([&]() { return fetch(path); }, std::move(policy));
 
 ``retry`` takes a function, since a task runs once.
-It never retries a cancelled error.
+It retries a task that raised an exception, and gives a result as it is.
+It never retries a stopped task.
 
 Run many jobs with a limit:
 
@@ -320,6 +321,7 @@ Stop a tree of tasks
 
 A ``coro::Scope`` stops its children when one fails, when ``request_stop`` runs or when the task that holds it is cancelled.
 A stopped child ends as cancelled at its next wait, and a parked child wakes at once.
+A task that is cancelled at a wait is not resumed. Its frame is destroyed, and the stop moves up to the first scope or combinator, which joins its children and stops its own task.
 ``with_scope`` links the scope to its task, so nested scopes stop together.
 
 .. code-block:: cpp
@@ -354,14 +356,14 @@ Each one is a function and an adaptor, so ``filter(gen, pred)`` and ``gen | filt
 - ``merge`` reads many generators at once and yields items as they come.
 - ``flat_map_merge`` does the same for the generators a function returns, with a limit on how many run.
 - ``buffer`` reads ahead of the reader by a bounded number of items.
-- ``with_item_timeout`` bounds the wait for each item.
+- ``with_item_timeout`` bounds the wait for each item and yields ``dstd::Result`` items. A wait that times out yields a ``dstd::Condition::Timeout`` error and ends the stream.
 
 A sync ``coro::Generator`` has the same ``map``, ``flat_map``, ``filter``, ``take``, ``take_until``, ``concat``, ``chunks``, ``zip`` and ``fold``, and the same ``next``.
 Its functions give plain values, because it cannot wait, so ``merge``, ``flat_map_merge``, ``map_ordered``, ``map_unordered``, ``buffer`` and ``with_item_timeout`` are only on ``AsyncGenerator``.
 ``coro::to_async(std::move(gen))`` turns a ``Generator`` into an ``AsyncGenerator`` for those.
 
 A stop or a cancel of the task that reads a generator also ends a wait inside the generator.
-The read then raises ``dstd::Condition::Cancelled``.
+The generator then ends as cancelled and the task that reads it stops.
 
 ``merge``, ``flat_map_merge`` and ``buffer`` run their sources in the background, so a source must own what it uses.
 Each of them keeps the order of one source, and raises the first error from the next read.

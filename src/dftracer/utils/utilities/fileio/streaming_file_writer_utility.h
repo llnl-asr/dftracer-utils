@@ -46,17 +46,20 @@ class StreamingFileWriterUtility {
         const dstd::PathView parent = path_.view().parent();
         if (create_dirs_ && !parent.empty()) {
             const auto found = dstd::fs::exists(parent);
-            if (!found) throw common::DFTUtilsException(found.error());
+            if (!found.has_value())
+                throw common::DFTUtilsException(found.error());
             if (!*found) {
                 const auto made = dstd::fs::create_directories(parent);
-                if (!made) throw common::DFTUtilsException(made.error());
+                if (!made.has_value())
+                    throw common::DFTUtilsException(made.error());
             }
         }
 
         // Validate parent directory exists if not creating it
         if (!create_dirs_ && !parent.empty()) {
             const auto found = dstd::fs::exists(parent);
-            if (!found) throw common::DFTUtilsException(found.error());
+            if (!found.has_value())
+                throw common::DFTUtilsException(found.error());
             if (!*found) {
                 throw common::DFTUtilsException(
                     common::ErrorCode::NotFound,

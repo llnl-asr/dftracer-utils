@@ -109,7 +109,7 @@ class GenDistArgParse : public binaries::ArgParse {
         }
         for (const auto& r : roots) {
             const auto is_dir = dstd::fs::is_directory(dstd::PathView(r));
-            if (!is_dir || !*is_dir) {
+            if (!is_dir.has_value() || !*is_dir) {
                 DFTRACER_UTILS_LOG_ERROR("Not a directory: %.*s",
                                          static_cast<int>(r.size()), r.data());
                 return false;

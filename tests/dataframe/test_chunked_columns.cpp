@@ -21,6 +21,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 #include <utility>
@@ -175,7 +176,8 @@ const Kind KINDS[] = {Kind::Int64,      Kind::Float64,    Kind::Bool,
                       Kind::StringMixed};
 
 DataFrame run(dftracer::utils::coro::CoroTask<DataFrame> t) {
-    return dftracer::utils::default_runtime().submit(std::move(t)).get();
+    return dftu_utils_test::ok(
+        dftracer::utils::default_runtime().submit(std::move(t)).get());
 }
 
 class PartsCursor : public Cursor {

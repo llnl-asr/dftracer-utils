@@ -20,6 +20,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -31,8 +32,8 @@ using namespace dftracer::utils::dataframe;
 namespace {
 
 DataFrame run(coro::CoroTask<DataFrame> t) {
-    DataFrame out =
-        dftracer::utils::default_runtime().submit(std::move(t)).get();
+    DataFrame out = dftu_utils_test::ok(
+        dftracer::utils::default_runtime().submit(std::move(t)).get());
     for (Series& c : out.columns) c = c.materialize();
     return out;
 }

@@ -15,6 +15,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <utilities/plugins/test_plugin_common.h>
 
@@ -60,7 +61,7 @@ plugins::PluginRun run_single(const plugins::Plugins& set, const View& view) {
         out = std::move(*run);
         co_return;
     });
-    rt.submit(std::move(task), "reference-plugin").wait();
+    dftu_utils_test::ok(rt.submit(std::move(task), "reference-plugin").wait());
     rt.shutdown();
     return out;
 }

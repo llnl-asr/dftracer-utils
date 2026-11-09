@@ -40,7 +40,7 @@ inline coro::AsyncGenerator<dstd::ByteView> read_binary_file(
     dstd::Path path, std::size_t chunk_size = 64 * 1024) {
     auto checking = runtime::fs::exists(path.view());
     const auto found = co_await std::move(checking);
-    if (!found) throw common::DFTUtilsException(found.error());
+    if (!found.has_value()) throw common::DFTUtilsException(found.error());
     if (!*found) {
         throw common::DFTUtilsException(
             common::ErrorCode::NotFound,

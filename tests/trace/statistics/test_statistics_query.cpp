@@ -4,6 +4,7 @@
 #include <dftracer/utils/trace/statistics/statistics_query_utility.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
+#include <task_result.h>
 
 using namespace dftracer::utils;
 
@@ -35,7 +36,7 @@ TEST_SUITE("StatisticsQueryUtility") {
         input.query_type = StatisticsQueryType::Summary;
 
         StatisticsQueryUtility query;
-        auto output = query(input).get();
+        auto output = dftu_utils_test::ok(query(input).get());
 
         CHECK(output.total_events == 5);
         CHECK(output.query_type_name == "summary");
@@ -53,7 +54,7 @@ TEST_SUITE("StatisticsQueryUtility") {
         input.query_type = StatisticsQueryType::Categories;
 
         StatisticsQueryUtility query;
-        auto output = query(input).get();
+        auto output = dftu_utils_test::ok(query(input).get());
 
         CHECK(output.results.size() == 2);
         // POSIX has 3 events, storage has 2
@@ -71,7 +72,7 @@ TEST_SUITE("StatisticsQueryUtility") {
         input.query_type = StatisticsQueryType::Names;
 
         StatisticsQueryUtility query;
-        auto output = query(input).get();
+        auto output = dftu_utils_test::ok(query(input).get());
 
         CHECK(output.results.size() == 4);
         // read=2, write=1, open=1, close=1
@@ -87,7 +88,7 @@ TEST_SUITE("StatisticsQueryUtility") {
         input.query_type = StatisticsQueryType::PidTids;
 
         StatisticsQueryUtility query;
-        auto output = query(input).get();
+        auto output = dftu_utils_test::ok(query(input).get());
 
         CHECK(!output.results.empty());
         // 1:1=2, 1:2=1, 2:1=2
@@ -109,7 +110,7 @@ TEST_SUITE("StatisticsQueryUtility") {
         input.query_type = StatisticsQueryType::TimeRange;
 
         StatisticsQueryUtility query;
-        auto output = query(input).get();
+        auto output = dftu_utils_test::ok(query(input).get());
 
         CHECK(output.min_timestamp_us == 1000);
         CHECK(output.max_timestamp_us == 5010);  // 5000 + 10
@@ -124,7 +125,7 @@ TEST_SUITE("StatisticsQueryUtility") {
         input.query_type = StatisticsQueryType::DurationStats;
 
         StatisticsQueryUtility query;
-        auto output = query(input).get();
+        auto output = dftu_utils_test::ok(query(input).get());
 
         CHECK(output.duration_count == 5);
         CHECK(output.duration_mean_us == doctest::Approx(132.0));
@@ -142,7 +143,7 @@ TEST_SUITE("StatisticsQueryUtility") {
         input.top_n = 2;
 
         StatisticsQueryUtility query;
-        auto output = query(input).get();
+        auto output = dftu_utils_test::ok(query(input).get());
 
         CHECK(output.results.size() == 2);
         // Top 2: read=2, then one of write/open/close=1
@@ -160,7 +161,7 @@ TEST_SUITE("StatisticsQueryUtility") {
         input.top_n = 1;
 
         StatisticsQueryUtility query;
-        auto output = query(input).get();
+        auto output = dftu_utils_test::ok(query(input).get());
 
         CHECK(output.results.size() == 1);
         CHECK(output.results[0].first == "POSIX");
@@ -184,7 +185,7 @@ TEST_SUITE("StatisticsQueryUtility") {
             input.query_type = qt;
             input.top_n = 5;
 
-            auto output = query(input).get();
+            auto output = dftu_utils_test::ok(query(input).get());
             dstd::String json = dstd::String(output.to_json());
 
             simdjson::dom::parser parser;

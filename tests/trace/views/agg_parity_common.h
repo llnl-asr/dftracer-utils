@@ -24,6 +24,7 @@
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/groupmap_oracle.h>
 #include <trace/views/test_view_common.h>
@@ -105,13 +106,13 @@ inline dftracer::utils::dataframe::DataFrame engine_collect(
     // fresh pool per call dominates the run under valgrind.
     static dftracer::utils::Runtime rt;
     dftracer::utils::dataframe::DataFrame result;
-    rt.block_on(dftracer::utils::coro::named(
+    dftu_utils_test::ok(rt.block_on(dftracer::utils::coro::named(
         "engine-collect", dftracer::utils::coro::with_scope(
                               [&](dftracer::utils::coro::Scope&)
                                   -> dftracer::utils::coro::CoroTask<void> {
                                   result = co_await dftracer::utils::trace::
                                       views::detail::run_collect_via_engine(*v);
-                              })));
+                              }))));
     return dftracer::utils::trace::views::detail::apply_agg_post_ops(
         std::move(result), *v);
 }
@@ -193,13 +194,13 @@ inline dftracer::utils::dataframe::DataFrame collect_engine_plan(
     // run under Valgrind.
     static dftracer::utils::Runtime rt;
     dftracer::utils::dataframe::DataFrame result;
-    rt.block_on(dftracer::utils::coro::named(
+    dftu_utils_test::ok(rt.block_on(dftracer::utils::coro::named(
         "agg-engine", dftracer::utils::coro::with_scope(
                           [&](dftracer::utils::coro::Scope&)
                               -> dftracer::utils::coro::CoroTask<void> {
                               result = co_await dftracer::utils::trace::views::
                                   detail::run_collect_via_engine(*v);
-                          })));
+                          }))));
     return dftracer::utils::trace::views::detail::apply_agg_post_ops(
         std::move(result), *v);
 }

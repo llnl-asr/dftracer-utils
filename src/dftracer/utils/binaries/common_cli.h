@@ -172,7 +172,17 @@ int cli_main(int argc, char** argv, const char* name, const char* description,
     CliT cli(program);
     if (auto code = setup_and_parse(cli, argc, argv)) return *code;
     try {
-        return run(cli);
+        auto outcome = run(cli);
+        if constexpr (std::is_same_v<decltype(outcome), int>) {
+            return outcome;
+        } else {
+            if (!outcome) {
+                DFTRACER_UTILS_LOG_ERROR("Error: %s",
+                                         outcome.error().format().c_str());
+                return 1;
+            }
+            return *outcome;
+        }
     } catch (const std::exception& err) {
         DFTRACER_UTILS_LOG_ERROR("Error: %s", err.what());
         return 1;
@@ -425,6 +435,18 @@ struct WatchdogArgs : CliSchema {
     double deadlock_timeout_ = 600;
 };
 
+// The value of a task run by run_on_pool. A task that ended with an error is
+// raised, which cli_main reports as the error of the tool.
+template <class R>
+R take_pool_result(coro::TaskResult<R>&& result) {
+    if constexpr (coro::detail::is_expected_v<R>) {
+        return std::move(result);
+    } else {
+        if (!result) common::throw_error(result.error());
+        if constexpr (!std::is_void_v<R>) return std::move(*result);
+    }
+}
+
 // A CLI's run coroutine runs on main's one-thread coro::RunLoop, so work
 // awaited outside the runtime is serial. A tool runs here instead, as one named
 // task on the process runtime, and blocks until done. `body` takes a
@@ -433,8 +455,10 @@ template <class Body>
 auto run_on_pool(const char* name, const RuntimeArgs& runtime, Body&& body) {
     RuntimeSettings settings;
     runtime.apply(settings);
-    return configure_default_runtime(settings).block_on(
-        coro::named(name, coro::with_scope(std::forward<Body>(body))));
+    using R = typename std::invoke_result_t<std::decay_t<Body>&,
+                                            coro::Scope&>::value_type;
+    return take_pool_result<R>(configure_default_runtime(settings).block_on(
+        coro::named(name, coro::with_scope(std::forward<Body>(body)))));
 }
 
 // As above, with a watchdog that stops the task and raises a
@@ -449,8 +473,8 @@ auto run_on_pool(const char* name, const RuntimeArgs& runtime,
     watchdog.apply(settings);
     Runtime& rt = configure_default_runtime(settings);
     if (watchdog.disable) {
-        return rt.block_on(
-            coro::named(name, coro::with_scope(std::forward<Body>(body))));
+        return take_pool_result<Result>(rt.block_on(
+            coro::named(name, coro::with_scope(std::forward<Body>(body)))));
     }
 
     coro::StopSource source;
@@ -481,15 +505,15 @@ auto run_on_pool(const char* name, const RuntimeArgs& runtime,
             name,
             coro::with_stop_token(coro::with_scope(std::forward<Body>(body)),
                                   source.token()));
+        auto outcome = rt.block_on(std::move(task));
+        dog.stop();
         // A timeout that fires after the task ended does not undo its result.
-        if constexpr (std::is_void_v<Result>) {
-            rt.block_on(std::move(task));
-            dog.stop();
-        } else {
-            Result value = rt.block_on(std::move(task));
-            dog.stop();
-            return value;
+        if (!outcome && !reason.empty() &&
+            outcome.error().is(dstd::Condition::Cancelled)) {
+            throw common::DFTUtilsException(
+                dstd::Error{dstd::Condition::Timeout, "[TIMEOUT] " + reason});
         }
+        return take_pool_result<Result>(std::move(outcome));
     } catch (...) {
         // The watchdog thread is joined before `reason` is read.
         dog.stop();

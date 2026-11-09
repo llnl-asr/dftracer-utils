@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <fstream>
@@ -80,7 +81,7 @@ TEST_SUITE("ChunkIndexer") {
             .with_batch_size(4 * 1024 * 1024);
 
         ChunkIndexer indexer;
-        auto output = indexer(input).get();
+        auto output = dftu_utils_test::ok(indexer(input).get());
 
         CHECK(output.success == true);
         CHECK(output.events_processed == 50);
@@ -141,7 +142,7 @@ TEST_SUITE("ChunkIndexer") {
             .with_batch_size(4 * 1024 * 1024);
 
         ChunkIndexer indexer;
-        auto output = indexer(input).get();
+        auto output = dftu_utils_test::ok(indexer(input).get());
 
         CHECK(output.success == true);
         CHECK(output.events_processed == 20);
@@ -199,7 +200,7 @@ TEST_SUITE("ChunkIndexer") {
             .with_batch_size(4 * 1024 * 1024);
 
         ChunkIndexer indexer;
-        auto output = indexer(input).get();
+        auto output = dftu_utils_test::ok(indexer(input).get());
 
         CHECK(output.success == true);
         CHECK(output.events_processed == 2);

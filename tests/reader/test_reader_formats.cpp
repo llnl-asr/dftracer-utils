@@ -9,6 +9,7 @@
 #include <dftracer/utils/utilities/reader/internal/reader.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <random>
@@ -159,8 +160,8 @@ TEST_CASE_TEMPLATE("Data reading operations", FormatType, GZIPFormat) {
         while (current_pos < max_bytes) {
             std::size_t end_pos = std::min(current_pos + buffer_size,
                                            static_cast<std::size_t>(max_bytes));
-            std::size_t bytes_read = reader->read(current_pos, end_pos,
-                                                  buffer.data(), buffer.size());
+            std::size_t bytes_read = dftu_utils_test::ok(reader->read(
+                current_pos, end_pos, buffer.data(), buffer.size()));
             if (bytes_read == 0) break;
             total_bytes += bytes_read;
             current_pos += bytes_read;
@@ -180,8 +181,8 @@ TEST_CASE_TEMPLATE("Data reading operations", FormatType, GZIPFormat) {
 
         const std::size_t buffer_size = 1024;
         dstd::Vector<char> buffer(buffer_size);
-        std::size_t bytes_read = reader->read(start_offset, end_offset,
-                                              buffer.data(), buffer.size());
+        std::size_t bytes_read = dftu_utils_test::ok(reader->read(
+            start_offset, end_offset, buffer.data(), buffer.size()));
         CHECK(bytes_read > 0);
         std::size_t total_bytes = bytes_read;
 
@@ -203,8 +204,8 @@ TEST_CASE_TEMPLATE("Data reading operations", FormatType, GZIPFormat) {
             std::size_t end_pos =
                 std::min(current_pos_small + small_buffer_size,
                          static_cast<std::size_t>(max_bytes));
-            std::size_t bytes_read = reader->read(current_pos_small, end_pos,
-                                                  buffer.data(), buffer.size());
+            std::size_t bytes_read = dftu_utils_test::ok(reader->read(
+                current_pos_small, end_pos, buffer.data(), buffer.size()));
             if (bytes_read == 0) break;
             total_bytes += bytes_read;
             current_pos_small += bytes_read;
@@ -243,12 +244,12 @@ TEST_CASE_TEMPLATE("JSON boundary detection", FormatType, GZIPFormat) {
         std::uint64_t max_bytes = indexer->max_bytes();
 
         // Read raw data
-        std::size_t raw_total = raw_reader->read(
-            0, max_bytes, raw_buffer.data(), raw_buffer.size());
+        std::size_t raw_total = dftu_utils_test::ok(raw_reader->read(
+            0, max_bytes, raw_buffer.data(), raw_buffer.size()));
 
         // Read with JSON boundary detection
-        std::size_t json_total = reader->read_line_bytes(
-            0, max_bytes, json_buffer.data(), json_buffer.size());
+        std::size_t json_total = dftu_utils_test::ok(reader->read_line_bytes(
+            0, max_bytes, json_buffer.data(), json_buffer.size()));
 
         CHECK(raw_total > 0);
         CHECK(json_total > 0);
@@ -295,7 +296,8 @@ TEST_CASE_TEMPLATE("Line-based reading", FormatType, GZIPFormat) {
              line <= std::min(total_lines, static_cast<std::uint64_t>(10));
              ++line) {
             try {
-                dstd::String line_content = reader->read_lines(line, line);
+                dstd::String line_content =
+                    dftu_utils_test::ok(reader->read_lines(line, line));
                 if (!line_content.empty()) {
                     line_count++;
                     CHECK(line_content.size() > 0);
@@ -323,8 +325,8 @@ TEST_CASE_TEMPLATE("Line-based reading", FormatType, GZIPFormat) {
 
             try {
                 // Convert to 1-based indexing
-                dstd::String line_content =
-                    reader->read_lines(line_num + 1, line_num + 1);
+                dstd::String line_content = dftu_utils_test::ok(
+                    reader->read_lines(line_num + 1, line_num + 1));
                 CHECK(!line_content.empty());
                 CHECK(line_content.find("\"id\":") != dstd::String::npos);
                 CHECK(line_content.find("\"message\":") != dstd::String::npos);

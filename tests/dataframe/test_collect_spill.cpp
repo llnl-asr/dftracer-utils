@@ -18,6 +18,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <stdlib.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <unistd.h>
 
@@ -35,7 +36,8 @@ constexpr std::int64_t MORSEL = 100;
 constexpr const char* DIR_VAR = "DFTRACER_UTILS_SPILL_DIR";
 
 DataFrame run(dftracer::utils::coro::CoroTask<DataFrame> t) {
-    return dftracer::utils::default_runtime().submit(std::move(t)).get();
+    return dftu_utils_test::ok(
+        dftracer::utils::default_runtime().submit(std::move(t)).get());
 }
 
 struct SpillDirVar {

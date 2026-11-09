@@ -14,6 +14,7 @@
 #include <dftracer/utils/utilities/reader/internal/reader.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <fstream>
@@ -140,7 +141,8 @@ TEST_CASE("C++ Reader - Basic functionality") {
         dstd::String result;
 
         // Stream data until no more available
-        std::size_t bytes_read = reader->read(0, 50, buffer, buffer_size);
+        std::size_t bytes_read =
+            dftu_utils_test::ok(reader->read(0, 50, buffer, buffer_size));
         CHECK(bytes_read > 0);
 
         std::printf("Read %zu bytes\n", bytes_read);
@@ -212,7 +214,8 @@ TEST_CASE("C++ API - Data range reading") {
         dstd::String content;
 
         // Stream data until no more available
-        std::size_t bytes_read = reader->read(0, 50, buffer, buffer_size);
+        std::size_t bytes_read =
+            dftu_utils_test::ok(reader->read(0, 50, buffer, buffer_size));
         CHECK(bytes_read > 0);
         content.append(buffer, bytes_read);
 
@@ -244,9 +247,11 @@ TEST_CASE("C++ API - Edge cases") {
         auto reader = ReaderFactory::create(gz_file, idx_file);
         REQUIRE(reader != nullptr);
         char buffer[1024];
-        CHECK_THROWS(reader->read(100, 50, buffer, sizeof(buffer)));
-        CHECK_THROWS(reader->read(50, 50, buffer,
-                                  sizeof(buffer)));  // Equal start and end
+        CHECK_THROWS(
+            dftu_utils_test::ok(reader->read(100, 50, buffer, sizeof(buffer))));
+        CHECK_THROWS(dftu_utils_test::ok(
+            reader->read(50, 50, buffer,
+                         sizeof(buffer))));  // Equal start and end
     }
 
     SUBCASE("Non-existent file should throw") {
@@ -290,8 +295,8 @@ TEST_CASE("C++ API - Integration test") {
         std::size_t offset1 = 0;
         std::size_t end1 = 100;
         while (offset1 < end1 &&
-               (bytes_read =
-                    reader->read(offset1, end1, buffer, sizeof(buffer))) > 0) {
+               (bytes_read = dftu_utils_test::ok(
+                    reader->read(offset1, end1, buffer, sizeof(buffer)))) > 0) {
             content1.append(buffer, bytes_read);
             offset1 += bytes_read;
         }
@@ -302,8 +307,8 @@ TEST_CASE("C++ API - Integration test") {
         std::size_t offset2 = 100;
         std::size_t end2 = 200;
         while (offset2 < end2 &&
-               (bytes_read =
-                    reader->read(offset2, end2, buffer, sizeof(buffer))) > 0) {
+               (bytes_read = dftu_utils_test::ok(
+                    reader->read(offset2, end2, buffer, sizeof(buffer)))) > 0) {
             content2.append(buffer, bytes_read);
             offset2 += bytes_read;
         }
@@ -346,8 +351,9 @@ TEST_CASE("C++ API - Memory safety stress test" * doctest::test_suite("vg")) {
         std::size_t end =
             std::min<std::size_t>(4 * 1024 * 1024, reader->max_bytes());
 
-        while (offset < end && (bytes_read = reader->read(
-                                    offset, end, buffer, sizeof(buffer))) > 0) {
+        while (offset < end &&
+               (bytes_read = dftu_utils_test::ok(
+                    reader->read(offset, end, buffer, sizeof(buffer)))) > 0) {
             total_bytes += bytes_read;
             offset += bytes_read;
         }
@@ -399,7 +405,8 @@ TEST_CASE("C++ API - Exception handling comprehensive tests") {
         // Operations on valid moved reader should work
         CHECK_NOTHROW(moved_reader->max_bytes());
         char buffer[1024];
-        CHECK_NOTHROW(moved_reader->read(0, 100, buffer, sizeof(buffer)));
+        CHECK_NOTHROW(dftu_utils_test::ok(
+            moved_reader->read(0, 100, buffer, sizeof(buffer))));
     }
 
     SUBCASE("Invalid read parameters should throw") {
@@ -416,10 +423,12 @@ TEST_CASE("C++ API - Exception handling comprehensive tests") {
 
         // Invalid ranges should throw
         char buffer[1024];
-        CHECK_THROWS_AS(reader->read(100, 50, buffer, sizeof(buffer)),
-                        utilities::reader::ReaderError);  // start > end
-        CHECK_THROWS_AS(reader->read(50, 50, buffer, sizeof(buffer)),
-                        utilities::reader::ReaderError);  // start == end
+        CHECK_THROWS_AS(
+            dftu_utils_test::ok(reader->read(100, 50, buffer, sizeof(buffer))),
+            utilities::reader::ReaderError);  // start > end
+        CHECK_THROWS_AS(
+            dftu_utils_test::ok(reader->read(50, 50, buffer, sizeof(buffer))),
+            utilities::reader::ReaderError);  // start == end
     }
 }
 
@@ -512,8 +521,8 @@ TEST_CASE("C++ API - Advanced reader functionality" *
         std::size_t offset1 = 0;
         std::size_t end1 = 100;
         while (offset1 < end1 &&
-               (bytes_read1 = reader1->read(offset1, end1, buffer1,
-                                            sizeof(buffer1))) > 0) {
+               (bytes_read1 = dftu_utils_test::ok(reader1->read(
+                    offset1, end1, buffer1, sizeof(buffer1)))) > 0) {
             result1.append(buffer1, bytes_read1);
             offset1 += bytes_read1;
         }
@@ -523,8 +532,8 @@ TEST_CASE("C++ API - Advanced reader functionality" *
         std::size_t offset2 = 0;
         std::size_t end2 = 100;
         while (offset2 < end2 &&
-               (bytes_read2 = reader2->read(offset2, end2, buffer2,
-                                            sizeof(buffer2))) > 0) {
+               (bytes_read2 = dftu_utils_test::ok(reader2->read(
+                    offset2, end2, buffer2, sizeof(buffer2)))) > 0) {
             result2.append(buffer2, bytes_read2);
             offset2 += bytes_read2;
         }
@@ -566,8 +575,9 @@ TEST_CASE("C++ API - Advanced reader functionality" *
         std::size_t bytes_read;
         std::size_t offset = 0;
         std::size_t end = 10;
-        while (offset < end && (bytes_read = reader->read_line_bytes(
-                                    offset, end, buffer, sizeof(buffer))) > 0) {
+        while (offset < end &&
+               (bytes_read = dftu_utils_test::ok(reader->read_line_bytes(
+                    offset, end, buffer, sizeof(buffer)))) > 0) {
             result.append(buffer, bytes_read);
             offset += bytes_read;
         }
@@ -580,8 +590,8 @@ TEST_CASE("C++ API - Advanced reader functionality" *
             offset = 100;
             end = 1000;
             while (offset < end &&
-                   (bytes_read = reader->read_line_bytes(offset, end, buffer,
-                                                         sizeof(buffer))) > 0) {
+                   (bytes_read = dftu_utils_test::ok(reader->read_line_bytes(
+                        offset, end, buffer, sizeof(buffer)))) > 0) {
                 result.append(buffer, bytes_read);
                 offset += bytes_read;
             }
@@ -594,8 +604,8 @@ TEST_CASE("C++ API - Advanced reader functionality" *
             offset = 1000;
             end = 10000;
             while (offset < end &&
-                   (bytes_read = reader->read_line_bytes(offset, end, buffer,
-                                                         sizeof(buffer))) > 0) {
+                   (bytes_read = dftu_utils_test::ok(reader->read_line_bytes(
+                        offset, end, buffer, sizeof(buffer)))) > 0) {
                 result.append(buffer, bytes_read);
                 offset += bytes_read;
             }
@@ -618,8 +628,8 @@ TEST_CASE("C++ API - Advanced reader functionality" *
             std::size_t offset = max_bytes - 50;
             std::size_t end = max_bytes;
             while (offset < end &&
-                   (bytes_read = reader->read(offset, end, buffer,
-                                              sizeof(buffer))) > 0) {
+                   (bytes_read = dftu_utils_test::ok(reader->read(
+                        offset, end, buffer, sizeof(buffer)))) > 0) {
                 result.append(buffer, bytes_read);
                 offset += bytes_read;
             }
@@ -630,8 +640,8 @@ TEST_CASE("C++ API - Advanced reader functionality" *
             offset = 0;
             end = 1;
             while (offset < end &&
-                   (bytes_read = reader->read(offset, end, buffer,
-                                              sizeof(buffer))) > 0) {
+                   (bytes_read = dftu_utils_test::ok(reader->read(
+                        offset, end, buffer, sizeof(buffer)))) > 0) {
                 result.append(buffer, bytes_read);
                 offset += bytes_read;
             }
@@ -641,7 +651,8 @@ TEST_CASE("C++ API - Advanced reader functionality" *
         // Read beyond file (should throw exception)
         result.clear();
         CHECK_THROWS_AS(
-            reader->read(max_bytes, max_bytes + 1000, buffer, sizeof(buffer)),
+            dftu_utils_test::ok(reader->read(max_bytes, max_bytes + 1000,
+                                             buffer, sizeof(buffer))),
             utilities::reader::ReaderError);
     }
 }
@@ -676,8 +687,9 @@ TEST_CASE("C++ API - JSON boundary detection") {
         std::size_t offset = 0;
         std::size_t end = 100;
 
-        while (offset < end && (bytes_read = reader->read_line_bytes(
-                                    offset, end, buffer, sizeof(buffer))) > 0) {
+        while (offset < end &&
+               (bytes_read = dftu_utils_test::ok(reader->read_line_bytes(
+                    offset, end, buffer, sizeof(buffer)))) > 0) {
             content.append(buffer, bytes_read);
             offset += bytes_read;
         }
@@ -704,8 +716,9 @@ TEST_CASE("C++ API - JSON boundary detection") {
         std::size_t offset = 0;
         std::size_t end = 500;
 
-        while (offset < end && (bytes_read = reader->read_line_bytes(
-                                    offset, end, buffer, sizeof(buffer))) > 0) {
+        while (offset < end &&
+               (bytes_read = dftu_utils_test::ok(reader->read_line_bytes(
+                    offset, end, buffer, sizeof(buffer)))) > 0) {
             content.append(buffer, bytes_read);
             offset += bytes_read;
         }
@@ -740,8 +753,8 @@ TEST_CASE("C++ API - JSON boundary detection") {
             std::size_t end = current_pos + segment_size;
 
             while (offset < end &&
-                   (bytes_read = reader->read_line_bytes(offset, end, buffer,
-                                                         sizeof(buffer))) > 0) {
+                   (bytes_read = dftu_utils_test::ok(reader->read_line_bytes(
+                        offset, end, buffer, sizeof(buffer)))) > 0) {
                 content.append(buffer, bytes_read);
                 offset += bytes_read;
             }
@@ -810,8 +823,8 @@ TEST_CASE("C++ API - Regression and stress tests") {
             std::size_t offset = 1000;
             std::size_t end = 50000;
             while (offset < end &&
-                   (bytes_read = reader->read_line_bytes(offset, end, buffer,
-                                                         sizeof(buffer))) > 0) {
+                   (bytes_read = dftu_utils_test::ok(reader->read_line_bytes(
+                        offset, end, buffer, sizeof(buffer)))) > 0) {
                 content.append(buffer, bytes_read);
                 offset += bytes_read;
             }
@@ -884,8 +897,8 @@ TEST_CASE("C++ API - Regression and stress tests") {
             std::size_t offset = 0;
             std::size_t end = 10000;
             while (offset < end &&
-                   (bytes_read = reader->read_line_bytes(offset, end, buffer,
-                                                         sizeof(buffer))) > 0) {
+                   (bytes_read = dftu_utils_test::ok(reader->read_line_bytes(
+                        offset, end, buffer, sizeof(buffer)))) > 0) {
                 content.append(buffer, bytes_read);
                 offset += bytes_read;
             }
@@ -914,8 +927,8 @@ TEST_CASE("C++ API - Regression and stress tests") {
             std::size_t offset = 0;
             std::size_t end = 100;
             while (offset < end &&
-                   (bytes_read = reader->read_line_bytes(offset, end, buffer,
-                                                         sizeof(buffer))) > 0) {
+                   (bytes_read = dftu_utils_test::ok(reader->read_line_bytes(
+                        offset, end, buffer, sizeof(buffer)))) > 0) {
                 content.append(buffer, bytes_read);
                 offset += bytes_read;
             }
@@ -964,8 +977,8 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
         std::size_t bytes_read;
         std::size_t offset = 0;
         std::size_t end = 50;
-        while (offset < end && (bytes_read = reader->read(offset, end, buffer,
-                                                          buffer_size)) > 0) {
+        while (offset < end && (bytes_read = dftu_utils_test::ok(reader->read(
+                                    offset, end, buffer, buffer_size))) > 0) {
             raw_result.append(buffer, bytes_read);
             offset += bytes_read;
         }
@@ -994,8 +1007,8 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
         std::size_t offset1 = 0;
         std::size_t end1 = 100;
         while (offset1 < end1 &&
-               (bytes_read1 =
-                    reader1->read(offset1, end1, buffer1, buffer_size)) > 0) {
+               (bytes_read1 = dftu_utils_test::ok(
+                    reader1->read(offset1, end1, buffer1, buffer_size))) > 0) {
             raw_result.append(buffer1, bytes_read1);
             offset1 += bytes_read1;
         }
@@ -1005,8 +1018,8 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
         std::size_t offset2 = 0;
         std::size_t end2 = 100;
         while (offset2 < end2 &&
-               (bytes_read2 = reader2->read_line_bytes(offset2, end2, buffer2,
-                                                       buffer_size)) > 0) {
+               (bytes_read2 = dftu_utils_test::ok(reader2->read_line_bytes(
+                    offset2, end2, buffer2, buffer_size))) > 0) {
             regular_result.append(buffer2, bytes_read2);
             offset2 += bytes_read2;
         }
@@ -1044,8 +1057,8 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
         std::size_t offset1 = 0;
         std::size_t end1 = 75;
         while (offset1 < end1 &&
-               (bytes_read1 =
-                    reader->read(offset1, end1, buffer1, buffer_size)) > 0) {
+               (bytes_read1 = dftu_utils_test::ok(
+                    reader->read(offset1, end1, buffer1, buffer_size))) > 0) {
             result1.append(buffer1, bytes_read1);
             offset1 += bytes_read1;
         }
@@ -1057,8 +1070,8 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
         std::size_t offset2 = 0;
         std::size_t end2 = 75;
         while (offset2 < end2 &&
-               (bytes_read2 =
-                    reader->read(offset2, end2, buffer2, buffer_size)) > 0) {
+               (bytes_read2 = dftu_utils_test::ok(
+                    reader->read(offset2, end2, buffer2, buffer_size))) > 0) {
             result2.append(buffer2, bytes_read2);
             offset2 += bytes_read2;
         }
@@ -1082,8 +1095,9 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
         std::size_t bytes_read;
         std::size_t offset = 0;
         std::size_t end = 1;
-        while (offset < end && (bytes_read = reader->read(
-                                    offset, end, buffer, sizeof(buffer))) > 0) {
+        while (offset < end &&
+               (bytes_read = dftu_utils_test::ok(
+                    reader->read(offset, end, buffer, sizeof(buffer)))) > 0) {
             result.append(buffer, bytes_read);
             offset += bytes_read;
         }
@@ -1095,8 +1109,8 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
             offset = max_bytes - 10;
             end = max_bytes - 1;
             while (offset < end &&
-                   (bytes_read = reader->read(offset, end, buffer,
-                                              sizeof(buffer))) > 0) {
+                   (bytes_read = dftu_utils_test::ok(reader->read(
+                        offset, end, buffer, sizeof(buffer)))) > 0) {
                 result.append(buffer, bytes_read);
                 offset += bytes_read;
             }
@@ -1104,8 +1118,10 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
         }
 
         // Invalid ranges should still throw
-        CHECK_THROWS(reader->read(100, 50, buffer, sizeof(buffer)));
-        CHECK_THROWS(reader->read(50, 50, buffer, sizeof(buffer)));
+        CHECK_THROWS(
+            dftu_utils_test::ok(reader->read(100, 50, buffer, sizeof(buffer))));
+        CHECK_THROWS(
+            dftu_utils_test::ok(reader->read(50, 50, buffer, sizeof(buffer))));
     }
 
     SUBCASE("Raw read with small buffer") {
@@ -1122,8 +1138,8 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
         std::size_t offset = 0;
         std::size_t end = 200;
         while (offset < end &&
-               (bytes_read = reader->read(offset, end, small_buffer,
-                                          small_buffer_size)) > 0) {
+               (bytes_read = dftu_utils_test::ok(reader->read(
+                    offset, end, small_buffer, small_buffer_size))) > 0) {
             result.append(small_buffer, bytes_read);
             offset += bytes_read;
             total_calls++;
@@ -1155,8 +1171,8 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
                 std::size_t offset = range.first;
                 std::size_t end = range.second;
                 while (offset < end &&
-                       (bytes_read = reader->read(offset, end, buffer,
-                                                  sizeof(buffer))) > 0) {
+                       (bytes_read = dftu_utils_test::ok(reader->read(
+                            offset, end, buffer, sizeof(buffer)))) > 0) {
                     segment.append(buffer, bytes_read);
                     offset += bytes_read;
                 }
@@ -1186,8 +1202,8 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
         std::size_t bytes_read1;
         std::size_t offset1 = 0;
         while (offset1 < max_bytes &&
-               (bytes_read1 = reader1->read(offset1, max_bytes, buffer,
-                                            sizeof(buffer))) > 0) {
+               (bytes_read1 = dftu_utils_test::ok(reader1->read(
+                    offset1, max_bytes, buffer, sizeof(buffer)))) > 0) {
             raw_content.append(buffer, bytes_read1);
             offset1 += bytes_read1;
         }
@@ -1197,8 +1213,8 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
         std::size_t bytes_read2;
         std::size_t offset2 = 0;
         while (offset2 < max_bytes &&
-               (bytes_read2 = reader2->read_line_bytes(
-                    offset2, max_bytes, buffer, sizeof(buffer))) > 0) {
+               (bytes_read2 = dftu_utils_test::ok(reader2->read_line_bytes(
+                    offset2, max_bytes, buffer, sizeof(buffer)))) > 0) {
             json_content.append(buffer, bytes_read2);
             offset2 += bytes_read2;
         }
@@ -1282,7 +1298,7 @@ TEST_CASE("C++ Reader - Line reading functionality" *
         REQUIRE(reader != nullptr);
 
         // Read first 5 lines
-        dstd::String result = reader->read_lines(1, 5);
+        dstd::String result = dftu_utils_test::ok(reader->read_lines(1, 5));
         CHECK(!result.empty());
 
         // Count newlines to verify we got the right number of lines
@@ -1303,7 +1319,8 @@ TEST_CASE("C++ Reader - Line reading functionality" *
         // Test specific line numbers that should contain predictable content
         for (std::size_t line_num :
              dstd::Vector<std::size_t>({1, 10, 50, 100})) {
-            dstd::String result = reader->read_lines(line_num, line_num);
+            dstd::String result =
+                dftu_utils_test::ok(reader->read_lines(line_num, line_num));
             CHECK(!result.empty());
 
             // Should contain id: N where N = line_num
@@ -1325,7 +1342,7 @@ TEST_CASE("C++ Reader - Line reading functionality" *
         REQUIRE(reader != nullptr);
 
         // Read line range 10-15 (6 lines total)
-        dstd::String result = reader->read_lines(10, 15);
+        dstd::String result = dftu_utils_test::ok(reader->read_lines(10, 15));
         CHECK(!result.empty());
 
         // Count lines
@@ -1352,7 +1369,7 @@ TEST_CASE("C++ Reader - Line reading functionality" *
         // Test that our line numbering matches sed's 1-based numbering
         // Line 1 should contain id: 1, line 2 should contain id: 2, etc.
         for (std::size_t i = 1; i <= 5; ++i) {
-            dstd::String result = reader->read_lines(i, i);
+            dstd::String result = dftu_utils_test::ok(reader->read_lines(i, i));
             dstd::String expected_id = "\"id\": " + dstd::to_string(i);
             CHECK(result.find(expected_id) != dstd::String::npos);
         }
@@ -1363,13 +1380,13 @@ TEST_CASE("C++ Reader - Line reading functionality" *
         REQUIRE(reader != nullptr);
 
         // 0-based line numbers should throw (we use 1-based)
-        CHECK_THROWS_AS(reader->read_lines(0, 5),
+        CHECK_THROWS_AS(dftu_utils_test::ok(reader->read_lines(0, 5)),
                         dftracer::utils::common::DFTUtilsException);
-        CHECK_THROWS_AS(reader->read_lines(1, 0),
+        CHECK_THROWS_AS(dftu_utils_test::ok(reader->read_lines(1, 0)),
                         dftracer::utils::common::DFTUtilsException);
 
         // start > end should throw
-        CHECK_THROWS_AS(reader->read_lines(10, 5),
+        CHECK_THROWS_AS(dftu_utils_test::ok(reader->read_lines(10, 5)),
                         dftracer::utils::common::DFTUtilsException);
     }
 
@@ -1384,7 +1401,8 @@ TEST_CASE("C++ Reader - Line reading functionality" *
 
         if (total_line_count > 100) {
             // Read a large range
-            dstd::String result = reader->read_lines(1, 100);
+            dstd::String result =
+                dftu_utils_test::ok(reader->read_lines(1, 100));
             CHECK(!result.empty());
 
             // Count lines
@@ -1412,7 +1430,8 @@ TEST_CASE("C++ Reader - Line reading functionality" *
         if (total_lines > 10) {
             // Read last few lines
             std::size_t start_line = total_lines - 5;
-            dstd::String result = reader->read_lines(start_line, total_lines);
+            dstd::String result = dftu_utils_test::ok(
+                reader->read_lines(start_line, total_lines));
             CHECK(!result.empty());
 
             // Should have exactly 6 lines (start_line through total_lines
@@ -1440,7 +1459,8 @@ TEST_CASE("C++ Reader - Line reading functionality" *
 
         for (std::size_t line_num : test_lines) {
             if (line_num <= total_lines) {
-                dstd::String result = reader->read_lines(line_num, line_num);
+                dstd::String result =
+                    dftu_utils_test::ok(reader->read_lines(line_num, line_num));
                 CHECK(!result.empty());
 
                 // Should have exactly one line
@@ -1512,8 +1532,8 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
                 std::size_t bytes_read;
                 std::size_t offset = start;
                 while (offset < end &&
-                       (bytes_read = reader->read(offset, end, buffer,
-                                                  sizeof(buffer))) > 0) {
+                       (bytes_read = dftu_utils_test::ok(reader->read(
+                            offset, end, buffer, sizeof(buffer)))) > 0) {
                     result.append(buffer, bytes_read);
                     offset += bytes_read;
                 }
@@ -1566,8 +1586,8 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
             std::size_t offset = 0;
             std::size_t end = 50;
             while (offset < end &&
-                   (bytes_read = reader->read(offset, end, buffer,
-                                              sizeof(buffer))) > 0) {
+                   (bytes_read = dftu_utils_test::ok(reader->read(
+                        offset, end, buffer, sizeof(buffer)))) > 0) {
                 result.append(buffer, bytes_read);
                 offset += bytes_read;
             }
@@ -1599,8 +1619,8 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
             std::size_t offset = max_bytes - 100;
             std::size_t end = max_bytes - 1;
             while (offset < end &&
-                   (bytes_read = reader->read(offset, end, buffer,
-                                              sizeof(buffer))) > 0) {
+                   (bytes_read = dftu_utils_test::ok(reader->read(
+                        offset, end, buffer, sizeof(buffer)))) > 0) {
                 result.append(buffer, bytes_read);
                 offset += bytes_read;
             }
@@ -1612,8 +1632,8 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
                 offset = max_bytes - 1;
                 end = max_bytes;
                 while (offset < end &&
-                       (bytes_read = reader->read(offset, end, buffer,
-                                                  sizeof(buffer))) > 0) {
+                       (bytes_read = dftu_utils_test::ok(reader->read(
+                            offset, end, buffer, sizeof(buffer)))) > 0) {
                     result.append(buffer, bytes_read);
                     offset += bytes_read;
                 }
@@ -1649,8 +1669,8 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
             std::size_t offset = 0;
             std::size_t end = 1000;
             while (offset < end &&
-                   (bytes_read = reader->read(offset, end, buffer,
-                                              sizeof(buffer))) > 0) {
+                   (bytes_read = dftu_utils_test::ok(reader->read(
+                        offset, end, buffer, sizeof(buffer)))) > 0) {
                 result.append(buffer, bytes_read);
                 offset += bytes_read;
             }
@@ -1661,8 +1681,8 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
             offset = 500;
             end = 1500;
             while (offset < end &&
-                   (bytes_read = reader->read(offset, end, buffer,
-                                              sizeof(buffer))) > 0) {
+                   (bytes_read = dftu_utils_test::ok(reader->read(
+                        offset, end, buffer, sizeof(buffer)))) > 0) {
                 result.append(buffer, bytes_read);
                 offset += bytes_read;
             }

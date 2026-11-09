@@ -11,6 +11,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 #include <stdexcept>
@@ -97,7 +98,8 @@ dataframe::LazyFrame scan(dstd::Vector<dstd::String> dyn = {"x", "y"}) {
 }
 
 dataframe::DataFrame run(const dataframe::LazyFrame& lf) {
-    return dftracer::utils::default_runtime().submit(lf.collect()).get();
+    return dftu_utils_test::ok(
+        dftracer::utils::default_runtime().submit(lf.collect()).get());
 }
 
 using Names = dstd::Vector<dstd::String>;

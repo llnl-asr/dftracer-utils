@@ -32,13 +32,6 @@ struct is_async_generator<AsyncGenerator<T>> : std::true_type {};
 template <typename T>
 inline constexpr bool is_async_generator_v = is_async_generator<T>::value;
 
-template <typename T>
-struct is_coro_task : std::false_type {};
-template <typename T>
-struct is_coro_task<CoroTask<T>> : std::true_type {};
-template <typename T>
-inline constexpr bool is_coro_task_v = is_coro_task<T>::value;
-
 template <typename R>
 struct UnwrapTask {
     using type = R;
@@ -54,9 +47,9 @@ struct UnwrapTask<CoroTask<T>> {
  * @brief Asynchronous lazy sequence.
  *
  * A wait inside it follows the same cancel rules as a @ref CoroTask, through
- * the task that reads it: a stop or a cancel of that task ends the wait, and
- * the read raises dstd::Condition::Cancelled. The operations on streams are in
- * `coro/stream.h`.
+ * the task that reads it: a stop or a cancel of that task ends the wait, the
+ * generator ends as cancelled and the task that reads it stops. The operations
+ * on streams are in `coro/stream.h`.
  */
 template <typename T>
 class AsyncGenerator {
@@ -169,12 +162,14 @@ class AsyncGenerator {
             p.continuation_executor = awaiter_executor;
             if (p.executor == nullptr) p.executor = awaiter_executor;
             handle_.resume();
+            if (!p.handoff.exchange(true, std::memory_order_acq_rel))
+                return true;
             if constexpr (requires { awaiting.promise().propagate_cancel(); }) {
                 if (p.cancelled && awaiting.promise().propagate_cancel()) {
                     return true;
                 }
             }
-            return !p.handoff.exchange(true, std::memory_order_acq_rel);
+            return false;
         }
 
         dstd::Optional<T> await_resume() {
@@ -182,7 +177,8 @@ class AsyncGenerator {
                 return dstd::nullopt;
             }
             if (handle_.promise().cancelled) {
-                throw_cancelled("generator cancelled");
+                detail::cancelled_unstoppable(
+                    "a stopped generator read by a frame that cannot stop");
             }
             if (handle_.promise().exception) {
                 common::rethrow_and_clear(handle_.promise().exception);
@@ -237,6 +233,51 @@ class AsyncGenerator {
         }
         return NextAwaitable{handle_};
     }
+
+    /// The read of @ref next that gives how it ended and never ends the reader:
+    /// an item or the end (an empty inner optional), a stop, or an exception.
+    class SettledNext {
+       public:
+        static constexpr bool CANCEL_EXEMPT = true;
+
+        explicit SettledNext(std::coroutine_handle<promise_type> handle)
+            : next_(handle), handle_(handle) {}
+
+        bool await_ready() const noexcept { return next_.await_ready(); }
+
+        template <typename Promise>
+        bool await_suspend(std::coroutine_handle<Promise> awaiting) noexcept {
+            return next_.await_suspend(awaiting);
+        }
+
+        detail::Settled<dstd::Optional<T>> await_resume() noexcept(
+            std::is_nothrow_move_constructible_v<T>) {
+            detail::Settled<dstd::Optional<T>> out;
+            if (!handle_) {
+                out.value.emplace();
+                return out;
+            }
+            auto& promise = handle_.promise();
+            if (promise.cancelled) {
+                out.stopped = true;
+            } else if (promise.exception) {
+                out.exception = std::move(promise.exception);
+                promise.exception = nullptr;
+            } else if (handle_.done() || !promise.has_value) {
+                out.value.emplace();
+            } else {
+                out.value.emplace(std::move(*promise.value_ptr()));
+                promise.clear_value();
+            }
+            return out;
+        }
+
+       private:
+        NextAwaitable next_;
+        std::coroutine_handle<promise_type> handle_;
+    };
+
+    SettledNext settled_next() { return SettledNext{handle_}; }
 
     bool done() const { return !handle_ || handle_.done(); }
 

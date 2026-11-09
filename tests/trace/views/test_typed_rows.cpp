@@ -9,6 +9,7 @@
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/trace/views/typed_rows.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -104,7 +105,7 @@ TEST_SUITE("TypedRows") {
                 CHECK(dstd::String(**r.host) == "h" + dstd::to_string(i));
         }
 
-        const auto df = view_of(gz).collect().get();
+        const auto df = dftu_utils_test::ok(view_of(gz).collect().get());
         REQUIRE(df.num_rows() == RECORDS);
         dstd::Vector<dstd::Pair<dstd::String, std::int64_t>> want, have;
         for (std::int64_t i = 0; i < RECORDS; ++i)
@@ -161,7 +162,8 @@ TEST_SUITE("TypedRows") {
             CHECK(e.size->has_value());
         }
         const auto any = view_of(gz).phase(Phase::Any);
-        CHECK(run(rows<Event>(any)).size() == any.collect().get().num_rows());
+        CHECK(run(rows<Event>(any)).size() ==
+              dftu_utils_test::ok(any.collect().get()).num_rows());
         const auto meta = run(rows<Event>(view_of(gz).phase(Phase::Metadata)));
         REQUIRE(meta.size() == 1);
         CHECK(*meta[0].name == "process_name");

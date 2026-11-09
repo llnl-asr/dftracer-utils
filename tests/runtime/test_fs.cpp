@@ -14,6 +14,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <sys/stat.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <unistd.h>
 
@@ -29,7 +30,8 @@ using dstd::fs::FileKind;
 template <typename Fn>
 void run_in_scope(Fn fn) {
     Runtime rt;
-    rt.block_on(coro::named("fs test", coro::with_scope(std::move(fn))));
+    dftu_utils_test::ok(
+        rt.block_on(coro::named("fs test", coro::with_scope(std::move(fn)))));
 }
 
 void write_file_at(const dstd::Path& path, dstd::StringView text) {
@@ -356,12 +358,14 @@ TEST_CASE("find_all - on a plain thread with no IO backend") {
     dftu_utils_test::ScopedTestDir dir("dftu_test_runtime_fs");
     const dstd::Path root = make_tree(dir);
     dstd::Vector<FoundFile> files;
-    coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
-        FindOptions options_found = trace_options();
-        auto found = co_await find_all(scope, root, std::move(options_found));
-        REQUIRE(found.has_value());
-        files = std::move(*found);
-    }).get();
+    dftu_utils_test::ok(
+        coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
+            FindOptions options_found = trace_options();
+            auto found =
+                co_await find_all(scope, root, std::move(options_found));
+            REQUIRE(found.has_value());
+            files = std::move(*found);
+        }).get());
     CHECK(files.size() == 3);
 }
 

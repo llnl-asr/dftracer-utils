@@ -8,6 +8,7 @@
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <zlib.h>
 
@@ -250,11 +251,12 @@ TEST_CASE("records carry the run id and resolve run keys through the index") {
 
     const dstd::String index_path = d.file(".dftindex");
     auto rows = [&](const dstd::String& q) {
-        return trace::views::View::from_file(dstd::String(out),
-                                             dstd::String(index_path))
-            .duql(q)
-            .collect()
-            .get()
+        return dftu_utils_test::ok(
+                   trace::views::View::from_file(dstd::String(out),
+                                                 dstd::String(index_path))
+                       .duql(q)
+                       .collect()
+                       .get())
             .num_rows();
     };
     const std::size_t x = rows(R"(run -> runs.unique_input == "x")");
@@ -264,13 +266,13 @@ TEST_CASE("records carry the run id and resolve run keys through the index") {
     CHECK(rows("run -> runs.nodes == 1") == records);
     CHECK(rows(R"(run -> runs.papi_set == "set1")") == records);
 
-    const auto df = trace::views::View::from_file(dstd::String(out),
-                                                  dstd::String(index_path))
-                        .duql(
-                            "derive u = run -> runs.unique_input | select "
-                            "path, u")
-                        .collect()
-                        .get();
+    const auto df = dftu_utils_test::ok(
+        trace::views::View::from_file(dstd::String(out),
+                                      dstd::String(index_path))
+            .duql("derive u = run -> runs.unique_input | select "
+                  "path, u")
+            .collect()
+            .get());
     const auto& col = df.columns[df.column_index("u")];
     REQUIRE(col.length() > 0);
     for (std::int64_t i = 0; i < col.length(); ++i) {
@@ -278,11 +280,12 @@ TEST_CASE("records carry the run id and resolve run keys through the index") {
         CHECK((v == "x" || v == "y"));
     }
 
-    const auto runs = trace::views::View::from_file(dstd::String(out),
-                                                    dstd::String(index_path))
-                          .duql("from runs | where true")
-                          .collect()
-                          .get();
+    const auto runs =
+        dftu_utils_test::ok(trace::views::View::from_file(
+                                dstd::String(out), dstd::String(index_path))
+                                .duql("from runs | where true")
+                                .collect()
+                                .get());
     CHECK(runs.num_rows() == 2);
     for (const char* name :
          {"run", "app", "system", "unique_input", "nodes", "ppn", "papi_set",
@@ -292,11 +295,12 @@ TEST_CASE("records carry the run id and resolve run keys through the index") {
     }
 
     CHECK(rows(R"(gtype == "run")") == 0);
-    const auto run_records = trace::views::View::from_file(
-                                 dstd::String(out), dstd::String(index_path))
-                                 .duql(R"(from all | where gtype == "run")")
-                                 .collect()
-                                 .get();
+    const auto run_records =
+        dftu_utils_test::ok(trace::views::View::from_file(
+                                dstd::String(out), dstd::String(index_path))
+                                .duql(R"(from all | where gtype == "run")")
+                                .collect()
+                                .get());
     CHECK(run_records.num_rows() == 2);
     CHECK(run_records.column_index("summary.ok") >= 0);
 }

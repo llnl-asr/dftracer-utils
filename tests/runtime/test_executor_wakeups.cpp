@@ -15,6 +15,7 @@
 #include <fcntl.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <unistd.h>
 
@@ -73,7 +74,7 @@ TEST_SUITE("ExecutorWakeups") {
             for (std::size_t i = 0; i < THREADS; ++i) {
                 handles.push_back(rt.submit(tiny(), "Tiny"));
             }
-            for (auto& handle : handles) handle.wait();
+            for (auto& handle : handles) dftu_utils_test::ok(handle.wait());
             std::this_thread::sleep_for(60ms);
         }
         const auto switches = context_switches() - before;
@@ -110,7 +111,7 @@ TEST_SUITE("ExecutorWakeups") {
             REQUIRE(gate.try_acquire(1));
         };
         auto outer = [&]() -> coro::CoroTask<void> {
-            inner().get();
+            dftu_utils_test::ok(inner().get());
             finished_ns.store(
                 std::chrono::steady_clock::now().time_since_epoch().count(),
                 std::memory_order_release);
@@ -127,7 +128,7 @@ TEST_SUITE("ExecutorWakeups") {
             std::this_thread::sleep_for(WAIT);
             const auto released = std::chrono::steady_clock::now();
             gate.release(1);
-            handle.wait();
+            dftu_utils_test::ok(handle.wait());
             latencies.push_back(std::chrono::nanoseconds(finished_ns.load()) -
                                 released.time_since_epoch());
         }
@@ -167,7 +168,7 @@ TEST_SUITE("ExecutorWakeups") {
 
         Runtime rt(1);
         bool landed = false;
-        rt.block_on(coro::named(
+        dftu_utils_test::ok(rt.block_on(coro::named(
             "io_flush",
             coro::with_scope([&](coro::Scope& s) -> coro::CoroTask<void> {
                 s.spawn([fd]() -> coro::CoroTask<void> {
@@ -184,7 +185,7 @@ TEST_SUITE("ExecutorWakeups") {
                     std::this_thread::sleep_for(1ms);
                 }
                 co_return;
-            })));
+            }))));
         rt.shutdown();
         dstd::fs::remove(path).discard();
         CHECK(landed);

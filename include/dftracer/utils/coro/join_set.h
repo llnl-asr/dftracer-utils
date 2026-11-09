@@ -3,7 +3,6 @@
 #define DFTRACER_UTILS_CORO_JOIN_SET_H
 
 #include <dftracer/utils/coro/async_generator.h>
-#include <dftracer/utils/coro/cancelled.h>
 #include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/coro/combinators.h>
 #include <dftracer/utils/coro/scope.h>
@@ -13,6 +12,7 @@
 #include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/vector.h>
 
 #include <chrono>
@@ -71,36 +71,36 @@ class JoinReport {
 
 template <class T>
 CoroTask<void> join_set_child(CoroTask<T> task, JoinReport<T> report) {
-    std::exception_ptr error;
-    try {
-        if constexpr (std::is_void_v<T>) {
-            co_await std::move(task);
-            report.send({});
-        } else {
-            T value = co_await std::move(task);
-            report.send(std::move(value));
-        }
-    } catch (...) {
-        error = std::current_exception();
+    auto settled = co_await settle(std::move(task));
+    if (settled.exception) {
+        report.send(
+            dstd::Unexpected(common::error_of_exception(settled.exception)));
+    } else if (settled.stopped) {
+        // The report sends the cancelled outcome when the frame ends.
+        co_await stop_here();
+    } else if constexpr (std::is_void_v<T>) {
+        report.send({});
+    } else {
+        report.send(std::move(*settled.value));
     }
-    if (error) report.send(dstd::Unexpected(error_from_exception(error)));
 }
 
 template <class T>
 CoroTask<dstd::Expected<T, dstd::Error>> settle_task(CoroTask<T> task) {
-    std::exception_ptr error;
-    try {
-        if constexpr (std::is_void_v<T>) {
-            co_await std::move(task);
-            co_return dstd::Expected<T, dstd::Error>{};
-        } else {
-            T value = co_await std::move(task);
-            co_return dstd::Expected<T, dstd::Error>(std::move(value));
-        }
-    } catch (...) {
-        error = std::current_exception();
+    auto settled = co_await settle(std::move(task));
+    if (settled.exception) {
+        co_return dstd::Unexpected(
+            common::error_of_exception(settled.exception));
     }
-    co_return dstd::Unexpected(error_from_exception(error));
+    if (settled.stopped) {
+        co_return dstd::Unexpected(
+            dstd::Error{dstd::Condition::Cancelled, "a task was cancelled"});
+    }
+    if constexpr (std::is_void_v<T>) {
+        co_return dstd::Expected<T, dstd::Error>{};
+    } else {
+        co_return dstd::Expected<T, dstd::Error>(std::move(*settled.value));
+    }
 }
 
 }  // namespace detail
@@ -143,14 +143,16 @@ class JoinSet {
         co_return take_ready();
     }
 
-    /// @ref next that raises a dstd::Condition::Timeout error when @p wait
+    /// @ref next that gives a dstd::Condition::Timeout error when @p wait
     /// passes first. A result that comes at that moment stays for the next
     /// read, which `with_timeout(set.next(), wait)` cannot promise.
     template <class Rep, class Period>
-    CoroTask<Outcome> next_within(std::chrono::duration<Rep, Period> wait) {
+    CoroTask<dstd::Result<Outcome>> next_within(
+        std::chrono::duration<Rep, Period> wait) {
         if (!ready_ && outstanding_ != 0) {
             auto bounded = with_timeout(fill(), wait);
-            co_await std::move(bounded);
+            auto waited = co_await std::move(bounded);
+            if (!waited) co_return dstd::Unexpected(waited.error());
         }
         co_return take_ready();
     }

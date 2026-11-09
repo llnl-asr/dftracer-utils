@@ -17,6 +17,7 @@
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <utilities/plugins/test_plugin_common.h>
 
@@ -153,7 +154,7 @@ void run_host(dstd::Vector<dftu_plugin*> plugins,
         REQUIRE(run.has_value());
         co_return;
     });
-    rt.submit(std::move(task), "plugin-order").wait();
+    dftu_utils_test::ok(rt.submit(std::move(task), "plugin-order").wait());
     rt.shutdown();
 }
 

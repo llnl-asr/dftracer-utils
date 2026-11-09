@@ -7,6 +7,7 @@
 #include <dftracer/utils/dataframe/agg_expr.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
@@ -354,45 +355,65 @@ class GroupBy {
     /// LazyGroupBy::transform over this frame, collected: the group-wise
     /// transforms (`cumsum`, `shift`, `rank`, `head`, ...) with the same
     /// contract and refusals.
-    DataFrame transform(GroupwiseOp kind, std::int64_t n = 0,
-                        RankMethod method = RankMethod::Average,
-                        bool ascending = true) const;
-    DataFrame cumsum() const { return transform(GroupwiseOp::CumSum); }
-    DataFrame cummax() const { return transform(GroupwiseOp::CumMax); }
-    DataFrame cummin() const { return transform(GroupwiseOp::CumMin); }
-    DataFrame cumcount() const { return transform(GroupwiseOp::CumCount); }
-    DataFrame shift(std::int64_t periods = 1) const {
+    dstd::Result<DataFrame> transform(GroupwiseOp kind, std::int64_t n = 0,
+                                      RankMethod method = RankMethod::Average,
+                                      bool ascending = true) const;
+    dstd::Result<DataFrame> cumsum() const {
+        return transform(GroupwiseOp::CumSum);
+    }
+    dstd::Result<DataFrame> cummax() const {
+        return transform(GroupwiseOp::CumMax);
+    }
+    dstd::Result<DataFrame> cummin() const {
+        return transform(GroupwiseOp::CumMin);
+    }
+    dstd::Result<DataFrame> cumcount() const {
+        return transform(GroupwiseOp::CumCount);
+    }
+    dstd::Result<DataFrame> shift(std::int64_t periods = 1) const {
         return transform(GroupwiseOp::Shift, periods);
     }
-    DataFrame diff() const { return transform(GroupwiseOp::Diff); }
-    DataFrame pct_change() const { return transform(GroupwiseOp::PctChange); }
-    DataFrame rank(RankMethod method = RankMethod::Average,
-                   bool ascending = true) const {
+    dstd::Result<DataFrame> diff() const {
+        return transform(GroupwiseOp::Diff);
+    }
+    dstd::Result<DataFrame> pct_change() const {
+        return transform(GroupwiseOp::PctChange);
+    }
+    dstd::Result<DataFrame> rank(RankMethod method = RankMethod::Average,
+                                 bool ascending = true) const {
         return transform(GroupwiseOp::Rank, 0, method, ascending);
     }
-    DataFrame ngroup() const { return transform(GroupwiseOp::NGroup); }
-    DataFrame head(std::int64_t n = 5) const {
+    dstd::Result<DataFrame> ngroup() const {
+        return transform(GroupwiseOp::NGroup);
+    }
+    dstd::Result<DataFrame> head(std::int64_t n = 5) const {
         return transform(GroupwiseOp::Head, n);
     }
-    DataFrame tail(std::int64_t n = 5) const {
+    dstd::Result<DataFrame> tail(std::int64_t n = 5) const {
         return transform(GroupwiseOp::Tail, n);
     }
-    DataFrame nth(std::int64_t n) const {
+    dstd::Result<DataFrame> nth(std::int64_t n) const {
         return transform(GroupwiseOp::Nth, n);
     }
-    DataFrame cumprod() const { return transform(GroupwiseOp::CumProd); }
-    DataFrame ffill() const { return transform(GroupwiseOp::FFill); }
-    DataFrame bfill() const { return transform(GroupwiseOp::BFill); }
-    DataFrame rolling_sum(std::int64_t window) const {
+    dstd::Result<DataFrame> cumprod() const {
+        return transform(GroupwiseOp::CumProd);
+    }
+    dstd::Result<DataFrame> ffill() const {
+        return transform(GroupwiseOp::FFill);
+    }
+    dstd::Result<DataFrame> bfill() const {
+        return transform(GroupwiseOp::BFill);
+    }
+    dstd::Result<DataFrame> rolling_sum(std::int64_t window) const {
         return transform(GroupwiseOp::RollingSum, window);
     }
-    DataFrame rolling_mean(std::int64_t window) const {
+    dstd::Result<DataFrame> rolling_mean(std::int64_t window) const {
         return transform(GroupwiseOp::RollingMean, window);
     }
-    DataFrame rolling_min(std::int64_t window) const {
+    dstd::Result<DataFrame> rolling_min(std::int64_t window) const {
         return transform(GroupwiseOp::RollingMin, window);
     }
-    DataFrame rolling_max(std::int64_t window) const {
+    dstd::Result<DataFrame> rolling_max(std::int64_t window) const {
         return transform(GroupwiseOp::RollingMax, window);
     }
 

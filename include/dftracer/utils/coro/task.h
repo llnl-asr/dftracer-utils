@@ -7,14 +7,15 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/common/typedefs.h>
-#include <dftracer/utils/coro/cancelled.h>
 #include <dftracer/utils/coro/detail/frame.h>
 #include <dftracer/utils/coro/detail/pool_resume.h>
 #include <dftracer/utils/coro/hooks.h>
 #include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/dstd/either.h>
 #include <dftracer/utils/dstd/expected.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/tuple.h>
 #include <dftracer/utils/memory/detail/manager.h>
@@ -89,10 +90,32 @@ inline constexpr bool is_expected_v = false;
 template <typename V, typename E>
 inline constexpr bool is_expected_v<dstd::Expected<V, E>> = true;
 
+/// What a blocking wait on a `CoroTask<T>` gives: a dstd::Result<T>, or the
+/// task's own type when that is already a Result. A task that was stopped gives
+/// dstd::Condition::Cancelled. A task with another error type is wrapped like
+/// any other value.
+template <typename T>
+struct TaskResultOf {
+    using type = dstd::Result<T>;
+};
+template <typename V>
+struct TaskResultOf<dstd::Expected<V, dstd::Error>> {
+    using type = dstd::Expected<V, dstd::Error>;
+};
+
+template <typename T>
+struct is_coro_task : std::false_type {};
+template <typename T>
+struct is_coro_task<CoroTask<T>> : std::true_type {};
+template <typename T>
+inline constexpr bool is_coro_task_v = is_coro_task<T>::value;
+
 template <typename V, typename E>
 struct OrFailValue;
 template <typename V, typename E>
 struct OrFailTask;
+template <typename T, typename Task>
+struct SettleTask;
 
 /// True when the scope was asked to stop or its owning task is cancelled.
 bool scope_stopping(const Scope& scope) noexcept;
@@ -104,6 +127,23 @@ struct ValueQuery {
     void await_suspend(std::coroutine_handle<>) const noexcept {}
     T await_resume() const noexcept { return value; }
 };
+
+}  // namespace detail
+
+template <typename T>
+using TaskResult = typename detail::TaskResultOf<T>::type;
+
+namespace detail {
+
+/// The error of a task that was stopped.
+inline dstd::Error stopped_error() {
+    return dstd::Error{dstd::Condition::Cancelled, "task cancelled"};
+}
+
+template <typename T>
+TaskResult<T> stopped_result() {
+    return dstd::Unexpected<dstd::Error>(stopped_error());
+}
 }  // namespace detail
 
 struct PromiseBase : detail::FrameAllocation {
@@ -186,10 +226,14 @@ struct PromiseBase : detail::FrameAllocation {
     /// scope and is cancelled, and returns true then. Call only while suspended
     /// on that child.
     bool propagate_cancel() noexcept {
-        if (owns_scope || !cancel_requested()) return false;
+        if (owns_scope) return false;
         finish_cancelled();
         return true;
     }
+
+    /// True for a frame that must reach a join and so cannot be stopped at a
+    /// wait.
+    bool refuses_stop() const noexcept { return owns_scope; }
 
     /// Ends the task as cancelled with no exception. The owner destroys the
     /// frame. Call only from the await_suspend of this task's own frame.
@@ -198,6 +242,34 @@ struct PromiseBase : detail::FrameAllocation {
         complete();
     }
 };
+
+namespace detail {
+struct StopHere {
+    static constexpr bool CANCEL_EXEMPT = true;
+
+    bool await_ready() const noexcept { return false; }
+
+    template <typename Promise>
+    void await_suspend(std::coroutine_handle<Promise> h) const noexcept {
+        if constexpr (requires { h.promise().finish_cancelled(); }) {
+            h.promise().finish_cancelled();
+        } else {
+            dstd::fatal("coro: stop_here in a frame that cannot stop");
+        }
+    }
+
+    void await_resume() const noexcept {}
+};
+}  // namespace detail
+
+/**
+ * @brief Ends the calling task as cancelled: `co_await stop_here()`.
+ *
+ * The task is not resumed, its frame is destroyed by its owner, and the stop
+ * moves up the await chain to the first scope or combinator, as a stop of one
+ * of its waits does.
+ */
+inline detail::StopHere stop_here() noexcept { return {}; }
 
 namespace detail {
 
@@ -426,6 +498,8 @@ class CoroTask {
 
     template <typename V, typename E>
     friend struct detail::OrFailTask;
+    template <typename U, typename Task>
+    friend struct detail::SettleTask;
 
     /// Links the task to its awaiter and runs it on this stack until it ends
     /// or suspends. False when it had already ended.
@@ -546,13 +620,16 @@ class CoroTask {
         if (!launch(awaiting_coro, detail::cancel_end_for<Promise>()))
             return false;
         auto& p = coro_handle_.promise();
+        // The handoff comes first: a stop job can end the child at any time,
+        // and the exchange orders the read of `cancelled` after that end.
+        if (!p.handoff.exchange(true, std::memory_order_acq_rel)) return true;
         if constexpr (requires {
                           awaiting_coro.promise().propagate_cancel();
                       }) {
             if (p.cancelled && awaiting_coro.promise().propagate_cancel())
                 return true;
         }
-        return !p.handoff.exchange(true, std::memory_order_acq_rel);
+        return false;
     }
 
     T await_resume() {
@@ -563,7 +640,9 @@ class CoroTask {
 #endif
         report_await_end(coro_handle_.promise());
         if (coro_handle_.promise().cancelled) {
-            throw_cancelled("task cancelled");
+            detail::cancelled_unstoppable(
+                "a stopped task awaited by a frame that cannot stop; await "
+                "it through settle");
         }
         if (coro_handle_.promise().exception) {
             common::rethrow_and_clear(coro_handle_.promise().exception);
@@ -621,12 +700,20 @@ class CoroTask {
      * Get result (blocking, for non-coroutine callers)
      * Resumes coroutine until completion
      *
-     * @return The result value
-     * @throws Exception if coroutine threw
+     * @return The value, or an error with dstd::Condition::Cancelled when the
+     *         task was stopped. An exception that the task raised is rethrown.
      */
-    T get() {
+    TaskResult<T> get() {
         drive_to_completion(coro_handle_, coro_handle_.promise().finished);
-        return await_resume();
+        auto& p = coro_handle_.promise();
+        report_await_end(p);
+        if (p.cancelled) return detail::stopped_result<T>();
+        if (p.exception) common::rethrow_and_clear(p.exception);
+        if constexpr (std::is_void_v<T>) {
+            return {};
+        } else {
+            return TaskResult<T>(p.take_result());
+        }
     }
 
     /**
@@ -794,7 +881,8 @@ class CoroTask {
      * the fallback instead. Yields whichever succeeds.
      *
      * @param fallback Fallback task to run if this task fails
-     * @return CoroTask<T> with result from whichever succeeds
+     * @return CoroTask<T> with result from whichever succeeds. A stop of this
+     *         task stops the result and runs no fallback.
      *
      * Usage:
      * @code
@@ -803,28 +891,21 @@ class CoroTask {
      */
     auto or_else(CoroTask<T>&& fallback) && -> CoroTask<T> {
         return [](CoroTask<T> prim, CoroTask<T> fall) -> CoroTask<T> {
-            std::exception_ptr primary_exception;
-            try {
+            auto settled = co_await settle(std::move(prim));
+            if (settled.stopped) co_await stop_here();
+            if (!settled.exception) {
                 if constexpr (std::is_void_v<T>) {
-                    co_await std::move(prim);
                     co_return;
                 } else {
-                    co_return co_await std::move(prim);
-                }
-            } catch (...) {
-                primary_exception = std::current_exception();
-            }
-            if (primary_exception) {
-                if constexpr (std::is_void_v<T>) {
-                    co_await std::move(fall);
-                    co_return;
-                } else {
-                    co_return co_await std::move(fall);
+                    co_return std::move(*settled.value);
                 }
             }
-            throw common::DFTUtilsException(
-                common::ErrorCode::Internal,
-                "Unreachable code in or_else reached");
+            if constexpr (std::is_void_v<T>) {
+                co_await std::move(fall);
+                co_return;
+            } else {
+                co_return co_await std::move(fall);
+            }
         }(std::move(*this), std::move(fallback));
     }
 };
@@ -888,8 +969,8 @@ struct OrFailTask {
     bool await_suspend(std::coroutine_handle<Promise> h) noexcept {
         if (!task.launch(h, &end_failed<Promise>)) return end_now(h);
         auto& p = task.coro_handle_.promise();
-        if (p.cancelled && h.promise().propagate_cancel()) return true;
         if (!p.handoff.exchange(true, std::memory_order_acq_rel)) return true;
+        if (p.cancelled && h.promise().propagate_cancel()) return true;
         return end_now(h);
     }
 
@@ -922,7 +1003,97 @@ struct OrFailTask {
         return true;
     }
 };
+/// The outcome of a task awaited through @ref settle: a value, a stop, or an
+/// exception that code with exceptions on threw in it. Exactly one is set.
+template <typename T>
+struct Settled {
+    dstd::Optional<T> value;
+    bool stopped = false;
+    std::exception_ptr exception;
+};
+
+template <>
+struct Settled<void> {
+    bool done = false;
+    bool stopped = false;
+    std::exception_ptr exception;
+};
+
+/// `Task` is a @ref CoroTask held by value, or a reference to one that lives
+/// as long as the await.
+template <typename T, typename Task>
+struct SettleTask {
+    static constexpr bool CANCEL_EXEMPT = true;
+    Task task;
+
+    bool await_ready() const noexcept { return false; }
+
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> h) noexcept {
+        if (!task.launch(h, nullptr)) return false;
+        return !task.coro_handle_.promise().handoff.exchange(
+            true, std::memory_order_acq_rel);
+    }
+
+    Settled<T> await_resume() noexcept(
+        std::is_void_v<T> || std::is_nothrow_move_constructible_v<T>) {
+        auto& p = task.coro_handle_.promise();
+        CoroTask<T>::report_await_end(p);
+        Settled<T> out;
+        if (p.cancelled) {
+            out.stopped = true;
+        } else if (p.exception) {
+            out.exception = std::move(p.exception);
+            p.exception = nullptr;
+        } else if constexpr (std::is_void_v<T>) {
+            out.done = true;
+        } else {
+            out.value.emplace(p.take_result());
+        }
+        return out;
+    }
+};
+
+/// The body of @ref settle_in_place for an awaitable that is not a task: a
+/// frame that holds the await, so a stop or an exception ends that frame and
+/// not the caller.
+template <typename A>
+CoroTask<typename A::result_type> await_in_place(A& awaitable) {
+    if constexpr (std::is_void_v<typename A::result_type>) {
+        co_await awaitable;
+    } else {
+        co_return co_await awaitable;
+    }
+}
 }  // namespace detail
+
+/**
+ * @brief Awaits @p task and gives how it ended, without ending the caller.
+ *
+ * A stop of the task does not stop the caller, so a frame that holds a
+ * @ref Scope, or a combinator, can still reach its join. Library code only.
+ */
+template <typename T>
+detail::SettleTask<T, CoroTask<T>> settle(CoroTask<T>&& task) noexcept {
+    return {std::move(task)};
+}
+
+/// @ref settle on a task that stays where it is.
+template <typename T>
+detail::SettleTask<T, CoroTask<T>&> settle(CoroTask<T>& task) noexcept {
+    return {task};
+}
+
+/// @ref settle for any awaitable with a `result_type` that stays where it is: a
+/// task is awaited as is, anything else through a frame that holds the await.
+template <typename A>
+auto settle_in_place(A& awaitable) {
+    if constexpr (detail::is_coro_task_v<A>) {
+        return settle(awaitable);
+    } else {
+        return settle(detail::await_in_place(awaitable));
+    }
+}
 
 /**
  * @brief Gives the value of a result, or ends the calling task with its error.

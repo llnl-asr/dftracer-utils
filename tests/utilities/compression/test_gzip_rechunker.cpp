@@ -13,6 +13,7 @@
 #include <doctest/doctest.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 using namespace dftracer::utils;
@@ -54,14 +55,14 @@ dstd::Pair<dstd::String, dstd::Vector<char>> decode_members(
 
     dstd::String out;
     dstd::Vector<char> last_bytes;
-    [&]() -> dftracer::utils::coro::CoroTask<void> {
+    dftu_utils_test::ok([&]() -> dftracer::utils::coro::CoroTask<void> {
         auto gen = fileio::compress::decode_gzip_members(fd, size);
         while (auto chunk = co_await gen.next()) {
             last_bytes.push_back(chunk->empty() ? '\0' : chunk->back());
             out.append(chunk->data(), chunk->size());
         }
     }()
-                 .get();
+                                     .get());
     return {out, last_bytes};
 }
 
@@ -76,9 +77,10 @@ bool needs_rechunk(const dstd::String& path, std::size_t cap) {
     const int fd = fd_file->native_handle();
     struct stat st;
     REQUIRE(::fstat(fd, &st) == 0);
-    return fileio::compress::gzip_first_member(
-               fd, static_cast<std::uint64_t>(st.st_size), cap)
-        .get()
+    return dftu_utils_test::ok(
+               fileio::compress::gzip_first_member(
+                   fd, static_cast<std::uint64_t>(st.st_size), cap)
+                   .get())
         .exceeds_cap;
 }
 
@@ -126,14 +128,15 @@ TEST_SUITE("gzip_rechunker") {
         constexpr std::size_t CAP = 10 * 1024 * 1024;
 
         // Without a sample only the "[" member is read.
-        auto first = fileio::compress::gzip_first_member(fd, size, CAP).get();
+        auto first = dftu_utils_test::ok(
+            fileio::compress::gzip_first_member(fd, size, CAP).get());
         CHECK(first.uncompressed == 2);
         CHECK_FALSE(first.exceeds_cap);
 
         // With one, the next member counts too, and the cap still applies to
         // the first member only.
-        auto sampled =
-            fileio::compress::gzip_first_member(fd, size, 16, 1 << 20).get();
+        auto sampled = dftu_utils_test::ok(
+            fileio::compress::gzip_first_member(fd, size, 16, 1 << 20).get());
         CHECK(sampled.uncompressed == 2 + payload.size());
         CHECK(sampled.compressed == size);
         CHECK_FALSE(sampled.exceeds_cap);
@@ -151,10 +154,11 @@ TEST_SUITE("gzip_rechunker") {
 
         // One member in, small member size out.
         CHECK(decode_all(in).second == 1);
-        fileio::compress::gzip_rechunk_to_members(in, out,
-                                                  /*member_size=*/8 * 1024,
-                                                  /*level=*/6)
-            .get();
+        dftu_utils_test::ok(
+            fileio::compress::gzip_rechunk_to_members(in, out,
+                                                      /*member_size=*/8 * 1024,
+                                                      /*level=*/6)
+                .get());
 
         auto [content, last_bytes] = decode_members(out);
         CHECK(content == payload);     // exact byte preservation
@@ -176,7 +180,9 @@ TEST_SUITE("gzip_rechunker") {
         payload += "{\"id\":99999,\"trailing\":true}";  // no final '\n'
         write_single_member_gz(in, payload);
 
-        fileio::compress::gzip_rechunk_to_members(in, out, 4 * 1024, 6).get();
+        dftu_utils_test::ok(
+            fileio::compress::gzip_rechunk_to_members(in, out, 4 * 1024, 6)
+                .get());
         CHECK(decode_all(out).first == payload);
 
         dstd::fs::remove_all(dir).discard();

@@ -8,6 +8,7 @@
 #include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <memory/fresh_process.h>
 
 #include <algorithm>
 #include <atomic>
@@ -103,14 +104,17 @@ coro::CoroTask<void> contender(coro::AsyncMutex& mutex, int& total,
 
 coro::CoroTask<void> noop() { co_return; }
 
+/// Blocks on a task from a thread of an executor that cannot lend it.
+coro::CoroTask<void> block_on_own_thread() {
+    noop().get().discard();
+    co_return;
+}
+
 /// Waits on a timeout the executor cannot serve itself, so the wait lands on
 /// the process-wide timer thread.
 coro::CoroTask<void> wait_beyond(std::atomic<bool>& timed_out) {
-    try {
-        co_await coro::timeout(std::chrono::milliseconds{20}, nullptr);
-    } catch (const common::DFTUtilsException&) {
-        timed_out.store(true, std::memory_order_release);
-    }
+    co_await coro::timeout(std::chrono::milliseconds{20}, nullptr);
+    timed_out.store(true, std::memory_order_release);
 }
 
 /// The frame the driver owns: awaiting the task is the only thing that keeps
@@ -123,21 +127,6 @@ coro::detail::Coro drive(coro::CoroTask<void> task, std::atomic<bool>& done,
         error = std::current_exception();
     }
     done.store(true, std::memory_order_release);
-}
-
-/// Blocks on a task from inside the executor's only thread.
-coro::CoroTask<void> block_on_own_thread(MiniExecutor& exec, bool& threw,
-                                         bool& left_queue_empty,
-                                         bool& task_untouched) {
-    auto inner = noop();
-    try {
-        inner.get();
-    } catch (const common::DFTUtilsException&) {
-        threw = true;
-    }
-    left_queue_empty = exec.is_empty();
-    task_untouched = !inner.done();
-    co_return;
 }
 
 struct CompletionSpy {
@@ -231,24 +220,25 @@ TEST_SUITE("UserExecutor") {
         CHECK(calls.load() == 1);
     }
 
-    TEST_CASE("blocking on the only thread of a post-only executor raises") {
+    TEST_CASE(
+        "a get on the only thread of a post-only executor ends the "
+        "process" *
+        doctest::skip()) {
+        fresh_process::announce_abort();
         MiniExecutor exec;
-        bool threw = false;
-        bool left_queue_empty = false;
-        bool task_untouched = false;
         std::atomic<bool> done{false};
         std::exception_ptr error;
-
-        auto task = drive(
-            block_on_own_thread(exec, threw, left_queue_empty, task_untouched),
-            done, error);
+        auto task = drive(block_on_own_thread(), done, error);
         exec.post(task.release());
         exec.run();
+    }
 
-        CHECK(done.load());
-        CHECK(error == nullptr);
-        CHECK(threw);
-        CHECK(left_queue_empty);
-        CHECK(task_untouched);
+    TEST_CASE("a get on a post-only executor aborts with its message") {
+        auto result = fresh_process::run(
+            "a get on the only thread of a post-only executor ends the "
+            "process");
+        CHECK(result.aborted_with(
+            "coro: cannot block on a thread of an executor that cannot lend "
+            "it"));
     }
 }

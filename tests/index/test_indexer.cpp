@@ -20,6 +20,7 @@
 #include <index_test_helpers.h>
 #include <instrumentation.h>
 #include <sys/resource.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <unistd.h>
 #include <zlib.h>
@@ -289,12 +290,12 @@ TEST_SUITE("Indexer") {
             with_runtime(rt));
         IndexStatus by_async;
         dstd::Vector<IndexedFile> files_async;
-        rt.block_on(coro::named(
+        dftu_utils_test::ok(rt.block_on(coro::named(
             "indexer-test",
             coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
                 by_async = co_await async.build(scope);
                 files_async = co_await async.files(scope);
-            })));
+            }))));
 
         CHECK(by_async.total == by_block.total);
         CHECK(by_async.indexed == by_block.indexed);
@@ -597,16 +598,18 @@ TEST_SUITE("Truncated") {
             while (auto line = co_await gen.next()) ++n;
             co_return n;
         };
-        CHECK(count_lines(cut).get() == ref.lines);  // sequential, no index
+        CHECK(dftu_utils_test::ok(count_lines(cut).get()) ==
+              ref.lines);  // sequential, no index
 
         Indexer::open({dstd::String(dstd::StringView(cut))}, with_runtime(rt))
             .build();
-        CHECK(count_lines(cut).get() == ref.lines);  // indexed
+        CHECK(dftu_utils_test::ok(count_lines(cut).get()) ==
+              ref.lines);  // indexed
 
-        auto df =
+        auto df = dftu_utils_test::ok(
             dftracer::utils::trace::views::View::from_file(dstd::String(cut))
                 .collect()
-                .get();
+                .get());
         CHECK(static_cast<std::size_t>(df.num_rows()) == ref.events);
         rt.shutdown();
     }

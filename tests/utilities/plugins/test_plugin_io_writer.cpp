@@ -25,6 +25,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/uio.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <unistd.h>
 
@@ -71,14 +72,15 @@ dstd::String read_all(const dstd::String& path) {
 template <class MakeTask>
 void drive_task(dftu_plugin_host& host, int workers, MakeTask make) {
     Runtime rt(workers);
-    rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                  dftu_task* driver =
-                      dftracer::utils::plugins::detail::drive_coro<int>(&host,
-                                                                        make());
-                  co_await *reinterpret_cast<coro::CoroTask<void>*>(driver);
-              }),
-              "caller")
-        .wait();
+    dftu_utils_test::ok(
+        rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                      dftu_task* driver =
+                          dftracer::utils::plugins::detail::drive_coro<int>(
+                              &host, make());
+                      co_await *reinterpret_cast<coro::CoroTask<void>*>(driver);
+                  }),
+                  "caller")
+            .wait());
     rt.shutdown();
 }
 

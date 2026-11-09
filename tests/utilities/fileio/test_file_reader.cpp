@@ -8,6 +8,7 @@
 #include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/utilities/fileio/file_reader_utility.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 using namespace dftracer::utils;
@@ -29,7 +30,7 @@ TEST_CASE("FileReaderUtility - Basic Operations") {
             dstd::fs::write_file(dstd::PathView(test_file), ofs).discard();
         }
 
-        Text content = reader(test_file).get();
+        Text content = dftu_utils_test::ok(reader(test_file).get());
 
         CHECK(content.content == "Hello, World!\nThis is a test file.\n");
         CHECK(content.size() == 35);
@@ -44,7 +45,7 @@ TEST_CASE("FileReaderUtility - Basic Operations") {
             dstd::fs::write_file(dstd::PathView(test_file), ofs).discard();
         }
 
-        Text content = reader(test_file).get();
+        Text content = dftu_utils_test::ok(reader(test_file).get());
 
         CHECK(content.content.empty());
         CHECK(content.size() == 0);
@@ -61,7 +62,7 @@ TEST_CASE("FileReaderUtility - Basic Operations") {
             dstd::fs::write_file(dstd::PathView(test_file), ofs).discard();
         }
 
-        Text content = reader(test_file).get();
+        Text content = dftu_utils_test::ok(reader(test_file).get());
 
         CHECK(content.content.find("Special: !@#$%^&*()") !=
               dstd::String::npos);
@@ -76,7 +77,7 @@ TEST_CASE("FileReaderUtility - Error Handling") {
 
     SUBCASE("Non-existent file") {
         const dstd::Path missing("non_existent_file_12345.txt");
-        CHECK_THROWS_AS(reader(missing).get(),
+        CHECK_THROWS_AS(dftu_utils_test::ok(reader(missing).get()),
                         dftracer::utils::common::DFTUtilsException);
     }
 
@@ -84,7 +85,7 @@ TEST_CASE("FileReaderUtility - Error Handling") {
         dstd::Path test_dir = make_unique_test_path("test_dir_reader");
         REQUIRE(dstd::fs::create_directory(test_dir).has_value());
 
-        CHECK_THROWS_AS(reader(test_dir).get(),
+        CHECK_THROWS_AS(dftu_utils_test::ok(reader(test_dir).get()),
                         dftracer::utils::common::DFTUtilsException);
 
         dstd::fs::remove(test_dir).discard();
@@ -102,7 +103,7 @@ TEST_CASE("FileReaderUtility - Different File Sizes") {
             dstd::fs::write_file(dstd::PathView(test_file), ofs).discard();
         }
 
-        Text content = reader(test_file).get();
+        Text content = dftu_utils_test::ok(reader(test_file).get());
 
         CHECK(content.size() == 1);
         CHECK(content.content == "x");
@@ -119,7 +120,7 @@ TEST_CASE("FileReaderUtility - Different File Sizes") {
             dstd::fs::write_file(dstd::PathView(test_file), ofs).discard();
         }
 
-        Text content = reader(test_file).get();
+        Text content = dftu_utils_test::ok(reader(test_file).get());
 
         CHECK(content.size() == 1024);
 
@@ -135,7 +136,7 @@ TEST_CASE("FileReaderUtility - Different File Sizes") {
             dstd::fs::write_file(dstd::PathView(test_file), ofs).discard();
         }
 
-        Text content = reader(test_file).get();
+        Text content = dftu_utils_test::ok(reader(test_file).get());
 
         CHECK(content.size() == 100 * 1024);
 
@@ -154,7 +155,7 @@ TEST_CASE("FileReaderUtility - Different Content Types") {
             dstd::fs::write_file(dstd::PathView(test_file), ofs).discard();
         }
 
-        Text content = reader(test_file).get();
+        Text content = dftu_utils_test::ok(reader(test_file).get());
 
         CHECK(content.size() == 5);
         CHECK(content.content == "\n\n\n\n\n");
@@ -171,7 +172,7 @@ TEST_CASE("FileReaderUtility - Different Content Types") {
             dstd::fs::write_file(dstd::PathView(test_file), ofs).discard();
         }
 
-        Text content = reader(test_file).get();
+        Text content = dftu_utils_test::ok(reader(test_file).get());
 
         CHECK(content.content.find("Line 1") != dstd::String::npos);
         CHECK(content.content.find("Line 2") != dstd::String::npos);
@@ -186,7 +187,7 @@ TEST_CASE("FileReaderUtility - Different Content Types") {
                 .discard();
         }
 
-        Text content = reader(test_file).get();
+        Text content = dftu_utils_test::ok(reader(test_file).get());
 
         CHECK(content.content == "No newline at end");
 
@@ -208,7 +209,7 @@ TEST_CASE("FileReaderUtility - Real World Scenarios") {
             dstd::fs::write_file(dstd::PathView(test_file), ofs).discard();
         }
 
-        Text content = reader(test_file).get();
+        Text content = dftu_utils_test::ok(reader(test_file).get());
 
         CHECK(content.content.find("INFO: Application started") !=
               dstd::String::npos);
@@ -228,7 +229,7 @@ TEST_CASE("FileReaderUtility - Real World Scenarios") {
             dstd::fs::write_file(dstd::PathView(test_file), ofs).discard();
         }
 
-        Text content = reader(test_file).get();
+        Text content = dftu_utils_test::ok(reader(test_file).get());
 
         CHECK(content.content.find("id,name,value") != dstd::String::npos);
         CHECK(content.content.find("Alice") != dstd::String::npos);
@@ -246,7 +247,7 @@ TEST_CASE("FileReaderUtility - Real World Scenarios") {
                 .discard();
         }
 
-        Text content = reader(test_file).get();
+        Text content = dftu_utils_test::ok(reader(test_file).get());
 
         CHECK(content.content.find("\"name\": \"test\"") != dstd::String::npos);
         CHECK(content.content.find("\"value\": 42") != dstd::String::npos);
@@ -276,15 +277,16 @@ TEST_CASE("FileReaderUtility - Composition with find_all") {
 
     // Scan and read
     dstd::Vector<runtime::fs::FoundFile> files;
-    coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
-        auto found = co_await runtime::fs::find_all(scope, test_dir.view());
-        REQUIRE(found.has_value());
-        files = std::move(*found);
-    }).get();
+    dftu_utils_test::ok(
+        coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
+            auto found = co_await runtime::fs::find_all(scope, test_dir.view());
+            REQUIRE(found.has_value());
+            files = std::move(*found);
+        }).get());
 
     int files_read = 0;
     for (const auto& file : files) {
-        Text content = reader(file.path).get();
+        Text content = dftu_utils_test::ok(reader(file.path).get());
         CHECK(content.size() > 0);
         files_read++;
     }

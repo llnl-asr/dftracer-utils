@@ -27,6 +27,7 @@
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <cstdint>
@@ -65,14 +66,15 @@ struct HostFixture {
 template <class MakeTask>
 void drive_task(dftu_plugin_host& host, int workers, MakeTask make) {
     Runtime rt(workers);
-    rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                  dftu_task* driver =
-                      dftracer::utils::plugins::detail::drive_coro<int>(&host,
-                                                                        make());
-                  co_await *reinterpret_cast<coro::CoroTask<void>*>(driver);
-              }),
-              "caller")
-        .wait();
+    dftu_utils_test::ok(
+        rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                      dftu_task* driver =
+                          dftracer::utils::plugins::detail::drive_coro<int>(
+                              &host, make());
+                      co_await *reinterpret_cast<coro::CoroTask<void>*>(driver);
+                  }),
+                  "caller")
+            .wait());
     rt.shutdown();
 }
 
@@ -488,11 +490,13 @@ TEST_CASE("plugin cxx: Host::agg merges a count and an argmax across slices") {
         master.merge(*pf);
     }
     Runtime rt(1);
-    rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                  co_await master.finalize(trace::views::detail::CoverageSet{});
-              }),
-              "fin")
-        .wait();
+    dftu_utils_test::ok(
+        rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                      co_await master.finalize(
+                          trace::views::detail::CoverageSet{});
+                  }),
+                  "fin")
+            .wait());
     rt.shutdown();
 
     auto it = named.results().find("by_pid");

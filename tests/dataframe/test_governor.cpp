@@ -22,6 +22,7 @@
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/memory/detail/pool_access.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_runtime.h>
 #include <testing_utilities.h>
 #include <unistd.h>
@@ -217,11 +218,12 @@ struct Asked {
 // smallest one later.
 Asked run_asked(const Plan& plan, dstd::StringView tail, bool typed = true) {
     Asked r;
-    r.plain = plan(LazyFrame::scan(dstd::make_shared<Hooked>(MORSELS, ROWS,
-                                                             nullptr, typed)))
-                  .memory_budget(LAZY_BUDGET)
-                  .collect()
-                  .get();
+    r.plain =
+        dftu_utils_test::ok(plan(LazyFrame::scan(dstd::make_shared<Hooked>(
+                                     MORSELS, ROWS, nullptr, typed)))
+                                .memory_budget(LAZY_BUDGET)
+                                .collect()
+                                .get());
     std::uint16_t id = 0;
     auto source = dstd::make_shared<Hooked>(
         MORSELS, ROWS,
@@ -547,7 +549,7 @@ TEST_CASE("a spool spilled on request replays every morsel in order") {
     auto values = [](dstd::UniquePtr<Cursor> c) {
         dstd::Vector<std::int64_t> out;
         for (;;) {
-            auto m = c->next(16).get();
+            auto m = dftu_utils_test::ok(c->next(16).get());
             if (!m) break;
             const std::int64_t* p = m->columns[0].data<std::int64_t>();
             out.insert(out.end(), p, p + m->rows);
@@ -597,7 +599,8 @@ TEST_CASE("unique and is_duplicated keep their tables in their own pool") {
         const LazyFrame lf = plan(LazyFrame::scan(dstd::make_shared<Hooked>(
                                       MORSELS, ROWS, nullptr)))
                                  .memory_budget(LAZY_BUDGET);
-        CHECK(held_while_streaming(lf, tail).get().live > 0);
+        CHECK(dftu_utils_test::ok(held_while_streaming(lf, tail).get()).live >
+              0);
         CHECK(pools_named(tail).empty());
         CHECK_FALSE(memory::detail::Manager::get().leaked());
     }
@@ -614,8 +617,9 @@ TEST_CASE("is_duplicated reserves its counts on its pool while it emits") {
     // One map entry is at least a key string and its count.
     const std::size_t entries =
         keys.size() * sizeof(dstd::Pair<dstd::String, std::int64_t>);
-    CHECK(held_while_streaming(lf, "query/is_duplicated").get().reserved >=
-          entries);
+    CHECK(dftu_utils_test::ok(
+              held_while_streaming(lf, "query/is_duplicated").get())
+              .reserved >= entries);
     CHECK(pools_named("query/is_duplicated").empty());
     CHECK_FALSE(memory::detail::Manager::get().leaked());
 }

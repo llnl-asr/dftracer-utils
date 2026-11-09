@@ -16,6 +16,7 @@
 #include <doctest/doctest.h>
 #include <nanoarrow/nanoarrow.h>
 #include <refused_lines.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <algorithm>
@@ -149,7 +150,7 @@ TEST_SUITE("TraceReader") {
 
         CHECK_FALSE(reader.has_index());
 
-        auto n = count_lines(reader.read_lines()).get();
+        auto n = dftu_utils_test::ok(count_lines(reader.read_lines()).get());
         CHECK(n > 0);
         CHECK(n == 102);
     }
@@ -172,7 +173,8 @@ TEST_SUITE("TraceReader") {
 
         CHECK(reader.has_index());
 
-        auto n_indexed = count_lines(reader.read_lines()).get();
+        auto n_indexed =
+            dftu_utils_test::ok(count_lines(reader.read_lines()).get());
         CHECK(n_indexed > 0);
         CHECK(n_indexed == 102);
 
@@ -182,7 +184,8 @@ TEST_SUITE("TraceReader") {
                 .has_value();
             TraceReader plain_reader({.file_path = dstd::String(gz_file)});
             CHECK_FALSE(plain_reader.has_index());
-            auto n_plain = count_lines(plain_reader.read_lines()).get();
+            auto n_plain = dftu_utils_test::ok(
+                count_lines(plain_reader.read_lines()).get());
             CHECK(n_plain == n_indexed);
         }
     }
@@ -205,11 +208,13 @@ TEST_SUITE("TraceReader") {
 
         ReadConfig bare;
         bare.query = "ret >= 100000";
-        auto n_bare = count_json_lines(reader.read_json(bare)).get();
+        auto n_bare =
+            dftu_utils_test::ok(count_json_lines(reader.read_json(bare)).get());
 
         ReadConfig dotted;
         dotted.query = "args.ret >= 100000";
-        auto n_dotted = count_json_lines(reader.read_json(dotted)).get();
+        auto n_dotted = dftu_utils_test::ok(
+            count_json_lines(reader.read_json(dotted)).get());
 
         CHECK(n_bare > 0);
         CHECK(n_dotted == n_bare);
@@ -221,12 +226,14 @@ TEST_SUITE("TraceReader") {
 
         TraceReader reader({.file_path = dstd::String(gz_file)});
 
-        auto n_full = count_lines(reader.read_lines()).get();
+        auto n_full =
+            dftu_utils_test::ok(count_lines(reader.read_lines()).get());
         REQUIRE(n_full > 0);
 
         ReadConfig rc;
         rc.start_line = 50;
-        auto n_skipped = count_lines(reader.read_lines(rc)).get();
+        auto n_skipped =
+            dftu_utils_test::ok(count_lines(reader.read_lines(rc)).get());
         CHECK(n_skipped < n_full);
         CHECK(n_skipped > 0);
     }
@@ -240,7 +247,8 @@ TEST_SUITE("TraceReader") {
         ReadConfig rc;
         rc.start_line = 1;
         rc.end_line = 10;
-        auto nums = collect_line_numbers(reader.read_lines(rc)).get();
+        auto nums = dftu_utils_test::ok(
+            collect_line_numbers(reader.read_lines(rc)).get());
         CHECK(nums.size() <= 10);
         CHECK(nums.size() > 0);
     }
@@ -250,7 +258,8 @@ TEST_SUITE("TraceReader") {
         dstd::String gz_file = env.create_dft_test_gzip_file(100);
 
         TraceReader reader({.file_path = dstd::String(gz_file)});
-        auto total = count_raw_bytes(reader.read_raw()).get();
+        auto total =
+            dftu_utils_test::ok(count_raw_bytes(reader.read_raw()).get());
         CHECK(total > 0);
     }
 
@@ -261,7 +270,8 @@ TEST_SUITE("TraceReader") {
         TraceReader reader({.file_path = dstd::String(gz_file)});
         ReadConfig rc;
         rc.line_aligned = false;
-        auto total = count_raw_bytes(reader.read_raw(rc)).get();
+        auto total =
+            dftu_utils_test::ok(count_raw_bytes(reader.read_raw(rc)).get());
         CHECK(total > 0);
     }
 
@@ -273,7 +283,8 @@ TEST_SUITE("TraceReader") {
         ReadConfig rc;
         rc.line_aligned = true;
         rc.multi_line = false;
-        auto chunks = count_raw_chunks(reader.read_raw(rc)).get();
+        auto chunks =
+            dftu_utils_test::ok(count_raw_chunks(reader.read_raw(rc)).get());
         CHECK(chunks > 0);
     }
 
@@ -282,7 +293,7 @@ TEST_SUITE("TraceReader") {
         bool threw = false;
         try {
             TraceReader reader({.file_path = ""});
-            n = count_lines(reader.read_lines()).get();
+            n = dftu_utils_test::ok(count_lines(reader.read_lines()).get());
         } catch (const std::exception&) {
             threw = true;
         }
@@ -294,13 +305,15 @@ TEST_SUITE("TraceReader") {
         dstd::String gz_file = env.create_dft_test_gzip_file(100);
         TraceReader reader({.file_path = dstd::String(gz_file)});
 
-        auto total = count_raw_bytes(reader.read_raw()).get();
+        auto total =
+            dftu_utils_test::ok(count_raw_bytes(reader.read_raw()).get());
         REQUIRE(total > 0);
 
         ReadConfig rc;
         rc.start_byte = 100;
         rc.end_byte = total / 2;
-        auto subset = count_raw_bytes(reader.read_raw(rc)).get();
+        auto subset =
+            dftu_utils_test::ok(count_raw_bytes(reader.read_raw(rc)).get());
         CHECK(subset > 0);
         CHECK(subset < total);
     }
@@ -322,13 +335,15 @@ TEST_SUITE("TraceReader") {
                             .index_dir = dstd::String(index_dir)});
         CHECK(reader.has_index());
 
-        auto total = count_raw_bytes(reader.read_raw()).get();
+        auto total =
+            dftu_utils_test::ok(count_raw_bytes(reader.read_raw()).get());
         REQUIRE(total > 0);
 
         ReadConfig rc;
         rc.start_byte = 100;
         rc.end_byte = total / 2;
-        auto subset = count_raw_bytes(reader.read_raw(rc)).get();
+        auto subset =
+            dftu_utils_test::ok(count_raw_bytes(reader.read_raw(rc)).get());
         CHECK(subset > 0);
         CHECK(subset < total);
     }
@@ -357,7 +372,8 @@ TEST_SUITE("TraceReader") {
         rc.end_byte =
             first_line.size() + 1 + dstd::String(R"({"name":"write")").size();
 
-        auto lines = collect_lines(reader.read_lines(rc)).get();
+        auto lines =
+            dftu_utils_test::ok(collect_lines(reader.read_lines(rc)).get());
 
         REQUIRE(lines.size() == 2);
         CHECK(lines[0].find(R"("name":"read")") != dstd::String::npos);
@@ -383,7 +399,8 @@ TEST_SUITE("TraceReader") {
         ReadConfig rc;
         rc.start_byte = 2;
         rc.end_byte = 100;
-        auto lines = collect_lines(reader.read_lines(rc)).get();
+        auto lines =
+            dftu_utils_test::ok(collect_lines(reader.read_lines(rc)).get());
 
         REQUIRE(lines.size() == 2);
         CHECK(lines[0] == "beta");
@@ -403,8 +420,8 @@ TEST_SUITE("TraceReader") {
         ReadConfig single_line;
         single_line.line_aligned = true;
         single_line.multi_line = false;
-        auto plain_chunks =
-            count_raw_chunks(plain_reader.read_raw(single_line)).get();
+        auto plain_chunks = dftu_utils_test::ok(
+            count_raw_chunks(plain_reader.read_raw(single_line)).get());
 
         auto indexer = CheckpointIndexerFactory::create(
             gz_file, index_path, 32 * 1024 * 1024, false);
@@ -414,8 +431,8 @@ TEST_SUITE("TraceReader") {
         TraceReader indexed_reader({.file_path = dstd::String(gz_file),
                                     .index_dir = dstd::String(index_dir)});
         CHECK(indexed_reader.has_index());
-        auto indexed_chunks =
-            count_raw_chunks(indexed_reader.read_raw(single_line)).get();
+        auto indexed_chunks = dftu_utils_test::ok(
+            count_raw_chunks(indexed_reader.read_raw(single_line)).get());
 
         CHECK(plain_chunks > 0);
         CHECK(plain_chunks == indexed_chunks);
@@ -428,11 +445,13 @@ TEST_SUITE("TraceReader") {
 
         ReadConfig large_buf;
         large_buf.buffer_size = 4 * 1024 * 1024;
-        auto large_chunks = count_raw_chunks(reader.read_raw(large_buf)).get();
+        auto large_chunks = dftu_utils_test::ok(
+            count_raw_chunks(reader.read_raw(large_buf)).get());
 
         ReadConfig small_buf;
         small_buf.buffer_size = 256;
-        auto small_chunks = count_raw_chunks(reader.read_raw(small_buf)).get();
+        auto small_chunks = dftu_utils_test::ok(
+            count_raw_chunks(reader.read_raw(small_buf)).get());
 
         CHECK(large_chunks > 0);
         CHECK(small_chunks > 0);
@@ -444,12 +463,13 @@ TEST_SUITE("TraceReader") {
         dstd::String gz_file = env.create_dft_test_gzip_file(100);
         TraceReader reader({.file_path = dstd::String(gz_file)});
 
-        auto all = count_lines(reader.read_lines()).get();
+        auto all = dftu_utils_test::ok(count_lines(reader.read_lines()).get());
         REQUIRE(all > 0);
 
         ReadConfig rc;
         rc.query = R"(cat == "POSIX")";
-        auto matched = count_lines(reader.read_lines(rc)).get();
+        auto matched =
+            dftu_utils_test::ok(count_lines(reader.read_lines(rc)).get());
         CHECK(matched > 0);
         CHECK(matched <= all);
     }
@@ -461,7 +481,8 @@ TEST_SUITE("TraceReader") {
 
         ReadConfig rc;
         rc.query = R"(cat == "NONEXISTENT")";
-        auto matched = count_lines(reader.read_lines(rc)).get();
+        auto matched =
+            dftu_utils_test::ok(count_lines(reader.read_lines(rc)).get());
         CHECK(matched == 0);
     }
 
@@ -472,7 +493,8 @@ TEST_SUITE("TraceReader") {
 
         ReadConfig rc;
         rc.query = R"(name == "read")";
-        auto lines = collect_lines(reader.read_lines(rc)).get();
+        auto lines =
+            dftu_utils_test::ok(collect_lines(reader.read_lines(rc)).get());
         CHECK(lines.size() > 0);
         for (const auto& line : lines) {
             CHECK(line.find("\"name\":\"read\"") != dstd::String::npos);
@@ -502,7 +524,8 @@ TEST_SUITE("TraceReader") {
         rc.start_byte = 0;
         rc.end_byte = uncompressed_size;
         rc.query = R"(name == "write")";
-        auto lines = collect_lines(reader.read_lines(rc)).get();
+        auto lines =
+            dftu_utils_test::ok(collect_lines(reader.read_lines(rc)).get());
 
         REQUIRE(lines.size() == 1);
         CHECK(lines[0].find(R"("name":"write")") != dstd::String::npos);
@@ -537,7 +560,8 @@ TEST_SUITE("TraceReader") {
         rc.start_byte = 0;
         rc.end_byte = uncompressed_size;
         rc.query = R"(name == "write")";
-        auto lines = collect_lines(reader.read_lines(rc)).get();
+        auto lines =
+            dftu_utils_test::ok(collect_lines(reader.read_lines(rc)).get());
 
         REQUIRE(lines.size() == static_cast<std::size_t>(REFUSED_KINDS));
         for (const auto& line : lines)
@@ -567,7 +591,8 @@ TEST_SUITE("TraceReader") {
         rc.start_byte = 0;
         rc.end_byte = uncompressed_size;
         rc.query = R"(name == "write")";
-        auto lines = collect_lines(reader.read_lines(rc)).get();
+        auto lines =
+            dftu_utils_test::ok(collect_lines(reader.read_lines(rc)).get());
         REQUIRE(lines.size() == 1);
         CHECK(lines[0].find(R"("name":"write")") != dstd::String::npos);
         CHECK(lines[0].size() > 200000);
@@ -590,7 +615,8 @@ TEST_SUITE("TraceReader") {
             }
             auto gz_file = gzip_fixture(dstd::String(test_file.str()));
             TraceReader reader({.file_path = dstd::String(gz_file)});
-            CHECK(reader.read_time_metric().get() == trace::TimeMetric::Ns);
+            CHECK(dftu_utils_test::ok(reader.read_time_metric().get()) ==
+                  trace::TimeMetric::Ns);
             dstd::fs::remove(gz_file).discard();
         }
     }
@@ -602,11 +628,13 @@ TEST_SUITE("TraceReader") {
 
         ReadConfig rc_cat;
         rc_cat.query = R"(cat == "POSIX")";
-        auto cat_count = count_lines(reader.read_lines(rc_cat)).get();
+        auto cat_count =
+            dftu_utils_test::ok(count_lines(reader.read_lines(rc_cat)).get());
 
         ReadConfig rc_both;
         rc_both.query = R"(cat == "POSIX" and name == "read")";
-        auto both_count = count_lines(reader.read_lines(rc_both)).get();
+        auto both_count =
+            dftu_utils_test::ok(count_lines(reader.read_lines(rc_both)).get());
 
         CHECK(both_count > 0);
         CHECK(both_count <= cat_count);
@@ -619,15 +647,18 @@ TEST_SUITE("TraceReader") {
 
         ReadConfig rc_read;
         rc_read.query = R"(name == "read")";
-        auto read_count = count_lines(reader.read_lines(rc_read)).get();
+        auto read_count =
+            dftu_utils_test::ok(count_lines(reader.read_lines(rc_read)).get());
 
         ReadConfig rc_write;
         rc_write.query = R"(name == "write")";
-        auto write_count = count_lines(reader.read_lines(rc_write)).get();
+        auto write_count =
+            dftu_utils_test::ok(count_lines(reader.read_lines(rc_write)).get());
 
         ReadConfig rc_or;
         rc_or.query = R"(name == "read" or name == "write")";
-        auto or_count = count_lines(reader.read_lines(rc_or)).get();
+        auto or_count =
+            dftu_utils_test::ok(count_lines(reader.read_lines(rc_or)).get());
 
         CHECK(or_count == read_count + write_count);
     }
@@ -651,7 +682,8 @@ TEST_SUITE("TraceReader") {
 
         ReadConfig rc;
         rc.query = R"(name == "read")";
-        auto lines = collect_lines(reader.read_lines(rc)).get();
+        auto lines =
+            dftu_utils_test::ok(collect_lines(reader.read_lines(rc)).get());
         CHECK(lines.size() > 0);
         for (const auto& line : lines) {
             CHECK(line.find("\"name\":\"read\"") != dstd::String::npos);
@@ -667,7 +699,8 @@ TEST_SUITE("TraceReader") {
         rc.start_line = 1;
         rc.end_line = 20;
         rc.query = R"(cat == "POSIX")";
-        auto matched = count_lines(reader.read_lines(rc)).get();
+        auto matched =
+            dftu_utils_test::ok(count_lines(reader.read_lines(rc)).get());
         CHECK(matched <= 20);
     }
 
@@ -676,11 +709,12 @@ TEST_SUITE("TraceReader") {
         dstd::String gz_file = env.create_dft_test_gzip_file(100);
         TraceReader reader({.file_path = dstd::String(gz_file)});
 
-        auto all = count_lines(reader.read_lines()).get();
+        auto all = dftu_utils_test::ok(count_lines(reader.read_lines()).get());
 
         ReadConfig rc;
         rc.query = "";
-        auto with_empty = count_lines(reader.read_lines(rc)).get();
+        auto with_empty =
+            dftu_utils_test::ok(count_lines(reader.read_lines(rc)).get());
 
         CHECK(all == with_empty);
     }
@@ -711,12 +745,13 @@ TEST_SUITE("TraceReader") {
         TraceReader reader({.file_path = dstd::String(gz)});
         REQUIRE(reader.has_index());
 
-        auto all = count_lines(reader.read_lines()).get();
+        auto all = dftu_utils_test::ok(count_lines(reader.read_lines()).get());
         REQUIRE(all == 400);
 
         ReadConfig rc_posix;
         rc_posix.query = R"(cat == "POSIX")";
-        auto posix_lines = collect_lines(reader.read_lines(rc_posix)).get();
+        auto posix_lines = dftu_utils_test::ok(
+            collect_lines(reader.read_lines(rc_posix)).get());
         CHECK(posix_lines.size() == 200);
         for (const auto& line : posix_lines) {
             CHECK(line.find("\"cat\":\"POSIX\"") != dstd::String::npos);
@@ -724,12 +759,14 @@ TEST_SUITE("TraceReader") {
 
         ReadConfig rc_compute;
         rc_compute.query = R"(cat == "COMPUTE")";
-        auto compute_lines = collect_lines(reader.read_lines(rc_compute)).get();
+        auto compute_lines = dftu_utils_test::ok(
+            collect_lines(reader.read_lines(rc_compute)).get());
         CHECK(compute_lines.size() == 200);
 
         ReadConfig rc_none;
         rc_none.query = R"(cat == "NONEXISTENT")";
-        auto none_lines = count_lines(reader.read_lines(rc_none)).get();
+        auto none_lines =
+            dftu_utils_test::ok(count_lines(reader.read_lines(rc_none)).get());
         CHECK(none_lines == 0);
     }
 
@@ -754,19 +791,22 @@ TEST_SUITE("TraceReader") {
         TraceReader reader({.file_path = dstd::String(gz)});
         REQUIRE(reader.has_index());
 
-        auto all_bytes = count_raw_bytes(reader.read_raw()).get();
+        auto all_bytes =
+            dftu_utils_test::ok(count_raw_bytes(reader.read_raw()).get());
         REQUIRE(all_bytes > 0);
 
         // No match → file-level skip → zero bytes
         ReadConfig rc_none;
         rc_none.query = R"(cat == "NONEXISTENT")";
-        auto none_bytes = count_raw_bytes(reader.read_raw(rc_none)).get();
+        auto none_bytes = dftu_utils_test::ok(
+            count_raw_bytes(reader.read_raw(rc_none)).get());
         CHECK(none_bytes == 0);
 
         // Match → all bytes (no per-event filtering for raw)
         ReadConfig rc_posix;
         rc_posix.query = R"(cat == "POSIX")";
-        auto posix_bytes = count_raw_bytes(reader.read_raw(rc_posix)).get();
+        auto posix_bytes = dftu_utils_test::ok(
+            count_raw_bytes(reader.read_raw(rc_posix)).get());
         CHECK(posix_bytes == all_bytes);
     }
 
@@ -814,13 +854,14 @@ TEST_SUITE("TraceReader") {
             {.file_path = dstd::String(gz), .checkpoint_size = 32 * 1024});
         REQUIRE(reader.has_index());
 
-        auto all = count_lines(reader.read_lines()).get();
+        auto all = dftu_utils_test::ok(count_lines(reader.read_lines()).get());
         REQUIRE(all == TOTAL);
 
         // Selective query: only COMPUTE events (5 out of 205)
         ReadConfig rc_compute;
         rc_compute.query = R"(cat == "COMPUTE")";
-        auto compute_lines = collect_lines(reader.read_lines(rc_compute)).get();
+        auto compute_lines = dftu_utils_test::ok(
+            collect_lines(reader.read_lines(rc_compute)).get());
         CHECK(compute_lines.size() == COMPUTE_COUNT);
         for (const auto& line : compute_lines) {
             CHECK(line.find("\"cat\":\"COMPUTE\"") != dstd::String::npos);
@@ -829,13 +870,15 @@ TEST_SUITE("TraceReader") {
         // Full category query should still return all POSIX
         ReadConfig rc_posix;
         rc_posix.query = R"(cat == "POSIX")";
-        auto posix_lines = collect_lines(reader.read_lines(rc_posix)).get();
+        auto posix_lines = dftu_utils_test::ok(
+            collect_lines(reader.read_lines(rc_posix)).get());
         CHECK(posix_lines.size() == POSIX_BEFORE + POSIX_AFTER);
 
         // No match
         ReadConfig rc_none;
         rc_none.query = R"(cat == "NONEXISTENT")";
-        auto none_lines = count_lines(reader.read_lines(rc_none)).get();
+        auto none_lines =
+            dftu_utils_test::ok(count_lines(reader.read_lines(rc_none)).get());
         CHECK(none_lines == 0);
     }
 }
@@ -846,7 +889,8 @@ TEST_SUITE("TraceReader::read_json") {
         dstd::String gz_file = env.create_dft_test_gzip_file(100);
         TraceReader reader({.file_path = dstd::String(gz_file)});
 
-        auto events = collect_json_events(reader.read_json()).get();
+        auto events =
+            dftu_utils_test::ok(collect_json_events(reader.read_json()).get());
         CHECK(events.size() > 0);
         for (const auto& ev : events) {
             CHECK_FALSE(ev.ph.empty());
@@ -858,8 +902,10 @@ TEST_SUITE("TraceReader::read_json") {
         dstd::String gz_file = env.create_dft_test_gzip_file(100);
         TraceReader reader({.file_path = dstd::String(gz_file)});
 
-        auto line_count = count_lines(reader.read_lines()).get();
-        auto json_count = count_json_lines(reader.read_json()).get();
+        auto line_count =
+            dftu_utils_test::ok(count_lines(reader.read_lines()).get());
+        auto json_count =
+            dftu_utils_test::ok(count_json_lines(reader.read_json()).get());
         CHECK(json_count <= line_count);
         CHECK(json_count > 0);
     }
@@ -869,12 +915,14 @@ TEST_SUITE("TraceReader::read_json") {
         dstd::String gz_file = env.create_dft_test_gzip_file(100);
         TraceReader reader({.file_path = dstd::String(gz_file)});
 
-        auto all = count_json_lines(reader.read_json()).get();
+        auto all =
+            dftu_utils_test::ok(count_json_lines(reader.read_json()).get());
         REQUIRE(all > 0);
 
         ReadConfig rc;
         rc.query = R"(cat == "POSIX")";
-        auto events = collect_json_events(reader.read_json(rc)).get();
+        auto events = dftu_utils_test::ok(
+            collect_json_events(reader.read_json(rc)).get());
         CHECK(events.size() > 0);
         CHECK(events.size() <= all);
         for (const auto& ev : events) {
@@ -889,7 +937,8 @@ TEST_SUITE("TraceReader::read_json") {
 
         ReadConfig rc;
         rc.query = R"(cat == "NONEXISTENT")";
-        auto n = count_json_lines(reader.read_json(rc)).get();
+        auto n =
+            dftu_utils_test::ok(count_json_lines(reader.read_json(rc)).get());
         CHECK(n == 0);
     }
 
@@ -900,7 +949,8 @@ TEST_SUITE("TraceReader::read_json") {
 
         ReadConfig rc;
         rc.query = R"(cat == "POSIX" and name == "read")";
-        auto events = collect_json_events(reader.read_json(rc)).get();
+        auto events = dftu_utils_test::ok(
+            collect_json_events(reader.read_json(rc)).get());
         CHECK(events.size() > 0);
         for (const auto& ev : events) {
             CHECK(ev.cat == "POSIX");
@@ -932,8 +982,10 @@ TEST_SUITE("TraceReader::read_json") {
 
         ReadConfig rc;
         rc.query = R"(cat == "POSIX")";
-        auto line_count = count_lines(reader.read_lines(rc)).get();
-        auto json_count = count_json_lines(reader.read_json(rc)).get();
+        auto line_count =
+            dftu_utils_test::ok(count_lines(reader.read_lines(rc)).get());
+        auto json_count =
+            dftu_utils_test::ok(count_json_lines(reader.read_json(rc)).get());
         CHECK(line_count == json_count);
         CHECK(json_count == 100);
 
@@ -979,7 +1031,8 @@ TEST_SUITE("TraceReader::read_json") {
 
         ReadConfig rc;
         rc.query = R"(cat == "COMPUTE")";
-        auto events = collect_json_events(reader.read_json(rc)).get();
+        auto events = dftu_utils_test::ok(
+            collect_json_events(reader.read_json(rc)).get());
         CHECK(events.size() == 5);
         for (const auto& ev : events) {
             CHECK(ev.cat == "COMPUTE");
@@ -987,12 +1040,14 @@ TEST_SUITE("TraceReader::read_json") {
 
         ReadConfig rc_posix;
         rc_posix.query = R"(cat == "POSIX")";
-        auto posix_count = count_json_lines(reader.read_json(rc_posix)).get();
+        auto posix_count = dftu_utils_test::ok(
+            count_json_lines(reader.read_json(rc_posix)).get());
         CHECK(posix_count == 200);
 
         ReadConfig rc_none;
         rc_none.query = R"(cat == "NONEXISTENT")";
-        auto none_count = count_json_lines(reader.read_json(rc_none)).get();
+        auto none_count = dftu_utils_test::ok(
+            count_json_lines(reader.read_json(rc_none)).get());
         CHECK(none_count == 0);
     }
 
@@ -1010,7 +1065,8 @@ TEST_SUITE("TraceReader::read_json") {
         auto gz_file = gzip_fixture(dstd::String(test_file.str()));
 
         TraceReader reader({.file_path = dstd::String(gz_file)});
-        auto events = collect_json_events(reader.read_json()).get();
+        auto events =
+            dftu_utils_test::ok(collect_json_events(reader.read_json()).get());
         REQUIRE(events.size() == 1);
         CHECK(events[0].name == "read");
         CHECK(events[0].cat == "POSIX");
@@ -1044,8 +1100,10 @@ KeptCounts read_kept(const dstd::Vector<dstd::String>& lines,
     ReadConfig rc;
     rc.query = query;
     KeptCounts out;
-    out.json = count_json_lines(reader.read_json(rc)).get();
-    out.arrow = count_arrow_rows(reader.read_arrow(rc)).get();
+    out.json =
+        dftu_utils_test::ok(count_json_lines(reader.read_json(rc)).get());
+    out.arrow =
+        dftu_utils_test::ok(count_arrow_rows(reader.read_arrow(rc)).get());
     return out;
 }
 
@@ -1269,11 +1327,14 @@ void check_windows(const WindowFixture& f, dstd::Vector<std::size_t> cuts) {
         rc.end_byte = cuts[i + 1];
         TraceReader reader({.file_path = f.gz});
         REQUIRE(reader.has_index());
-        for (auto& l : collect_lines(reader.read_lines(rc)).get())
+        for (auto& l :
+             dftu_utils_test::ok(collect_lines(reader.read_lines(rc)).get()))
             raw.push_back(std::move(l));
-        for (auto& l : collect_json_text(reader.read_json(rc)).get())
+        for (auto& l :
+             dftu_utils_test::ok(collect_json_text(reader.read_json(rc)).get()))
             json.push_back(std::move(l));
-        arrow += count_arrow_rows(reader.read_arrow(rc)).get();
+        arrow +=
+            dftu_utils_test::ok(count_arrow_rows(reader.read_arrow(rc)).get());
     }
     const bool raw_same = raw == f.lines;
     const bool json_same = json == f.lines;
@@ -1495,7 +1556,9 @@ TEST_SUITE("TraceReader valid but odd values") {
                         expression ? odd.expression : odd.selective;
                     selective.flatten_objects = true;
                     OddRead json;
-                    collect_odd_json(reader.read_json(selective), json).get();
+                    dftu_utils_test::ok(
+                        collect_odd_json(reader.read_json(selective), json)
+                            .get());
                     REQUIRE(json.lines.size() == 1);
                     CHECK(json.lines[0] == odd.line);
                     if (odd.is_string) {
@@ -1508,9 +1571,10 @@ TEST_SUITE("TraceReader valid but odd values") {
                     dstd::Vector<dstd::Optional<double>> doubles;
                     dstd::Vector<dstd::Optional<dstd::String>> strings;
                     std::size_t rows = 0;
-                    collect_odd_arrow(reader.read_arrow(selective), "x",
-                                      doubles, strings, rows)
-                        .get();
+                    dftu_utils_test::ok(
+                        collect_odd_arrow(reader.read_arrow(selective), "x",
+                                          doubles, strings, rows)
+                            .get());
                     REQUIRE(rows == 1);
                     if (odd.is_string) {
                         REQUIRE(strings[0].has_value());
@@ -1525,15 +1589,17 @@ TEST_SUITE("TraceReader valid but odd values") {
                                      ? R"(x > 5 or lower(name) == "read")"
                                      : R"(x > 5 or name == "read")";
                     OddRead all;
-                    collect_odd_json(reader.read_json(both), all).get();
+                    dftu_utils_test::ok(
+                        collect_odd_json(reader.read_json(both), all).get());
                     CHECK(all.lines.size() == 2);
                     CHECK(all.lines[1] == lines[1]);
                     std::size_t arrow_rows = 0;
                     dstd::Vector<dstd::Optional<double>> d2;
                     dstd::Vector<dstd::Optional<dstd::String>> s2;
-                    collect_odd_arrow(reader.read_arrow(both), "x", d2, s2,
-                                      arrow_rows)
-                        .get();
+                    dftu_utils_test::ok(
+                        collect_odd_arrow(reader.read_arrow(both), "x", d2, s2,
+                                          arrow_rows)
+                            .get());
                     CHECK(arrow_rows == 2);
                 }
             }
@@ -1585,9 +1651,10 @@ TEST_SUITE("TraceReader valid but odd values") {
                 dstd::Vector<dstd::Optional<double>> doubles;
                 dstd::Vector<dstd::Optional<dstd::String>> strings;
                 std::size_t rows = 0;
-                collect_odd_arrow(reader.read_arrow(ReadConfig{}), "x", doubles,
-                                  strings, rows)
-                    .get();
+                dftu_utils_test::ok(
+                    collect_odd_arrow(reader.read_arrow(ReadConfig{}), "x",
+                                      doubles, strings, rows)
+                        .get());
                 REQUIRE(rows == 2);
                 if (pair.as_text) {
                     REQUIRE(strings[0].has_value());
@@ -1669,10 +1736,12 @@ TEST_SUITE("TraceReader valid but odd values") {
                         const dstd::String gz = write_odd_trace(lines, indexed);
                         TraceReader reader({.file_path = gz});
                         dstd::Vector<OddCell> cells;
-                        collect_odd_cells(
-                            reader.read_arrow(ReadConfig{}, shape.batch_size),
-                            "x", cells)
-                            .get();
+                        dftu_utils_test::ok(
+                            collect_odd_cells(
+                                reader.read_arrow(ReadConfig{},
+                                                  shape.batch_size),
+                                "x", cells)
+                                .get());
                         REQUIRE(cells.size() == lines.size());
                         for (std::size_t i = 0; i < cells.size(); ++i) {
                             const Lit& lit = shape.order[i] == 0 ? a : b;
@@ -1720,9 +1789,10 @@ TEST_SUITE("TraceReader valid but odd values") {
                     const dstd::String gz = write_odd_trace(lines, indexed);
                     TraceReader reader({.file_path = gz});
                     dstd::Vector<OddCell> cells;
-                    collect_odd_cells(reader.read_arrow(ReadConfig{}), "x",
-                                      cells)
-                        .get();
+                    dftu_utils_test::ok(
+                        collect_odd_cells(reader.read_arrow(ReadConfig{}), "x",
+                                          cells)
+                            .get());
                     REQUIRE(cells.size() == lines.size());
                     for (std::size_t i = 0; i < cells.size(); ++i) {
                         CAPTURE(i);
@@ -1732,7 +1802,8 @@ TEST_SUITE("TraceReader valid but odd values") {
                     CHECK(reader.dropped_line_count() == 0);
                     ReadConfig rc;
                     rc.query = R"(x > 1 or name == "r")";
-                    CHECK(count_arrow_rows(reader.read_arrow(rc)).get() ==
+                    CHECK(dftu_utils_test::ok(
+                              count_arrow_rows(reader.read_arrow(rc)).get()) ==
                           lines.size());
                 }
             }
@@ -1757,8 +1828,12 @@ TEST_SUITE("TraceReader valid but odd values") {
                     TraceReader reader({.file_path = gz});
                     ReadConfig rc;
                     rc.query = query;
-                    CHECK(count_json_lines(reader.read_json(rc)).get() == 2);
-                    CHECK(count_arrow_rows(reader.read_arrow(rc)).get() == 2);
+                    CHECK(dftu_utils_test::ok(
+                              count_json_lines(reader.read_json(rc)).get()) ==
+                          2);
+                    CHECK(dftu_utils_test::ok(
+                              count_arrow_rows(reader.read_arrow(rc)).get()) ==
+                          2);
                 }
             }
         }
@@ -1804,7 +1879,8 @@ TEST_SUITE("TraceReader valid but odd values") {
                         ReadConfig rc;
                         rc.query = query;
                         OddRead json;
-                        collect_odd_json(reader.read_json(rc), json).get();
+                        dftu_utils_test::ok(
+                            collect_odd_json(reader.read_json(rc), json).get());
                         CAPTURE(json.lines.size());
                         REQUIRE(json.lines.size() == 3);
                         CHECK(json.lines[at] == bad.line);
@@ -1812,9 +1888,10 @@ TEST_SUITE("TraceReader valid but odd values") {
                         dstd::Vector<dstd::Optional<double>> doubles;
                         dstd::Vector<dstd::Optional<dstd::String>> strings;
                         std::size_t rows = 0;
-                        collect_odd_arrow(reader.read_arrow(rc), "x", doubles,
-                                          strings, rows)
-                            .get();
+                        dftu_utils_test::ok(
+                            collect_odd_arrow(reader.read_arrow(rc), "x",
+                                              doubles, strings, rows)
+                                .get());
                         REQUIRE(rows == 3);
                         CHECK(strings[at] == bad.repaired);
                     }
@@ -1852,26 +1929,34 @@ TEST_SUITE("TraceReader valid but odd values") {
                 rc.query = R"(x != "zzz" or name == "read")";
                 {
                     TraceReader reader({.file_path = gz});
-                    CHECK(count_json_lines(reader.read_json(rc)).get() == 2);
+                    CHECK(dftu_utils_test::ok(
+                              count_json_lines(reader.read_json(rc)).get()) ==
+                          2);
                     CHECK(reader.dropped_line_count() == 1);
                 }
                 {
                     TraceReader reader({.file_path = gz});
-                    CHECK(count_arrow_rows(reader.read_arrow(rc)).get() == 2);
+                    CHECK(dftu_utils_test::ok(
+                              count_arrow_rows(reader.read_arrow(rc)).get()) ==
+                          2);
                     CHECK(reader.dropped_line_count() == 1);
                 }
                 ReadConfig plain;
                 {
                     TraceReader reader({.file_path = gz});
-                    CHECK(count_json_lines(reader.read_json(plain)).get() ==
-                          drop.plain_json_kept);
+                    CHECK(
+                        dftu_utils_test::ok(
+                            count_json_lines(reader.read_json(plain)).get()) ==
+                        drop.plain_json_kept);
                     CHECK(reader.dropped_line_count() ==
                           drop.plain_json_dropped);
                 }
                 {
                     TraceReader reader({.file_path = gz});
-                    CHECK(count_arrow_rows(reader.read_arrow(plain)).get() ==
-                          drop.plain_arrow_rows);
+                    CHECK(
+                        dftu_utils_test::ok(
+                            count_arrow_rows(reader.read_arrow(plain)).get()) ==
+                        drop.plain_arrow_rows);
                     CHECK(reader.dropped_line_count() == 1);
                 }
             }
@@ -1917,16 +2002,16 @@ TEST_SUITE("TraceReader valid but odd values") {
                         {
                             TraceReader reader({.file_path = gz});
                             CHECK(reader.dropped_line_count() == 0);
-                            CHECK(
-                                count_json_lines(reader.read_json(rc)).get() ==
-                                2);
+                            CHECK(dftu_utils_test::ok(
+                                      count_json_lines(reader.read_json(rc))
+                                          .get()) == 2);
                             CHECK(reader.dropped_line_count() == bad_count);
                         }
                         {
                             TraceReader reader({.file_path = gz});
-                            CHECK(
-                                count_arrow_rows(reader.read_arrow(rc)).get() ==
-                                2);
+                            CHECK(dftu_utils_test::ok(
+                                      count_arrow_rows(reader.read_arrow(rc))
+                                          .get()) == 2);
                             CHECK(reader.dropped_line_count() == bad_count);
                         }
                         {
@@ -1969,12 +2054,16 @@ TEST_SUITE("TraceReader valid but odd values") {
                 rc.query = query;
                 {
                     TraceReader reader({.file_path = gz});
-                    CHECK(count_json_lines(reader.read_json(rc)).get() == 0);
+                    CHECK(dftu_utils_test::ok(
+                              count_json_lines(reader.read_json(rc)).get()) ==
+                          0);
                     CHECK(reader.dropped_line_count() == 2);
                 }
                 {
                     TraceReader reader({.file_path = gz});
-                    CHECK(count_arrow_rows(reader.read_arrow(rc)).get() == 0);
+                    CHECK(dftu_utils_test::ok(
+                              count_arrow_rows(reader.read_arrow(rc)).get()) ==
+                          0);
                     CHECK(reader.dropped_line_count() == 2);
                 }
             }
@@ -1997,12 +2086,16 @@ TEST_SUITE("TraceReader valid but odd values") {
                 ReadConfig rc;
                 {
                     TraceReader reader({.file_path = gz});
-                    CHECK(count_json_lines(reader.read_json(rc)).get() == 3);
+                    CHECK(dftu_utils_test::ok(
+                              count_json_lines(reader.read_json(rc)).get()) ==
+                          3);
                     CHECK(reader.dropped_line_count() == bad.json_dropped);
                 }
                 {
                     TraceReader reader({.file_path = gz});
-                    CHECK(count_arrow_rows(reader.read_arrow(rc)).get() == 2);
+                    CHECK(dftu_utils_test::ok(
+                              count_arrow_rows(reader.read_arrow(rc)).get()) ==
+                          2);
                     CHECK(reader.dropped_line_count() == 1);
                 }
             }
@@ -2017,7 +2110,8 @@ TEST_SUITE("TraceReader valid but odd values") {
             CAPTURE(indexed);
             const dstd::String gz = write_odd_trace(lines, indexed);
             TraceReader reader({.file_path = gz});
-            const auto events = collect_json_events(reader.read_json()).get();
+            const auto events = dftu_utils_test::ok(
+                collect_json_events(reader.read_json()).get());
             REQUIRE(events.size() == lines.size());
             CHECK(events[0].name == "a");
             CHECK(events[2].name.empty());
@@ -2041,9 +2135,10 @@ TEST_SUITE("TraceReader valid but odd values") {
                 dstd::Vector<dstd::Optional<double>> doubles;
                 dstd::Vector<dstd::Optional<dstd::String>> strings;
                 std::size_t rows = 0;
-                collect_odd_arrow(reader.read_arrow(ReadConfig{}), "x", doubles,
-                                  strings, rows)
-                    .get();
+                dftu_utils_test::ok(
+                    collect_odd_arrow(reader.read_arrow(ReadConfig{}), "x",
+                                      doubles, strings, rows)
+                        .get());
                 REQUIRE(rows == 3);
                 CHECK(reader.dropped_line_count() == 1);
                 CHECK(strings[0] == "ok");
@@ -2051,8 +2146,9 @@ TEST_SUITE("TraceReader valid but odd values") {
                 CHECK(strings[2] == "ok");
                 // read_json hands the line over unread, so it cannot count it.
                 TraceReader json_reader({.file_path = gz});
-                CHECK(count_json_lines(json_reader.read_json(ReadConfig{}))
-                          .get() == 3);
+                CHECK(dftu_utils_test::ok(
+                          count_json_lines(json_reader.read_json(ReadConfig{}))
+                              .get()) == 3);
                 CHECK(json_reader.dropped_line_count() == 0);
             }
         }
@@ -2080,9 +2176,11 @@ TEST_SUITE("TraceReader valid but odd values") {
                         std::strcmp(query, "x == 5") == 0 ||
                         std::strstr(query, "and x == 5");
                     const std::size_t expected = selects_one ? 1 : 2;
-                    CHECK(count_json_lines(reader.read_json(rc)).get() ==
+                    CHECK(dftu_utils_test::ok(
+                              count_json_lines(reader.read_json(rc)).get()) ==
                           expected);
-                    CHECK(count_arrow_rows(reader.read_arrow(rc)).get() ==
+                    CHECK(dftu_utils_test::ok(
+                              count_arrow_rows(reader.read_arrow(rc)).get()) ==
                           expected);
                 }
             }
@@ -2103,10 +2201,11 @@ TEST_SUITE("TraceReader valid but odd values") {
                 TraceReader reader({.file_path = gz});
                 ReadConfig rc;
                 rc.query = R"(x == 1 or name == "read")";
-                const std::size_t bad_kept =
-                    count_json_lines(reader.read_json(rc)).get();
+                const std::size_t bad_kept = dftu_utils_test::ok(
+                    count_json_lines(reader.read_json(rc)).get());
                 CHECK(bad_kept <= 1);
-                CHECK(count_arrow_rows(reader.read_arrow(rc)).get() ==
+                CHECK(dftu_utils_test::ok(
+                          count_arrow_rows(reader.read_arrow(rc)).get()) ==
                       bad_kept);
             }
         }
@@ -2163,16 +2262,22 @@ TEST_SUITE("TraceReader long lines") {
             TraceReader reader({.file_path = f.gz});
             REQUIRE(reader.has_index() == indexed);
             const bool lines_same =
-                collect_lines(reader.read_lines(ReadConfig{})).get() == f.lines;
+                dftu_utils_test::ok(
+                    collect_lines(reader.read_lines(ReadConfig{})).get()) ==
+                f.lines;
             CHECK(lines_same);
             const bool json_same =
-                collect_json_text(reader.read_json(ReadConfig{})).get() ==
+                dftu_utils_test::ok(
+                    collect_json_text(reader.read_json(ReadConfig{})).get()) ==
                 f.lines;
             CHECK(json_same);
-            CHECK(count_arrow_rows(reader.read_arrow(ReadConfig{})).get() ==
-                  f.lines.size());
+            CHECK(
+                dftu_utils_test::ok(
+                    count_arrow_rows(reader.read_arrow(ReadConfig{})).get()) ==
+                f.lines.size());
             const bool raw_same =
-                collect_raw_text(reader.read_raw(ReadConfig{})).get() ==
+                dftu_utils_test::ok(
+                    collect_raw_text(reader.read_raw(ReadConfig{})).get()) ==
                 expected;
             CHECK(raw_same);
             CHECK(reader.dropped_line_count() == 0);

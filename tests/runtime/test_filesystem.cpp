@@ -6,6 +6,7 @@
 #include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -165,7 +166,7 @@ TEST_CASE("file system: find runs on a registered file system") {
     mounted.store.files["mem://bucket/sub/c.pfw"] = "cc";
     Runtime rt(ExecutorConfig{.thread_count = 2}, false);
     dstd::Vector<FoundFile> found;
-    rt.block_on(
+    dftu_utils_test::ok(rt.block_on(
         coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
             runtime::fs::FindOptions options;
             options.patterns.push_back(dstd::String("*.pfw"));
@@ -173,7 +174,7 @@ TEST_CASE("file system: find runs on a registered file system") {
                 scope, dstd::PathView("mem://bucket"), std::move(options));
             REQUIRE(all.has_value());
             found = std::move(*all);
-        }));
+        })));
     const auto paths = sorted_paths(found);
     REQUIRE(paths.size() == 2);
     CHECK(paths[0] == "mem://bucket/a.pfw");
@@ -198,7 +199,7 @@ TEST_CASE("file system: read_file and write_file take short transfers") {
         REQUIRE(read.has_value());
         CHECK(*read == text);
     };
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     CHECK(mounted.store.closes == 2);
 }
 
@@ -211,7 +212,7 @@ TEST_CASE("file system: a missing file reports NotFound through the seam") {
         REQUIRE_FALSE(read.has_value());
         CHECK(read.error().is(dstd::Condition::NotFound));
     };
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
 }
 
 TEST_CASE("file system: an unknown scheme is an error everywhere") {
@@ -225,13 +226,13 @@ TEST_CASE("file system: an unknown scheme is an error everywhere") {
         auto stat = co_await runtime::fs::stat(path);
         CHECK_FALSE(stat.has_value());
     };
-    rt.block_on(body());
-    rt.block_on(
+    dftu_utils_test::ok(rt.block_on(body()));
+    dftu_utils_test::ok(rt.block_on(
         coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
             auto found = co_await runtime::fs::find_all(scope, path);
             REQUIRE_FALSE(found.has_value());
             CHECK(found.error().is(dstd::Condition::InvalidArgument));
-        }));
+        })));
 }
 
 TEST_CASE("file system: a file:// path and a plain path are one local file") {
@@ -249,7 +250,7 @@ TEST_CASE("file system: a file:// path and a plain path are one local file") {
         REQUIRE(read.has_value());
         CHECK(*read == "through the uri");
     };
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     ::unlink(name);
 }
 
@@ -294,7 +295,7 @@ TEST_CASE(
             dstd::PathView(dstd::String(root) + "/a"));
         CHECK_FALSE(not_empty.has_value());
     };
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     ::rmdir(dir.c_str());
     ::rmdir((dstd::String(root) + "/a").c_str());
     ::rmdir(root);

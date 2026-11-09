@@ -8,6 +8,7 @@
 #include <dftracer/utils/utilities/fileio/lines/sources/async_indexed_file_line_generator.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 using namespace dftracer::utils::utilities::fileio::lines::sources;
@@ -61,7 +62,7 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
 
             auto gen = async_indexed_file_lines(config);
             auto task = collect_lines(std::move(gen));
-            auto lines = task.get();
+            auto lines = dftu_utils_test::ok(task.get());
 
             REQUIRE(lines.size() == 10);
             CHECK(lines[0] == "{\"id\": 1, \"message\": \"Test message 1\"}");
@@ -83,7 +84,7 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
 
             auto gen = async_indexed_file_lines(config);
             auto task = collect_lines(std::move(gen));
-            auto lines = task.get();
+            auto lines = dftu_utils_test::ok(task.get());
 
             REQUIRE(lines.size() == 6);
             CHECK(lines[0] == "{\"id\": 5, \"message\": \"Test message 5\"}");
@@ -105,7 +106,7 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
 
             auto gen = async_indexed_file_lines(config);
             auto task = collect_line_copies(std::move(gen));
-            auto lines = task.get();
+            auto lines = dftu_utils_test::ok(task.get());
 
             REQUIRE(lines.size() == 1);
             CHECK(lines[0].content ==
@@ -129,7 +130,7 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
 
             auto gen = async_indexed_file_lines(config);
             auto task = collect_lines(std::move(gen));
-            auto lines = task.get();
+            auto lines = dftu_utils_test::ok(task.get());
 
             REQUIRE(lines.size() == 6);  // Lines 10-15
             CHECK(lines[0] == "{\"id\": 10, \"message\": \"Test message 10\"}");
@@ -157,7 +158,7 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
 
             auto gen = async_indexed_file_lines(config);
             auto task = collect_lines(std::move(gen));
-            auto lines = task.get();
+            auto lines = dftu_utils_test::ok(task.get());
 
             REQUIRE(lines.size() == 3);  // Lines 2, 3, 4
             CHECK(lines[0] == "{\"id\": 2, \"message\": \"Test message 2\"}");
@@ -181,7 +182,7 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
 
             auto gen = async_indexed_file_lines(config);
             auto task = collect_lines(std::move(gen));
-            auto lines = task.get();
+            auto lines = dftu_utils_test::ok(task.get());
 
             CHECK(lines.size() > 0);
         }
@@ -203,7 +204,7 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
 
             auto gen = async_indexed_file_lines(config);
             auto task = collect_line_copies(std::move(gen));
-            auto lines = task.get();
+            auto lines = dftu_utils_test::ok(task.get());
 
             REQUIRE(lines.size() == 5);
             CHECK(lines[0].line_number == 3);
@@ -228,7 +229,8 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
                 co_return;
             }(std::move(gen));
 
-            CHECK_THROWS_AS(task.get(), common::DFTUtilsException);
+            CHECK_THROWS_AS(dftu_utils_test::ok(task.get()),
+                            common::DFTUtilsException);
         }
 
         SUBCASE("Non-existent file throws") {
@@ -239,7 +241,7 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
                 auto gen = async_indexed_file_lines(config);
                 // Consume to trigger the coroutine body
                 auto task = collect_lines(std::move(gen));
-                task.get();
+                dftu_utils_test::ok(task.get());
             } catch (const std::exception&) {
                 exception_thrown = true;
             }
@@ -264,7 +266,7 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
 
             auto gen = async_indexed_file_lines(config);
             auto task = collect_lines(std::move(gen));
-            auto lines = task.get();
+            auto lines = dftu_utils_test::ok(task.get());
 
             REQUIRE(lines.size() == 101);  // Lines 100-200 inclusive
             CHECK(lines[0] ==
@@ -299,7 +301,7 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             // Async path
             auto gen = async_indexed_file_lines(config);
             auto task = collect_lines(std::move(gen));
-            auto async_lines = task.get();
+            auto async_lines = dftu_utils_test::ok(task.get());
 
             REQUIRE(sync_lines.size() == async_lines.size());
             for (std::size_t i = 0; i < sync_lines.size(); ++i) {
@@ -343,7 +345,7 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
                 co_return;
             }(std::move(gen));
 
-            task.get();
+            dftu_utils_test::ok(task.get());
         }
 
         SUBCASE("Move semantics") {
@@ -363,7 +365,7 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             auto gen2 = std::move(gen1);  // Move construct
 
             auto task = collect_lines(std::move(gen2));
-            auto lines = task.get();
+            auto lines = dftu_utils_test::ok(task.get());
 
             REQUIRE(lines.size() == 5);
         }

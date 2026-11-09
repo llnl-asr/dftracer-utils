@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <algorithm>
 #include <cmath>
@@ -154,12 +155,13 @@ TEST_CASE("every float order in the library is the order of compare_doubles") {
     CHECK(order_of(
               frame.sort_by_multi({"x"}, false).column("row").materialize()) ==
           want);
-    dataframe::DataFrame spilled = dftracer::utils::default_runtime()
-                                       .submit(frame.lazy()
-                                                   .memory_budget(4096)
-                                                   .sort_by("x", false)
-                                                   .collect(64))
-                                       .get();
+    dataframe::DataFrame spilled =
+        dftu_utils_test::ok(dftracer::utils::default_runtime()
+                                .submit(frame.lazy()
+                                            .memory_budget(4096)
+                                            .sort_by("x", false)
+                                            .collect(64))
+                                .get());
     CHECK(order_of(spilled.column("row").materialize()) == want);
 }
 
@@ -207,11 +209,12 @@ TEST_CASE(
     CHECK(order_of(frame.sort_by_multi({"x", "row"}, false)
                        .column("row")
                        .materialize()) == want);
-    const dataframe::DataFrame spilled = dftracer::utils::default_runtime()
-                                             .submit(frame.lazy()
-                                                         .memory_budget(4096)
-                                                         .sort_by("x", false)
-                                                         .collect(64))
-                                             .get();
+    const dataframe::DataFrame spilled =
+        dftu_utils_test::ok(dftracer::utils::default_runtime()
+                                .submit(frame.lazy()
+                                            .memory_budget(4096)
+                                            .sort_by("x", false)
+                                            .collect(64))
+                                .get());
     CHECK(order_of(spilled.column("row").materialize()) == want);
 }

@@ -14,6 +14,7 @@
 #include <dftracer/utils/utilities/fileio/compress/gzip_rechunker.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <fstream>
@@ -73,7 +74,7 @@ dstd::String stats_body(Router& router, const dstd::String& target) {
         body = resp.body;
         co_return;
     });
-    rt.submit(std::move(task), "stats").wait();
+    dftu_utils_test::ok(rt.submit(std::move(task), "stats").wait());
     rt.shutdown();
     return body;
 }
@@ -109,7 +110,7 @@ TEST_SUITE("viz_stats_fastpath") {
                 co_await index.initialize();
                 co_return;
             });
-            rt.submit(std::move(task), "setup").wait();
+            dftu_utils_test::ok(rt.submit(std::move(task), "setup").wait());
             rt.shutdown();
         }
         REQUIRE(index.file_count() == 1);

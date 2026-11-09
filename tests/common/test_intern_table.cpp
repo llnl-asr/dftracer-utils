@@ -11,6 +11,7 @@
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <atomic>
 #include <cstddef>
@@ -149,10 +150,11 @@ TEST_CASE("ids from the scope survive a co_await on another thread") {
         Runtime rt(4);
         {
             common::InternScope scope{table};
-            rt.submit(hop_and_check(table.get(), &bad)).get();
+            dftu_utils_test::ok(
+                rt.submit(hop_and_check(table.get(), &bad)).get());
         }
         std::atomic<int> stale{0};
-        rt.submit(sees_no_table(&stale)).get();
+        dftu_utils_test::ok(rt.submit(sees_no_table(&stale)).get());
         CHECK(stale.load() == 0);
     }
     CHECK(bad.load() == 0);
@@ -175,7 +177,7 @@ TEST_CASE("tasks on many threads intern and read one table") {
                     rt.submit(intern_and_read(table.get(), i, &bad)));
             }
         }
-        for (auto& h : handles) h.get();
+        for (auto& h : handles) dftu_utils_test::ok(h.get());
     }
     CHECK(bad.load() == 0);
     for (int k = 0; k < STRINGS; ++k) {

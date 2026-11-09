@@ -9,6 +9,7 @@
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <variant>
 
@@ -27,10 +28,10 @@ inline dftracer::utils::trace::views::ViewFile index_trace(
     struct Sink : ExportSink {
         void write(dftracer::utils::dstd::StringView) override {}
     } sink;
-    View::from_file(dftracer::utils::dstd::String(gz),
-                    dftracer::utils::dstd::String(idx))
-        .sink_json(sink)
-        .get();
+    dftu_utils_test::ok(View::from_file(dftracer::utils::dstd::String(gz),
+                                        dftracer::utils::dstd::String(idx))
+                            .sink_json(sink)
+                            .get());
     return ViewFile{dftracer::utils::dstd::String(gz),
                     dftracer::utils::dstd::String(idx)};
 }
@@ -51,7 +52,7 @@ inline dftracer::utils::plugins::PluginRun run_set(
             out = std::move(*run);
             co_return;
         });
-    rt.submit(std::move(task), tag).wait();
+    dftu_utils_test::ok(rt.submit(std::move(task), tag).wait());
     rt.shutdown();
     return out;
 }

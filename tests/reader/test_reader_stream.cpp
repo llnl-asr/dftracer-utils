@@ -8,6 +8,7 @@
 #include <dftracer/utils/utilities/reader/internal/stream.h>
 #include <dftracer/utils/utilities/reader/internal/stream_type.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <string>
@@ -52,7 +53,8 @@ TEST_CASE("C++ Reader Streaming API - BYTES stream" *
 
         // Read in chunks
         while (!stream->done()) {
-            std::size_t bytes_read = stream->read(buffer, sizeof(buffer));
+            std::size_t bytes_read =
+                dftu_utils_test::ok(stream->read(buffer, sizeof(buffer)));
             if (bytes_read > 0) {
                 result.append(buffer, bytes_read);
             }
@@ -75,7 +77,8 @@ TEST_CASE("C++ Reader Streaming API - BYTES stream" *
         int read_count = 0;
 
         while (!stream->done()) {
-            std::size_t bytes_read = stream->read(buffer, sizeof(buffer));
+            std::size_t bytes_read =
+                dftu_utils_test::ok(stream->read(buffer, sizeof(buffer)));
             total_read += bytes_read;
             read_count++;
 
@@ -105,7 +108,8 @@ TEST_CASE("C++ Reader Streaming API - BYTES stream" *
         dstd::String result;
 
         while (!stream->done()) {
-            std::size_t bytes_read = stream->read(buffer, sizeof(buffer));
+            std::size_t bytes_read =
+                dftu_utils_test::ok(stream->read(buffer, sizeof(buffer)));
             if (bytes_read > 0) {
                 result.append(buffer, bytes_read);
             }
@@ -131,7 +135,8 @@ TEST_CASE("C++ Reader Streaming API - BYTES stream" *
                                               .to(100));
             REQUIRE(stream1 != nullptr);
 
-            std::size_t bytes = stream1->read(buffer, sizeof(buffer));
+            std::size_t bytes =
+                dftu_utils_test::ok(stream1->read(buffer, sizeof(buffer)));
             if (bytes > 0) {
                 first_read.append(buffer, bytes);
             }
@@ -147,7 +152,8 @@ TEST_CASE("C++ Reader Streaming API - BYTES stream" *
             REQUIRE(stream2 != nullptr);
 
             dstd::String second_read;
-            std::size_t bytes = stream2->read(buffer, sizeof(buffer));
+            std::size_t bytes =
+                dftu_utils_test::ok(stream2->read(buffer, sizeof(buffer)));
             if (bytes > 0) {
                 second_read.append(buffer, bytes);
             }
@@ -195,7 +201,8 @@ TEST_CASE("C++ Reader Streaming API - LINE_BYTES stream") {
         int line_count = 0;
 
         while (!stream->done()) {
-            std::size_t bytes_read = stream->read(buffer, sizeof(buffer));
+            std::size_t bytes_read =
+                dftu_utils_test::ok(stream->read(buffer, sizeof(buffer)));
             if (bytes_read > 0) {
                 line_count++;
                 // Each read should end with newline (except possibly last)
@@ -222,7 +229,8 @@ TEST_CASE("C++ Reader Streaming API - LINE_BYTES stream") {
         int line_count = 0;
 
         while (!stream->done() && line_count < 20) {
-            std::size_t bytes_read = stream->read(buffer, sizeof(buffer));
+            std::size_t bytes_read =
+                dftu_utils_test::ok(stream->read(buffer, sizeof(buffer)));
             if (bytes_read > 0) {
                 line_count++;
             } else {
@@ -276,7 +284,8 @@ TEST_CASE("C++ Reader Streaming API - MULTI_LINES_BYTES stream" *
         std::size_t total_bytes = 0;
 
         while (!stream->done()) {
-            std::size_t bytes_read = stream->read(buffer, sizeof(buffer));
+            std::size_t bytes_read =
+                dftu_utils_test::ok(stream->read(buffer, sizeof(buffer)));
             if (bytes_read > 0) {
                 read_count++;
                 total_bytes += bytes_read;
@@ -305,7 +314,8 @@ TEST_CASE("C++ Reader Streaming API - MULTI_LINES_BYTES stream" *
         std::size_t total_lines = 0;
 
         while (!stream->done()) {
-            std::size_t bytes_read = stream->read(buffer, sizeof(buffer));
+            std::size_t bytes_read =
+                dftu_utils_test::ok(stream->read(buffer, sizeof(buffer)));
             if (bytes_read > 0) {
                 // Count newlines
                 for (std::size_t i = 0; i < bytes_read; i++) {
@@ -363,7 +373,8 @@ TEST_CASE("C++ Reader Streaming API - LINE stream") {
         dstd::Vector<dstd::String> lines;
 
         while (!stream->done()) {
-            std::size_t bytes_read = stream->read(buffer, sizeof(buffer));
+            std::size_t bytes_read =
+                dftu_utils_test::ok(stream->read(buffer, sizeof(buffer)));
             if (bytes_read > 0) {
                 line_count++;
                 lines.emplace_back(buffer, bytes_read);
@@ -393,7 +404,8 @@ TEST_CASE("C++ Reader Streaming API - LINE stream") {
         int line_count = 0;
 
         while (!stream->done()) {
-            std::size_t bytes_read = stream->read(buffer, sizeof(buffer));
+            std::size_t bytes_read =
+                dftu_utils_test::ok(stream->read(buffer, sizeof(buffer)));
             if (bytes_read > 0) {
                 line_count++;
             } else {
@@ -446,7 +458,8 @@ TEST_CASE("C++ Reader Streaming API - MULTI_LINES stream" *
         std::size_t total_line_count = 0;
 
         while (!stream->done()) {
-            std::size_t bytes_read = stream->read(buffer, sizeof(buffer));
+            std::size_t bytes_read =
+                dftu_utils_test::ok(stream->read(buffer, sizeof(buffer)));
             if (bytes_read > 0) {
                 read_count++;
                 // Buffer contains multiple lines separated by newlines
@@ -480,7 +493,8 @@ TEST_CASE("C++ Reader Streaming API - MULTI_LINES stream" *
         std::size_t total_line_count = 0;
 
         while (!stream->done()) {
-            std::size_t bytes_read = stream->read(buffer, sizeof(buffer));
+            std::size_t bytes_read =
+                dftu_utils_test::ok(stream->read(buffer, sizeof(buffer)));
             if (bytes_read > 0) {
                 // Count newlines
                 for (std::size_t i = 0; i < bytes_read; i++) {
@@ -527,7 +541,8 @@ TEST_CASE("C++ Reader Streaming API - Edge cases") {
         REQUIRE(stream != nullptr);
 
         char buffer[128];
-        std::size_t bytes_read = stream->read(buffer, sizeof(buffer));
+        std::size_t bytes_read =
+            dftu_utils_test::ok(stream->read(buffer, sizeof(buffer)));
         CHECK(bytes_read == 0);
         CHECK(stream->done());
     }
@@ -542,7 +557,8 @@ TEST_CASE("C++ Reader Streaming API - Edge cases") {
         REQUIRE(stream != nullptr);
 
         char buffer[128];
-        std::size_t bytes_read = stream->read(buffer, sizeof(buffer));
+        std::size_t bytes_read =
+            dftu_utils_test::ok(stream->read(buffer, sizeof(buffer)));
         CHECK(bytes_read == 0);
         CHECK(stream->done());
     }
@@ -559,7 +575,8 @@ TEST_CASE("C++ Reader Streaming API - Edge cases") {
         std::size_t total = 0;
 
         while (!stream->done()) {
-            std::size_t bytes_read = stream->read(buffer, sizeof(buffer));
+            std::size_t bytes_read =
+                dftu_utils_test::ok(stream->read(buffer, sizeof(buffer)));
             total += bytes_read;
             if (bytes_read == 0) {
                 break;
@@ -584,7 +601,8 @@ TEST_CASE("C++ Reader Streaming API - Edge cases") {
                                              .from(0)
                                              .to(50));
             REQUIRE(stream != nullptr);
-            first_bytes = stream->read(buffer, sizeof(buffer));
+            first_bytes =
+                dftu_utils_test::ok(stream->read(buffer, sizeof(buffer)));
             CHECK(first_bytes > 0);
         }
 
@@ -598,7 +616,8 @@ TEST_CASE("C++ Reader Streaming API - Edge cases") {
             REQUIRE(stream != nullptr);
             CHECK_FALSE(stream->done());
 
-            std::size_t bytes = stream->read(buffer, sizeof(buffer));
+            std::size_t bytes =
+                dftu_utils_test::ok(stream->read(buffer, sizeof(buffer)));
             CHECK(bytes == first_bytes);  // Should read same amount each time
         }
     }
@@ -680,8 +699,8 @@ TEST_CASE("C++ Reader Streaming API - Buffer Size Tests") {
 
             dstd::Vector<char> buffer(512 * 1024);
             while (!stream->done()) {
-                std::size_t bytes_read =
-                    stream->read(buffer.data(), buffer.size());
+                std::size_t bytes_read = dftu_utils_test::ok(
+                    stream->read(buffer.data(), buffer.size()));
                 if (bytes_read > 0) {
                     reference_data.append(buffer.data(), bytes_read);
                 }
@@ -701,8 +720,8 @@ TEST_CASE("C++ Reader Streaming API - Buffer Size Tests") {
             dstd::String data;
             dstd::Vector<char> buffer(512 * 1024);
             while (!stream->done()) {
-                std::size_t bytes_read =
-                    stream->read(buffer.data(), buffer.size());
+                std::size_t bytes_read = dftu_utils_test::ok(
+                    stream->read(buffer.data(), buffer.size()));
                 if (bytes_read > 0) {
                     data.append(buffer.data(), bytes_read);
                 }
@@ -726,8 +745,8 @@ TEST_CASE("C++ Reader Streaming API - Buffer Size Tests") {
 
             char buffer[4096];
             while (!stream->done()) {
-                std::size_t bytes_read =
-                    stream->read(buffer, sizeof(buffer) - 1);
+                std::size_t bytes_read = dftu_utils_test::ok(
+                    stream->read(buffer, sizeof(buffer) - 1));
                 if (bytes_read > 0) {
                     buffer[bytes_read] = '\0';
                     reference_lines.push_back(dstd::String(buffer, bytes_read));
@@ -748,8 +767,8 @@ TEST_CASE("C++ Reader Streaming API - Buffer Size Tests") {
             dstd::Vector<dstd::String> lines;
             char buffer[4096];
             while (!stream->done()) {
-                std::size_t bytes_read =
-                    stream->read(buffer, sizeof(buffer) - 1);
+                std::size_t bytes_read = dftu_utils_test::ok(
+                    stream->read(buffer, sizeof(buffer) - 1));
                 if (bytes_read > 0) {
                     buffer[bytes_read] = '\0';
                     lines.push_back(dstd::String(buffer, bytes_read));
@@ -776,8 +795,8 @@ TEST_CASE("C++ Reader Streaming API - Buffer Size Tests") {
             dstd::Vector<char> buffer(64 * 1024);
             dstd::String content;
             while (!stream->done()) {
-                std::size_t bytes_read =
-                    stream->read(buffer.data(), buffer.size());
+                std::size_t bytes_read = dftu_utils_test::ok(
+                    stream->read(buffer.data(), buffer.size()));
                 if (bytes_read > 0) {
                     content.append(buffer.data(), bytes_read);
                 }
@@ -806,8 +825,8 @@ TEST_CASE("C++ Reader Streaming API - Buffer Size Tests") {
             dstd::Vector<char> buffer(64 * 1024);
             dstd::String content;
             while (!stream->done()) {
-                std::size_t bytes_read =
-                    stream->read(buffer.data(), buffer.size());
+                std::size_t bytes_read = dftu_utils_test::ok(
+                    stream->read(buffer.data(), buffer.size()));
                 if (bytes_read > 0) {
                     content.append(buffer.data(), bytes_read);
                 }

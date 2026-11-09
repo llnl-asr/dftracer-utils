@@ -6,6 +6,7 @@
 #include <dftracer/utils/dstd/variant.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <atomic>
 
@@ -17,7 +18,7 @@ TEST_CASE("when_any - Two heterogeneous types (int, string)") {
     std::atomic<bool> index_valid{false};
     std::atomic<bool> value_valid{false};
 
-    rt.block_on(
+    dftu_utils_test::ok(rt.block_on(
         coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
             auto f1 = scope.spawn_future(
                 []() -> coro::CoroTask<int> { co_return 42; });
@@ -40,7 +41,7 @@ TEST_CASE("when_any - Two heterogeneous types (int, string)") {
             }
 
             co_return;
-        }));
+        })));
     CHECK(index_valid.load());
     CHECK(value_valid.load());
 }
@@ -51,7 +52,7 @@ TEST_CASE("when_any - Three heterogeneous types") {
     std::atomic<bool> index_valid{false};
     std::atomic<bool> type_valid{false};
 
-    rt.block_on(
+    dftu_utils_test::ok(rt.block_on(
         coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
             auto f1 = scope.spawn_future(
                 []() -> coro::CoroTask<int> { co_return 1; });
@@ -86,7 +87,7 @@ TEST_CASE("when_any - Three heterogeneous types") {
             tv->store(correct_type, std::memory_order_relaxed);
 
             co_return;
-        }));
+        })));
     CHECK(index_valid.load());
     CHECK(type_valid.load());
 }
@@ -97,7 +98,7 @@ TEST_CASE("when_any - Mixed void and non-void") {
     std::atomic<bool> index_valid{false};
     std::atomic<bool> type_valid{false};
 
-    rt.block_on(
+    dftu_utils_test::ok(rt.block_on(
         coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
             auto f1 =
                 scope.spawn_future([]() -> coro::CoroTask<void> { co_return; });
@@ -120,7 +121,7 @@ TEST_CASE("when_any - Mixed void and non-void") {
             tv->store(correct_type, std::memory_order_relaxed);
 
             co_return;
-        }));
+        })));
     CHECK(index_valid.load());
     CHECK(type_valid.load());
 }
@@ -130,7 +131,7 @@ TEST_CASE("when_any - Exception propagation") {
 
     std::atomic<bool> handled{false};
 
-    rt.block_on(
+    dftu_utils_test::ok(rt.block_on(
         coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
             auto f1 = scope.spawn_future([]() -> coro::CoroTask<int> {
                 throw std::runtime_error("boom");
@@ -159,7 +160,7 @@ TEST_CASE("when_any - Exception propagation") {
             }
 
             co_return;
-        }));
+        })));
     CHECK(handled.load());
 }
 
@@ -169,7 +170,7 @@ TEST_CASE("when_any - Index-based get<N>() access") {
     std::atomic<bool> accessed{false};
     std::atomic<bool> value_correct{false};
 
-    rt.block_on(
+    dftu_utils_test::ok(rt.block_on(
         coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
             auto f1 = scope.spawn_future(
                 []() -> coro::CoroTask<int> { co_return 42; });
@@ -192,7 +193,7 @@ TEST_CASE("when_any - Index-based get<N>() access") {
             }
 
             co_return;
-        }));
+        })));
     CHECK(accessed.load());
     CHECK(value_correct.load());
 }
@@ -203,30 +204,31 @@ TEST_CASE("when_any - Overload resolution (homogeneous uses vector version)") {
     std::atomic<bool> index_valid{false};
     std::atomic<int> result_value{-1};
 
-    rt.block_on(coro::with_scope([&](coro::Scope& scope)
-                                     -> coro::CoroTask<void> {
-        // Both futures are SpawnFuture<int> -- homogeneous overload
-        // selected; result is WhenAnyResult<int>, not
-        // WhenAnyTupleResult.
-        auto f1 =
-            scope.spawn_future([]() -> coro::CoroTask<int> { co_return 10; });
-        auto f2 =
-            scope.spawn_future([]() -> coro::CoroTask<int> { co_return 20; });
+    dftu_utils_test::ok(rt.block_on(
+        coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
+            // Both futures are SpawnFuture<int> -- homogeneous overload
+            // selected; result is WhenAnyResult<int>, not
+            // WhenAnyTupleResult.
+            auto f1 = scope.spawn_future(
+                []() -> coro::CoroTask<int> { co_return 10; });
+            auto f2 = scope.spawn_future(
+                []() -> coro::CoroTask<int> { co_return 20; });
 
-        auto result = co_await coro::when_any(std::move(f1), std::move(f2));
+            auto result = co_await coro::when_any(std::move(f1), std::move(f2));
 
-        // result_type is WhenAnyResult<int>: .result is int
-        static_assert(std::is_same_v<decltype(result.result), int>,
-                      "homogeneous when_any must return WhenAnyResult<int>");
+            // result_type is WhenAnyResult<int>: .result is int
+            static_assert(
+                std::is_same_v<decltype(result.result), int>,
+                "homogeneous when_any must return WhenAnyResult<int>");
 
-        auto* iv = &index_valid;
-        auto* rv = &result_value;
+            auto* iv = &index_valid;
+            auto* rv = &result_value;
 
-        iv->store(result.index <= 1, std::memory_order_relaxed);
-        rv->store(result.result, std::memory_order_relaxed);
+            iv->store(result.index <= 1, std::memory_order_relaxed);
+            rv->store(result.result, std::memory_order_relaxed);
 
-        co_return;
-    }));
+            co_return;
+        })));
     CHECK(index_valid.load());
     int rv = result_value.load();
     CHECK((rv == 10 || rv == 20));

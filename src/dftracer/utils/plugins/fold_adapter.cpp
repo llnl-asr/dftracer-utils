@@ -677,7 +677,7 @@ int host_arrow_write_ipc(void*, [[maybe_unused]] ::ArrowArray* a,
         utilities::arrow::ArrowExportResult res(std::move(schema),
                                                 std::move(array));
         int rc = -1;
-        dftracer::utils::default_runtime().block_on(
+        const auto ran = dftracer::utils::default_runtime().block_on(
             coro::named("dft-plugin-ipc", [&]() -> coro::CoroTask<void> {
                 utilities::arrow::IpcWriter writer;
                 const auto open_rc = co_await writer.open(path);
@@ -688,6 +688,7 @@ int host_arrow_write_ipc(void*, [[maybe_unused]] ::ArrowArray* a,
                 if (close_rc != 0) co_return;
                 rc = 0;
             }()));
+        if (!ran) return -1;
         ArrowSchemaMove(res.schema(), s);
         ArrowArrayMove(res.array(), a);
         return rc;
@@ -763,7 +764,7 @@ int host_trace_read(void* h, const char* path, dftu_stream_item_fn on_batch,
     auto& intern = static_cast<PluginFold*>(h)->intern_table();
     try {
         dstd::String p(path);
-        dftracer::utils::default_runtime().block_on(
+        const auto ran = dftracer::utils::default_runtime().block_on(
             coro::named("dft-plugin-trace-read", [&]() -> coro::CoroTask<void> {
                 dftracer::utils::json::Document document;
                 dftracer::utils::dstd::InternCache cache(intern);
@@ -817,7 +818,7 @@ int host_trace_read(void* h, const char* path, dftu_stream_item_fn on_batch,
                     },
                     /*slot_count=*/1, /*limit=*/0);
             }()));
-        return 0;
+        return ran ? 0 : -1;
     } catch (...) {
         return -1;
     }

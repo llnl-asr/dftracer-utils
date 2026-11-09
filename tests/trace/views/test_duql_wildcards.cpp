@@ -8,6 +8,7 @@
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -60,7 +61,9 @@ View view_of(const dstd::String& gz) {
         dstd::String(dstd::String(determine_index_path(gz, ""))));
 }
 
-dataframe::DataFrame frame(const View& v) { return v.collect().get(); }
+dataframe::DataFrame frame(const View& v) {
+    return dftu_utils_test::ok(v.collect().get());
+}
 
 dstd::Vector<dstd::String> names(const dataframe::DataFrame& f) {
     return f.names;
@@ -175,8 +178,10 @@ TEST_SUITE("DuqlWildcards") {
         CHECK(plan.find("*") == dstd::String::npos);
         NullSink a;
         NullSink b;
-        const auto sw = view_of(gz).duql(wild).sink_json(a).get();
-        const auto ss = view_of(gz).duql(spelled).sink_json(b).get();
+        const auto sw =
+            dftu_utils_test::ok(view_of(gz).duql(wild).sink_json(a).get());
+        const auto ss =
+            dftu_utils_test::ok(view_of(gz).duql(spelled).sink_json(b).get());
         CHECK(sw.events_matched == ss.events_matched);
         CHECK(sw.events_matched == 210);
         CHECK(sw.events_scanned < RECORDS);

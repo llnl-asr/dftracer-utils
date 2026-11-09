@@ -10,6 +10,7 @@
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 using namespace dftracer::utils;
@@ -54,7 +55,8 @@ TEST_SUITE("IndexFoldDriver") {
             result =
                 co_await index::build::BatchBuilder::process(std::move(config));
         });
-        rt.submit(std::move(task), "fold-buffer-pools").wait();
+        dftu_utils_test::ok(
+            rt.submit(std::move(task), "fold-buffer-pools").wait());
         rt.shutdown();
 
         REQUIRE(result.indexed == files.size());

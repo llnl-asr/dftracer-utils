@@ -11,6 +11,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/views/abi.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -140,7 +141,9 @@ dstd::String write_and_index(const dstd::String& dir, const dstd::String& name,
     dstd::fs::remove(pfw).discard();
     dstd::String idx = dstd::String(determine_index_path(gz, ""));
     StringSink sink;
-    View::from_file(dstd::String(gz), dstd::String(idx)).sink_json(sink).get();
+    dftu_utils_test::ok(View::from_file(dstd::String(gz), dstd::String(idx))
+                            .sink_json(sink)
+                            .get());
     return gz;
 }
 
@@ -394,9 +397,9 @@ TEST_SUITE("View C ABI") {
         dstd::String gz = write_group_trace(env);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
         StringSink sink;
-        View::from_file(dstd::String(gz), dstd::String(idx))
-            .sink_json(sink)
-            .get();
+        dftu_utils_test::ok(View::from_file(dstd::String(gz), dstd::String(idx))
+                                .sink_json(sink)
+                                .get());
 
         const char* paths[1] = {gz.c_str()};
         const char* idxs[1] = {idx.c_str()};
@@ -506,9 +509,10 @@ TEST_SUITE("View C ABI") {
             dstd::String am_gz = write_argmax_trace(env);
             dstd::String am_idx = dstd::String(determine_index_path(am_gz, ""));
             StringSink am_sink;
-            View::from_file(dstd::String(am_gz), dstd::String(am_idx))
-                .sink_json(am_sink)
-                .get();
+            dftu_utils_test::ok(
+                View::from_file(dstd::String(am_gz), dstd::String(am_idx))
+                    .sink_json(am_sink)
+                    .get());
             const char* am_paths[1] = {am_gz.c_str()};
             const char* am_idxs[1] = {am_idx.c_str()};
 
@@ -553,9 +557,10 @@ TEST_SUITE("View C ABI") {
             dstd::String am_gz = write_argmax_trace(env);
             dstd::String am_idx = dstd::String(determine_index_path(am_gz, ""));
             StringSink am_sink;
-            View::from_file(dstd::String(am_gz), dstd::String(am_idx))
-                .sink_json(am_sink)
-                .get();
+            dftu_utils_test::ok(
+                View::from_file(dstd::String(am_gz), dstd::String(am_idx))
+                    .sink_json(am_sink)
+                    .get());
             const char* am_paths[1] = {am_gz.c_str()};
             const char* am_idxs[1] = {am_idx.c_str()};
 
@@ -595,9 +600,10 @@ TEST_SUITE("View C ABI") {
             dstd::String am_gz = write_argmax_trace(env);
             dstd::String am_idx = dstd::String(determine_index_path(am_gz, ""));
             StringSink am_sink;
-            View::from_file(dstd::String(am_gz), dstd::String(am_idx))
-                .sink_json(am_sink)
-                .get();
+            dftu_utils_test::ok(
+                View::from_file(dstd::String(am_gz), dstd::String(am_idx))
+                    .sink_json(am_sink)
+                    .get());
             const char* am_paths[1] = {am_gz.c_str()};
             const char* am_idxs[1] = {am_idx.c_str()};
 
@@ -653,9 +659,9 @@ TEST_SUITE("View C ABI") {
         dstd::fs::remove(pfw).discard();
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
         StringSink sink;
-        View::from_file(dstd::String(gz), dstd::String(idx))
-            .sink_json(sink)
-            .get();
+        dftu_utils_test::ok(View::from_file(dstd::String(gz), dstd::String(idx))
+                                .sink_json(sink)
+                                .get());
 
         const char* paths[1] = {gz.c_str()};
         const char* idxs[1] = {idx.c_str()};

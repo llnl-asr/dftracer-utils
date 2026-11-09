@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_LONG_LIVED_RELEASE_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_LONG_LIVED_RELEASE_H
 
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/task.h>
@@ -38,10 +39,10 @@ void release_long_lived(dstd::UniquePtr<Impl> impl, const char* name) {
     impl->abandon();
     if (!coro::Executor::current()) {
         try {
-            default_runtime().block_on(
+            common::unwrap(default_runtime().block_on(
                 coro::named(name, [&]() -> coro::CoroTask<void> {
                     co_await impl->join_and_clean();
-                }()));
+                }())));
             return;
         } catch (...) {
         }

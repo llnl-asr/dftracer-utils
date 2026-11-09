@@ -14,6 +14,7 @@
 #include <dftracer/utils/trace/views/view_scanner_utility.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <algorithm>
@@ -97,7 +98,8 @@ static coro::CoroTask<CollectedViewOutput> collect_view_coro(
 
 static CollectedViewOutput collect_view_output(ViewScannerUtility& reader,
                                                ViewScannerInput input) {
-    return collect_view_coro(&reader, std::move(input)).get();
+    return dftu_utils_test::ok(
+        collect_view_coro(&reader, std::move(input)).get());
 }
 
 static dstd::String create_refused_gz(TestEnvironment& env) {

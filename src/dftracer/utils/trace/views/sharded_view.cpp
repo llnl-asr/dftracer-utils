@@ -315,7 +315,7 @@ std::size_t merge_shard_set(const dstd::String& root,
     std::size_t files = 0;
     dstd::Optional<index::schemas::dft::agg::tier::Config> config;
 
-    default_runtime().block_on(
+    common::unwrap(default_runtime().block_on(
         coro::named("shard merge", [&]() -> coro::CoroTask<void> {
             index::Index out = common::unwrap(index::Index::open(out_idx));
 
@@ -362,7 +362,7 @@ std::size_t merge_shard_set(const dstd::String& root,
                     ++files;
                 }
             }
-        }()));
+        }())));
 
     return files;
 }

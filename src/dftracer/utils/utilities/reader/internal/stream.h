@@ -48,7 +48,9 @@ class ReaderStream {
     /**
      * @brief Read next chunk as zero-copy view (sync wrapper).
      */
-    dstd::Span<const char> read() { return read_async().get(); }
+    coro::TaskResult<dstd::Span<const char>> read() {
+        return read_async().get();
+    }
 
     /**
      * @brief Read next chunk of data into buffer (coroutine).
@@ -66,7 +68,7 @@ class ReaderStream {
     /**
      * @brief Read next chunk of data into buffer (sync wrapper).
      */
-    std::size_t read(char* buffer, std::size_t buffer_size) {
+    coro::TaskResult<std::size_t> read(char* buffer, std::size_t buffer_size) {
         return read_async(buffer, buffer_size).get();
     }
 

@@ -243,7 +243,12 @@ static int run_event_count(const EventCountArgParse* cli) {
     resolve_input.index_dir = index_dir;
     resolve_input.require_checkpoints = true;
 
-    auto resolve_result = resolver(resolve_input).get();
+    auto resolved = resolver(resolve_input).get();
+    if (!resolved) {
+        DFTRACER_UTILS_LOG_ERROR("%s", resolved.error().format().c_str());
+        return 1;
+    }
+    auto& resolve_result = *resolved;
 
     if (resolve_result.all_files.empty()) {
         DFTRACER_UTILS_LOG_ERROR("No trace files found in: %s",

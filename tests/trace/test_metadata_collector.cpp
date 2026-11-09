@@ -11,6 +11,7 @@
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/metadata_collector_utility.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <chrono>
@@ -70,7 +71,7 @@ TEST_SUITE("MetadataCollector") {
 
             // Process
             MetadataCollectorUtility collector;
-            auto output = collector(input).get();
+            auto output = dftu_utils_test::ok(collector(input).get());
 
             // Verify output
             CHECK(output.success == true);
@@ -94,7 +95,7 @@ TEST_SUITE("MetadataCollector") {
 
             // Process
             MetadataCollectorUtility collector;
-            auto output = collector(input).get();
+            auto output = dftu_utils_test::ok(collector(input).get());
 
             // Verify
             CHECK(output.success == true);
@@ -116,7 +117,7 @@ TEST_SUITE("MetadataCollector") {
 
             // Process
             MetadataCollectorUtility collector;
-            auto output = collector(input).get();
+            auto output = dftu_utils_test::ok(collector(input).get());
 
             // Verify extended metadata fields
             CHECK(output.success == true);
@@ -160,7 +161,7 @@ TEST_SUITE("MetadataCollector") {
 
             // Process
             MetadataCollectorUtility collector;
-            auto output = collector(input).get();
+            auto output = dftu_utils_test::ok(collector(input).get());
 
             // Verify basic fields
             CHECK(output.success == true);
@@ -199,7 +200,7 @@ TEST_SUITE("MetadataCollector") {
                                  .with_compute_hash(true);
 
                 MetadataCollectorUtility collector;
-                auto output = collector(input).get();
+                auto output = dftu_utils_test::ok(collector(input).get());
 
                 CHECK(output.success == true);
                 CHECK(output.has_index == true);
@@ -216,7 +217,7 @@ TEST_SUITE("MetadataCollector") {
                                  .with_compute_hash(true);
 
                 MetadataCollectorUtility collector;
-                auto output = collector(input).get();
+                auto output = dftu_utils_test::ok(collector(input).get());
 
                 CHECK(output.success == true);
                 CHECK(output.has_index == true);
@@ -245,7 +246,7 @@ TEST_SUITE("MetadataCollector") {
                 .with_index(dstd::String(root))
                 .with_force_rebuild(true);
         MetadataCollectorUtility collector;
-        REQUIRE(collector(first).get().success);
+        REQUIRE(dftu_utils_test::ok(collector(first).get()).success);
 
         REQUIRE(dstd::fs::create_directories(dstd::Path(root) / "rollups")
                     .has_value());
@@ -262,7 +263,7 @@ TEST_SUITE("MetadataCollector") {
             MetadataCollectorUtilityInput::from_file(dstd::String(gz_file))
                 .with_index(dstd::String(root))
                 .with_force_rebuild(true);
-        const auto output = collector(second).get();
+        const auto output = dftu_utils_test::ok(collector(second).get());
         CHECK(output.success);
         CHECK(output.line_count == 25);
         CHECK(
@@ -283,7 +284,7 @@ TEST_SUITE("MetadataCollector") {
             MetadataCollectorUtility collector;
             MetadataCollectorUtilityOutput output;
             try {
-                output = collector(input).get();
+                output = dftu_utils_test::ok(collector(input).get());
             } catch (...) {
                 // noop
             }
@@ -306,7 +307,7 @@ TEST_SUITE("MetadataCollector") {
                 dstd::String(empty_file));
 
             MetadataCollectorUtility collector;
-            auto output = collector(input).get();
+            auto output = dftu_utils_test::ok(collector(input).get());
 
             // Empty file should still succeed but with 0 events
             CHECK(dstd::String(output.file_path) == empty_file);
@@ -341,7 +342,8 @@ TEST_SUITE("MetadataCollectorRoot") {
                                  .with_index(dstd::String(index_path)))
                 .get();
         };
-        for (const auto& file : files) REQUIRE(collect(file).success);
+        for (const auto& file : files)
+            REQUIRE(dftu_utils_test::ok(collect(file)).success);
 
         // The collector keys the root by its normalized path.
         auto root = internal::index_root(dstd::String(
@@ -358,7 +360,7 @@ TEST_SUITE("MetadataCollectorRoot") {
             auto future = std::async(std::launch::async, collect, files[i]);
             REQUIRE(future.wait_for(std::chrono::seconds(10)) ==
                     std::future_status::ready);
-            const auto out = future.get();
+            const auto out = dftu_utils_test::ok(future.get());
             CHECK(out.success);
             CHECK(out.line_count == static_cast<std::size_t>(20 + i));
         }
@@ -372,7 +374,7 @@ TEST_SUITE("MetadataCollectorRoot") {
         root->gate.release(1);
         REQUIRE(build.wait_for(std::chrono::seconds(10)) ==
                 std::future_status::ready);
-        const auto built = build.get();
+        const auto built = dftu_utils_test::ok(build.get());
         CHECK(built.success);
         CHECK(built.line_count == 7);
 

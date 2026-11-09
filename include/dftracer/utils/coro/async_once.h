@@ -2,7 +2,6 @@
 #ifndef DFTRACER_UTILS_CORO_ASYNC_ONCE_H
 #define DFTRACER_UTILS_CORO_ASYNC_ONCE_H
 
-#include <dftracer/utils/coro/cancelled.h>
 #include <dftracer/utils/coro/completion_latch.h>
 #include <dftracer/utils/coro/detail/parked.h>
 #include <dftracer/utils/coro/detail/resumption_helper.h>
@@ -26,8 +25,8 @@ namespace dftracer::utils::coro {
  * later callers return the value without suspending or taking a lock. T must
  * be cheap to copy (e.g. a shared_ptr); it is set exactly once.
  *
- * A waiter that is still suspended when its executor shuts down is resumed
- * with a cancelled error (see coro::is_cancelled), so get() throws.
+ * A waiter that is still suspended when its executor shuts down stops with
+ * its task and never resumes.
  */
 template <typename T>
 class AsyncOnce {
@@ -106,7 +105,7 @@ class AsyncOnce {
                 executor_->unpark(park_);
                 park_ = nullptr;
             }
-            if (cancelled_) throw_cancelled("once wait cancelled");
+            if (cancelled_) detail::cancelled_unstoppable("once wait");
         }
 
         static void cancel_thunk(void* self) noexcept {
@@ -126,7 +125,7 @@ class AsyncOnce {
                 next_ = nullptr;
                 cancelled_ = true;
             }
-            resume_continuation(executor_, handle_);
+            detail::stop_or_resume(executor_, park_, handle_);
         }
 
        private:

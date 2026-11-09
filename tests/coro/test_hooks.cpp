@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <atomic>
 #include <chrono>
@@ -78,13 +79,13 @@ TEST_SUITE("CoroutineHooks") {
         {
             Runtime rt(2);
             constexpr std::size_t CHILDREN = 16;
-            rt.block_on(coro::with_scope(
+            dftu_utils_test::ok(rt.block_on(coro::with_scope(
                 [](coro::Scope& scope) -> coro::CoroTask<void> {
                     for (std::size_t i = 0; i < CHILDREN; ++i) {
                         scope.spawn(yield_twice());
                     }
                     co_return;
-                }));
+                })));
             rt.shutdown();
             coro::set_coroutine_hooks(nullptr);
             CHECK(counts.resume.load() == counts.suspend.load());
@@ -103,7 +104,7 @@ TEST_SUITE("CoroutineHooks") {
         coro::set_coroutine_hooks(&hooks);
         Runtime rt(1);
         std::atomic<int> sum{0};
-        rt.block_on(await_inline(sum));
+        dftu_utils_test::ok(rt.block_on(await_inline(sum)));
         rt.shutdown();
         coro::set_coroutine_hooks(nullptr);
         CHECK(sum.load() == 1);
@@ -116,14 +117,14 @@ TEST_SUITE("CoroutineHooks") {
         const coro::CoroutineHooks hooks = counting_hooks(counts);
         coro::set_coroutine_hooks(&hooks);
         Runtime rt(1);
-        rt.block_on(yield_twice());
+        dftu_utils_test::ok(rt.block_on(yield_twice()));
         const std::size_t before_removal = counts.resume.load();
         CHECK(before_removal > 0);
         coro::set_coroutine_hooks(nullptr);
         // A slice that began before the removal may still report its suspend.
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
         const std::size_t after_removal = counts.resume.load();
-        rt.block_on(yield_twice());
+        dftu_utils_test::ok(rt.block_on(yield_twice()));
         rt.shutdown();
         CHECK(counts.resume.load() == after_removal);
         CHECK(coro::current_worker_index() == -1);
@@ -135,13 +136,13 @@ TEST_SUITE("CoroutineHooks") {
         {
             Runtime rt(4);
             constexpr std::size_t CHILDREN = 200;
-            rt.block_on(coro::with_scope(
+            dftu_utils_test::ok(rt.block_on(coro::with_scope(
                 [](coro::Scope& scope) -> coro::CoroTask<void> {
                     for (std::size_t i = 0; i < CHILDREN; ++i) {
                         scope.spawn(yield_twice());
                     }
                     co_return;
-                }));
+                })));
             rt.shutdown();
         }
         log.stop();
@@ -184,13 +185,13 @@ TEST_SUITE("CoroutineHooks") {
         coro::CoroutineEventLog log(options);
         log.start();
         Runtime rt(1);
-        rt.block_on(burst());
+        dftu_utils_test::ok(rt.block_on(burst()));
         CHECK(log.dropped() > 0);
         std::size_t seen = 0;
         log.drain([&](const CoroutineEvent&) { ++seen; });
         CHECK(seen > 0);
 
-        rt.block_on(burst());
+        dftu_utils_test::ok(rt.block_on(burst()));
         rt.shutdown();
         log.stop();
         std::size_t seen_after_read = 0;
@@ -206,7 +207,7 @@ TEST_SUITE("CoroutineHooks") {
         Runtime rt(1);
 
         first.start();
-        rt.block_on(yield_twice());
+        dftu_utils_test::ok(rt.block_on(yield_twice()));
         // The worker hands over its partial chunk when it goes idle.
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
         first.stop();
@@ -214,11 +215,11 @@ TEST_SUITE("CoroutineHooks") {
         first.drain([&](const CoroutineEvent& event) {
             if (event.worker >= 0) ++first_worker_events;
         });
-        rt.block_on(yield_twice());
+        dftu_utils_test::ok(rt.block_on(yield_twice()));
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
 
         second.start();
-        rt.block_on(yield_twice());
+        dftu_utils_test::ok(rt.block_on(yield_twice()));
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
         second.stop();
         rt.shutdown();

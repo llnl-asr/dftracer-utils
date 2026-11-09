@@ -24,6 +24,7 @@
 #include <doctest/doctest.h>
 #include <refused_lines.h>
 #include <simdjson.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 using namespace dftracer::utils;
@@ -57,7 +58,7 @@ dstd::UniquePtr<Served> serve(const dstd::String& name,
     auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
         co_await s->index->initialize();
     });
-    rt.submit(std::move(task), "setup").wait();
+    dftu_utils_test::ok(rt.submit(std::move(task), "setup").wait());
     rt.shutdown();
     REQUIRE(s->index->file_count() == 1);
     register_viz_api(s->router, *s->index);
@@ -76,7 +77,7 @@ dstd::String get(Served& s, const dstd::String& target) {
         body = resp.body;
         co_return;
     });
-    rt.submit(std::move(task), "get").wait();
+    dftu_utils_test::ok(rt.submit(std::move(task), "get").wait());
     rt.shutdown();
     return body;
 }

@@ -10,6 +10,7 @@
 #include <dftracer/utils/memory/detail/pool_access.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_runtime.h>
 
 #include <atomic>
@@ -143,8 +144,9 @@ TEST_CASE("a waiter with room gets its bytes without waiting") {
     Budget budget(64 * MIB);
     memory::PoolHandle pool = open_pool("task");
     Outcome out;
-    rt.submit(wait_for(pool.get(), 8 * MIB, Clock::now() + 10s, &out, nullptr))
-        .get();
+    dftu_utils_test::ok(rt.submit(wait_for(pool.get(), 8 * MIB,
+                                           Clock::now() + 10s, &out, nullptr))
+                            .get());
     CHECK(out.status == memory::Status::Ok);
     CHECK(out.bytes == 8 * MIB);
     CHECK(root().reserved() == 0);
@@ -157,9 +159,9 @@ TEST_CASE("a request that can never fit fails at once") {
     memory::PoolHandle pool = open_pool("task");
     Outcome out;
     auto start = Clock::now();
-    rt.submit(
-          wait_for(pool.get(), 128 * MIB, Clock::now() + 10s, &out, nullptr))
-        .get();
+    dftu_utils_test::ok(rt.submit(wait_for(pool.get(), 128 * MIB,
+                                           Clock::now() + 10s, &out, nullptr))
+                            .get());
     CHECK(out.status == memory::Status::OverBudget);
     CHECK(Clock::now() - start < 5s);
 }
@@ -182,8 +184,8 @@ TEST_CASE("a waiter resumes on its executor when another task releases") {
     TaskHandle w = rt.submit(std::move(waiter));
     CoroTask<void> releaser =
         under(*holds, [&] { return release_later(&held, &about_to_wait); });
-    rt.submit(std::move(releaser)).get();
-    w.get();
+    dftu_utils_test::ok(rt.submit(std::move(releaser)).get());
+    dftu_utils_test::ok(w.get());
 
     CHECK(out.status == memory::Status::Ok);
     CHECK(out.bytes == 32 * MIB);
@@ -218,7 +220,7 @@ TEST_CASE("a release from a plain thread does not resume the waiter inline") {
         held.release();
     });
     t.join();
-    w.get();
+    dftu_utils_test::ok(w.get());
 
     CHECK(out.status == memory::Status::Ok);
     CHECK(out.waited >= 10ms);
@@ -238,9 +240,9 @@ TEST_CASE("a waiter times out and the later release skips it") {
 
     Outcome out;
     auto start = Clock::now();
-    rt.submit(
-          wait_for(pool.get(), 32 * MIB, Clock::now() + 50ms, &out, nullptr))
-        .get();
+    dftu_utils_test::ok(rt.submit(wait_for(pool.get(), 32 * MIB,
+                                           Clock::now() + 50ms, &out, nullptr))
+                            .get());
     CHECK(out.status == memory::Status::OverBudget);
     CHECK(Clock::now() - start >= 50ms);
     CHECK(out.resumed_on == rt.executor());
@@ -281,9 +283,10 @@ TEST_CASE("a frame destroyed while it waits leaks nothing") {
     bool suspended = false;
     memory::Pool& general = memory::detail::Manager::get().general();
     std::atomic<bool> warm{false};
-    rt.submit(start_and_destroy(pool.get(), 0, Clock::now() + 50ms, &alive,
-                                &warm, &suspended))
-        .get();
+    dftu_utils_test::ok(
+        rt.submit(start_and_destroy(pool.get(), 0, Clock::now() + 50ms, &alive,
+                                    &warm, &suspended))
+            .get());
     REQUIRE(warm.load());
     // The warm-up task's last frees run on a worker after get() returns, so
     // the count is taken once two reads 50 ms apart agree.
@@ -294,9 +297,10 @@ TEST_CASE("a frame destroyed while it waits leaks nothing") {
         next = general.blocks();
         if (next == before) break;
     }
-    rt.submit(start_and_destroy(pool.get(), 32 * MIB, Clock::now() + 50ms,
-                                &alive, &resumed, &suspended))
-        .get();
+    dftu_utils_test::ok(
+        rt.submit(start_and_destroy(pool.get(), 32 * MIB, Clock::now() + 50ms,
+                                    &alive, &resumed, &suspended))
+            .get());
     CHECK(suspended);
     CHECK(alive.load() == 0);
 
@@ -360,7 +364,7 @@ TEST_CASE("many waiters on several workers end exact") {
             rt.submit(worker(pools[static_cast<std::size_t>(i)].get(),
                              static_cast<unsigned>(100 + i))));
     }
-    for (TaskHandle& h : handles) h.get();
+    for (TaskHandle& h : handles) dftu_utils_test::ok(h.get());
 
     CHECK(bad.load() == 0);
     CHECK(granted.load() + timed_out.load() == TASKS * ROUNDS);

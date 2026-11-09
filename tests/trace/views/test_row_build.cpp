@@ -17,6 +17,7 @@
 #include <dftracer/utils/trace/views/stream_row_fold.h>
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 #include <memory>
@@ -82,9 +83,10 @@ coro::CoroTask<Built> run_step(dstd::StringIntern& intern_ref,
 
 Built stepped(const dstd::SharedPtr<dstd::StringIntern>& intern,
               dstd::Vector<views::detail::FoldEvent> events) {
-    return dftracer::utils::default_runtime()
-        .submit(run_step(*intern, intern, std::move(events)))
-        .get();
+    return dftu_utils_test::ok(
+        dftracer::utils::default_runtime()
+            .submit(run_step(*intern, intern, std::move(events)))
+            .get());
 }
 
 dstd::Vector<views::detail::FoldEvent> copy_events(

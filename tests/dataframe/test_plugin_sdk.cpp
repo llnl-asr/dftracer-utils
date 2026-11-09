@@ -18,6 +18,7 @@
 #include <dftracer/utils/plugins/plugin/source.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 #include <cstring>
@@ -30,7 +31,8 @@ namespace {
 
 dataframe::DataFrame run(
     dftracer::utils::coro::CoroTask<dataframe::DataFrame> t) {
-    return dftracer::utils::default_runtime().submit(std::move(t)).get();
+    return dftu_utils_test::ok(
+        dftracer::utils::default_runtime().submit(std::move(t)).get());
 }
 
 dstd::Vector<std::int64_t> ints(const dataframe::DataFrame& f,

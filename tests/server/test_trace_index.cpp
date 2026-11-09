@@ -8,6 +8,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/server/trace_index.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <atomic>
@@ -58,7 +59,7 @@ TEST_CASE("TraceIndex - discovers .pfw.gz files") {
         co_return;
     };
 
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     CHECK(success.load());
     CHECK(file_count >= 2);
 }
@@ -87,7 +88,7 @@ TEST_CASE("TraceIndex - find_file by path") {
         co_return;
     };
 
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     CHECK(found.load());
     CHECK(found_path == file);
 }
@@ -114,7 +115,7 @@ TEST_CASE("TraceIndex - find_file returns nullptr for missing file") {
         co_return;
     };
 
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     CHECK(is_null.load());
 }
 
@@ -145,7 +146,7 @@ TEST_CASE("TraceIndex - file_at by index") {
         co_return;
     };
 
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     CHECK(success.load());
 }
 
@@ -165,7 +166,7 @@ TEST_CASE("TraceIndex - empty directory") {
         co_return;
     };
 
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     CHECK(count.load() == 0);
 
     dstd::fs::remove_all(dir).discard();
@@ -206,7 +207,7 @@ TEST_CASE("TraceIndex - genesis output resolves run keys through runs") {
         nodes = index.resolve("runs", "run", "nodes", "ab");
         co_return;
     };
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     CHECK(schema == "genesis");
     CHECK(app == "laghos");
     CHECK(nodes == "4");

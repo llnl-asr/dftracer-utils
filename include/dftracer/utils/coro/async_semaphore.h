@@ -2,7 +2,6 @@
 #ifndef DFTRACER_UTILS_CORO_ASYNC_SEMAPHORE_H
 #define DFTRACER_UTILS_CORO_ASYNC_SEMAPHORE_H
 
-#include <dftracer/utils/coro/cancelled.h>
 #include <dftracer/utils/coro/detail/parked.h>
 #include <dftracer/utils/coro/detail/resumption_helper.h>
 #include <dftracer/utils/coro/executor.h>
@@ -36,8 +35,8 @@ class AsyncSemaphore {
     AsyncSemaphore(const AsyncSemaphore&) = delete;
     AsyncSemaphore& operator=(const AsyncSemaphore&) = delete;
 
-    /// co_await throws a cancelled error (see coro::is_cancelled) when the
-    /// executor shuts down while it waits. No permits are taken then.
+    /// The awaiting task stops when the executor shuts down while it waits. No
+    /// permits are taken then.
     class AcquireOperation {
        public:
         AcquireOperation(AsyncSemaphore& sem, std::uint64_t n) noexcept
@@ -75,7 +74,8 @@ class AsyncSemaphore {
                 const bool cancelled = park_->cancelled;
                 executor_->unpark(park_);
                 park_ = nullptr;
-                if (cancelled) throw_cancelled("semaphore acquire cancelled");
+                if (cancelled)
+                    detail::cancelled_unstoppable("semaphore acquire");
             }
         }
 
@@ -94,7 +94,7 @@ class AsyncSemaphore {
                 sem_.waiters_.erase(it);
                 park_->cancelled = true;
             }
-            detail::post_resumption(executor_, handle_);
+            detail::stop_or_resume(executor_, park_, handle_);
         }
 
        private:

@@ -26,6 +26,7 @@
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <algorithm>
@@ -76,8 +77,8 @@ dstd::Expected<void, dstd::Error> run(
 // Stages a build the way a spill task does: it claims the build, stages the
 // puts it made, and gives the build up.
 void stage(index::FileBuild& build) {
-    auto claim =
-        dftracer::utils::default_runtime().submit(index::claim(build)).get();
+    auto claim = dftu_utils_test::ok(
+        dftracer::utils::default_runtime().submit(index::claim(build)).get());
     REQUIRE(claim);
     REQUIRE(run(claim->stage()).has_value());
 }
@@ -717,10 +718,11 @@ TEST_CASE("a group of FileBuilds becomes visible together") {
 
     CHECK_FALSE(take(opened->snapshot()).file(a).has_value());
     index::FileBuild* group[] = {&build_a, &build_bad, &build_b};
-    auto errors = dftracer::utils::default_runtime()
-                      .submit(index::commit_group(
-                          dstd::Span<index::FileBuild* const>(group, 3)))
-                      .get();
+    auto errors = dftu_utils_test::ok(
+        dftracer::utils::default_runtime()
+            .submit(index::commit_group(
+                dstd::Span<index::FileBuild* const>(group, 3)))
+            .get());
     REQUIRE(errors.size() == 3);
     CHECK_FALSE(errors[0].has_value());
     CHECK(errors[1].has_value());
@@ -764,11 +766,18 @@ TEST_CASE("a FileGroup publishes a repeated path in order and counts files") {
     put_members(broken, 1);
     index::put_chunk_statistics(broken, 0, {});
 
-    CHECK(run_task(group.add(std::move(first), 0, key(plain))).empty());
-    CHECK(run_task(group.add(std::move(second), 1, key(dotted))).empty());
-    CHECK(run_task(group.add(std::move(third), 2, key(other))).empty());
-    CHECK(run_task(group.add(std::move(broken), 3, bad)).empty());
-    auto result = run_task(group.commit());
+    CHECK(dftu_utils_test::ok(
+              run_task(group.add(std::move(first), 0, key(plain))))
+              .empty());
+    CHECK(dftu_utils_test::ok(
+              run_task(group.add(std::move(second), 1, key(dotted))))
+              .empty());
+    CHECK(dftu_utils_test::ok(
+              run_task(group.add(std::move(third), 2, key(other))))
+              .empty());
+    CHECK(dftu_utils_test::ok(run_task(group.add(std::move(broken), 3, bad)))
+              .empty());
+    auto result = dftu_utils_test::ok(run_task(group.commit()));
 
     REQUIRE(result.failures.size() == 1);
     CHECK(result.failures[0].tag == 3);
@@ -1239,7 +1248,9 @@ TEST_CASE("FileBuild commits from concurrent tasks and an open reader") {
         co_return ok;
     };
     for (int round = 0; round < 4; ++round) {
-        CHECK(dftracer::utils::default_runtime().submit(all()).get() == FILES);
+        CHECK(dftu_utils_test::ok(
+                  dftracer::utils::default_runtime().submit(all()).get()) ==
+              FILES);
     }
     const auto after = take(opened->snapshot());
     for (int i = 0; i < FILES; ++i) {
@@ -1475,7 +1486,7 @@ TEST_CASE("a commit lands from a worker, a process worker and a plain thread") {
     SUBCASE("the only worker of the runtime") {
         dftracer::utils::configure_default_runtime({.threads = 1});
         bool committed = false;
-        dftracer::utils::default_runtime().block_on(
+        dftu_utils_test::ok(dftracer::utils::default_runtime().block_on(
             dftracer::utils::coro::named(
                 "index-worker-commit", [&]() -> coro::CoroTask<void> {
                     auto build = opened->build("/traces/worker", stat_of(1, 2));
@@ -1483,7 +1494,7 @@ TEST_CASE("a commit lands from a worker, a process worker and a plain thread") {
                     put_members(*build, 1);
                     auto done = co_await build->commit();
                     committed = done.has_value();
-                }()));
+                }())));
         dftracer::utils::configure_default_runtime({.threads = previous});
         CHECK(committed);
         CHECK(take(opened->snapshot()).file("/traces/worker").has_value());
@@ -1491,7 +1502,7 @@ TEST_CASE("a commit lands from a worker, a process worker and a plain thread") {
 
     SUBCASE("a worker of the process runtime") {
         bool committed = false;
-        dftracer::utils::default_runtime().block_on(
+        dftu_utils_test::ok(dftracer::utils::default_runtime().block_on(
             dftracer::utils::coro::named(
                 "index-async-commit", [&]() -> coro::CoroTask<void> {
                     auto build = opened->build("/traces/async", stat_of(1, 2));
@@ -1499,7 +1510,7 @@ TEST_CASE("a commit lands from a worker, a process worker and a plain thread") {
                     put_members(*build, 1);
                     auto done = co_await build->commit();
                     committed = done.has_value();
-                }()));
+                }())));
         CHECK(committed);
         CHECK(take(opened->snapshot()).file("/traces/async").has_value());
     }

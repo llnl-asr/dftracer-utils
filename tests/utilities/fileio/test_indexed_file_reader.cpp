@@ -10,6 +10,7 @@
 #include <dftracer/utils/utilities/fileio/indexed_file_reader_utility.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <chrono>
@@ -41,7 +42,7 @@ TEST_SUITE("IndexedFileReader") {
                                          .with_checkpoint_size(1024);
 
             // Process should create index and return reader
-            auto reader = reader_utility(input).get();
+            auto reader = dftu_utils_test::ok(reader_utility(input).get());
 
             CHECK(reader != nullptr);
             CHECK(dstd::fs::exists(db_root).value());
@@ -56,7 +57,8 @@ TEST_SUITE("IndexedFileReader") {
             CHECK(stream != nullptr);
 
             dstd::Vector<char> buffer(1024);
-            CHECK(stream->read(buffer.data(), buffer.size()) > 0);
+            CHECK(dftu_utils_test::ok(
+                      stream->read(buffer.data(), buffer.size())) > 0);
         }
 
         SUBCASE("Process gzip file with existing index") {
@@ -78,7 +80,7 @@ TEST_SUITE("IndexedFileReader") {
                                          .with_index(db_root)
                                          .with_checkpoint_size(1024);
 
-            auto reader = reader_utility(input).get();
+            auto reader = dftu_utils_test::ok(reader_utility(input).get());
 
             CHECK(reader != nullptr);
             CHECK(dstd::fs::exists(db_root).value());
@@ -108,7 +110,7 @@ TEST_SUITE("IndexedFileReader") {
                                          .with_checkpoint_size(1024)
                                          .with_force_rebuild(true);
 
-            auto reader = reader_utility(input).get();
+            auto reader = dftu_utils_test::ok(reader_utility(input).get());
 
             CHECK(reader != nullptr);
             CHECK(dstd::fs::exists(db_root).value());
@@ -132,7 +134,7 @@ TEST_SUITE("IndexedFileReader") {
                                          .with_index(db_root)
                                          .with_checkpoint_size(2048);
 
-            auto reader = reader_utility(input).get();
+            auto reader = dftu_utils_test::ok(reader_utility(input).get());
 
             CHECK(reader != nullptr);
             CHECK(dstd::fs::exists(db_root).value());
@@ -154,7 +156,7 @@ TEST_SUITE("IndexedFileReader") {
                     .with_checkpoint_size(512)
                     .with_force_rebuild(false);
 
-            auto reader = reader_utility(input).get();
+            auto reader = dftu_utils_test::ok(reader_utility(input).get());
 
             CHECK(reader != nullptr);
             CHECK(reader->line_count() > 0);
@@ -171,7 +173,7 @@ TEST_SUITE("IndexedFileReader") {
             // Use constructor directly
             IndexedReadInput input(gz_path, db_root, 1024, false);
 
-            auto reader = reader_utility(input).get();
+            auto reader = dftu_utils_test::ok(reader_utility(input).get());
 
             CHECK(reader != nullptr);
             CHECK(dstd::fs::exists(db_root).value());
@@ -185,7 +187,7 @@ TEST_SUITE("IndexedFileReader") {
                 IndexedReadInput::from_file("non_existent.gz")
                     .with_index("non_existent.gz.dftindex");
 
-            CHECK_THROWS_AS(reader_utility(input).get(),
+            CHECK_THROWS_AS(dftu_utils_test::ok(reader_utility(input).get()),
                             dftracer::utils::common::DFTUtilsException);
         }
 
@@ -195,7 +197,7 @@ TEST_SUITE("IndexedFileReader") {
                 IndexedReadInput::from_file("/invalid/path/file.gz")
                     .with_index("/invalid/path/.dftindex");
 
-            CHECK_THROWS_AS(reader_utility(input).get(),
+            CHECK_THROWS_AS(dftu_utils_test::ok(reader_utility(input).get()),
                             dftracer::utils::common::DFTUtilsException);
         }
 
@@ -204,7 +206,7 @@ TEST_SUITE("IndexedFileReader") {
             IndexedReadInput input =
                 IndexedReadInput::from_file("").with_index(".dftindex");
 
-            CHECK_THROWS_AS(reader_utility(input).get(),
+            CHECK_THROWS_AS(dftu_utils_test::ok(reader_utility(input).get()),
                             dftracer::utils::common::DFTUtilsException);
         }
     }
@@ -219,7 +221,7 @@ TEST_SUITE("IndexedFileReader") {
                 IndexedReadInput::from_file(gz_path).with_index(
                     dstd::String(determine_index_path(gz_path, "")));
 
-            auto reader = reader_utility(input).get();
+            auto reader = dftu_utils_test::ok(reader_utility(input).get());
 
             CHECK(reader != nullptr);
             CHECK(reader->line_count() == 15);
@@ -268,7 +270,7 @@ TEST_SUITE("IndexedFileReader") {
             IndexedReadInput input =
                 IndexedReadInput::from_file(gz_path).with_index(index_path);
 
-            auto reader = reader_utility(input).get();
+            auto reader = dftu_utils_test::ok(reader_utility(input).get());
 
             CHECK(reader != nullptr);
             // Note: We can't easily verify rebuild happened without checking
@@ -292,7 +294,7 @@ TEST_SUITE("IndexedFileReader") {
             IndexedReadInput input =
                 IndexedReadInput::from_file(gz_path).with_index(index_path);
 
-            auto reader = reader_utility(input).get();
+            auto reader = dftu_utils_test::ok(reader_utility(input).get());
 
             CHECK(reader != nullptr);
             CHECK(dstd::fs::exists(db_root).value());
@@ -310,7 +312,7 @@ TEST_SUITE("IndexedFileReader") {
                 IndexedReadInput::from_file(gz_path).with_index(gz_path +
                                                                 ".idx");
 
-            auto reader = reader_utility(input).get();
+            auto reader = dftu_utils_test::ok(reader_utility(input).get());
             REQUIRE(reader != nullptr);
 
             // Create line stream to read specific lines
@@ -324,7 +326,8 @@ TEST_SUITE("IndexedFileReader") {
 
             dstd::Vector<char> buffer(1024);
             int lines_read = 0;
-            while (stream->read(buffer.data(), buffer.size()) > 0) {
+            while (dftu_utils_test::ok(
+                       stream->read(buffer.data(), buffer.size())) > 0) {
                 lines_read++;
             }
 
@@ -341,7 +344,7 @@ TEST_SUITE("IndexedFileReader") {
                 IndexedReadInput::from_file(gz_path).with_index(gz_path +
                                                                 ".idx");
 
-            auto reader = reader_utility(input).get();
+            auto reader = dftu_utils_test::ok(reader_utility(input).get());
             REQUIRE(reader != nullptr);
 
             CHECK(reader->line_count() == 10);

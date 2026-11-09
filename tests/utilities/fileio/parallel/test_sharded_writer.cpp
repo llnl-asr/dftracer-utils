@@ -9,6 +9,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/utilities/fileio/parallel/parallel_writer.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <cstdio>
@@ -58,7 +59,8 @@ TEST_CASE("ShardedWriter - one shard per worker with header/footer placement") {
         if (co_await w->close() != 0) co_return 7;
         co_return 0;
     };
-    CHECK(runtime.submit(task(), "sharded_basic").get() == 0);
+    CHECK(dftu_utils_test::ok(runtime.submit(task(), "sharded_basic").get()) ==
+          0);
 
     REQUIRE(paths.size() == 3);
     CHECK(paths == expected);
@@ -88,7 +90,7 @@ TEST_CASE("ShardedWriter - gzip_extension appends .gz to shard names") {
         if (co_await w->close() != 0) co_return 4;
         co_return 0;
     };
-    CHECK(runtime.submit(task(), "sharded_gz").get() == 0);
+    CHECK(dftu_utils_test::ok(runtime.submit(task(), "sharded_gz").get()) == 0);
     CHECK(paths == expected);
     for (const auto& p : expected) CHECK(dstd::fs::exists(p).value());
     cleanup(expected);
@@ -107,6 +109,7 @@ TEST_CASE("ShardedWriter - out-of-range worker_idx fails") {
         co_await w->close();
         co_return rc == 0 ? 99 : 0;
     };
-    CHECK(runtime.submit(task(), "sharded_oor").get() == 0);
+    CHECK(dftu_utils_test::ok(runtime.submit(task(), "sharded_oor").get()) ==
+          0);
     cleanup({base + ".shard_0"});
 }

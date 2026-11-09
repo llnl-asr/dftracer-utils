@@ -99,7 +99,8 @@ class StreamingLineReader {
             actual_index_path = index_path;
             const auto found =
                 dstd::fs::exists(dstd::PathView(actual_index_path));
-            if (!found) throw common::DFTUtilsException(found.error());
+            if (!found.has_value())
+                throw common::DFTUtilsException(found.error());
             has_index = *found;
         }
 

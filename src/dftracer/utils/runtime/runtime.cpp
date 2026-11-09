@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_config.h>
 #include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/coro/combinators.h>
 #include <dftracer/utils/coro/detail/coro.h>
 #include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/dstd/fatal.h>
@@ -62,10 +63,16 @@ void start_or_fatal(TaskExecutor& executor) {
     auto started = executor.start();
     if (!started) dstd::fatal("runtime: cannot start", started.error().c_str());
 }
+
+void configure_memory_or_fatal() {
+    auto configured = common::configure_memory_from_env();
+    if (!configured)
+        dstd::fatal("runtime: bad memory setting", configured.error().c_str());
+}
 }  // namespace
 
 Runtime::Runtime(std::size_t threads) : threads_(resolve_threads(threads)) {
-    common::unwrap(common::configure_memory_from_env());
+    configure_memory_or_fatal();
     ExecutorConfig config;
     config.thread_count = threads_.load(std::memory_order_relaxed);
     config.io_pool_size = resolve_io_threads(
@@ -81,7 +88,7 @@ Runtime::Runtime(const ExecutorConfig& config, bool enable_watchdog)
     : threads_(resolve_threads(config.thread_count)),
       io_backend_(config.io_backend_type),
       io_batch_threshold_(config.io_batch_threshold) {
-    common::unwrap(common::configure_memory_from_env());
+    configure_memory_or_fatal();
     ExecutorConfig cfg = config;
     cfg.thread_count = threads_.load(std::memory_order_relaxed);
     cfg.io_pool_size = resolve_io_threads(
@@ -116,15 +123,11 @@ Runtime::Runtime(const ExecutorConfig& config,
 Runtime::~Runtime() { stop(); }
 
 TaskHandle Runtime::submit(coro::CoroTask<void> task, dstd::StringView name) {
-    if (shutdown_called_.load(std::memory_order_acquire)) {
-        throw common::DFTUtilsException(common::ErrorCode::Pipeline,
-                                        "Runtime is shut down");
-    }
     // The handle, its shared state and the futures list outlive the
     // submitting thread's pool scope, so they charge the general pool.
     dstd::String task_name;
-    dstd::SharedPtr<dstd::Promise<void>> promise;
-    dstd::SharedFuture<void> future;
+    dstd::SharedPtr<dstd::Promise<dstd::Result<void>>> promise;
+    dstd::SharedFuture<dstd::Result<void>> future;
     dstd::SharedPtr<std::atomic<common::TaskIndex>> tid;
     {
         memory::detail::Scope bookkeeping_scope{
@@ -134,31 +137,42 @@ TaskHandle Runtime::submit(coro::CoroTask<void> task, dstd::StringView name) {
         } else {
             task_name.assign(name.data(), name.size());
         }
-        promise = dstd::make_shared<dstd::Promise<void>>();
+        promise = dstd::make_shared<dstd::Promise<dstd::Result<void>>>();
         future = promise->get_future().share();
         tid = dstd::make_shared<std::atomic<common::TaskIndex>>(-1);
     }
 
+    if (shutdown_called_.load(std::memory_order_acquire)) {
+        detail::fulfill(
+            *promise, future,
+            dstd::Unexpected<dstd::Error>(dstd::Error{
+                dstd::Condition::Cancelled, "Runtime is shut down"}));
+        return TaskHandle{future, -1, std::move(task_name)};
+    }
+
     auto wrapper = [](coro::CoroTask<void> t,
-                      dstd::SharedPtr<dstd::Promise<void>> p,
+                      dstd::SharedPtr<dstd::Promise<dstd::Result<void>>> p,
+                      dstd::SharedFuture<dstd::Result<void>> f,
                       TaskExecutor* exec,
                       dstd::SharedPtr<std::atomic<common::TaskIndex>> task_id)
         -> coro::detail::Coro {
         exec->mark_coro_started(task_id->load(std::memory_order_acquire));
-        try {
-            co_await std::move(t);
-            t = coro::CoroTask<void>{
-                std::coroutine_handle<coro::CoroTask<void>::promise_type>{}};
-            exec->mark_coro_completed(task_id->load(std::memory_order_acquire));
-        } catch (...) {
-            t = coro::CoroTask<void>{
-                std::coroutine_handle<coro::CoroTask<void>::promise_type>{}};
+        auto settled = co_await coro::settle(std::move(t));
+        if (settled.exception) {
             mark_coro_failed(*exec, task_id->load(std::memory_order_acquire),
-                             std::current_exception());
-            p->set_exception(std::current_exception());
+                             common::error_of_exception(settled.exception));
+            p->set_exception(std::move(settled.exception));
             co_return;
         }
-        p->set_value();
+        if (settled.stopped) {
+            const dstd::Error error = coro::detail::stopped_error();
+            mark_coro_failed(*exec, task_id->load(std::memory_order_acquire),
+                             error);
+            detail::fulfill(*p, f, dstd::Unexpected<dstd::Error>(error));
+            co_return;
+        }
+        exec->mark_coro_completed(task_id->load(std::memory_order_acquire));
+        detail::fulfill(*p, f, dstd::Result<void>{});
     };
 
     // Set the executor on the task's promise so awaitables (e.g. channels)
@@ -169,7 +183,7 @@ TaskHandle Runtime::submit(coro::CoroTask<void> task, dstd::StringView name) {
     if (task.handle()) {
         task.handle().promise().set_executor(executor_.get());
     }
-    auto coro = wrapper(std::move(task), promise, executor_.get(), tid);
+    auto coro = wrapper(std::move(task), promise, future, executor_.get(), tid);
     common::TaskIndex id =
         executor_->enqueue_tracked(std::move(coro), task_name, tid);
 
@@ -185,7 +199,7 @@ TaskHandle Runtime::submit(coro::CoroTask<void> task, dstd::StringView name) {
 }
 
 void Runtime::wait_all() {
-    dstd::Vector<dstd::SharedFuture<void>> futures;
+    dstd::Vector<dstd::SharedFuture<dstd::Result<void>>> futures;
     {
         std::lock_guard<std::mutex> lock(futures_mutex_);
         futures = std::move(outstanding_futures_);
@@ -199,7 +213,7 @@ void Runtime::wait_all() {
 void Runtime::cleanup_completed_futures() {
     outstanding_futures_.erase(
         std::remove_if(outstanding_futures_.begin(), outstanding_futures_.end(),
-                       [](const dstd::SharedFuture<void>& f) {
+                       [](const dstd::SharedFuture<dstd::Result<void>>& f) {
                            return f.wait_for(std::chrono::seconds(0)) ==
                                   std::future_status::ready;
                        }),
@@ -425,10 +439,9 @@ bool spawn_detached(coro::Executor* executor, coro::CoroTask<void> task) {
     if (executor_stopping(executor)) return false;
     auto make_coro = [](coro::CoroTask<void> t,
                         coro::Executor* exec) -> coro::detail::Coro {
-        try {
-            t.handle().promise().set_executor(exec);
-            co_await std::move(t);
-        } catch (...) {
+        t.handle().promise().set_executor(exec);
+        auto settled = co_await coro::settle(std::move(t));
+        if (settled.exception) {
             DFTRACER_UTILS_LOG_ERROR("detached task failed");
         }
     };

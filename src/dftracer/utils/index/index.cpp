@@ -124,7 +124,7 @@ Index::Impl::find_store() {
         if (store) return store;
     }
     const auto present = dstd::fs::exists(dstd::PathView(store_dir));
-    if (!present || !*present)
+    if (!present.has_value() || !*present)
         return dstd::Optional<dftracer::utils::store::Store>{};
     auto opened = open_store();
     if (!opened) return dstd::Unexpected<dstd::Error>(opened.error());

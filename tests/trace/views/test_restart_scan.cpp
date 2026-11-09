@@ -8,6 +8,7 @@
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -154,8 +155,10 @@ TEST_SUITE("RestartScan") {
         for (const auto& m : multi)
             CHECK(m.kind == index::gzip::GzipRecordKind::Member);
 
-        const auto a = View::from_files({fx.one.file()}).collect().get();
-        const auto b = View::from_files({fx.many.file()}).collect().get();
+        const auto a = dftu_utils_test::ok(
+            View::from_files({fx.one.file()}).collect().get());
+        const auto b = dftu_utils_test::ok(
+            View::from_files({fx.many.file()}).collect().get());
         REQUIRE(a.num_rows() == EVENTS);
         REQUIRE(b.num_rows() == EVENTS);
         CHECK(sorted_col(a, "ts") == sorted_col(b, "ts"));

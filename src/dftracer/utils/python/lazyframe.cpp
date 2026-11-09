@@ -816,8 +816,9 @@ PyObject* LazyFrame_collect(PyObject* self, PyObject* args, PyObject* kwds) {
         runtime_from_arg(runtime_arg);
     if (!rt) return nullptr;
     dataframe::DataFrame out;
-    if (!run_blocking(
-            [&] { out = rt->submit(b->lf.collect(morsel_rows)).get(); }))
+    if (!run_blocking([&] {
+            out = common::unwrap(rt->submit(b->lf.collect(morsel_rows)).get());
+        }))
         return nullptr;
     return dftracer::utils::python::wrap_dataframe(std::move(out));
 }
@@ -1073,7 +1074,8 @@ PyObject* collect_all_py(PyObject*, PyObject* args, PyObject* kwds) {
     Py_DECREF(seq);
     dftracer::utils::dstd::Vector<dataframe::DataFrame> frames;
     if (!run_blocking([&] {
-            frames = rt->submit(dataframe::collect_all(std::move(plans))).get();
+            frames = common::unwrap(
+                rt->submit(dataframe::collect_all(std::move(plans))).get());
         }))
         return nullptr;
     PyObject* out = PyList_New(static_cast<Py_ssize_t>(frames.size()));

@@ -473,7 +473,7 @@ Store::State::get_or_open(dstd::StringView dir) {
         if (live && !live->forked()) return live;
     }
     const auto made = dstd::fs::create_directories(key.view());
-    if (!made) {
+    if (!made.has_value()) {
         return dstd::Unexpected<dstd::Error>(dstd::Error(
             dstd::Condition::Io,
             common::str_cat("store: cannot create the directory ", key.str(),
@@ -494,7 +494,7 @@ Store::State::get_or_open(dstd::StringView dir) {
 
 dstd::Expected<void, dstd::Error> Store::State::ensure_dir_locked() {
     const auto made = dstd::fs::create_directories(dir.view());
-    if (!made) {
+    if (!made.has_value()) {
         return dstd::Unexpected<dstd::Error>(dstd::Error(
             dstd::Condition::Io,
             common::str_cat("store: cannot create the directory ", dir.str(),
@@ -853,7 +853,7 @@ coro::CoroTask<dstd::Expected<PackReport, dstd::Error>> Store::State::pack_task(
         if (!old_enough) continue;
         auto removed =
             dstd::fs::remove((self->dir / dstd::PathView(file.name)).view());
-        if (!removed) {
+        if (!removed.has_value()) {
             co_return Failure(
                 dstd::Error(dstd::Condition::Io,
                             common::str_cat("store: cannot delete ", file.name,
@@ -987,7 +987,8 @@ dstd::Expected<void, dstd::Error> Store::erase(const Namespace& ns,
     auto erased =
         (*opened)->erase(engine::NamespaceId{ns.id}, scope, begin, end);
     state_->bump_version();
-    if (!erased) return dstd::Unexpected<dstd::Error>(erased.error());
+    if (!erased.has_value())
+        return dstd::Unexpected<dstd::Error>(erased.error());
     if (*erased || ns.spec.shared) return {};
     auto view = snapshot();
     if (!view) return dstd::Unexpected<dstd::Error>(view.error());

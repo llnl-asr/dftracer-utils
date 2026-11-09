@@ -2572,6 +2572,12 @@ _Static_assert(sizeof(DFTU_OP_SIG8(SERIES, SERIES, NONE, NONE, NONE, NONE, NONE,
                "DFTU_OP_SIG8 computes in a narrower type than dftu_op_sig");
 #endif
 
+/** A function pointer of no particular signature. `dftu_op_desc::fn` holds an
+ * op's function as this type; the runner casts it back to the function type
+ * the signature names. Cast the op function to this type when filling a
+ * `dftu_op_desc`: `(dftu_op_generic_fn)&my_op`. */
+typedef void (*dftu_op_generic_fn)(void);
+
 /** A registry record. `sig` is authoritative: it packs the whole signature, so
  * it selects the fn cast, the operands read, and (via dftu_op_kind_of) the
  * category. For a built-in, `name` is a literal and must outlive the process;
@@ -2584,9 +2590,9 @@ _Static_assert(sizeof(DFTU_OP_SIG8(SERIES, SERIES, NONE, NONE, NONE, NONE, NONE,
 typedef struct dftu_op_desc dftu_op_desc;
 #endif
 struct dftu_op_desc {
-    const char* name; /**< registry key, e.g. "add" or "mymod.zscore" */
-    dftu_op_sig sig;  /**< the packed signature the runner dispatches on */
-    const void* fn;   /**< the engine function pointer */
+    const char* name;      /**< registry key, e.g. "add" or "mymod.zscore" */
+    dftu_op_sig sig;       /**< the packed signature the runner dispatches on */
+    dftu_op_generic_fn fn; /**< the engine function, cast to its real type */
 };
 
 /** The coarse category of a signature (decoded from its return token). */

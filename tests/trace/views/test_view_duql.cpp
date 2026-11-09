@@ -114,15 +114,15 @@ struct PluginReducers {
     PluginReducers() {
         const dftu_op_desc ops[] = {
             {"myplug.total", DFTU_OP_SIG(F64, SERIES, NONE, NONE),
-             reinterpret_cast<const void*>(&plug_total)},
+             reinterpret_cast<dftu_op_generic_fn>(&plug_total)},
             {"myplug.scaled", DFTU_OP_SIG(F64, SERIES, F64, NONE),
-             reinterpret_cast<const void*>(&plug_scaled)},
+             reinterpret_cast<dftu_op_generic_fn>(&plug_scaled)},
             {"myplug.count_i", DFTU_OP_SIG(I64, SERIES, NONE, NONE),
-             reinterpret_cast<const void*>(&plug_count)},
+             reinterpret_cast<dftu_op_generic_fn>(&plug_count)},
             {"myplug.big", DFTU_OP_SIG(BOOL, SERIES, I32, NONE),
-             reinterpret_cast<const void*>(&plug_big)},
+             reinterpret_cast<dftu_op_generic_fn>(&plug_big)},
             {"myplug.unrun", DFTU_OP_SIG(SCALAR, SERIES, I32, NONE),
-             reinterpret_cast<const void*>(&plug_unrun)}};
+             reinterpret_cast<dftu_op_generic_fn>(&plug_unrun)}};
         for (const auto& op : ops) REQUIRE(dftu_op_register(&op) == 0);
     }
     ~PluginReducers() {
@@ -134,13 +134,13 @@ struct PluginOps {
     PluginOps() {
         const dftu_op_desc ops[] = {
             {"myplug.twice", DFTU_OP_SIG(SERIES, SERIES, NONE, NONE),
-             reinterpret_cast<const void*>(&plug_twice)},
+             reinterpret_cast<dftu_op_generic_fn>(&plug_twice)},
             {"myplug.add2", DFTU_OP_SIG(SERIES, SERIES, SERIES, NONE),
-             reinterpret_cast<const void*>(&plug_add2)},
+             reinterpret_cast<dftu_op_generic_fn>(&plug_add2)},
             {"myplug.scale", DFTU_OP_SIG(SERIES, SERIES, F64, NONE),
-             reinterpret_cast<const void*>(&plug_scale)},
+             reinterpret_cast<dftu_op_generic_fn>(&plug_scale)},
             {"myplug.head", DFTU_OP_SIG(FRAME, FRAME, I64, NONE),
-             reinterpret_cast<const void*>(&plug_head)}};
+             reinterpret_cast<dftu_op_generic_fn>(&plug_head)}};
         for (const auto& op : ops) REQUIRE(dftu_op_register(&op) == 0);
     }
     ~PluginOps() {

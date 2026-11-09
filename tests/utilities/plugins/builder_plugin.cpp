@@ -26,7 +26,7 @@ extern "C" std::int64_t double_rows(const dftu_series* v) {
 }
 
 const dftu_op_desc OP = {OP_NAME, DFTU_OP_SIG(I64, SERIES, NONE, NONE),
-                         reinterpret_cast<const void*>(&double_rows)};
+                         reinterpret_cast<dftu_op_generic_fn>(&double_rows)};
 
 // Nothing but a running total, so the test can compare the state's answer
 // against the fold's and see both halves of one factory work.

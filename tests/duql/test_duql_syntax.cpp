@@ -1544,15 +1544,15 @@ struct PluginOps {
     PluginOps() {
         const dftu_op_desc ops[] = {
             {"pa.unary", DFTU_OP_SIG(SERIES, SERIES, NONE, NONE),
-             reinterpret_cast<const void*>(&plug_unary)},
+             reinterpret_cast<dftu_op_generic_fn>(&plug_unary)},
             {"pb.binary", DFTU_OP_SIG(SERIES, SERIES, SERIES, NONE),
-             reinterpret_cast<const void*>(&plug_binary)},
+             reinterpret_cast<dftu_op_generic_fn>(&plug_binary)},
             {"pa.frame", DFTU_OP_SIG(FRAME, FRAME, I64, NONE),
-             reinterpret_cast<const void*>(&plug_frame)},
+             reinterpret_cast<dftu_op_generic_fn>(&plug_frame)},
             {"pa.total", DFTU_OP_SIG(F64, SERIES, NONE, NONE),
-             reinterpret_cast<const void*>(&plug_total)},
+             reinterpret_cast<dftu_op_generic_fn>(&plug_total)},
             {"pa.scaled", DFTU_OP_SIG(F64, SERIES, F64, NONE),
-             reinterpret_cast<const void*>(&plug_total)}};
+             reinterpret_cast<dftu_op_generic_fn>(&plug_total)}};
         for (const auto& op : ops) REQUIRE(dftu_op_register(&op) == 0);
     }
     ~PluginOps() {

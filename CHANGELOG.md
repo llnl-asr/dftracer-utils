@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Make `dftu_op_desc::fn` a function pointer of the new type `dftu_op_generic_fn` in place of `const void*`, so a plugin author casts an op function with `(dftu_op_generic_fn)&my_op`.
 - Make `dstd::Expected` our own class and remove the vendored `tl::expected`.
   `value()` and `error()` on the wrong side now end the process with the message and a stack trace, where `value()` threw before.
   A build with `DFTRACER_UTILS_DEBUG` also ends the process when an error result is destroyed unchecked.

@@ -208,10 +208,10 @@ TEST_CASE("plugin ops: a plugin op over a chunked column equals the joined") {
 
     static const dftu_op_desc sum_op = {
         "chunk_join_test.sum", DFTU_OP_SIG(I64, SERIES, NONE, NONE),
-        reinterpret_cast<const void*>(&sum_through_data)};
+        reinterpret_cast<dftu_op_generic_fn>(&sum_through_data)};
     static const dftu_op_desc dbl_op = {
         "chunk_join_test.double", DFTU_OP_SIG(SERIES, SERIES, NONE, NONE),
-        reinterpret_cast<const void*>(&doubled_through_data)};
+        reinterpret_cast<dftu_op_generic_fn>(&doubled_through_data)};
     if (!dftu_op_find(sum_op.name)) REQUIRE(dftu_op_register(&sum_op) == 0);
     if (!dftu_op_find(dbl_op.name)) REQUIRE(dftu_op_register(&dbl_op) == 0);
 

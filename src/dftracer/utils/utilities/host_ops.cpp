@@ -146,15 +146,15 @@ dftu_series* line_filter(const dftu_series* lines, const char* needle,
 // dftu.file.read here.
 const dftu_op_desc HOST_OPS[] = {
     {"dftu.fs.scan_dir", DFTU_OP_SIG(SERIES, STR, NONE, NONE),
-     reinterpret_cast<const void*>(&scan_dir)},
+     reinterpret_cast<dftu_op_generic_fn>(&scan_dir)},
     {"dftu.fs.scan_dir_pattern", DFTU_OP_SIG(SERIES, STR, STR, NONE),
-     reinterpret_cast<const void*>(&scan_dir_pattern)},
+     reinterpret_cast<dftu_op_generic_fn>(&scan_dir_pattern)},
     {"dftu.file.compress", DFTU_OP_SIG(BOOL, STR, STR, NONE),
-     reinterpret_cast<const void*>(&compress)},
+     reinterpret_cast<dftu_op_generic_fn>(&compress)},
     {"dftu.file.decompress", DFTU_OP_SIG(BOOL, STR, STR, NONE),
-     reinterpret_cast<const void*>(&decompress)},
+     reinterpret_cast<dftu_op_generic_fn>(&decompress)},
     {"dftu.text.line_filter", DFTU_OP_SIG(SERIES, SERIES, STR, NONE),
-     reinterpret_cast<const void*>(&line_filter)},
+     reinterpret_cast<dftu_op_generic_fn>(&line_filter)},
 };
 
 }  // namespace

@@ -354,7 +354,7 @@ static int64_t count_rows(const dftu_series* v) {
 
 static const dftu_op_desc COUNT_ROWS_OP = {"reference_plugin.count_rows",
                                            DFTU_OP_SIG(I64, SERIES, NONE, NONE),
-                                           (const void*)&count_rows};
+                                           (dftu_op_generic_fn)&count_rows};
 
 /* ---- Compose leaf op: doubles an int64 value, inline. */
 

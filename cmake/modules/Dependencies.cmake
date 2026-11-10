@@ -1041,17 +1041,20 @@ function(need_vectorscan)
                -DRAGEL=${RAGEL}
                ${boost_args}
                ${hs_args}
-    BUILD_BYPRODUCTS "${hs_lib}"
     USES_TERMINAL_BUILD ON)
   # Written only after the install step succeeded, so an interrupted build
   # never leaves a prefix that looks complete.
   file(WRITE "${CMAKE_BINARY_DIR}/_deps/vectorscan.fingerprint"
        "${hs_fingerprint}")
+  # The library is written by the install step, so it is a byproduct of this
+  # later step: Ninja then checks it after install and relinks its users in
+  # the same build.
   ExternalProject_Add_Step(
     dftracer_utils_vectorscan_ep fingerprint
     COMMAND ${CMAKE_COMMAND} -E copy
             "${CMAKE_BINARY_DIR}/_deps/vectorscan.fingerprint" "${hs_stamp}"
-    DEPENDEES install)
+    DEPENDEES install
+    BYPRODUCTS "${hs_lib}")
 
   add_dependencies(dftracer_utils_vectorscan::hs dftracer_utils_vectorscan_ep)
   dftracer_utils_ok("Vectorscan ${hs_version} external static build (${hs_lib})")

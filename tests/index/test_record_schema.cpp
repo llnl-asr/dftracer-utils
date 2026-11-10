@@ -81,10 +81,10 @@ TEST_SUITE("Schemas") {
     TEST_CASE("the built-in hashes are the ones existing indexes hold") {
         // A change here marks every existing index stale. dftracer's covers
         // its source, whose row sets an older index does not hold.
-        CHECK(index::get_schema("dftracer").params_hash() ==
-              3999216331681324496ULL);
-        CHECK(index::get_schema("generic").params_hash() ==
-              7825305221053757732ULL);
+        CHECK(dftu_utils_test::ok_ref(index::get_schema("dftracer"))
+                  .params_hash() == 3999216331681324496ULL);
+        CHECK(dftu_utils_test::ok_ref(index::get_schema("generic"))
+                  .params_hash() == 7825305221053757732ULL);
     }
 
     TEST_CASE("detection picks the most specific matching schema") {
@@ -95,14 +95,18 @@ TEST_SUITE("Schemas") {
                                                       R"({"op":"write"})"};
         const dstd::Vector<dstd::StringView> mixed = {
             R"({"name":"read","ph":"X"})", R"({"op":"read"})"};
-        CHECK(detect_schema(dft).id == "dftracer");
-        CHECK(detect_schema(plain).id == "generic");
-        CHECK(detect_schema(mixed).id == "generic");
-        CHECK(detect_schema({}).id == "generic");
-        CHECK(index::get_schema("generic").require.empty());
-        CHECK(index::get_schema("dftracer").params_hash() !=
-              index::get_schema("generic").params_hash());
-        CHECK_THROWS_AS(index::get_schema("nope"), common::DFTUtilsException);
+        CHECK(dftu_utils_test::ok_ref(detect_schema(dft)).id == "dftracer");
+        CHECK(dftu_utils_test::ok_ref(detect_schema(plain)).id == "generic");
+        CHECK(dftu_utils_test::ok_ref(detect_schema(mixed)).id == "generic");
+        CHECK(dftu_utils_test::ok_ref(detect_schema({})).id == "generic");
+        CHECK(dftu_utils_test::ok_ref(index::get_schema("generic"))
+                  .require.empty());
+        CHECK(dftu_utils_test::ok_ref(index::get_schema("dftracer"))
+                  .params_hash() !=
+              dftu_utils_test::ok_ref(index::get_schema("generic"))
+                  .params_hash());
+        dftu_utils_test::expect_error(index::get_schema("nope"),
+                                      common::ErrorCode::InvalidArgument);
     }
 
     TEST_CASE("detection reads the lines the DOM parser refuses") {
@@ -112,15 +116,17 @@ TEST_SUITE("Schemas") {
             owned.push_back(dftu_utils_test::refused_line(
                 k, R"("id":1,"name":"read","cat":"POSIX","ph":"X","ts":1)"));
         dstd::Vector<dstd::StringView> lines(owned.begin(), owned.end());
-        CHECK(detect_schema(lines).id == "dftracer");
+        CHECK(dftu_utils_test::ok_ref(detect_schema(lines)).id == "dftracer");
     }
 
     TEST_CASE("a file's schema is detected from its first lines") {
         dftu_utils_test::TestEnvironment env(10);
-        CHECK(index::detect_file_schema(env.create_dft_test_gzip_file(50)).id ==
-              "dftracer");
-        CHECK(index::detect_file_schema(write_ndjson(env.dir(), 50)).id ==
-              "generic");
+        CHECK(dftu_utils_test::ok_ref(
+                  index::detect_file_schema(env.create_dft_test_gzip_file(50)))
+                  .id == "dftracer");
+        CHECK(dftu_utils_test::ok_ref(
+                  index::detect_file_schema(write_ndjson(env.dir(), 50)))
+                  .id == "generic");
     }
 
     TEST_CASE("generic NDJSON is indexed and pruned by path") {

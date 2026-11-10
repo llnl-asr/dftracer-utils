@@ -394,14 +394,14 @@ TEST_SUITE("LiveView") {
     }
 
     TEST_CASE("an old view of path records keeps its bucket origin") {
-        index::register_schema(R"(
+        dftu_utils_test::ok_ref(index::register_schema(R"(
 id: live_path_roles
 fields:
   start: {type: int, role: time}
   took: {type: int, role: duration}
   op: {type: string, role: name}
 )",
-                               "test");
+                                                       "test"));
         TestEnvironment env(10);
         REQUIRE(env.is_valid());
         const dstd::String gz = env.dir() + "/a.jsonl.gz";

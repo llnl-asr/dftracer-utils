@@ -85,10 +85,9 @@ class TraceIndex {
 
     /// The record schema of the served files (a viewer reads one), from the
     /// first file's index record or, without one, detected from the file;
-    /// dftracer before initialize() and for an empty directory.
+    /// dftracer for an empty directory. Valid after initialize().
     const dftracer::utils::index::RecordSchema& record_schema() const {
-        return record_schema_ ? *record_schema_
-                              : dftracer::utils::index::get_schema("dftracer");
+        return *record_schema_;
     }
 
     /// Result cache for heavy viz endpoints. Immutable trace => never stale.

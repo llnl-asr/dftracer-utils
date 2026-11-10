@@ -269,7 +269,15 @@ static coro::CoroTask<int> run_verify(
                 ChunkPrunerInput pruner_input{idx_path_q, abs_path,
                                               std::move(*parsed), nullptr};
                 ChunkPruner pruner;
-                auto result = co_await pruner(pruner_input);
+                auto pruning = pruner(pruner_input);
+                auto pruned = co_await std::move(pruning);
+                if (!pruned) {
+                    std::fprintf(stderr,
+                                 "  WARN: bloom query failed for %s: %s\n",
+                                 abs_path.c_str(), pruned.error().c_str());
+                    continue;
+                }
+                auto& result = *pruned;
 
                 total_chunks += result.total_checkpoints;
                 if (result.file_may_match) {

@@ -111,8 +111,8 @@ dstd::String padded(dstd::String s) {
 }
 
 dstd::Vector<dftracer::utils::index::IndexedRowSet> dftracer_rowsets() {
-    return dftracer::utils::index::indexed_rowsets(
-        dftracer::utils::index::get_schema("dftracer"));
+    return dftracer::utils::index::indexed_rowsets(dftu_utils_test::ok_ref(
+        dftracer::utils::index::get_schema("dftracer")));
 }
 
 // The path the stored `files` row set of `file` gives for `fhash`, or "".

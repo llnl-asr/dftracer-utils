@@ -175,11 +175,14 @@ TEST_SUITE("index kinds") {
         }
         auto q = duql::Query::from_string("dur > 5");
         REQUIRE(q.has_value());
-        CHECK_THROWS_WITH_AS((void)index::plan::prune_file(
-                                 {path, trace, &*q, nullptr, dstd::nullopt})
-                                 .get(),
-                             doctest::Contains("corrupt zone map"),
-                             std::exception);
+        const auto pruned =
+            index::plan::prune_file({path, trace, &*q, nullptr, dstd::nullopt})
+                .get();
+        REQUIRE_FALSE(pruned.has_value());
+        CHECK(common::errorcode_of(pruned.error()) ==
+              common::ErrorCode::Indexer);
+        CHECK(dstd::String(pruned.error().message()).find("corrupt zone map") !=
+              dstd::String::npos);
     }
 
     TEST_CASE("a ts bound that is not an integer is an error") {
@@ -190,10 +193,14 @@ TEST_SUITE("index kinds") {
 
         auto bad = duql::Query::from_string(R"(ts > "abc")");
         REQUIRE(bad.has_value());
-        CHECK_THROWS_WITH_AS((void)index::plan::prune_file(
+        const auto refused = index::plan::prune_file(
                                  {index, trace, &*bad, nullptr, dstd::nullopt})
-                                 .get(),
-                             doctest::Contains("abc"), std::exception);
+                                 .get();
+        REQUIRE_FALSE(refused.has_value());
+        CHECK(common::errorcode_of(refused.error()) ==
+              common::ErrorCode::InvalidArgument);
+        CHECK(dstd::String(refused.error().message()).find("abc") !=
+              dstd::String::npos);
 
         auto fraction = duql::Query::from_string("ts > 1.5");
         REQUIRE(fraction.has_value());

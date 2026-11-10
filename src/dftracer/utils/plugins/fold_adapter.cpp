@@ -776,7 +776,7 @@ int host_trace_read(void* h, const char* path, dftu_stream_item_fn on_batch,
                 dftracer::utils::dstd::InternCache cache(intern);
                 trace::views::detail::FoldEventBuffer batch_events;
                 const index::RecordSchema& schema =
-                    index::detect_file_schema(p);
+                    *common::unwrap(index::detect_file_schema(p));
                 const bool by_path = schema.decoder == index::Decoder::Path;
                 const index::RecordSchema* declared =
                     schema.fields.empty() ? nullptr : &schema;

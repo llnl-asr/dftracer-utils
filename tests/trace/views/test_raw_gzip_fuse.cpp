@@ -140,9 +140,10 @@ TEST_SUITE("RawGzipFuse") {
         dstd::StringIntern intern;
         gmoracle::OracleAggFold agg(pp, intern);
         BloomFold bloom(intern);
-        RowSetFold dict(intern,
-                        dftracer::utils::index::indexed_rowsets(
-                            dftracer::utils::index::get_schema("dftracer")));
+        RowSetFold dict(
+            intern,
+            dftracer::utils::index::indexed_rowsets(dftu_utils_test::ok_ref(
+                dftracer::utils::index::get_schema("dftracer"))));
         std::array<Fold*, 3> folds{&agg, &bloom, &dict};
         IndexFoldDriver driver(intern, folds,
                                dstd::String(dstd::StringView(gz)),

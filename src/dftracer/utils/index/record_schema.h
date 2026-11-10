@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/hash/xxh3.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -167,49 +168,52 @@ struct RecordSchema {
 /// Every registered schema: the built-ins "dftracer", "generic" and
 /// "genesis" first, then user schemas in registration order. Schemas stay
 /// registered, and the pointers valid, until the process exits. The first
-/// registry access loads $DFTRACER_UTILS_SCHEMA_PATH. Thread-safe.
-dstd::Vector<const RecordSchema*> registered_schemas();
+/// registry access loads $DFTRACER_UTILS_SCHEMA_PATH; every function that reads
+/// the registry returns the error of a failed load, and the next call tries
+/// again. Thread-safe.
+dstd::Result<dstd::Vector<const RecordSchema*>> registered_schemas();
 
-/// The registered schema `id`, or null.
-const RecordSchema* find_schema(dstd::StringView id);
+/// The registered schema `id`, or null; an error when the environment load
+/// failed.
+dstd::Result<const RecordSchema*> find_schema(dstd::StringView id);
 
-/// The registered schema `id`. Throws @ref
-/// dftracer::utils::common::DFTUtilsException "DFTUtilsException"
-/// INVALID_ARGUMENT, listing the registered ids and where schemas load from,
-/// for any other.
-const RecordSchema& get_schema(dstd::StringView id);
+/// The registered schema `id`; never null. For any other id an
+/// InvalidArgument error listing the registered ids and where schemas load
+/// from; also the error of a failed $DFTRACER_UTILS_SCHEMA_PATH load.
+dstd::Result<const RecordSchema*> get_schema(dstd::StringView id);
 
 /// Resolves `spec` against its parent and registers it; `source` names it in
-/// errors. Throws @ref dftracer::utils::common::DFTUtilsException
-/// "DFTUtilsException" INVALID_ARGUMENT for an empty id or field name, a
-/// built-in id, an unknown or self `extends`, a unit without a time or duration
-/// role, two fields with one role or one path, or an id registered with another
-/// definition; registering the same definition again returns the registered
-/// schema.
-const RecordSchema& register_schema(const SchemaSpec& spec,
-                                    dstd::StringView source);
+/// errors. Returns the registered schema, never null; registering the same
+/// definition again returns the schema registered. An InvalidArgument error
+/// for an empty id or field name, a built-in id, an unknown or self `extends`,
+/// a unit without a time or duration role, two fields with one role or one
+/// path, or an id registered with another definition.
+dstd::Result<const RecordSchema*> register_schema(const SchemaSpec& spec,
+                                                  dstd::StringView source);
 
 /// Registers the schema the YAML or JSON spec `text` describes. Keys: id,
 /// extends, fields (name -> type, path, optional, role, unit, always_index),
 /// index.path_budget, index.never_index (a list of paths) and source (duql
-/// source members). Throws as the @ref SchemaSpec overload, and for an unknown
-/// key or a value of the wrong type.
-const RecordSchema& register_schema(dstd::StringView text,
-                                    dstd::StringView source);
+/// source members). The errors of the @ref SchemaSpec overload, and an
+/// InvalidArgument error for text that is not YAML, an unknown key or a value
+/// of the wrong type.
+dstd::Result<const RecordSchema*> register_schema(dstd::StringView text,
+                                                  dstd::StringView source);
 
 /// Registers every spec at `path`: a file, or the *.yaml, *.yml and *.json
 /// files of a directory in name order. A path is loaded once per process.
-/// Throws as register_schema, or IO when a file cannot be read.
-void load_schemas(dstd::StringView path);
+/// The errors of register_schema, or an Io error when a file cannot be read.
+dstd::Result<void> load_schemas(dstd::StringView path);
 
 /// The registered schemas as a JSON array of objects with id, decoder
 /// ("dftracer" or "path"), fields, require, path_budget (null when unset) and
 /// source (its text), in registration order.
-dstd::String schemas_json();
+dstd::Result<dstd::String> schemas_json();
 
 /// load_schemas on `<index_dir>/schemas` for the index at `index_path`
-/// (`<index_dir>/.dftindex`), when that directory exists.
-void load_index_schemas(dstd::StringView index_path);
+/// (`<index_dir>/.dftindex`), when that directory exists. The errors of
+/// load_schemas.
+dstd::Result<void> load_index_schemas(dstd::StringView index_path);
 
 /// Share of the records a schema judges that it must match to be chosen.
 inline constexpr double SCHEMA_MATCH_SHARE = 0.9;
@@ -248,37 +252,39 @@ struct SchemaDetection {
 /// the higher share, then the lower id. With only metadata sampled it is the
 /// schema with the fewest required paths whose `data` leaves out every
 /// object. Otherwise "generic"; a schema declaring no field is never chosen.
-SchemaDetection explain_schema(dstd::Span<const dstd::StringView> lines);
+dstd::Result<SchemaDetection> explain_schema(
+    dstd::Span<const dstd::StringView> lines);
 
 /// explain_schema over the lines at the start of `file_path` (gzip or
 /// plain), up to SCHEMA_SAMPLE_LINES records; the last line needs no
 /// newline. Cached per process by path, modification time, size and the
-/// registered schemas. Throws @ref dftracer::utils::common::DFTUtilsException
-/// "DFTUtilsException" IO when the file cannot be read.
-SchemaDetection explain_file_schema(dstd::CStringView file_path);
+/// registered schemas. An Io error when the file cannot be read.
+dstd::Result<SchemaDetection> explain_file_schema(dstd::CStringView file_path);
 
 /// The same over an open file of `size` bytes modified at `mtime_ns`
 /// nanoseconds since the epoch, read at offsets. `file` stays open and owned
 /// by the caller.
-SchemaDetection explain_file_schema(dstd::CStringView file_path,
-                                    const dstd::File& file, std::uint64_t size,
-                                    std::int64_t mtime_ns);
+dstd::Result<SchemaDetection> explain_file_schema(dstd::CStringView file_path,
+                                                  const dstd::File& file,
+                                                  std::uint64_t size,
+                                                  std::int64_t mtime_ns);
 
 /// `d` as a JSON object: chosen (id), objects, records, and scores, each with
 /// id, required (the count of required paths) and share.
 dstd::String to_json(const SchemaDetection& d);
 
 /// explain_schema(lines).chosen.
-const RecordSchema& detect_schema(dstd::Span<const dstd::StringView> lines);
+dstd::Result<const RecordSchema*> detect_schema(
+    dstd::Span<const dstd::StringView> lines);
 
 /// explain_file_schema(file_path).chosen.
-const RecordSchema& detect_file_schema(dstd::CStringView file_path);
+dstd::Result<const RecordSchema*> detect_file_schema(
+    dstd::CStringView file_path);
 
 /// explain_file_schema(file_path, file, size, mtime_ns).chosen.
-const RecordSchema& detect_file_schema(dstd::CStringView file_path,
-                                       const dstd::File& file,
-                                       std::uint64_t size,
-                                       std::int64_t mtime_ns);
+dstd::Result<const RecordSchema*> detect_file_schema(
+    dstd::CStringView file_path, const dstd::File& file, std::uint64_t size,
+    std::int64_t mtime_ns);
 
 }  // namespace dftracer::utils::index
 

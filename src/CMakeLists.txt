@@ -226,6 +226,7 @@ set(DFTRACER_UTILS_INDEX_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/indexer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/key.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/record_schema.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/record_schema_yaml.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/source.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/tables.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/extensions/bloom_filter.cpp
@@ -1451,6 +1452,11 @@ create_library(
     yaml-cpp
     libdeflate
     zstd)
+
+# The one file that reads YAML catches yaml-cpp's exceptions.
+set_source_files_properties(
+  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/record_schema_yaml.cpp
+  PROPERTIES COMPILE_OPTIONS -fexceptions)
 
 foreach(variant objects shared static)
   dftu_variant_target(VARIANT_TARGET dftracer_utils_trace ${variant})

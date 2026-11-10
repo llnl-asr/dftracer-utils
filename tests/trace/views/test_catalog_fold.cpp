@@ -89,14 +89,14 @@ dstd::Vector<dstd::String> genesis_lines() {
 }
 
 void register_log_schema() {
-    index::register_schema(
+    dftu_utils_test::ok_ref(index::register_schema(
         "id: cf_log\n"
         "fields:\n"
         "  op: {type: string}\n"
         "  took: {type: float, role: duration, unit: s}\n"
         "  worker: {type: string, role: entity}\n"
         "  status: {type: json, optional: true}\n",
-        "test_catalog_fold");
+        "test_catalog_fold"));
 }
 
 bool has_catalog(const dstd::String& gz) {

@@ -16,6 +16,7 @@
 #include <dftracer/utils/utilities/reader/internal/inflater.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
+#include <task_result.h>
 #include <testing_runtime.h>
 #include <unistd.h>
 #include <zlib.h>
@@ -275,7 +276,7 @@ TEST_CASE("the control: a stream that verifies the gzip checksum is counted") {
     Sample s;
     TempFile f(s.bytes);
     const auto before = fileio::compress::zlib_checksum_streams_opened();
-    index::detect_file_schema(dstd::String(f.path));
+    dftu_utils_test::ok_ref(index::detect_file_schema(dstd::String(f.path)));
     CHECK(fileio::compress::zlib_checksum_streams_opened() > before);
 }
 

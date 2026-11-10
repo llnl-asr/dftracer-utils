@@ -6,6 +6,7 @@
 #include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/file.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
@@ -23,6 +24,7 @@
 #include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/record_schema.h>
+#include <dftracer/utils/index/record_schema_yaml.h>
 #include <dftracer/utils/index/source.h>
 #include <dftracer/utils/json/dom_form.h>
 #include <dftracer/utils/json/json_escape.h>
@@ -35,7 +37,6 @@
 #include <simdjson.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#include <yaml-cpp/yaml.h>
 
 #include <algorithm>
 #include <array>
@@ -59,8 +60,8 @@ constexpr std::size_t MAX_RECORD = 256u * 1024 * 1024;
 // without its newline too, until it returns false or MAX_TEXT bytes were
 // read.
 template <typename Emit>
-void for_each_head_line(const dstd::File& file, dstd::StringView path,
-                        Emit&& emit) {
+dstd::Result<void> for_each_head_line(const dstd::File& file,
+                                      dstd::StringView path, Emit&& emit) {
     dstd::Vector<char> comp(CHUNK);
     std::uint64_t offset = 0;
     // Returns the byte count, 0 at the end and -1 on error.
@@ -107,8 +108,8 @@ void for_each_head_line(const dstd::File& file, dstd::StringView path,
         // member end).
         if (utilities::fileio::compress::open_inflate_stream(
                 zs, 16 + MAX_WBITS) != Z_OK)
-            throw common::DFTUtilsException::cat(
-                common::ErrorCode::Io, "cannot inflate trace: ", path);
+            return common::make_error<"cannot inflate trace: {}">(
+                common::ErrorCode::Io, path);
         dstd::Vector<char> out(CHUNK);
         bool eof = false;
         while (!done) {
@@ -134,6 +135,7 @@ void for_each_head_line(const dstd::File& file, dstd::StringView path,
         zng_inflateEnd(&zs);
     }
     if (!done && !text.empty()) emit(dstd::StringView(text));
+    return {};
 }
 
 // Scores the registered schemas on lines fed one at a time. A schema judges
@@ -141,7 +143,9 @@ void for_each_head_line(const dstd::File& file, dstd::StringView path,
 // neither match nor miss it.
 class Detector {
    public:
-    Detector() : candidates_(registered_schemas()) {
+    Detector(dstd::Vector<const RecordSchema*> candidates,
+             const RecordSchema* generic)
+        : candidates_(std::move(candidates)), generic_(generic) {
         judged_.assign(candidates_.size(), 0);
         hits_.assign(candidates_.size(), 0);
         cond_of_.assign(candidates_.size(), NONE);
@@ -155,7 +159,11 @@ class Detector {
                 });
             if (same == conds_.end()) {
                 auto parsed = duql::Query::from_string(s->data);
-                if (!parsed) throw duql::DuqlParseError(parsed.error());
+                if (!parsed)
+                    dstd::fatal(
+                        "a registered record schema data condition does not "
+                        "parse",
+                        parsed.error().message.c_str());
                 conds_.push_back(
                     {s->data, s->args_fallback, std::move(*parsed), 0});
                 same = std::prev(conds_.end());
@@ -220,7 +228,7 @@ class Detector {
             }
         }
         if (!best && out_.records == 0) best = metadata_owner();
-        out_.chosen = best ? best : &get_schema("generic");
+        out_.chosen = best ? best : generic_;
         return std::move(out_);
     }
 
@@ -275,6 +283,7 @@ class Detector {
     }
 
     dstd::Vector<const RecordSchema*> candidates_;
+    const RecordSchema* generic_;
     dstd::Vector<Cond> conds_;
     dstd::Vector<std::size_t> cond_of_;
     dstd::Vector<duql::Truth> truth_;
@@ -437,6 +446,14 @@ dstd::String built_source(const duql::Source& source) {
     return std::move(*text);
 }
 
+dstd::String built_merge(const duql::Source& source, dstd::StringView origin) {
+    auto merged = merge_source({}, built_source(source), origin);
+    if (!merged)
+        dstd::fatal("a built-in record schema source does not merge",
+                    merged.error().c_str());
+    return std::move(*merged);
+}
+
 dstd::Vector<RecordSchema> builtins() {
     RecordSchema dft;
     dft.id = "dftracer";
@@ -457,32 +474,29 @@ dstd::Vector<RecordSchema> builtins() {
         const auto dict = [&](const char* tag) {
             return Pipe().where(meta && c("name") == tag);
         };
-        dft.source = common::unwrap(merge_source(
-            {},
-            built_source(
-                Source()
-                    .rowset("data", Pipe().where(c("ph").not_in(
-                                        dstd::Vector<Col>{"M", 4})))
-                    .rowset("files", dict("FH")
-                                         .select({{"fhash", c("args.value")},
-                                                  {"path", c("args.name")}})
-                                         .distinct())
-                    .rowset("hosts", dict("HH")
-                                         .select({{"hhash", c("args.value")},
-                                                  {"name", c("args.name")}})
-                                         .distinct())
-                    .rowset("strings", dict("SH")
-                                           .select({{"shash", c("args.value")},
-                                                    {"value", c("args.name")}})
-                                           .distinct())
-                    .rowset("ranks",
-                            Pipe()
-                                .where(meta && c("name") == "PR" &&
-                                       c("args.name") == "rank")
-                                .select({"pid", {"rank", c("args.value")}})
-                                .distinct())
-                    .flag("args_fallback", true)),
-            "dftracer"));
+        dft.source = built_merge(
+            Source()
+                .rowset("data",
+                        Pipe().where(c("ph").not_in(dstd::Vector<Col>{"M", 4})))
+                .rowset("files", dict("FH")
+                                     .select({{"fhash", c("args.value")},
+                                              {"path", c("args.name")}})
+                                     .distinct())
+                .rowset("hosts", dict("HH")
+                                     .select({{"hhash", c("args.value")},
+                                              {"name", c("args.name")}})
+                                     .distinct())
+                .rowset("strings", dict("SH")
+                                       .select({{"shash", c("args.value")},
+                                                {"value", c("args.name")}})
+                                       .distinct())
+                .rowset("ranks", Pipe()
+                                     .where(meta && c("name") == "PR" &&
+                                            c("args.name") == "rank")
+                                     .select({"pid", {"rank", c("args.value")}})
+                                     .distinct())
+                .flag("args_fallback", true),
+            "dftracer");
     }
     dft.data = data_condition(dft);
     dft.args_fallback = source_args_fallback(dft);
@@ -504,19 +518,17 @@ dstd::Vector<RecordSchema> builtins() {
     };
     {
         using namespace duql;
-        genesis.source = common::unwrap(merge_source(
-            {},
-            built_source(
-                Source()
-                    .rowset("data", Pipe().where(c("gtype") != "run"))
-                    .rowset("runs",
-                            Pipe()
-                                .where(c("gtype") == "run")
-                                .select({"run", "app", "system", "unique_input",
-                                         "nodes", "ppn", "papi_set", "method",
-                                         "sketch_accuracy", "leaf"})
-                                .distinct())),
-            "genesis"));
+        genesis.source = built_merge(
+            Source()
+                .rowset("data", Pipe().where(c("gtype") != "run"))
+                .rowset("runs",
+                        Pipe()
+                            .where(c("gtype") == "run")
+                            .select({"run", "app", "system", "unique_input",
+                                     "nodes", "ppn", "papi_set", "method",
+                                     "sketch_accuracy", "leaf"})
+                            .distinct()),
+            "genesis");
     }
     genesis.data = data_condition(genesis);
     genesis.args_fallback = source_args_fallback(genesis);
@@ -529,11 +541,10 @@ struct Entry {
     dstd::String source;
 };
 
-[[noreturn]] void spec_error(const dstd::String& source,
-                             const dstd::String& what) {
-    throw common::DFTUtilsException::cat(common::ErrorCode::InvalidArgument,
-                                         "record schema spec ", source, ": ",
-                                         what);
+dstd::Unexpected<dstd::Error> spec_error(const dstd::String& source,
+                                         dstd::StringView what) {
+    return common::make_error<"record schema spec {}: {}">(
+        common::ErrorCode::InvalidArgument, source, what);
 }
 
 class Registry {
@@ -562,7 +573,8 @@ class Registry {
         return out;
     }
 
-    const RecordSchema& add(const SchemaSpec& spec, const dstd::String& source);
+    dstd::Result<const RecordSchema*> add(const SchemaSpec& spec,
+                                          const dstd::String& source);
 
     // Whether `path` was loaded before; marks it loaded.
     bool first_load(dstd::StringView path) {
@@ -620,54 +632,62 @@ dstd::StringView role_name(Role role) {
     return "none";
 }
 
-const RecordSchema& Registry::add(const SchemaSpec& spec,
-                                  const dstd::String& source) {
-    if (spec.id.empty()) spec_error(source, "missing id");
+dstd::Result<const RecordSchema*> Registry::add(const SchemaSpec& spec,
+                                                const dstd::String& source) {
+    if (spec.id.empty()) return spec_error(source, "missing id");
     std::unique_lock lock(mu_);
     if (const Entry* e = entry_locked(spec.id); e && e->source == "built-in")
-        spec_error(source,
-                   "built-in schema " + spec.id + " cannot be redefined");
+        return spec_error(
+            source,
+            dstd::fmt<"built-in schema {} cannot be redefined">(spec.id));
     if (spec.extends == spec.id)
-        spec_error(source, "schema " + spec.id + " extends itself");
+        return spec_error(source,
+                          dstd::fmt<"schema {} extends itself">(spec.id));
     const RecordSchema* parent = find_locked(spec.extends);
-    if (!parent) spec_error(source, "unknown extends " + spec.extends);
+    if (!parent)
+        return spec_error(source,
+                          dstd::fmt<"unknown extends {}">(spec.extends));
     RecordSchema s = *parent;
     s.id = spec.id;
     s.builtin = false;
     for (FieldSpec f : spec.fields) {
-        if (f.name.empty()) spec_error(source, "a field has no name");
-        const dstd::String where = "fields." + f.name;
+        if (f.name.empty()) return spec_error(source, "a field has no name");
+        const dstd::String where = dstd::fmt<"fields.{}">(f.name);
         if (f.path.empty()) f.path = f.name;
         const bool timed = f.role == Role::Time || f.role == Role::Duration;
         if (f.unit && !timed)
-            spec_error(source, where + ".unit needs the time or duration role");
+            return spec_error(
+                source,
+                dstd::fmt<"{}.unit needs the time or duration role">(where));
         if (timed) {
             // A string time is ISO-8601 text.
             const bool iso =
                 f.role == Role::Time && f.type == FieldType::String;
             if (f.type != FieldType::Int && f.type != FieldType::Float && !iso)
-                spec_error(source,
-                           where + " has the " +
-                               dstd::String(role_name(f.role)) +
-                               (f.role == Role::Time
-                                    ? " role and must be int, float or string"
-                                    : " role and must be int or float"));
+                return spec_error(
+                    source,
+                    f.role == Role::Time
+                        ? dstd::fmt<"{} has the {} role and must be int, float "
+                                    "or string">(where, role_name(f.role))
+                        : dstd::fmt<"{} has the {} role and must be int or "
+                                    "float">(where, role_name(f.role)));
             if (iso && f.unit)
-                spec_error(source, where +
-                                       ".unit does not apply to an "
-                                       "ISO-8601 string time");
+                return spec_error(
+                    source, dstd::fmt<"{}.unit does not apply to an ISO-8601 "
+                                      "string time">(where));
             f.unit = f.unit.value_or(TimeUnit::Us);
         }
         if ((f.role == Role::Entity || f.role == Role::Lane ||
              f.role == Role::Name) &&
             f.type != FieldType::Int && f.type != FieldType::String)
-            spec_error(source, where + " has the " +
-                                   dstd::String(role_name(f.role)) +
-                                   " role and must be int or string");
+            return spec_error(
+                source,
+                dstd::fmt<"{} has the {} role and must be int or string">(
+                    where, role_name(f.role)));
         if (f.type == FieldType::Json && s.decoder != Decoder::Path)
-            spec_error(source, where +
-                                   " is json, which needs a schema that "
-                                   "decodes records by path");
+            return spec_error(source,
+                              dstd::fmt<"{} is json, which needs a schema that "
+                                        "decodes records by path">(where));
         auto same =
             std::find_if(s.fields.begin(), s.fields.end(),
                          [&](const FieldSpec& x) { return x.name == f.name; });
@@ -681,13 +701,14 @@ const RecordSchema& Registry::add(const SchemaSpec& spec,
             const FieldSpec& a = s.fields[i];
             const FieldSpec& b = s.fields[j];
             if (a.path == b.path)
-                spec_error(source, "fields." + a.name + " and fields." +
-                                       b.name + " share the path " + a.path);
+                return spec_error(
+                    source, dstd::fmt<"fields.{} and fields.{} share the path "
+                                      "{}">(a.name, b.name, a.path));
             if (a.role != Role::None && a.role == b.role)
-                spec_error(source, "fields." + a.name + " and fields." +
-                                       b.name + " both have the " +
-                                       dstd::String(role_name(a.role)) +
-                                       " role");
+                return spec_error(
+                    source,
+                    dstd::fmt<"fields.{} and fields.{} both have the {} role">(
+                        a.name, b.name, role_name(a.role)));
         }
     for (const auto& path : spec.never_index) {
         const auto it =
@@ -695,16 +716,18 @@ const RecordSchema& Registry::add(const SchemaSpec& spec,
                          [&](const FieldSpec& x) { return x.path == path; });
         const FieldSpec* f = it == s.fields.end() ? nullptr : &*it;
         if (f && f->role != Role::None)
-            spec_error(source, "index.never_index lists " + path +
-                                   ", which has the " +
-                                   dstd::String(role_name(f->role)) + " role");
+            return spec_error(
+                source,
+                dstd::fmt<"index.never_index lists {}, which has the {} role">(
+                    path, role_name(f->role)));
         if (f && f->always_index)
-            spec_error(source, "index.never_index lists " + path +
-                                   ", which is always_index");
+            return spec_error(source,
+                              dstd::fmt<"index.never_index lists {}, which is "
+                                        "always_index">(path));
         if (s.decoder != Decoder::Path)
-            spec_error(source,
-                       "index.never_index needs a schema that decodes "
-                       "records by path");
+            return spec_error(source,
+                              "index.never_index needs a schema that decodes "
+                              "records by path");
         s.never_index.push_back(path);
     }
     std::sort(s.never_index.begin(), s.never_index.end());
@@ -712,159 +735,33 @@ const RecordSchema& Registry::add(const SchemaSpec& spec,
                         s.never_index.end());
     if (spec.path_budget) s.path_budget = spec.path_budget;
     if (spec.stats_share) s.stats_share = spec.stats_share;
-    s.source = common::unwrap(
-        merge_source(s.source, spec.source, source + ", schema " + spec.id));
+    auto merged = merge_source(s.source, spec.source,
+                               dstd::fmt<"{}, schema {}">(source, spec.id));
+    if (!merged) return merged.error();
+    s.source = std::move(*merged);
     s.data = data_condition(s);
+    if (!s.data.empty()) {
+        const auto parsed = duql::Query::from_string(s.data);
+        if (!parsed)
+            return spec_error(
+                source,
+                dstd::fmt<"schema {}: the data row set is not a condition "
+                          "detection can evaluate: {}">(
+                    spec.id, parsed.error().message));
+    }
     s.args_fallback = source_args_fallback(s);
     derive(s);
-    common::unwrap(check_source(s, source));
+    if (auto checked = check_source(s, source); !checked)
+        return checked.error();
 
     if (const Entry* e = entry_locked(s.id)) {
-        if (e->schema->params_hash() == s.params_hash()) return *e->schema;
-        spec_error(source, "schema " + s.id + " is already registered from " +
-                               e->source + " with another definition");
+        if (e->schema->params_hash() == s.params_hash()) return e->schema.get();
+        return spec_error(
+            source, dstd::fmt<"schema {} is already registered from {} with "
+                              "another definition">(s.id, e->source));
     }
     entries_.push_back({dstd::make_unique<RecordSchema>(std::move(s)), source});
-    return *entries_.back().schema;
-}
-
-void check_keys(const YAML::Node& map, std::initializer_list<const char*> keys,
-                const dstd::String& where, const dstd::String& source) {
-    if (!map.IsMap()) spec_error(source, where + " must be a mapping");
-    for (const auto& kv : map) {
-        const auto text = kv.first.as<std::string>();
-        const dstd::String key(text.data(), text.size());
-        if (std::none_of(keys.begin(), keys.end(),
-                         [&](const char* k) { return key == k; }))
-            spec_error(source, "unknown key " + where + key);
-    }
-}
-
-dstd::String text_of(const YAML::Node& n, const dstd::String& key,
-                     const dstd::String& source) {
-    if (!n.IsScalar()) spec_error(source, key + " must be a string");
-    const auto text = n.as<std::string>();
-    return dstd::String(text.data(), text.size());
-}
-
-bool flag_of(const YAML::Node& n, const dstd::String& key,
-             const dstd::String& source) {
-    try {
-        return n.as<bool>();
-    } catch (const YAML::Exception&) {
-        spec_error(source, key + " must be true or false");
-    }
-}
-
-template <typename E, std::size_t N>
-E choice_of(const YAML::Node& n, const dstd::String& key,
-            const std::array<dstd::Pair<const char*, E>, N>& names,
-            const dstd::String& source) {
-    const dstd::String v = text_of(n, key, source);
-    for (const auto& [name, value] : names)
-        if (v == name) return value;
-    dstd::String all;
-    for (const auto& [name, value] : names) {
-        if (!all.empty()) all += ", ";
-        all += name;
-    }
-    spec_error(source, key + " is " + v + "; expected one of " + all);
-}
-
-constexpr std::array<dstd::Pair<const char*, FieldType>, 5> TYPE_NAMES = {{
-    {"bool", FieldType::Bool},
-    {"int", FieldType::Int},
-    {"float", FieldType::Float},
-    {"string", FieldType::String},
-    {"json", FieldType::Json},
-}};
-constexpr std::array<dstd::Pair<const char*, Role>, 5> ROLE_NAMES = {{
-    {"time", Role::Time},
-    {"duration", Role::Duration},
-    {"entity", Role::Entity},
-    {"lane", Role::Lane},
-    {"name", Role::Name},
-}};
-constexpr std::array<dstd::Pair<const char*, TimeUnit>, 4> UNIT_NAMES = {{
-    {"ns", TimeUnit::Ns},
-    {"us", TimeUnit::Us},
-    {"ms", TimeUnit::Ms},
-    {"s", TimeUnit::S},
-}};
-
-SchemaSpec parse_spec(const YAML::Node& spec, const dstd::String& source) {
-    check_keys(spec, {"id", "extends", "fields", "index", "source"}, "",
-               source);
-    SchemaSpec out;
-    if (!spec["id"]) spec_error(source, "missing id");
-    out.id = text_of(spec["id"], "id", source);
-    if (spec["extends"])
-        out.extends = text_of(spec["extends"], "extends", source);
-    if (const auto fs = spec["fields"]) {
-        if (!fs.IsMap())
-            spec_error(source, "fields must map field names to settings");
-        for (const auto& kv : fs) {
-            FieldSpec f;
-            f.name = text_of(kv.first, "fields", source);
-            const dstd::String where = "fields." + f.name;
-            const YAML::Node n = kv.second;
-            check_keys(
-                n, {"type", "path", "optional", "role", "unit", "always_index"},
-                where + ".", source);
-            if (!n["type"]) spec_error(source, where + ".type is required");
-            f.type = choice_of(n["type"], where + ".type", TYPE_NAMES, source);
-            if (n["path"]) f.path = text_of(n["path"], where + ".path", source);
-            if (n["optional"])
-                f.optional =
-                    flag_of(n["optional"], where + ".optional", source);
-            if (n["role"])
-                f.role =
-                    choice_of(n["role"], where + ".role", ROLE_NAMES, source);
-            if (n["unit"])
-                f.unit =
-                    choice_of(n["unit"], where + ".unit", UNIT_NAMES, source);
-            if (n["always_index"])
-                f.always_index =
-                    flag_of(n["always_index"], where + ".always_index", source);
-            out.fields.push_back(std::move(f));
-        }
-    }
-    if (const auto ix = spec["index"]) {
-        check_keys(ix, {"path_budget", "stats_share", "never_index"}, "index.",
-                   source);
-        if (ix["never_index"]) {
-            const auto list = ix["never_index"];
-            if (!list.IsSequence())
-                spec_error(source, "index.never_index must be a list of paths");
-            for (const auto& item : list) {
-                if (!item.IsScalar() || item.Scalar().empty())
-                    spec_error(source,
-                               "index.never_index must be a list of paths");
-                const auto& path = item.Scalar();
-                out.never_index.emplace_back(path.data(), path.size());
-            }
-        }
-        if (ix["path_budget"]) {
-            try {
-                out.path_budget = ix["path_budget"].as<std::size_t>();
-            } catch (const YAML::Exception&) {
-                spec_error(source, "index.path_budget must be a count");
-            }
-        }
-        if (ix["stats_share"]) {
-            double share = 0;
-            try {
-                share = ix["stats_share"].as<double>();
-            } catch (const YAML::Exception&) {
-                spec_error(source, "index.stats_share must be in (0, 1]");
-            }
-            if (!(share > 0 && share <= 1))
-                spec_error(source, "index.stats_share must be in (0, 1]");
-            out.stats_share = share;
-        }
-    }
-    if (spec["source"]) out.source = text_of(spec["source"], "source", source);
-    return out;
+    return entries_.back().schema.get();
 }
 
 bool spec_file(dstd::PathView p) {
@@ -872,58 +769,66 @@ bool spec_file(dstd::PathView p) {
     return ext == ".yaml" || ext == ".yml" || ext == ".json";
 }
 
-const RecordSchema& register_into(Registry& reg, dstd::StringView text,
-                                  const dstd::String& source) {
-    YAML::Node spec;
-    try {
-        spec = YAML::Load(std::string(text));
-    } catch (const YAML::Exception& e) {
-        spec_error(source, e.what());
-    }
-    return reg.add(parse_spec(spec, source), source);
+dstd::Result<const RecordSchema*> register_into(Registry& reg,
+                                                dstd::StringView text,
+                                                const dstd::String& source) {
+    auto spec = parse_schema_spec(text, source);
+    if (!spec) return spec.error();
+    return reg.add(*spec, source);
 }
 
-void load_into(Registry& reg, dstd::StringView path) {
+dstd::Result<void> load_files(Registry& reg, const dstd::Path& p) {
+    dstd::Vector<dstd::Path> files;
+    auto is_dir = dstd::fs::is_directory(p.view());
+    if (!is_dir.has_value()) return is_dir.error();
+    if (*is_dir) {
+        auto dir = dstd::fs::Dir::open(p.view());
+        if (!dir) return dir.error();
+        auto listing = dir->entries();
+        if (!listing) return listing.error();
+        for (const dstd::fs::DirEntry& e : *listing) {
+            if (!spec_file(dstd::PathView(e.name))) continue;
+            const auto st = dir->stat(e.name);
+            if (st && st->kind == dstd::fs::FileKind::File) {
+                files.push_back(p.view() / e.name);
+            }
+        }
+        std::sort(files.begin(), files.end(),
+                  [](const dstd::Path& a, const dstd::Path& b) {
+                      return a.str() < b.str();
+                  });
+    } else {
+        files.push_back(p);
+    }
+    for (const auto& f : files) {
+        auto text = dstd::fs::read_file(f.view());
+        if (!text)
+            return common::make_error<"cannot read record schema spec {}">(
+                common::ErrorCode::Io, f.str());
+        auto added = register_into(reg, *text, dstd::String(f.str()));
+        if (!added) return added.error();
+    }
+    return {};
+}
+
+dstd::Result<void> load_into(Registry& reg, dstd::StringView path) {
     const auto canonical = dstd::fs::weakly_canonical(dstd::PathView(path));
     const dstd::Path p = canonical ? *canonical : dstd::Path(path);
     const dstd::StringView key = p.str();
-    if (!reg.first_load(key)) return;
-    try {
-        dstd::Vector<dstd::Path> files;
-        if (common::unwrap(dstd::fs::is_directory(p.view()))) {
-            const auto dir = common::unwrap(dstd::fs::Dir::open(p.view()));
-            auto listing = common::unwrap(dir.entries());
-            for (const dstd::fs::DirEntry& e : listing) {
-                if (!spec_file(dstd::PathView(e.name))) continue;
-                const auto st = dir.stat(e.name);
-                if (st && st->kind == dstd::fs::FileKind::File) {
-                    files.push_back(p.view() / e.name);
-                }
-            }
-            std::sort(files.begin(), files.end(),
-                      [](const dstd::Path& a, const dstd::Path& b) {
-                          return a.str() < b.str();
-                      });
-        } else {
-            files.push_back(p);
-        }
-        for (const auto& f : files) {
-            auto text = dstd::fs::read_file(f.view());
-            if (!text)
-                throw common::DFTUtilsException::cat(
-                    common::ErrorCode::Io, "cannot read record schema spec ",
-                    f.str());
-            register_into(reg, *text, dstd::String(f.str()));
-        }
-    } catch (...) {
-        reg.forget_load(key);
-        throw;
-    }
+    if (!reg.first_load(key)) return {};
+    auto loaded = load_files(reg, p);
+    if (!loaded) reg.forget_load(key);
+    return loaded;
 }
 
-// Loads $DFTRACER_UTILS_SCHEMA_PATH on first use. A failed load throws and the
-// next access retries.
-Registry& registry() {
+struct RegistryState {
+    std::mutex mu;
+    bool env_loaded = false;
+};
+
+// Loads $DFTRACER_UTILS_SCHEMA_PATH on first use. A failed load is returned
+// and the next access retries.
+dstd::Result<Registry*> try_registry() {
     Registry& r = dstd::Singleton<Registry>::get();
     [[maybe_unused]] static const bool hooked = [] {
         dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, []() noexcept {
@@ -931,20 +836,23 @@ Registry& registry() {
         });
         return true;
     }();
-    static std::once_flag env;
-    std::call_once(env, [&r] {
-        if (const auto paths = common::Env::get("DFTRACER_UTILS_SCHEMA_PATH")) {
-            dstd::StringView rest = *paths;
-            while (!rest.empty()) {
-                const std::size_t colon = rest.find(':');
-                const dstd::StringView part = rest.substr(0, colon);
-                rest.remove_prefix(colon == dstd::StringView::npos ? rest.size()
-                                                                   : colon + 1);
-                if (!part.empty()) load_into(r, part);
-            }
+    static RegistryState state;
+    std::lock_guard lock(state.mu);
+    if (state.env_loaded) return &r;
+    if (const auto paths = common::Env::get("DFTRACER_UTILS_SCHEMA_PATH")) {
+        dstd::StringView rest = *paths;
+        while (!rest.empty()) {
+            const std::size_t colon = rest.find(':');
+            const dstd::StringView part = rest.substr(0, colon);
+            rest.remove_prefix(colon == dstd::StringView::npos ? rest.size()
+                                                               : colon + 1);
+            if (part.empty()) continue;
+            if (auto loaded = load_into(r, part); !loaded)
+                return loaded.error();
         }
-    });
-    return r;
+    }
+    state.env_loaded = true;
+    return &r;
 }
 
 template <typename E, std::size_t N>
@@ -961,41 +869,56 @@ dstd::StringView field_type_name(FieldType type) {
     return name_of(type, TYPE_NAMES);
 }
 
-dstd::Vector<const RecordSchema*> registered_schemas() {
-    return registry().all();
+dstd::Result<dstd::Vector<const RecordSchema*>> registered_schemas() {
+    auto reg = try_registry();
+    if (!reg) return reg.error();
+    return (*reg)->all();
 }
 
-const RecordSchema* find_schema(dstd::StringView id) {
-    return registry().find(id);
+dstd::Result<const RecordSchema*> find_schema(dstd::StringView id) {
+    auto reg = try_registry();
+    if (!reg) return reg.error();
+    return (*reg)->find(id);
 }
 
-const RecordSchema& get_schema(dstd::StringView id) {
-    if (const RecordSchema* s = find_schema(id)) return *s;
+dstd::Result<const RecordSchema*> get_schema(dstd::StringView id) {
+    auto reg = try_registry();
+    if (!reg) return reg.error();
+    if (const RecordSchema* s = (*reg)->find(id)) return s;
     dstd::String ids;
-    for (const RecordSchema* s : registered_schemas()) {
+    for (const RecordSchema* s : (*reg)->all()) {
         if (!ids.empty()) ids += ", ";
         ids += s->id;
     }
-    throw common::DFTUtilsException::cat(
-        common::ErrorCode::InvalidArgument, "unknown record schema ",
-        dstd::String(id), " (registered: ", ids,
-        "); user schemas load from $DFTRACER_UTILS_SCHEMA_PATH and "
-        "<index_dir>/schemas/");
+    return common::make_error<
+        "unknown record schema {} (registered: {}); user schemas load from "
+        "$DFTRACER_UTILS_SCHEMA_PATH and <index_dir>/schemas/">(
+        common::ErrorCode::InvalidArgument, id, ids);
 }
 
-const RecordSchema& register_schema(const SchemaSpec& spec,
-                                    dstd::StringView source) {
-    return registry().add(spec, dstd::String(source));
+dstd::Result<const RecordSchema*> register_schema(const SchemaSpec& spec,
+                                                  dstd::StringView source) {
+    auto reg = try_registry();
+    if (!reg) return reg.error();
+    return (*reg)->add(spec, dstd::String(source));
 }
 
-const RecordSchema& register_schema(dstd::StringView text,
-                                    dstd::StringView source) {
-    return register_into(registry(), text, dstd::String(source));
+dstd::Result<const RecordSchema*> register_schema(dstd::StringView text,
+                                                  dstd::StringView source) {
+    auto reg = try_registry();
+    if (!reg) return reg.error();
+    return register_into(**reg, text, dstd::String(source));
 }
 
-void load_schemas(dstd::StringView path) { load_into(registry(), path); }
+dstd::Result<void> load_schemas(dstd::StringView path) {
+    auto reg = try_registry();
+    if (!reg) return reg.error();
+    return load_into(**reg, path);
+}
 
-dstd::String schemas_json() {
+dstd::Result<dstd::String> schemas_json() {
+    const auto all = registered_schemas();
+    if (!all) return all.error();
     dstd::String out = "[";
     auto quoted = [&](dstd::StringView s) {
         out += '"';
@@ -1011,7 +934,7 @@ dstd::String schemas_json() {
         out += ']';
     };
     bool first = true;
-    for (const RecordSchema* s : registered_schemas()) {
+    for (const RecordSchema* s : *all) {
         if (!first) out += ',';
         first = false;
         out += "{\"id\":";
@@ -1060,15 +983,19 @@ dstd::String schemas_json() {
     return dstd::String(out);
 }
 
-void load_index_schemas(dstd::StringView index_path) {
+dstd::Result<void> load_index_schemas(dstd::StringView index_path) {
     const dstd::Path dir = dstd::PathView(index_path).parent() / "schemas";
-    if (common::unwrap(dstd::fs::is_directory(dir.view()))) {
-        load_schemas(dir.str());
-    }
+    const auto is_dir = dstd::fs::is_directory(dir.view());
+    if (!is_dir.has_value()) return is_dir.error();
+    if (*is_dir) return load_schemas(dir.str());
+    return {};
 }
 
-SchemaDetection explain_schema(dstd::Span<const dstd::StringView> lines) {
-    Detector d;
+dstd::Result<SchemaDetection> explain_schema(
+    dstd::Span<const dstd::StringView> lines) {
+    auto reg = try_registry();
+    if (!reg) return reg.error();
+    Detector d((*reg)->all(), (*reg)->find("generic"));
     for (auto line : lines) d.add(line);
     return d.finish();
 }
@@ -1102,10 +1029,11 @@ DetectionCache& detection_cache() {
     return dstd::Singleton<DetectionCache>::get();
 }
 
-dstd::Optional<SchemaDetection> cached_detection(dstd::StringView file_path,
+dstd::Optional<SchemaDetection> cached_detection(Registry& registry,
+                                                 dstd::StringView file_path,
                                                  std::uint64_t size,
                                                  std::int64_t mtime_ns) {
-    const std::size_t schemas = registry().size();
+    const std::size_t schemas = registry.size();
     std::lock_guard lock(detection_cache().mu);
     const auto& map = detection_cache().map;
     if (!map) return dstd::nullopt;
@@ -1118,14 +1046,20 @@ dstd::Optional<SchemaDetection> cached_detection(dstd::StringView file_path,
 
 }  // namespace
 
-SchemaDetection explain_file_schema(dstd::CStringView file_path,
-                                    const dstd::File& file, std::uint64_t size,
-                                    std::int64_t mtime_ns) {
-    if (const auto hit = cached_detection(file_path, size, mtime_ns))
+dstd::Result<SchemaDetection> explain_file_schema(dstd::CStringView file_path,
+                                                  const dstd::File& file,
+                                                  std::uint64_t size,
+                                                  std::int64_t mtime_ns) {
+    auto reg = try_registry();
+    if (!reg) return reg.error();
+    if (const auto hit = cached_detection(**reg, file_path, size, mtime_ns))
         return *hit;
-    Detector d;
-    for_each_head_line(file, file_path,
-                       [&](dstd::StringView line) { return d.add(line); });
+    Detector d((*reg)->all(), (*reg)->find("generic"));
+    if (auto read = for_each_head_line(
+            file, file_path,
+            [&](dstd::StringView line) { return d.add(line); });
+        !read)
+        return read.error();
     SchemaDetection out = d.finish();
     {
         std::lock_guard lock(detection_cache().mu);
@@ -1133,26 +1067,25 @@ SchemaDetection explain_file_schema(dstd::CStringView file_path,
         if (!map) map = dstd::make_unique<DetectionMap>();
         map->insert_or_assign(
             dstd::String(file_path.view()),
-            CachedDetection{mtime_ns, size, registry().size(), out});
+            CachedDetection{mtime_ns, size, (*reg)->size(), out});
     }
     return out;
 }
 
-SchemaDetection explain_file_schema(dstd::CStringView file_path) {
+dstd::Result<SchemaDetection> explain_file_schema(dstd::CStringView file_path) {
+    auto reg = try_registry();
+    if (!reg) return reg.error();
     common::InputFileStat st;
     if (!common::stat_input(file_path, st))
-        throw common::DFTUtilsException::cat(common::ErrorCode::Io,
-                                             "cannot read trace for schema "
-                                             "detection: ",
-                                             file_path);
-    if (const auto hit = cached_detection(file_path, st.size, st.mtime_ns))
+        return common::make_error<"cannot read trace for schema detection: {}">(
+            common::ErrorCode::Io, file_path);
+    if (const auto hit =
+            cached_detection(**reg, file_path, st.size, st.mtime_ns))
         return *hit;
     auto file = dstd::File::open(dstd::PathView(file_path), {});
     if (!file)
-        throw common::DFTUtilsException::cat(common::ErrorCode::Io,
-                                             "cannot read trace for schema "
-                                             "detection: ",
-                                             file_path);
+        return common::make_error<"cannot read trace for schema detection: {}">(
+            common::ErrorCode::Io, file_path);
     return explain_file_schema(file_path, *file, st.size, st.mtime_ns);
 }
 
@@ -1173,19 +1106,26 @@ dstd::String to_json(const SchemaDetection& d) {
     return dstd::String(out);
 }
 
-const RecordSchema& detect_schema(dstd::Span<const dstd::StringView> lines) {
-    return *explain_schema(lines).chosen;
+dstd::Result<const RecordSchema*> detect_schema(
+    dstd::Span<const dstd::StringView> lines) {
+    auto detection = explain_schema(lines);
+    if (!detection) return detection.error();
+    return detection->chosen;
 }
 
-const RecordSchema& detect_file_schema(dstd::CStringView file_path) {
-    return *explain_file_schema(file_path).chosen;
+dstd::Result<const RecordSchema*> detect_file_schema(
+    dstd::CStringView file_path) {
+    auto detection = explain_file_schema(file_path);
+    if (!detection) return detection.error();
+    return detection->chosen;
 }
 
-const RecordSchema& detect_file_schema(dstd::CStringView file_path,
-                                       const dstd::File& file,
-                                       std::uint64_t size,
-                                       std::int64_t mtime_ns) {
-    return *explain_file_schema(file_path, file, size, mtime_ns).chosen;
+dstd::Result<const RecordSchema*> detect_file_schema(
+    dstd::CStringView file_path, const dstd::File& file, std::uint64_t size,
+    std::int64_t mtime_ns) {
+    auto detection = explain_file_schema(file_path, file, size, mtime_ns);
+    if (!detection) return detection.error();
+    return detection->chosen;
 }
 
 dstd::Optional<std::int64_t> iso8601_micros(dstd::StringView s) {

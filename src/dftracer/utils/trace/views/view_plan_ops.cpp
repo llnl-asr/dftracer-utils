@@ -323,7 +323,7 @@ void ensure_indexes_fresh(const dstd::Vector<ViewFile>& files) {
                 }
                 if (const auto recorded_schema = common::unwrap(
                         index::schema(*found.snapshot, *found.file))) {
-                    index::get_schema(*recorded_schema);
+                    common::unwrap(index::get_schema(*recorded_schema));
                     schema.assign(recorded_schema->data(),
                                   recorded_schema->size());
                 }
@@ -1108,7 +1108,7 @@ ScanPlan timed(const ScanPlan& plan) {
 }
 
 ScanPlan record_schema(const ScanPlan& plan, const dstd::String& id) {
-    const auto& p = dftracer::utils::index::get_schema(id);
+    const auto& p = *common::unwrap(dftracer::utils::index::get_schema(id));
     auto next = clone(plan);
     // Registered record_schemas live until the process exits.
     next->record_schema =

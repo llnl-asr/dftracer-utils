@@ -197,20 +197,6 @@ dstd::Result<store::IndexExtension> tier_extension(const dstd::String& name) {
     return *ext;
 }
 
-// The registered schema `id`, or the error get_schema throws for another.
-dstd::Result<const RecordSchema*> schema_by_id(dstd::StringView id) {
-    if (const RecordSchema* found = find_schema(id)) return found;
-    dstd::String ids;
-    for (const RecordSchema* s : registered_schemas()) {
-        if (!ids.empty()) ids += ", ";
-        ids += s->id;
-    }
-    return common::make_error<
-        "unknown record schema {} (registered: {}); user schemas load from "
-        "$DFTRACER_UTILS_SCHEMA_PATH and <index_dir>/schemas/">(
-        common::ErrorCode::InvalidArgument, id, ids);
-}
-
 template <class T, class Fn>
 dstd::Result<T> block_on(Runtime& rt, const char* name, Fn fn) {
     return rt.block_on(coro::named(
@@ -243,9 +229,10 @@ dstd::Result<void> Indexer::validate_options(Impl& impl) {
 
 dstd::Result<Indexer> Indexer::finish_open(dstd::SharedPtr<Impl> impl) {
     for (const auto& [index_path, traces] : impl->by_index())
-        load_index_schemas(index_path);
+        if (auto loaded = load_index_schemas(index_path); !loaded)
+            return loaded.error();
     if (!impl->options.schema.empty()) {
-        const auto found = schema_by_id(impl->options.schema);
+        const auto found = get_schema(impl->options.schema);
         if (!found) return found.error();
     }
     return Indexer(std::move(impl));
@@ -437,7 +424,7 @@ coro::CoroTask<dstd::Result<dstd::Vector<FileManifest>>> Indexer::manifest(
                     : dstd::String{};
             const RecordSchema* rec_schema = nullptr;
             if (*recorded) {
-                const auto found = schema_by_id(id);
+                const auto found = get_schema(id);
                 if (!found) co_return found.error();
                 rec_schema = *found;
             }
@@ -498,7 +485,9 @@ coro::CoroTask<dstd::Result<dstd::Vector<FileExplain>>> Indexer::explain(
         const auto& snapshot = *opened;
         const duql::Query& q = *parsed;
         for (const auto* p : traces) {
-            auto e = plan::explain_file_chunks(snapshot, *p, q);
+            auto explained = plan::explain_file_chunks(snapshot, *p, q);
+            if (!explained) co_return explained.error();
+            auto& e = *explained;
             FileExplain f{*p,
                           e.indexed,
                           e.file_may_match,

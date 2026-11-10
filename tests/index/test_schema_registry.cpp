@@ -25,13 +25,12 @@ using namespace dftracer::utils;
 
 namespace {
 
-dstd::String error_of(const dstd::Function<void()>& fn) {
-    try {
-        fn();
-    } catch (const std::exception& e) {
-        return e.what();
-    }
-    return "no error";
+// The message of the error `fn` returns.
+template <typename Fn>
+dstd::String error_of(Fn&& fn) {
+    const auto result = fn();
+    if (result.has_value()) return "no error";
+    return dstd::String(result.error().message());
 }
 
 bool mentions(const dstd::String& text, const dstd::String& part) {
@@ -79,7 +78,7 @@ std::size_t count_rows(dstd::StringView trace, dstd::StringView index_dir,
 
 TEST_SUITE("SchemaRegistry") {
     TEST_CASE("a YAML spec declares typed fields and derives the rest") {
-        const auto& s = index::register_schema(
+        const auto& s = dftu_utils_test::ok_ref(index::register_schema(
             "id: yaml_a\n"
             "# Fields.\n"
             "fields:\n"
@@ -89,7 +88,7 @@ TEST_SUITE("SchemaRegistry") {
             "  host: {type: string, path: meta.host, optional: true}\n"
             "  upstream: {type: string, always_index: true}\n"
             "index: {path_budget: 8}\n",
-            "yaml_a.yaml");
+            "yaml_a.yaml"));
         CHECK(s.id == "yaml_a");
         CHECK(s.decoder == index::Decoder::Path);
         CHECK(s.require ==
@@ -103,22 +102,25 @@ TEST_SUITE("SchemaRegistry") {
         REQUIRE(s.field_at("meta.host") != nullptr);
         CHECK(s.field_at("meta.host")->name == "host");
         CHECK(s.path_budget == 8);
-        CHECK(&index::get_schema("yaml_a") == &s);
-        CHECK(s.params_hash() != index::get_schema("generic").params_hash());
+        CHECK(&dftu_utils_test::ok_ref(index::get_schema("yaml_a")) == &s);
+        CHECK(s.params_hash() !=
+              dftu_utils_test::ok_ref(index::get_schema("generic"))
+                  .params_hash());
     }
 
     TEST_CASE(
         "index.never_index is derived, hashed and refused where it "
         "conflicts") {
-        const auto& s = index::register_schema(
+        const auto& s = dftu_utils_test::ok_ref(index::register_schema(
             "id: yaml_never\n"
             "fields:\n"
             "  zz_nv_status: {type: int}\n"
             "index: {never_index: [zz_nv_z, zz_nv_blob, zz_nv_z]}\n",
-            "yaml_never.yaml");
+            "yaml_never.yaml"));
         CHECK(s.never_index ==
               dstd::Vector<dstd::String>{"zz_nv_blob", "zz_nv_z"});
-        CHECK(index::schemas_json().find("\"never_index\":[\"zz_nv_blob\"") !=
+        CHECK(dftu_utils_test::ok(index::schemas_json())
+                  .find("\"never_index\":[\"zz_nv_blob\"") !=
               dstd::String::npos);
         auto cfg = index::build::ChunkIndexerConfig{};
         cfg.extra_dimensions = {"zz_nv_blob", "zz_nv_status"};
@@ -129,15 +131,15 @@ TEST_SUITE("SchemaRegistry") {
         fewer.never_index.pop_back();
         CHECK(fewer.params_hash() != s.params_hash());
 
-        const auto& child = index::register_schema(
-            "id: yaml_never_child\nextends: yaml_never\n"
-            "index: {never_index: [zz_nv_a]}\n",
-            "yaml_never_child.yaml");
+        const auto& child = dftu_utils_test::ok_ref(
+            index::register_schema("id: yaml_never_child\nextends: yaml_never\n"
+                                   "index: {never_index: [zz_nv_a]}\n",
+                                   "yaml_never_child.yaml"));
         CHECK(child.never_index ==
               dstd::Vector<dstd::String>{"zz_nv_a", "zz_nv_blob", "zz_nv_z"});
 
         CHECK(mentions(error_of([] {
-                           index::register_schema(
+                           return index::register_schema(
                                "id: never_role\nfields: {x: {type: int, role: "
                                "entity}}\nindex: {never_index: [x]}\n",
                                "never_role.yaml");
@@ -145,34 +147,34 @@ TEST_SUITE("SchemaRegistry") {
                        "entity role"));
         CHECK(mentions(
             error_of([] {
-                index::register_schema(
+                return index::register_schema(
                     "id: never_always\nfields: {x: {type: string, "
                     "always_index: true}}\nindex: {never_index: [x]}\n",
                     "never_always.yaml");
             }),
             "always_index"));
         CHECK(mentions(error_of([] {
-                           index::register_schema(
+                           return index::register_schema(
                                "id: never_dft\nextends: dftracer\n"
                                "index: {never_index: [args.x]}\n",
                                "never_dft.yaml");
                        }),
                        "decodes records by path"));
         CHECK(mentions(error_of([] {
-                           index::register_schema(
+                           return index::register_schema(
                                "id: never_text\nindex: {never_index: abc}\n",
                                "never_text.yaml");
                        }),
                        "list of paths"));
         CHECK(
             mentions(error_of([] {
-                         index::register_schema(
+                         return index::register_schema(
                              "id: never_empty\nindex: {never_index: [\"\"]}\n",
                              "never_empty.yaml");
                      }),
                      "list of paths"));
         CHECK(mentions(error_of([] {
-                           index::register_schema(
+                           return index::register_schema(
                                "id: never_rowset\nfields: {y: {type: int}}\n"
                                "index: {never_index: [x]}\n"
                                "source: |\n  xs = where y > 0 | select x\n",
@@ -182,16 +184,16 @@ TEST_SUITE("SchemaRegistry") {
     }
 
     TEST_CASE("the genesis built-in never indexes its sketches") {
-        const auto& g = index::get_schema("genesis");
+        const auto& g = dftu_utils_test::ok_ref(index::get_schema("genesis"));
         CHECK(g.never_index ==
               dstd::Vector<dstd::String>{"dur.sketch", "v.sketch"});
     }
 
     TEST_CASE("index.stats_share and index.path_budget override the build") {
-        const auto& s = index::register_schema(
+        const auto& s = dftu_utils_test::ok_ref(index::register_schema(
             "id: yaml_share\nfields: {zz_probe_a: {type: int}}\n"
             "index: {stats_share: 0.2, path_budget: 50}\n",
-            "yaml_share.yaml");
+            "yaml_share.yaml"));
         REQUIRE(s.stats_share);
         CHECK(*s.stats_share == doctest::Approx(0.2));
         CHECK(s.path_budget == 50);
@@ -199,12 +201,12 @@ TEST_SUITE("SchemaRegistry") {
             index::build::for_schema(index::build::ChunkIndexerConfig{}, s);
         CHECK(cfg.stats_share == doctest::Approx(0.2));
         CHECK(cfg.path_budget == 50);
-        CHECK(index::schemas_json().find("\"stats_share\":0.2") !=
-              dstd::String::npos);
+        CHECK(dftu_utils_test::ok(index::schemas_json())
+                  .find("\"stats_share\":0.2") != dstd::String::npos);
 
-        const auto& unset = index::register_schema(
+        const auto& unset = dftu_utils_test::ok_ref(index::register_schema(
             "id: yaml_share_unset\nfields: {zz_probe_b: {type: int}}\n",
-            "yaml_share_unset.yaml");
+            "yaml_share_unset.yaml"));
         CHECK_FALSE(unset.stats_share);
         CHECK(
             index::build::for_schema(index::build::ChunkIndexerConfig{}, unset)
@@ -218,7 +220,8 @@ TEST_SUITE("SchemaRegistry") {
     }
 
     TEST_CASE("a built-in's hash changes only when it sets an override") {
-        const auto& dft = index::get_schema("dftracer");
+        const auto& dft =
+            dftu_utils_test::ok_ref(index::get_schema("dftracer"));
         REQUIRE(dft.builtin);
         CHECK_FALSE(dft.stats_share);
         CHECK_FALSE(dft.path_budget);
@@ -234,10 +237,10 @@ TEST_SUITE("SchemaRegistry") {
     }
 
     TEST_CASE("a JSON spec and a SchemaSpec reach the same schema") {
-        const auto& s = index::register_schema(
+        const auto& s = dftu_utils_test::ok_ref(index::register_schema(
             R"({"id":"json_a","fields":{"status":{"type":"int"},)"
             R"("upstream":{"type":"string","always_index":true}}})",
-            "json_a.json");
+            "json_a.json"));
         index::SchemaSpec spec;
         spec.id = "json_a";
         index::FieldSpec upstream;
@@ -248,20 +251,22 @@ TEST_SUITE("SchemaRegistry") {
         status.type = index::FieldType::Int;
         // Field order does not change the definition.
         spec.fields = {upstream, status};
-        CHECK(&index::register_schema(spec, "code") == &s);
+        CHECK(&dftu_utils_test::ok_ref(index::register_schema(spec, "code")) ==
+              &s);
         CHECK_FALSE(s.path_budget);
     }
 
     TEST_CASE("extending dftracer keeps its decoder, roles and source") {
-        const auto& s = index::register_schema(
+        const auto& s = dftu_utils_test::ok_ref(index::register_schema(
             "id: ext_dft\nextends: dftracer\n"
             "fields: {step: {type: int, path: args.step}}\n"
             "source: |\n"
             "  hosts = where name == \"HH\" | select hhash = args.value, "
             "fqdn = args.fqdn;\n"
             "  steps = where step > 0\n",
-            "ext_dft.yaml");
-        const auto& dft = index::get_schema("dftracer");
+            "ext_dft.yaml"));
+        const auto& dft =
+            dftu_utils_test::ok_ref(index::get_schema("dftracer"));
         CHECK(s.decoder == index::Decoder::Dftracer);
         CHECK(s.require ==
               dstd::Vector<dstd::String>{"ph", "name", "ts", "args.step"});
@@ -278,22 +283,22 @@ TEST_SUITE("SchemaRegistry") {
     }
 
     TEST_CASE("a child field of the same name replaces the parent's") {
-        index::register_schema(
+        dftu_utils_test::ok_ref(index::register_schema(
             "id: base_a\nfields: {lat_a: {type: float}, op_a: {type: "
             "string}}\n",
-            "base.yaml");
-        const auto& s = index::register_schema(
+            "base.yaml"));
+        const auto& s = dftu_utils_test::ok_ref(index::register_schema(
             "id: child_a\nextends: base_a\n"
             "fields: {lat_a: {type: float, optional: true}}\n",
-            "child.yaml");
+            "child.yaml"));
         CHECK(s.require == dstd::Vector<dstd::String>{"op_a"});
         CHECK(s.fields.size() == 2);
     }
 
     TEST_CASE("malformed specs name the source and the key") {
         auto reject = [](const char* text, const char* part) {
-            const auto what =
-                error_of([&] { index::register_schema(text, "bad.yaml"); });
+            const auto what = error_of(
+                [&] { return index::register_schema(text, "bad.yaml"); });
             CAPTURE(text);
             CAPTURE(what);
             CHECK(mentions(what, "bad.yaml"));
@@ -335,25 +340,26 @@ TEST_SUITE("SchemaRegistry") {
         reject("id: bad_h\nsource: \"a = where x >\"\n", "bad_h");
         reject("id: [unclosed\n", "bad.yaml");
         reject("id: generic\n", "cannot be redefined");
-        CHECK(index::find_schema("bad_a") == nullptr);
-        CHECK(index::find_schema("bad_b") == nullptr);
+        CHECK(dftu_utils_test::ok(index::find_schema("bad_a")) == nullptr);
+        CHECK(dftu_utils_test::ok(index::find_schema("bad_b")) == nullptr);
     }
 
     TEST_CASE("one id has one definition") {
-        const auto& first = index::register_schema(
-            "id: twice\nfields: {a: {type: int}}\n", "one.yaml");
-        CHECK(&index::register_schema("id: twice\nfields: {a: {type: int}}\n",
-                                      "again.yaml") == &first);
+        const auto& first = dftu_utils_test::ok_ref(index::register_schema(
+            "id: twice\nfields: {a: {type: int}}\n", "one.yaml"));
+        CHECK(&dftu_utils_test::ok_ref(index::register_schema(
+                  "id: twice\nfields: {a: {type: int}}\n", "again.yaml")) ==
+              &first);
         const auto what = error_of([] {
-            index::register_schema("id: twice\nfields: {a: {type: float}}\n",
-                                   "two.yaml");
+            return index::register_schema(
+                "id: twice\nfields: {a: {type: float}}\n", "two.yaml");
         });
         CHECK(mentions(what, "one.yaml"));
         CHECK(mentions(what, "two.yaml"));
     }
 
     TEST_CASE("an unknown id lists the registered ones and where they load") {
-        const auto what = error_of([] { index::get_schema("no_such"); });
+        const auto what = error_of([] { return index::get_schema("no_such"); });
         CHECK(mentions(what, "no_such"));
         CHECK(mentions(what, "dftracer"));
         CHECK(mentions(what, "DFTRACER_UTILS_SCHEMA_PATH"));
@@ -361,7 +367,8 @@ TEST_SUITE("SchemaRegistry") {
     }
 
     TEST_CASE("the built-ins are declared with fields") {
-        const auto& dft = index::get_schema("dftracer");
+        const auto& dft =
+            dftu_utils_test::ok_ref(index::get_schema("dftracer"));
         CHECK(dft.builtin);
         CHECK(dft.require == dstd::Vector<dstd::String>{"ph", "name", "ts"});
         CHECK(dft.roles.time == "ts");
@@ -369,14 +376,15 @@ TEST_SUITE("SchemaRegistry") {
         CHECK(dft.roles.entity == "pid");
         CHECK(dft.roles.phase == "ph");
         CHECK(dft.always_index.empty());
-        const auto& generic = index::get_schema("generic");
+        const auto& generic =
+            dftu_utils_test::ok_ref(index::get_schema("generic"));
         CHECK(generic.fields.empty());
         CHECK(generic.require.empty());
     }
 
     TEST_CASE(
         "the genesis built-in is path-decoded with a stored runs row set") {
-        const auto& g = index::get_schema("genesis");
+        const auto& g = dftu_utils_test::ok_ref(index::get_schema("genesis"));
         CHECK(g.builtin);
         CHECK(g.decoder == index::Decoder::Path);
         CHECK(g.require == dstd::Vector<dstd::String>{"gtype", "run"});
@@ -390,19 +398,24 @@ TEST_SUITE("SchemaRegistry") {
         for (int i = 0; i < 12; ++i)
             lines.push_back(
                 R"({"gtype":"func","run":"ab","path":"main;f","ts":1,"count":2})");
-        CHECK(index::detect_schema(lines).id == "genesis");
+        CHECK(dftu_utils_test::ok_ref(index::detect_schema(lines)).id ==
+              "genesis");
         const dstd::Vector<dstd::StringView> counters = {
             R"({"gtype":"counter","run":"ab","path":"main","metric":"m"})"};
-        CHECK(index::detect_schema(counters).id == "genesis");
+        CHECK(dftu_utils_test::ok_ref(index::detect_schema(counters)).id ==
+              "genesis");
         const dstd::Vector<dstd::StringView> dft = {
             R"({"id":1,"name":"read","cat":"POSIX","ph":"X","ts":1})"};
-        CHECK(index::detect_schema(dft).id == "dftracer");
+        CHECK(dftu_utils_test::ok_ref(index::detect_schema(dft)).id ==
+              "dftracer");
         const dstd::Vector<dstd::StringView> other = {
             R"({"kind":"x","id":"a"})"};
-        CHECK(index::detect_schema(other).id == "generic");
+        CHECK(dftu_utils_test::ok_ref(index::detect_schema(other)).id ==
+              "generic");
         const dstd::Vector<dstd::StringView> user = {
             R"({"type":"run","run":1})", R"({"type":"run","run":2})"};
-        CHECK(index::detect_schema(user).id == "generic");
+        CHECK(dftu_utils_test::ok_ref(index::detect_schema(user)).id ==
+              "generic");
     }
 
     TEST_CASE("a directory of specs loads once") {
@@ -416,45 +429,48 @@ TEST_SUITE("SchemaRegistry") {
             .discard();
         dstd::fs::write_file(dstd::PathView(dir + "/notes.txt"), "not a spec")
             .discard();
-        index::load_schemas(dir);
-        REQUIRE(index::find_schema("dir_b") != nullptr);
-        index::load_schemas(dir);
+        dftu_utils_test::ok(index::load_schemas(dir));
+        REQUIRE(dftu_utils_test::ok(index::find_schema("dir_b")) != nullptr);
+        dftu_utils_test::ok(index::load_schemas(dir));
 
         const auto bad = env.dir() + "/broken";
         REQUIRE(dstd::fs::create_directories(bad).has_value());
         dstd::fs::write_file(dstd::PathView(bad + "/c.yaml"),
                              "id: dir_c\nbogus: 1\n")
             .discard();
-        const auto what = error_of([&] { index::load_schemas(bad); });
+        const auto what = error_of([&] { return index::load_schemas(bad); });
         CHECK(mentions(what, "c.yaml"));
         CHECK(mentions(what, "bogus"));
     }
 
     TEST_CASE("detection picks a user schema and never one requiring nothing") {
-        index::register_schema(
+        dftu_utils_test::ok_ref(index::register_schema(
             "id: det_nginx\n"
             "fields: {status: {type: int}, request_time: {type: float}}\n",
-            "det.yaml");
-        index::register_schema("id: aaa_empty\n", "empty.yaml");
+            "det.yaml"));
+        dftu_utils_test::ok_ref(
+            index::register_schema("id: aaa_empty\n", "empty.yaml"));
         const dstd::Vector<dstd::StringView> nginx = {
             R"({"status":200,"request_time":0.5})",
             R"({"status":404,"request_time":1.5,"x":1})"};
         const dstd::Vector<dstd::StringView> plain = {R"({"op":"read"})"};
-        CHECK(index::detect_schema(nginx).id == "det_nginx");
-        CHECK(index::detect_schema(plain).id == "generic");
+        CHECK(dftu_utils_test::ok_ref(index::detect_schema(nginx)).id ==
+              "det_nginx");
+        CHECK(dftu_utils_test::ok_ref(index::detect_schema(plain)).id ==
+              "generic");
     }
 
     TEST_CASE("explain reports each schema's share and the choice") {
-        index::register_schema(
+        dftu_utils_test::ok_ref(index::register_schema(
             "id: exp_nginx\n"
             "fields: {status: {type: int}, request_time: {type: float}}\n",
-            "exp.yaml");
+            "exp.yaml"));
         dstd::Vector<dstd::StringView> lines;
         for (int i = 0; i < 8; ++i)
             lines.push_back(R"({"status":200,"request_time":0.5})");
         lines.push_back(R"({"status":200})");
         lines.push_back(R"({"op":"read"})");
-        const auto d = index::explain_schema(lines);
+        const auto d = dftu_utils_test::ok(index::explain_schema(lines));
         CHECK(d.objects == 10);
         CHECK(d.chosen->id == "generic");
         const auto it = std::find_if(d.scores.begin(), d.scores.end(),
@@ -553,7 +569,7 @@ TEST_SUITE("SchemaDetection") {
 
     static dstd::String chosen(const dstd::Vector<dstd::String>& lines) {
         dstd::Vector<dstd::StringView> views(lines.begin(), lines.end());
-        return index::detect_schema(views).id;
+        return dftu_utils_test::ok_ref(index::detect_schema(views)).id;
     }
 
     TEST_CASE("a corpus of JSON shapes is classified") {
@@ -619,7 +635,7 @@ TEST_SUITE("SchemaDetection") {
                          dstd::to_string(i) + "Z\"}");
         CHECK(chosen(gh) == "generic");
 
-        const auto none = index::explain_schema({});
+        const auto none = dftu_utils_test::ok(index::explain_schema({}));
         CHECK(none.chosen->id == "generic");
         CHECK(none.objects == 0);
         CHECK(none.records == 0);
@@ -628,7 +644,7 @@ TEST_SUITE("SchemaDetection") {
     TEST_CASE("user schemas: paths, ties and optional fields") {
         // Paths resolve as JsonValue::at: an array index and a flat dotted
         // key.
-        index::register_schema(
+        dftu_utils_test::ok_ref(index::register_schema(
             "id: det_otel\n"
             "fields:\n"
             "  trace_id: {type: string, path: traceId}\n"
@@ -636,7 +652,7 @@ TEST_SUITE("SchemaDetection") {
             "unit: ns}\n"
             "  attr: {type: string, path: attributes.0.key}\n"
             "  method: {type: string, path: http.method}\n",
-            "det_otel.yaml");
+            "det_otel.yaml"));
         dstd::Vector<dstd::String> otel;
         for (int i = 0; i < 10; ++i)
             otel.push_back(
@@ -648,11 +664,11 @@ TEST_SUITE("SchemaDetection") {
         CHECK(chosen(otel) == "generic");
 
         // As specific as dftracer: the user schema wins.
-        index::register_schema(
+        dftu_utils_test::ok_ref(index::register_schema(
             "id: det_tie\n"
             "fields: {ph: {type: string}, name: {type: string},\n"
             "  zz_tie: {type: int}}\n",
-            "det_tie.yaml");
+            "det_tie.yaml"));
         dstd::Vector<dstd::String> tie;
         for (int i = 0; i < 5; ++i)
             tie.push_back(R"({"ph":"X","name":"n","ts":1,"zz_tie":)" +
@@ -661,12 +677,12 @@ TEST_SUITE("SchemaDetection") {
 
         // Only optional fields: chosen by any declared path, never over a
         // schema with required paths.
-        index::register_schema(
+        dftu_utils_test::ok_ref(index::register_schema(
             "id: det_gh\n"
             "fields:\n"
             "  kind: {type: string, path: gh_type, optional: true}\n"
             "  login: {type: string, path: gh_actor.login, optional: true}\n",
-            "det_gh.yaml");
+            "det_gh.yaml"));
         dstd::Vector<dstd::String> gh;
         for (int i = 0; i < 10; ++i)
             gh.push_back(i % 2 ? R"({"gh_type":"PushEvent","id":1})"
@@ -678,25 +694,95 @@ TEST_SUITE("SchemaDetection") {
         CHECK(chosen(dft) == "dftracer");
     }
 
+    TEST_CASE("a trace that cannot be read is an Io error") {
+        dftu_utils_test::TestEnvironment env(1);
+        const dstd::String missing = env.dir() + "/missing.pfw";
+        dftu_utils_test::expect_error(index::explain_file_schema(missing),
+                                      common::ErrorCode::Io);
+        dftu_utils_test::expect_error(index::detect_file_schema(missing),
+                                      common::ErrorCode::Io);
+    }
+
+    TEST_CASE("a schema spec file that does not exist is an Io error") {
+        dftu_utils_test::TestEnvironment env(1);
+        const dstd::String missing = env.dir() + "/missing.yaml";
+        const auto loaded = index::load_schemas(missing);
+        REQUIRE_FALSE(loaded.has_value());
+        CHECK(loaded.error().is_code(common::ErrorCode::Io));
+    }
+
+    TEST_CASE("a data condition detection cannot evaluate is rejected") {
+        for (const char* text :
+             {"id: bad_data_def\nfields: {a: {type: int}}\n"
+              "source: \"def f(x) = x + 1; data = where f(a) > 2\"\n",
+              "id: bad_data_sub\nfields: {a: {type: int}}\n"
+              "source: \"data = where a in (from all | where a > 1)\"\n"}) {
+            const auto what =
+                error_of([&] { return index::register_schema(text, "bad"); });
+            CHECK(mentions(what, "data row set"));
+        }
+        CHECK(dftu_utils_test::ok(index::find_schema("bad_data_def")) ==
+              nullptr);
+        CHECK(dftu_utils_test::ok(index::find_schema("bad_data_sub")) ==
+              nullptr);
+    }
+
+    TEST_CASE("a failed environment load is reported by every reader") {
+        dftu_utils_test::TestEnvironment env(1);
+        const dstd::String dir = env.dir() + "/env_specs";
+        REQUIRE(dstd::fs::create_directories(dir).has_value());
+        dstd::fs::write_file(dstd::PathView(dir + "/a.yaml"),
+                             "id: env_broken\nbogus: 1\n")
+            .discard();
+        ::setenv("DFTRACER_UTILS_SCHEMA_PATH", dir.c_str(), 1);
+        ::setenv("DFTU_TEST_SCHEMA_DIR", dir.c_str(), 1);
+        auto result = fresh_process::run("environment schema load retries");
+        ::unsetenv("DFTRACER_UTILS_SCHEMA_PATH");
+        ::unsetenv("DFTU_TEST_SCHEMA_DIR");
+        CHECK(result.ok());
+    }
+
+    TEST_CASE("environment schema load retries" * doctest::skip()) {
+        fresh_process::announce();
+        const dstd::String dir = std::getenv("DFTU_TEST_SCHEMA_DIR");
+        const auto invalid = common::ErrorCode::InvalidArgument;
+        dftu_utils_test::expect_error(index::registered_schemas(), invalid);
+        dftu_utils_test::expect_error(index::find_schema("generic"), invalid);
+        dftu_utils_test::expect_error(index::schemas_json(), invalid);
+        dftu_utils_test::expect_error(index::get_schema("generic"), invalid);
+        dftu_utils_test::expect_error(index::explain_schema({}), invalid);
+        dftu_utils_test::expect_error(
+            index::explain_file_schema(dir + "/a.yaml"), invalid);
+        dftu_utils_test::expect_error(
+            index::detect_file_schema(dir + "/a.yaml"), invalid);
+        dstd::fs::write_file(dstd::PathView(dir + "/a.yaml"),
+                             "id: env_fixed\nfields: {a: {type: int}}\n")
+            .discard();
+        CHECK(dftu_utils_test::ok(index::schemas_json()).find("env_fixed") !=
+              dstd::String::npos);
+        CHECK(dftu_utils_test::ok(index::find_schema("env_fixed")) != nullptr);
+    }
+
     TEST_CASE("files: edges of the sample") {
         dftu_utils_test::TestEnvironment env(1);
 
         const auto empty = write_file(env, "empty.pfw", "", false);
-        auto d = index::explain_file_schema(empty);
+        auto d = dftu_utils_test::ok(index::explain_file_schema(empty));
         CHECK(d.chosen->id == "generic");
         CHECK(d.objects == 0);
         CHECK(d.records == 0);
-        CHECK(index::detect_file_schema(
-                  write_file(env, "bracket.pfw", "[\n", true))
+        CHECK(dftu_utils_test::ok_ref(index::detect_file_schema(write_file(
+                                          env, "bracket.pfw", "[\n", true)))
                   .id == "generic");
 
         // One line, no trailing newline, plain and gzip.
-        CHECK(index::detect_file_schema(
-                  write_file(env, "one.pfw", dft_event(1), false))
+        CHECK(dftu_utils_test::ok_ref(index::detect_file_schema(write_file(
+                                          env, "one.pfw", dft_event(1), false)))
                   .id == "dftracer");
-        CHECK(index::detect_file_schema(
-                  write_file(env, "one_gz.pfw", dft_event(1), true))
-                  .id == "dftracer");
+        CHECK(
+            dftu_utils_test::ok_ref(index::detect_file_schema(write_file(
+                                        env, "one_gz.pfw", dft_event(1), true)))
+                .id == "dftracer");
 
         // A first record past the 16 MiB text cap is read whole.
         dstd::String big =
@@ -704,7 +790,8 @@ TEST_SUITE("SchemaDetection") {
             R"("tid":2,"ts":1,"dur":5,"ph":"X","args":{"blob":")";
         big.append(17u * 1024 * 1024, 'x');
         big += "\"}}\n" + dft_event(2) + "\n";
-        CHECK(index::detect_file_schema(write_file(env, "big.pfw", big, true))
+        CHECK(dftu_utils_test::ok_ref(index::detect_file_schema(write_file(
+                                          env, "big.pfw", big, true)))
                   .id == "dftracer");
 
         // Genesis behind 1500 run lines, past the sample count.
@@ -712,14 +799,16 @@ TEST_SUITE("SchemaDetection") {
         for (int i = 0; i < 1500; ++i)
             gen += R"({"gtype":"run","run":"r)" + dstd::to_string(i) + "\"}\n";
         for (int i = 0; i < 20; ++i) gen += genesis_record(i) + "\n";
-        d = index::explain_file_schema(write_file(env, "gen.pfw", gen, true));
+        d = dftu_utils_test::ok(
+            index::explain_file_schema(write_file(env, "gen.pfw", gen, true)));
         CHECK(d.chosen->id == "genesis");
         CHECK(d.records == 20);
 
         // Only metadata: dftracer, with no records to vote with.
         dstd::String meta;
         for (int i = 0; i < 10; ++i) meta += hash_line("HH", i) + "\n";
-        d = index::explain_file_schema(write_file(env, "meta.pfw", meta, true));
+        d = dftu_utils_test::ok(index::explain_file_schema(
+            write_file(env, "meta.pfw", meta, true)));
         CHECK(d.chosen->id == "dftracer");
         CHECK(d.records == 0);
     }
@@ -730,12 +819,14 @@ TEST_SUITE("SchemaDetection") {
         dstd::fs::write_file(dstd::PathView(path),
                              common::str_cat(R"({"k":1})", "\n"))
             .discard();
-        CHECK(index::detect_file_schema(path).id == "generic");
+        CHECK(dftu_utils_test::ok_ref(index::detect_file_schema(path)).id ==
+              "generic");
         dstd::fs::write_file(
             dstd::PathView(path),
             common::str_cat(dft_event(1), "\n", dft_event(2), "\n"))
             .discard();
-        CHECK(index::detect_file_schema(path).id == "dftracer");
+        CHECK(dftu_utils_test::ok_ref(index::detect_file_schema(path)).id ==
+              "dftracer");
     }
 
     TEST_CASE("built-in sources equal their previous literals") {
@@ -752,7 +843,7 @@ runs = where gtype == "run" | select run, app, system, unique_input, nodes, ppn,
         for (const auto& [id, old] :
              {dstd::Pair<dstd::String, dstd::String>{"dftracer", dft_old},
               dstd::Pair<dstd::String, dstd::String>{"genesis", genesis_old}}) {
-            const auto& s = index::get_schema(id);
+            const auto& s = dftu_utils_test::ok_ref(index::get_schema(id));
             CHECK(s.source ==
                   dftu_utils_test::ok(index::merge_source({}, old, id)));
             index::RecordSchema before = s;

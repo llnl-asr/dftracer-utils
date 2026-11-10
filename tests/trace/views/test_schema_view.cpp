@@ -64,7 +64,7 @@ dstd::String write_log(TestEnvironment& env) {
 }
 
 void register_log_schema() {
-    dftracer::utils::index::register_schema(
+    dftu_utils_test::ok_ref(dftracer::utils::index::register_schema(
         "id: sv_log\n"
         "fields:\n"
         "  op: {type: string}\n"
@@ -74,7 +74,7 @@ void register_log_schema() {
         "  status: {type: int, optional: true}\n"
         "  tags: {type: json, optional: true}\n"
         "  host: {type: string, path: meta.host, optional: true}\n",
-        "test_schema_view");
+        "test_schema_view"));
 }
 
 View view_of(const dstd::String& gz) {

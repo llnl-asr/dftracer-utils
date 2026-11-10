@@ -244,14 +244,14 @@ TEST_SUITE("viz_refused") {
     }
 
     TEST_CASE("a record schema serves a record the DOM parser refuses") {
-        index::register_schema(R"(id: viz_refused_log
+        dftu_utils_test::ok_ref(index::register_schema(R"(id: viz_refused_log
 fields:
   t: {type: float, role: time, unit: s}
   took: {type: float, role: duration, unit: s}
   client: {type: string, role: entity}
   req: {type: string}
 )",
-                               "test_viz_refused");
+                                                       "test_viz_refused"));
         dstd::String t;
         constexpr double T0 = 1700000000.5;
         const char* const EXTRA[] = {"1e400", "\"a\\qb\"",

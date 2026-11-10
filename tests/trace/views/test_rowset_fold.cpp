@@ -129,26 +129,28 @@ bool interned(const dstd::StringIntern& intern, dstd::StringView text) {
 TEST_SUITE("RowSetFold") {
     TEST_CASE("the built-in sources index their lookup row sets") {
         dstd::Vector<dstd::String> names;
-        for (const auto& r :
-             index::indexed_rowsets(index::get_schema("dftracer")))
+        for (const auto& r : index::indexed_rowsets(
+                 dftu_utils_test::ok_ref(index::get_schema("dftracer"))))
             names.emplace_back(r.name);
         CHECK(names ==
               dstd::Vector<dstd::String>{"files", "hosts", "strings", "ranks"});
         names.clear();
-        for (const auto& r :
-             index::indexed_rowsets(index::get_schema("genesis")))
+        for (const auto& r : index::indexed_rowsets(
+                 dftu_utils_test::ok_ref(index::get_schema("genesis"))))
             names.emplace_back(r.name);
         CHECK(names.back() == "runs");
-        CHECK(index::indexed_rowsets(index::get_schema("generic")).empty());
+        CHECK(index::indexed_rowsets(
+                  dftu_utils_test::ok_ref(index::get_schema("generic")))
+                  .empty());
     }
 
     TEST_CASE("a row set that aggregates or reads another is not indexed") {
-        const auto& s = index::register_schema(
+        const auto& s = dftu_utils_test::ok_ref(index::register_schema(
             "id: rs_mixed\nsource: |\n"
             "  big = where x > 1 | select x, y;\n"
             "  counts = where x > 1 | group y { n = count() };\n"
             "  keyed = where y in (from big | select y)\n",
-            "test");
+            "test"));
         dstd::Vector<dstd::String> names;
         for (const auto& r : index::indexed_rowsets(s))
             names.emplace_back(r.name);
@@ -228,8 +230,8 @@ TEST_SUITE("RowSetFold") {
         auto lines = trace_lines();
         lines.push_back(lines[0]);
         auto events = fold_events_of(lines, intern);
-        RowSetFold fold(intern,
-                        index::indexed_rowsets(index::get_schema("dftracer")));
+        RowSetFold fold(intern, index::indexed_rowsets(dftu_utils_test::ok_ref(
+                                    index::get_schema("dftracer"))));
         ScanUnit unit;
         unit.file_path = "x";
         for (int i = 0; i < 2; ++i) {
@@ -243,8 +245,10 @@ TEST_SUITE("RowSetFold") {
     TEST_CASE("a fold over budget keeps no rows") {
         dstd::StringIntern intern;
         auto events = fold_events_of(trace_lines(), intern);
-        RowSetFold fold(
-            intern, index::indexed_rowsets(index::get_schema("dftracer")), 16);
+        RowSetFold fold(intern,
+                        index::indexed_rowsets(dftu_utils_test::ok_ref(
+                            index::get_schema("dftracer"))),
+                        16);
         ScanUnit unit;
         unit.file_path = "x";
         dftu_utils_test::ok(
@@ -257,8 +261,8 @@ TEST_SUITE("RowSetFold") {
     TEST_CASE("a dropped unit leaves no rows") {
         dstd::StringIntern intern;
         auto events = fold_events_of(trace_lines(), intern);
-        RowSetFold fold(intern,
-                        index::indexed_rowsets(index::get_schema("dftracer")));
+        RowSetFold fold(intern, index::indexed_rowsets(dftu_utils_test::ok_ref(
+                                    index::get_schema("dftracer"))));
         ScanUnit unit;
         unit.file_path = "x";
         dftu_utils_test::ok(
@@ -275,7 +279,8 @@ TEST_SUITE("RowSetFold") {
         const dstd::String line =
             R"({"gtype":"func","run":"ab","path":"main;f","ts":1,)"
             R"("dur":{"sketch":"UNIQUE_SKETCH_BLOB","count":2}})";
-        const auto& genesis = index::get_schema("genesis");
+        const auto& genesis =
+            dftu_utils_test::ok_ref(index::get_schema("genesis"));
         for (const bool skip : {true, false}) {
             CAPTURE(skip);
             dstd::StringIntern intern;

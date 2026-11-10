@@ -11,7 +11,6 @@
 
 #include <cstdlib>
 #include <cstring>
-#include <exception>
 #include <utility>
 
 using namespace dftracer::utils;
@@ -42,25 +41,6 @@ dftu_error fill_error(dstd::String& storage, Condition condition,
     storage = std::move(message);
     return dftu_error{domain, code, static_cast<std::int32_t>(condition),
                       storage.c_str()};
-}
-
-dftu_error current_error(dstd::String& storage) {
-    try {
-        throw;
-    } catch (const dftracer::utils::common::DFTUtilsException& e) {
-        return fill_error(storage, e.condition(), e.domain(), e.code_int(),
-                          e.what());
-    } catch (const std::exception& e) {
-        return fill_error(storage, Condition::Internal,
-                          dftracer::utils::dstd::CORE_ERROR_DOMAIN.id,
-                          static_cast<std::int32_t>(Condition::Internal),
-                          e.what());
-    } catch (...) {
-        return fill_error(storage, Condition::Internal,
-                          dftracer::utils::dstd::CORE_ERROR_DOMAIN.id,
-                          static_cast<std::int32_t>(Condition::Internal),
-                          "unknown error");
-    }
 }
 
 dftu_error to_c_error(dstd::String& storage, const dstd::Error& error) {
@@ -129,12 +109,13 @@ dftu_indexer_status_result status_call(dftu_indexer* ix, Fn fn) {
 template <class Fn>
 dftu_indexer_string_result schema_call(Fn fn) {
     dftu_indexer_string_result r{};
-    try {
-        r.u.value = copy_c_string(fn());
-        r.ok = 1;
-    } catch (...) {
-        r.u.err = current_error(t_schema_error);
+    const dstd::Result<dstd::String> text = fn();
+    if (!text) {
+        r.u.err = to_c_error(t_schema_error, text.error());
+        return r;
     }
+    r.u.value = copy_c_string(*text);
+    r.ok = 1;
     return r;
 }
 
@@ -238,19 +219,12 @@ dftu_indexer_open_result dftu_indexer_open(
                 opts.extensions.emplace_back(options->extensions[i]);
             }
         }
-        // load_index_schemas still throws.
-        dstd::Optional<dstd::Result<Indexer>> opened;
-        try {
-            opened.emplace(Indexer::open(std::move(list), std::move(opts)));
-        } catch (...) {
-            r.u.err = current_error(t_handle_free_error);
+        auto opened = Indexer::open(std::move(list), std::move(opts));
+        if (!opened) {
+            r.u.err = to_c_error(t_handle_free_error, opened.error());
             return r;
         }
-        if (!*opened) {
-            r.u.err = to_c_error(t_handle_free_error, opened->error());
-            return r;
-        }
-        r.u.value = new dftu_indexer{{}, std::move(**opened), {}};
+        r.u.value = new dftu_indexer{{}, std::move(*opened), {}};
         r.ok = 1;
     }
     return r;
@@ -359,36 +333,45 @@ void dftu_indexer_file_list_free(dftu_indexer_file_list* list) { delete list; }
 dftu_indexer_string_result dftu_schema_register(const char* text,
                                                 const char* source) {
     if (!text) return null_argument("text is NULL");
-    return schema_call([&] {
-        return dftracer::utils::index::register_schema(
-                   text, source ? source : "<text>")
-            .id;
+    return schema_call([&]() -> dstd::Result<dstd::String> {
+        const auto registered = dftracer::utils::index::register_schema(
+            text, source ? source : "<text>");
+        if (!registered) return registered.error();
+        return (*registered)->id;
     });
 }
 
 dftu_indexer_string_result dftu_schema_load(const char* path) {
     if (!path) return null_argument("path is NULL");
-    return schema_call([&] {
-        dftracer::utils::index::load_schemas(path);
+    return schema_call([&]() -> dstd::Result<dstd::String> {
+        const auto loaded = dftracer::utils::index::load_schemas(path);
+        if (!loaded) return loaded.error();
         return dftracer::utils::index::schemas_json();
     });
 }
 
 dftu_indexer_string_result dftu_schema_list(void) {
-    return schema_call([] { return dftracer::utils::index::schemas_json(); });
+    return schema_call([]() -> dstd::Result<dstd::String> {
+        return dftracer::utils::index::schemas_json();
+    });
 }
 
 dftu_indexer_string_result dftu_schema_detect(const char* path) {
     if (!path) return null_argument("path is NULL");
-    return schema_call(
-        [&] { return dftracer::utils::index::detect_file_schema(path).id; });
+    return schema_call([&]() -> dstd::Result<dstd::String> {
+        const auto detected = dftracer::utils::index::detect_file_schema(path);
+        if (!detected) return detected.error();
+        return (*detected)->id;
+    });
 }
 
 dftu_indexer_string_result dftu_schema_explain(const char* path) {
     if (!path) return null_argument("path is NULL");
-    return schema_call([&] {
-        return dftracer::utils::index::to_json(
-            dftracer::utils::index::explain_file_schema(path));
+    return schema_call([&]() -> dstd::Result<dstd::String> {
+        const auto explained =
+            dftracer::utils::index::explain_file_schema(path);
+        if (!explained) return explained.error();
+        return dftracer::utils::index::to_json(*explained);
     });
 }
 

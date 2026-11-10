@@ -6,6 +6,7 @@
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/schema_class.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 
@@ -53,7 +54,8 @@ struct ClassTimed {
 
 TEST_SUITE("SchemaClass") {
     TEST_CASE("a class and the equal YAML spec are one definition") {
-        const auto& s = index::register_schema<ClassNginx>("test_schema_class");
+        const auto& s = dftu_utils_test::ok_ref(
+            index::register_schema<ClassNginx>("test_schema_class"));
         CHECK(s.id == "class_nginx");
         CHECK(s.require ==
               dstd::Vector<dstd::String>{"status", "request_time", "upstream"});
@@ -64,7 +66,7 @@ TEST_SUITE("SchemaClass") {
         REQUIRE(s.field_at("tags") != nullptr);
         CHECK(s.field_at("tags")->type == index::FieldType::Json);
         CHECK(s.field_at("meta.host")->optional);
-        CHECK(&index::register_schema(
+        CHECK(&dftu_utils_test::ok_ref(index::register_schema(
                   "id: class_nginx\n"
                   "fields:\n"
                   "  tags: {type: json, optional: true}\n"
@@ -72,11 +74,12 @@ TEST_SUITE("SchemaClass") {
                   "  meta.host: {type: string, optional: true}\n"
                   "  request_time: {type: float, role: duration, unit: s}\n"
                   "  status: {type: int}\n",
-                  "yaml") == &s);
+                  "yaml")) == &s);
     }
 
     TEST_CASE("a class extends another schema") {
-        const auto& s = index::register_schema<ClassStep>("test_schema_class");
+        const auto& s = dftu_utils_test::ok_ref(
+            index::register_schema<ClassStep>("test_schema_class"));
         CHECK(s.decoder == index::Decoder::Dftracer);
         CHECK(s.require ==
               dstd::Vector<dstd::String>{"ph", "name", "ts", "args.step"});
@@ -99,7 +102,8 @@ TEST_SUITE("SchemaClass") {
     TEST_CASE("a class declares its source") {
         CHECK(index::schema_spec<ClassWeb>().source ==
               "errors = where status >= 500; def slow(t) = latency > t");
-        const auto& s = index::register_schema<ClassWeb>("test_schema_class");
+        const auto& s = dftu_utils_test::ok_ref(
+            index::register_schema<ClassWeb>("test_schema_class"));
         CHECK(s.source ==
               "errors = where status >= 500;\ndef slow(t) = latency > t");
     }

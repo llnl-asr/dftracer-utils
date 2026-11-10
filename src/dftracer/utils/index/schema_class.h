@@ -208,10 +208,10 @@ SchemaSpec schema_spec() {
     return spec;
 }
 
-/// Registers schema class `T` (see schema_spec) under `source`; throws as
+/// Registers schema class `T` (see schema_spec) under `source`; the result of
 /// register_schema(const SchemaSpec&, dstd::StringView).
 template <typename T>
-const RecordSchema& register_schema(dstd::StringView source) {
+dstd::Result<const RecordSchema*> register_schema(dstd::StringView source) {
     return register_schema(schema_spec<T>(), source);
 }
 

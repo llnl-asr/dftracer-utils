@@ -861,7 +861,7 @@ namespace {
 template <class Fn>
 PyObject* schema_str(Fn fn) {
     try {
-        const auto s = fn();
+        const auto s = dftracer::utils::common::unwrap(fn());
         return PyUnicode_FromStringAndSize(s.data(),
                                            static_cast<Py_ssize_t>(s.size()));
     } catch (const std::exception& e) {
@@ -874,38 +874,55 @@ PyObject* schema_register_fn(PyObject*, PyObject* args) {
     const char* text = nullptr;
     const char* source = "<text>";
     if (!PyArg_ParseTuple(args, "s|s", &text, &source)) return nullptr;
-    return schema_str([&] {
-        return dftracer::utils::index::register_schema(text, source).id;
-    });
+    return schema_str(
+        [&]() -> dftracer::utils::dstd::Result<dftracer::utils::dstd::String> {
+            const auto registered =
+                dftracer::utils::index::register_schema(text, source);
+            if (!registered) return registered.error();
+            return (*registered)->id;
+        });
 }
 
 PyObject* schema_load_fn(PyObject*, PyObject* args) {
     const char* path = nullptr;
     if (!PyArg_ParseTuple(args, "s", &path)) return nullptr;
-    return schema_str([&] {
-        dftracer::utils::index::load_schemas(path);
-        return dftracer::utils::index::schemas_json();
-    });
+    return schema_str(
+        [&]() -> dftracer::utils::dstd::Result<dftracer::utils::dstd::String> {
+            const auto loaded = dftracer::utils::index::load_schemas(path);
+            if (!loaded) return loaded.error();
+            return dftracer::utils::index::schemas_json();
+        });
 }
 
 PyObject* schema_list_fn(PyObject*, PyObject*) {
-    return schema_str([] { return dftracer::utils::index::schemas_json(); });
+    return schema_str(
+        []() -> dftracer::utils::dstd::Result<dftracer::utils::dstd::String> {
+            return dftracer::utils::index::schemas_json();
+        });
 }
 
 PyObject* schema_detect_fn(PyObject*, PyObject* args) {
     const char* path = nullptr;
     if (!PyArg_ParseTuple(args, "s", &path)) return nullptr;
     return schema_str(
-        [&] { return dftracer::utils::index::detect_file_schema(path).id; });
+        [&]() -> dftracer::utils::dstd::Result<dftracer::utils::dstd::String> {
+            const auto detected =
+                dftracer::utils::index::detect_file_schema(path);
+            if (!detected) return detected.error();
+            return (*detected)->id;
+        });
 }
 
 PyObject* schema_explain_fn(PyObject*, PyObject* args) {
     const char* path = nullptr;
     if (!PyArg_ParseTuple(args, "s", &path)) return nullptr;
-    return schema_str([&] {
-        return dftracer::utils::index::to_json(
-            dftracer::utils::index::explain_file_schema(path));
-    });
+    return schema_str(
+        [&]() -> dftracer::utils::dstd::Result<dftracer::utils::dstd::String> {
+            const auto explained =
+                dftracer::utils::index::explain_file_schema(path);
+            if (!explained) return explained.error();
+            return dftracer::utils::index::to_json(*explained);
+        });
 }
 
 PyMethodDef SCHEMA_METHODS[] = {

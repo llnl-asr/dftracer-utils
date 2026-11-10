@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -65,6 +66,12 @@ class Reads {
     dstd::Optional<index::Snapshot> owned_;
 };
 
+dstd::Unexpected<dstd::Error> read_failed(const dstd::String& file_path,
+                                          const dstd::Error& error) {
+    return common::make_error<"prune_file: index read failed for {}: {}">(
+        common::ErrorCode::Indexer, file_path, error.message());
+}
+
 coro::CoroTask<dstd::Result<PruneResult>> prune_data(
     const PruneRequest& request, Reads& reads) {
     PruneResult result;
@@ -73,10 +80,14 @@ coro::CoroTask<dstd::Result<PruneResult>> prune_data(
         ChunkPruner pruner;
         // A temporary built inside the co_await expression is destroyed
         // twice by GCC 12, so the input is a named local.
+        const auto snapshot = reads.get();
+        if (!snapshot) co_return snapshot.error();
         const ChunkPrunerInput input{request.index_path, request.file_path,
-                                     *request.query,
-                                     common::unwrap(reads.get())};
-        auto out = co_await pruner(input);
+                                     *request.query, *snapshot};
+        auto pruning = pruner(input);
+        auto pruned = co_await std::move(pruning);
+        if (!pruned) co_return pruned.error();
+        auto& out = *pruned;
         if (out.success) {
             result.total_chunks = out.total_checkpoints;
             if (!out.file_may_match && out.candidate_checkpoints.empty()) {
@@ -99,27 +110,31 @@ coro::CoroTask<dstd::Result<PruneResult>> prune_data(
     dstd::HashMap<std::uint64_t, dstd::Pair<std::uint64_t, std::uint64_t>>
         bounds;
     dstd::HashSet<std::uint64_t> no_starts;
-    try {
-        const index::Snapshot& snapshot = *common::unwrap(reads.get());
+    {
+        const auto taken = reads.get();
+        if (!taken) co_return read_failed(request.file_path, taken.error());
+        const index::Snapshot& snapshot = **taken;
         const auto file =
             snapshot.file(store::internal::get_logical_path(request.file_path));
         if (!file) co_return result;
-        bounds = common::unwrap(
+        auto read_bounds =
             request.by_start
                 ? index::extensions::kinds::chunk_start_bounds(snapshot, *file)
-                : index::extensions::kinds::chunk_time_bounds(snapshot, *file));
+                : index::extensions::kinds::chunk_time_bounds(snapshot, *file);
+        if (!read_bounds)
+            co_return read_failed(request.file_path, read_bounds.error());
+        bounds = std::move(*read_bounds);
         // Whole bins round the window outward, so a zero is exact.
-        if (request.by_start)
-            no_starts =
-                common::unwrap(index::extensions::kinds::chunks_without_starts(
-                    snapshot, *file,
-                    static_cast<std::uint64_t>(std::max(0.0, begin)),
-                    end > 0 ? static_cast<std::uint64_t>(std::ceil(end))
-                            : std::numeric_limits<std::uint64_t>::max()));
-    } catch (const std::exception& e) {
-        co_return common::make_error(common::ErrorCode::Indexer,
-                                     "prune_file: index read failed for " +
-                                         request.file_path + ": " + e.what());
+        if (request.by_start) {
+            auto read_starts = index::extensions::kinds::chunks_without_starts(
+                snapshot, *file,
+                static_cast<std::uint64_t>(std::max(0.0, begin)),
+                end > 0 ? static_cast<std::uint64_t>(std::ceil(end))
+                        : std::numeric_limits<std::uint64_t>::max());
+            if (!read_starts)
+                co_return read_failed(request.file_path, read_starts.error());
+            no_starts = std::move(*read_starts);
+        }
     }
 
     if (result.all_chunks) {
@@ -161,16 +176,15 @@ coro::CoroTask<dstd::Result<PruneResult>> prune_chunks(
     // whose records are asked for, or every chunk without evidence.
     dstd::Optional<dstd::HashMap<std::uint64_t, store::ChunkMetadata>> meta;
     if (!request.index_path.empty()) {
-        try {
-            const index::Snapshot& snapshot = *common::unwrap(reads.get());
-            if (const auto file = snapshot.file(
-                    store::internal::get_logical_path(request.file_path)))
-                meta = common::unwrap(index::chunk_meta(snapshot, *file));
-        } catch (const std::exception& e) {
-            co_return common::make_error(common::ErrorCode::Indexer,
-                                         "prune_file: index read failed for " +
-                                             request.file_path + ": " +
-                                             e.what());
+        const auto taken = reads.get();
+        if (!taken) co_return read_failed(request.file_path, taken.error());
+        const index::Snapshot& snapshot = **taken;
+        if (const auto file = snapshot.file(
+                store::internal::get_logical_path(request.file_path))) {
+            auto read_meta = index::chunk_meta(snapshot, *file);
+            if (!read_meta)
+                co_return read_failed(request.file_path, read_meta.error());
+            meta = std::move(*read_meta);
         }
     }
     if (!meta) co_return PruneResult{};
@@ -229,21 +243,19 @@ coro::CoroTask<dstd::Result<PruneResult>> prune_file(PruneRequest request) {
     if (!pruned || pruned->all_chunks || pruned->candidates.empty() ||
         request.index_path.empty() || pruned->candidates.back() == 0)
         co_return pruned;
-    try {
-        const index::Snapshot& snapshot = *common::unwrap(reads.get());
-        const auto file =
-            snapshot.file(store::internal::get_logical_path(request.file_path));
-        if (file) {
-            const auto meta =
-                common::unwrap(index::file_metadata(snapshot, *file));
-            if (meta && meta->has_mid_line_chunk)
-                add_line_starts(pruned->candidates,
-                                common::unwrap(index::spans(snapshot, *file)));
+    const auto taken = reads.get();
+    if (!taken) co_return read_failed(request.file_path, taken.error());
+    const index::Snapshot& snapshot = **taken;
+    const auto file =
+        snapshot.file(store::internal::get_logical_path(request.file_path));
+    if (file) {
+        const auto meta = index::file_metadata(snapshot, *file);
+        if (!meta) co_return read_failed(request.file_path, meta.error());
+        if (*meta && (*meta)->has_mid_line_chunk) {
+            const auto spans = index::spans(snapshot, *file);
+            if (!spans) co_return read_failed(request.file_path, spans.error());
+            add_line_starts(pruned->candidates, *spans);
         }
-    } catch (const std::exception& e) {
-        co_return common::make_error(common::ErrorCode::Indexer,
-                                     "prune_file: index read failed for " +
-                                         request.file_path + ": " + e.what());
     }
     co_return pruned;
 }

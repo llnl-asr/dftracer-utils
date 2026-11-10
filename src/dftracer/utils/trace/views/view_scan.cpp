@@ -61,7 +61,8 @@ const dftracer::utils::index::RecordSchema& plan_record_schema(
         files.push_back({dstd::String(dstd::StringView(f.file_path)),
                          dstd::String(dstd::StringView(f.index_path)),
                          f.fd.get()});
-    const index::RecordSchema* found = &index::plan::files_schema(files);
+    const index::RecordSchema* found =
+        common::unwrap(index::plan::files_schema(files));
     // Registered record_schemas live until the process exits, so the pointer
     // never dangles.
     plan.record_schema = dstd::SharedPtr<const index::RecordSchema>(

@@ -320,6 +320,25 @@ static coro::CoroTask<void> parse_and_write_worker(
                 pf.file_hash = index::store::internal::calculate_file_hash(
                     *input_fd, pf.file_size);
                 job.identity = pf;
+                const auto s0 = std::chrono::steady_clock::now();
+                const auto schema_found =
+                    admission->schema.empty()
+                        ? index::detect_file_schema(pf.file_path, *input_fd,
+                                                    pf.file_size,
+                                                    pf.file_mtime_ns)
+                        : index::get_schema(admission->schema);
+                writer->metrics->schema_ns.fetch_add(
+                    static_cast<std::uint64_t>(
+                        std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            std::chrono::steady_clock::now() - s0)
+                            .count()),
+                    std::memory_order_relaxed);
+                if (!schema_found) {
+                    result.error_message =
+                        dstd::String(schema_found.error().message());
+                    break;
+                }
+                const index::RecordSchema& schema = **schema_found;
                 // The build exists before the folds, so one that spills
                 // writes its runs into the file it is parsing.
                 auto started = writer->index->build(
@@ -332,20 +351,6 @@ static coro::CoroTask<void> parse_and_write_worker(
                 } else {
                     build.emplace(std::move(*started));
                     index::gzip::CheckpointIndexer::VisitorList visitors;
-                    const auto s0 = std::chrono::steady_clock::now();
-                    const index::RecordSchema& schema =
-                        admission->schema.empty()
-                            ? index::detect_file_schema(pf.file_path, *input_fd,
-                                                        pf.file_size,
-                                                        pf.file_mtime_ns)
-                            : index::get_schema(admission->schema);
-                    writer->metrics->schema_ns.fetch_add(
-                        static_cast<std::uint64_t>(
-                            std::chrono::duration_cast<
-                                std::chrono::nanoseconds>(
-                                std::chrono::steady_clock::now() - s0)
-                                .count()),
-                        std::memory_order_relaxed);
                     job.schema = &schema;
                     const auto file_config =
                         index::build::for_schema(bloom_config, schema);
@@ -611,7 +616,13 @@ static coro::CoroTask<void> run_streaming_pipeline(BatchWriteState* state) {
     auto writer_metrics = dstd::make_shared<index::build::BatchWriterMetrics>();
 
     // A lookup per file stalled a build on Lustre for minutes.
-    index::load_index_schemas(state->index_path);
+    if (auto loaded = index::load_index_schemas(state->index_path); !loaded) {
+        for (auto& result : *state->results) {
+            result.success = false;
+            result.error_message = dstd::String(loaded.error().message());
+        }
+        co_return;
+    }
     auto writer_index =
         index::Index::open(index::normalize_index_root(state->index_path));
     if (!writer_index) {

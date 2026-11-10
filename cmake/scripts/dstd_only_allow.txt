@@ -54,7 +54,7 @@ tests/runtime/test_task_pool.cpp | set, thread, vector | a dstd container or thr
 
 
 # Edges to a library that takes std types.
-src/dftracer/utils/index/record_schema.cpp | string | yaml-cpp converts to std::string
+src/dftracer/utils/index/record_schema_yaml.cpp | string | yaml-cpp converts to std::string
 src/dftracer/utils/utilities/dlio/trace_loader.cpp | string | yaml-cpp converts to std::string
 include/dftracer/utils/dataframe/agg.h | unique_ptr | dstd::UniquePtr takes no custom deleter and AggState is incomplete
 tests/common/test_memory_report.cpp | string | fresh_process::Result holds a std::string

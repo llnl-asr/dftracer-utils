@@ -113,7 +113,9 @@ dstd::Result<bool> schema_current(const Snapshot& snapshot, const FileRef& file,
     if (!*recorded) return false;
     const dstd::String id((*recorded)->data(), (*recorded)->size());
     if (!wanted.empty() && id != wanted) return false;
-    const RecordSchema* schema = find_schema(id);
+    const auto found = find_schema(id);
+    if (!found) return found.error();
+    const RecordSchema* schema = *found;
     if (!schema) return false;
     const auto state =
         index::extension_state(snapshot, file, IndexExtension::Profile);
@@ -265,14 +267,16 @@ dstd::Result<FileDecision> decide(const Snapshot& snapshot,
     if (!recorded) return recorded.error();
     if (*recorded) d.schema.assign((*recorded)->data(), (*recorded)->size());
     bool needs_agg = false;
-    if (find_schema(d.schema)) {
+    const auto schema_found = find_schema(d.schema);
+    if (!schema_found) return schema_found.error();
+    if (*schema_found) {
         d.agg_candidate = true;
         d.agg_current = agg_current(snapshot, *file, params);
         needs_agg = !d.agg_current;
     }
     if (input.require_bloom) {
-        auto tier = stale_tier(snapshot, *file, input.bloom_config,
-                               find_schema(d.schema));
+        auto tier =
+            stale_tier(snapshot, *file, input.bloom_config, *schema_found);
         if (!tier) return tier.error();
         d.tier = *tier;
         if (!d.tier.empty()) {
@@ -387,7 +391,10 @@ dstd::Result<void> decide_group(ResolveGroupInput& input,
 dstd::Result<ResolveGroupOutput> resolve_group_sync(ResolveGroupInput input) {
     ResolveGroupOutput result;
     result.index_path = input.index_path;
-    if (!input.index_path.empty()) load_index_schemas(input.index_path);
+    if (!input.index_path.empty()) {
+        if (auto loaded = load_index_schemas(input.index_path); !loaded)
+            return loaded.error();
+    }
 
     bool has_store = false;
     if (!input.index_path.empty()) {

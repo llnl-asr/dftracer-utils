@@ -67,7 +67,8 @@ fields:
 
 void register_schemas() {
     for (const char* spec : {WEBLOG_SCHEMA, OTEL_SCHEMA, TWIN_SCHEMA})
-        index::register_schema(spec, "test_viz_schema");
+        dftu_utils_test::ok_ref(
+            index::register_schema(spec, "test_viz_schema"));
 }
 
 void write_gz(const dstd::Path& path, const dstd::String& content) {

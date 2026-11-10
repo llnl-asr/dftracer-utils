@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
@@ -77,18 +78,21 @@ struct ChunkExplanation {
     dstd::Vector<ByExtension> by_extension;
 };
 
-/// Explains the pruning of `file_path` for `query`. Throws on an index read
-/// error, where @ref ChunkPruner assumes a match.
-ChunkExplanation explain_file_chunks(const index::Snapshot& snapshot,
-                                     const dstd::String& file_path,
-                                     const Query& query);
+/// Explains the pruning of `file_path` for `query`. An error when the index
+/// cannot be read or holds corrupt evidence, as @ref ChunkPruner returns one.
+dstd::Result<ChunkExplanation> explain_file_chunks(
+    const index::Snapshot& snapshot, const dstd::String& file_path,
+    const Query& query);
 
 /// Chunk pruner over the index's pruning kinds (bloom, postings, counts,
 /// zonemap). Walks the Query AST (AND intersects, OR unions, NOT keeps the
 /// chunks where not every record is proven to match).
 class ChunkPruner {
    public:
-    coro::CoroTask<ChunkPrunerOutput> operator()(const ChunkPrunerInput& input);
+    /// An error when the index cannot be opened or read, or holds corrupt
+    /// evidence, or `query` compares `ts` with a string that is no integer.
+    coro::CoroTask<dstd::Result<ChunkPrunerOutput>> operator()(
+        const ChunkPrunerInput& input);
 
     /// Prune many files against the same index with one snapshot.
     dstd::Result<ChunkPrunerBatchOutput> process_batch(

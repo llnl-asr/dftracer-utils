@@ -25,6 +25,12 @@ typename std::remove_cvref_t<R>::value_type ok(R&& result) {
     }
 }
 
+// The object a Result of a non-null pointer points to.
+template <typename R>
+auto& ok_ref(R&& result) {
+    return *ok(std::forward<R>(result));
+}
+
 // Checks that a Result is an error of the given code, and when `text` is not
 // null that its message is exactly `text`.
 template <typename R>

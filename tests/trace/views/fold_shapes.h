@@ -10,6 +10,7 @@
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <simdjson.h>
+#include <task_result.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -551,7 +552,8 @@ inline const char* const PATH_LINES[] = {
 /// once.
 inline const dftracer::utils::index::RecordSchema& path_schema() {
     static const dftracer::utils::index::RecordSchema& schema =
-        dftracer::utils::index::register_schema(R"(
+        dftu_utils_test::ok_ref(
+            dftracer::utils::index::register_schema(R"(
 id: fold_shapes_path
 fields:
   ts: {type: int, role: time, unit: us}
@@ -576,7 +578,7 @@ fields:
 index:
   never_index: [secret, io.len, args.d]
 )",
-                                                "test");
+                                                    "test"));
     return schema;
 }
 

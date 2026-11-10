@@ -542,7 +542,7 @@ coro::CoroTask<void> TraceIndex::initialize() {
     dstd::Vector<std::size_t> large_files;
     dstd::Vector<const dftracer::utils::index::RecordSchema*> file_schemas(
         entries.size(), nullptr);
-    record_schema_ = nullptr;
+    record_schema_ = common::unwrap(index::get_schema("dftracer"));
 
     // The reuse decision below is existence-only, so a changed .pfw would be
     // served from a stale index. Drop any (shared) index root whose sources
@@ -732,15 +732,16 @@ coro::CoroTask<void> TraceIndex::initialize() {
                                             index::store::internal::
                                                 get_logical_path(info->path));
                                         if (file) {
-                                            index::load_index_schemas(
-                                                info->index_path);
-                                            const auto* schema =
+                                            common::unwrap(
+                                                index::load_index_schemas(
+                                                    info->index_path));
+                                            const auto* schema = common::unwrap(
                                                 index::plan::recorded_schema(
-                                                    snapshot, info->path);
+                                                    snapshot, info->path));
                                             if (!schema)
-                                                schema =
-                                                    &index::detect_file_schema(
-                                                        info->path);
+                                                schema = common::unwrap(
+                                                    index::detect_file_schema(
+                                                        info->path));
                                             (*schemas_ptr)[fi] = schema;
                                             auto bounds = timeline_bounds(
                                                 snapshot, *file, *schema);
@@ -839,8 +840,8 @@ coro::CoroTask<void> TraceIndex::initialize() {
                 sources.push_back(
                     {dstd::String(dstd::StringView(f.path)),
                      dstd::String(dstd::StringView(f.index_path))});
-            record_schema_ =
-                &dftracer::utils::index::plan::files_schema(sources);
+            record_schema_ = common::unwrap(
+                dftracer::utils::index::plan::files_schema(sources));
             for (std::size_t i = 0; i < files_.size(); ++i) {
                 const auto* schema = file_schemas[i];
                 if (schema && schema->id != record_schema_->id)

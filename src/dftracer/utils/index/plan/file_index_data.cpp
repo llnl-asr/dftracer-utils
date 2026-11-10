@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -36,8 +35,13 @@ bool FileIndexData::current(IndexExtension ext) {
 const FileIndexData::Catalog& FileIndexData::catalog() {
     if (!catalog_) {
         catalog_.emplace();
-        if (current(IndexExtension::Catalog))
-            *catalog_ = common::unwrap(index::catalog(*snapshot, *file));
+        if (current(IndexExtension::Catalog)) {
+            auto listed = index::catalog(*snapshot, *file);
+            if (listed)
+                *catalog_ = std::move(*listed);
+            else
+                fail(std::move(listed).error());
+        }
     }
     return *catalog_;
 }
@@ -77,11 +81,17 @@ const FileIndexData::Zones& FileIndexData::zones(const dstd::String& path) {
     if (it != zones_.end()) return it->second;
     auto& out = zones_[path];
     const auto& name = evidence_name(path);
-    if (name && current(IndexExtension::Zonemap))
-        for (auto& [granule, bytes] : common::unwrap(index::granules(
-                 *snapshot, *file, IndexExtension::Zonemap, *name)))
+    if (name && current(IndexExtension::Zonemap)) {
+        auto listed =
+            index::granules(*snapshot, *file, IndexExtension::Zonemap, *name);
+        if (!listed) {
+            fail(std::move(listed).error());
+            return out;
+        }
+        for (auto& [granule, bytes] : *listed)
             if (auto zone = index::extensions::kinds::decode_zone(bytes))
                 out.emplace(granule, std::move(*zone));
+    }
     return out;
 }
 
@@ -90,15 +100,21 @@ const FileIndexData::Counts& FileIndexData::counts(const dstd::String& path) {
     if (it != counts_.end()) return it->second;
     auto& out = counts_[path];
     const auto& name = evidence_name(path);
-    if (name && current(IndexExtension::Counts))
-        for (auto& [granule, bytes] : common::unwrap(index::granules(
-                 *snapshot, *file, IndexExtension::Counts, *name))) {
+    if (name && current(IndexExtension::Counts)) {
+        auto listed =
+            index::granules(*snapshot, *file, IndexExtension::Counts, *name);
+        if (!listed) {
+            fail(std::move(listed).error());
+            return out;
+        }
+        for (auto& [granule, bytes] : *listed) {
             auto counts = index::extensions::kinds::decode_counts(bytes);
             if (!counts || !counts->compressed) continue;
             auto& g = out[granule];
             g.observed = counts->observed;
             g.compressed = std::move(*counts->compressed);
         }
+    }
     return out;
 }
 
@@ -107,11 +123,17 @@ const FileIndexData::Blooms& FileIndexData::blooms(const dstd::String& path) {
     if (it != blooms_.end()) return it->second;
     auto& out = blooms_[path];
     const auto& name = evidence_name(path);
-    if (name && current(IndexExtension::Bloom))
-        for (auto& [granule, bytes] : common::unwrap(index::granules(
-                 *snapshot, *file, IndexExtension::Bloom, *name)))
+    if (name && current(IndexExtension::Bloom)) {
+        auto listed =
+            index::granules(*snapshot, *file, IndexExtension::Bloom, *name);
+        if (!listed) {
+            fail(std::move(listed).error());
+            return out;
+        }
+        for (auto& [granule, bytes] : *listed)
             if (auto bloom = index::extensions::kinds::decode_bloom(bytes))
                 out.emplace(granule, std::move(*bloom));
+    }
     return out;
 }
 
@@ -121,10 +143,14 @@ const index::extensions::ScalableBloomFilter* FileIndexData::file_bloom(
     if (it == file_blooms_.end()) {
         dstd::Optional<index::extensions::ScalableBloomFilter> bloom;
         const auto& name = evidence_name(path);
-        if (name && current(IndexExtension::Bloom))
-            if (auto bytes = common::unwrap(index::path_file(
-                    *snapshot, *file, IndexExtension::Bloom, *name)))
-                bloom = index::extensions::kinds::decode_bloom(*bytes);
+        if (name && current(IndexExtension::Bloom)) {
+            auto bytes = index::path_file(*snapshot, *file,
+                                          IndexExtension::Bloom, *name);
+            if (!bytes)
+                fail(std::move(bytes).error());
+            else if (*bytes)
+                bloom = index::extensions::kinds::decode_bloom(**bytes);
+        }
         it = file_blooms_.emplace(path, std::move(bloom)).first;
     }
     return it->second ? &*it->second : nullptr;
@@ -137,11 +163,15 @@ const dstd::Set<std::uint64_t>& FileIndexData::posting_chunks(
     if (it != posting_chunks_.end()) return it->second;
     auto& out = posting_chunks_[key];
     const auto& name = evidence_name(path);
-    if (name && current(IndexExtension::Postings))
-        for (auto g : common::unwrap(index::posting_granules(
-                 *snapshot, *file, *name,
-                 index::extensions::kinds::value_hash(val))))
-            out.insert(g);
+    if (name && current(IndexExtension::Postings)) {
+        auto granules = index::posting_granules(
+            *snapshot, *file, *name, index::extensions::kinds::value_hash(val));
+        if (!granules) {
+            fail(std::move(granules).error());
+            return out;
+        }
+        for (auto g : *granules) out.insert(g);
+    }
     return out;
 }
 
@@ -150,19 +180,26 @@ dstd::Optional<bool> FileIndexData::posting_contains(const dstd::String& path,
     const auto& name = evidence_name(path);
     if (!name || !current(IndexExtension::Postings)) return dstd::nullopt;
     auto has = has_postings_.find(path);
-    if (has == has_postings_.end())
-        has = has_postings_
-                  .emplace(path, common::unwrap(index::has_postings(
-                                     *snapshot, *file, *name)))
-                  .first;
+    if (has == has_postings_.end()) {
+        const auto found = index::has_postings(*snapshot, *file, *name);
+        if (!found.has_value()) {
+            fail(found.error());
+            return dstd::nullopt;
+        }
+        has = has_postings_.emplace(path, *found).first;
+    }
     if (!has->second) return dstd::nullopt;
     auto key = path + '\0' + val;
     auto it = posting_membership_.find(key);
     if (it != posting_membership_.end()) return it->second;
-    const bool present = common::unwrap(index::has_posting(
-        *snapshot, *file, *name, index::extensions::kinds::value_hash(val)));
-    posting_membership_.emplace(key, present);
-    return present;
+    const auto present = index::has_posting(
+        *snapshot, *file, *name, index::extensions::kinds::value_hash(val));
+    if (!present.has_value()) {
+        fail(present.error());
+        return dstd::nullopt;
+    }
+    posting_membership_.emplace(key, *present);
+    return *present;
 }
 
 }  // namespace dftracer::utils::index::plan

@@ -356,6 +356,51 @@ def test_schema_path_environment_and_spec_edits(tmp_path):
     assert "env_nginx" in out and "DFTRACER_UTILS_SCHEMA_PATH" in out
 
 
+@pytest.mark.parametrize(
+    "source",
+    [
+        "def f(x) = x + 1; data = where f(a) > 2",
+        "data = where a in (from all | where a > 1)",
+    ],
+)
+def test_data_condition_detection_cannot_evaluate_is_rejected(source):
+    with pytest.raises(dftu.DFTUtilsValueError, match="data row set"):
+        schemas.register(
+            {
+                "id": "py_bad_data",
+                "fields": {"a": {"type": "int"}},
+                "source": source,
+            }
+        )
+    assert "py_bad_data" not in [s["id"] for s in schemas.list()]
+
+
+def test_failed_schema_path_load_is_reported_and_retried(tmp_path):
+    trace = _nginx(str(tmp_path / "access.ndjson.gz"))
+    spec_dir = tmp_path / "env_specs"
+    spec_dir.mkdir()
+    spec = spec_dir / "broken.yaml"
+    spec.write_text("id: env_broken\nbogus: 1\n")
+    code = f"""
+        import dftracer.utils as d
+        for call in (d.schemas.list, lambda: d.schemas.detect({trace!r}),
+                     lambda: d.schemas.explain({trace!r})):
+            try:
+                call()
+            except d.DFTUtilsValueError as e:
+                assert "bogus" in str(e), e
+            else:
+                raise SystemExit("no error")
+        open({str(spec)!r}, "w").write("id: env_fixed\\nfields: {{status: {{type: int}}}}\\n")
+        assert "env_fixed" in [s["id"] for s in d.schemas.list()]
+        d.schemas.detect({trace!r})
+        print("retried")
+    """
+    code, out = _run(code, {"DFTRACER_UTILS_SCHEMA_PATH": str(spec_dir)})
+    assert code == 0, out
+    assert "retried" in out
+
+
 def test_old_locations_are_not_read(tmp_path):
     trace = _nginx(str(tmp_path / "access.ndjson.gz"))
     old = tmp_path / "old"

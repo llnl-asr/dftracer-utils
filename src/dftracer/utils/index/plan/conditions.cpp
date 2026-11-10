@@ -78,18 +78,23 @@ bool is_range_op(duql::CompareOp op) {
 }
 
 // Bounds of a zone that can be trusted: both present and, for numbers,
-// min <= max. Corrupt stats would silently drop matching events.
-bool trusted_bounds(const Zone& z, bool need_both) {
+// min <= max. Corrupt stats would silently drop matching events, so bounds
+// that are not numbers also fail `data`.
+bool trusted_bounds(FileIndexData& data, const Zone& z, bool need_both) {
     if (need_both ? (z.min.empty() || z.max.empty())
                   : (z.min.empty() && z.max.empty()))
         return false;
     if (is_numeric_type(z.value_type) && !z.min.empty() && !z.max.empty()) {
         const auto lo = dstd::from_chars<double>(z.min);
         const auto hi = dstd::from_chars<double>(z.max);
-        if (!lo || !hi)
-            throw common::DFTUtilsException::cat(
-                common::ErrorCode::Indexer, "corrupt zone map: bounds [", z.min,
-                ", ", z.max, "] of a ", z.value_type, " zone are not numbers");
+        if (!lo || !hi) {
+            data.fail(common::make_error<
+                          "corrupt zone map: bounds [{}, {}] of a {} zone are "
+                          "not numbers">(common::ErrorCode::Indexer, z.min,
+                                         z.max, z.value_type)
+                          .error());
+            return false;
+        }
         if (*lo > *hi) return false;
     }
     return true;
@@ -99,21 +104,23 @@ bool trusted_bounds(const Zone& z, bool need_both) {
 // non-negative integer (a fraction, a negative number) leaves it out. A string
 // that is not an integer is a malformed query.
 dstd::Optional<std::uint64_t> timestamp_bound(
-    const dstd::String& text, const duql::detail::CompareNode& n) {
+    FileIndexData& data, const dstd::String& text,
+    const duql::detail::CompareNode& n) {
     std::uint64_t out = 0;
     const char* end = text.data() + text.size();
     const auto parsed = dstd::from_chars(text.data(), end, out);
     if (parsed.ec == std::errc{} && parsed.ptr == end) return out;
     if (std::holds_alternative<dstd::String>(n.value.value))
-        throw common::DFTUtilsException::cat(
-            common::ErrorCode::InvalidArgument, "ts compared with \"", text,
-            "\", which is not an integer timestamp");
+        data.fail(common::make_error<
+                      "ts compared with \"{}\", which is not an integer "
+                      "timestamp">(common::ErrorCode::InvalidArgument, text)
+                      .error());
     return dstd::nullopt;
 }
 
-bool zone_may_match(const Zone& z, duql::CompareOp op,
+bool zone_may_match(FileIndexData& data, const Zone& z, duql::CompareOp op,
                     const dstd::String& val) {
-    if (!trusted_bounds(z, false)) return true;
+    if (!trusted_bounds(data, z, false)) return true;
     switch (op) {
         case duql::CompareOp::Gt:
             return compare_values(z.max, val, z.value_type) > 0;
@@ -129,9 +136,9 @@ bool zone_may_match(const Zone& z, duql::CompareOp op,
 }
 
 // The dual of zone_may_match: every value in the zone satisfies `op val`.
-bool zone_all_match(const Zone& z, duql::CompareOp op,
+bool zone_all_match(FileIndexData& data, const Zone& z, duql::CompareOp op,
                     const dstd::String& val) {
-    if (!trusted_bounds(z, true)) return false;
+    if (!trusted_bounds(data, z, true)) return false;
     switch (op) {
         case duql::CompareOp::Gt:
             return compare_values(z.min, val, z.value_type) > 0;
@@ -669,7 +676,7 @@ class Zonemap final : public Condition {
         const auto val = literal_to_string(n->value);
         dstd::Optional<std::uint64_t> ts_val;
         if (!d_.by_path && n->field.path == "ts" && is_range_op(n->op))
-            ts_val = timestamp_bound(val, *n);
+            ts_val = timestamp_bound(d_, val, *n);
         ChunkSet out;
         for (auto ckpt : candidates) {
             auto it = zones.find(ckpt);
@@ -681,9 +688,9 @@ class Zonemap final : public Condition {
             if (absent(z)) continue;
             const bool in_range =
                 bounds_equality
-                    ? zone_may_match(z, duql::CompareOp::Ge, val) &&
-                          zone_may_match(z, duql::CompareOp::Le, val)
-                    : zone_may_match(z, n->op, val);
+                    ? zone_may_match(d_, z, duql::CompareOp::Ge, val) &&
+                          zone_may_match(d_, z, duql::CompareOp::Le, val)
+                    : zone_may_match(d_, z, n->op, val);
             if (!in_range) continue;
             if (ts_val && !histogram_has_events(z, n->op, *ts_val)) continue;
             out.insert(ckpt);
@@ -699,7 +706,7 @@ class Zonemap final : public Condition {
         ChunkSet out;
         for (const auto& [ckpt, z] : d_.zones(dstd::String(n->field.path)))
             if (covers_every_line(d_, ckpt, z.observed, z.present) &&
-                zone_all_match(z, n->op, val))
+                zone_all_match(d_, z, n->op, val))
                 out.insert(ckpt);
         return out;
     }
@@ -724,8 +731,8 @@ class Zonemap final : public Condition {
             }
             if (absent(it->second)) continue;
             for (const auto& v : vals)
-                if (zone_may_match(it->second, duql::CompareOp::Ge, v) &&
-                    zone_may_match(it->second, duql::CompareOp::Le, v)) {
+                if (zone_may_match(d_, it->second, duql::CompareOp::Ge, v) &&
+                    zone_may_match(d_, it->second, duql::CompareOp::Le, v)) {
                     out.insert(ckpt);
                     break;
                 }
@@ -979,8 +986,12 @@ class PluginCondition final : public Condition {
     bool file_may_match(const duql::detail::QueryNode& root) override {
         if (!ext_->vt.file_may_match) return true;
         if (!file_loaded_) {
-            file_ = common::unwrap(
-                index::plugin_file(*d_.snapshot, *d_.file, ext_->name));
+            auto loaded =
+                index::plugin_file(*d_.snapshot, *d_.file, ext_->name);
+            if (loaded)
+                file_ = std::move(*loaded);
+            else
+                d_.fail(std::move(loaded).error());
             file_loaded_ = true;
         }
         return !file_ || may_match_file(root);
@@ -992,10 +1003,12 @@ class PluginCondition final : public Condition {
         if (!h) return dstd::nullopt;
         if (!granules_) {
             granules_.emplace();
-            auto listed = common::unwrap(
-                index::plugin_granules(*d_.snapshot, *d_.file, ext_->name));
-            if (listed)
-                for (auto& [g, bytes] : *listed)
+            auto listed =
+                index::plugin_granules(*d_.snapshot, *d_.file, ext_->name);
+            if (!listed)
+                d_.fail(std::move(listed).error());
+            else if (*listed)
+                for (auto& [g, bytes] : **listed)
                     granules_->emplace(g, std::move(bytes));
         }
         ChunkSet out;
@@ -1099,10 +1112,13 @@ Conditions make_query_conditions(FileIndexData& data) {
     cs.push_back(dstd::make_unique<ChunkBloom>(data));
     auto registered = index::extensions::plugin_extensions();
     if (registered.empty()) return cs;
-    const auto copies =
-        common::unwrap(index::plugins(*data.snapshot, *data.file));
+    const auto copies = index::plugins(*data.snapshot, *data.file);
+    if (!copies) {
+        data.fail(copies.error());
+        return cs;
+    }
     for (auto& ext : registered) {
-        for (const auto& copy : copies) {
+        for (const auto& copy : *copies) {
             if (dstd::StringView(copy.name) != ext->name) continue;
             const store::ExtensionState state{copy.version, copy.params_hash,
                                               copy.ready};

@@ -21,16 +21,22 @@ using index::store::internal::get_logical_path;
 
 namespace {
 
-bool indexed_by_path(const Snapshot& snapshot, const FileRef& file) {
-    const auto id = common::unwrap(index::schema(snapshot, file));
-    const RecordSchema* schema = id ? find_schema(*id) : nullptr;
-    return schema && schema->decoder == Decoder::Path;
+dstd::Result<bool> indexed_by_path(const Snapshot& snapshot,
+                                   const FileRef& file) {
+    const auto id = index::schema(snapshot, file);
+    if (!id) return id.error();
+    if (!*id) return false;
+    const auto schema = find_schema(**id);
+    if (!schema) return schema.error();
+    return *schema && (*schema)->decoder == Decoder::Path;
 }
 
 // Chunk i is gzip member i; every member is a candidate until a Condition
 // rules it out, whether or not the index holds data for it.
-void load_chunks(FileIndexData& ctx) {
-    const auto spans = common::unwrap(index::spans(*ctx.snapshot, *ctx.file));
+dstd::Result<void> load_chunks(FileIndexData& ctx) {
+    const auto loaded = index::spans(*ctx.snapshot, *ctx.file);
+    if (!loaded) return loaded.error();
+    const auto& spans = *loaded;
     ctx.total_chunks = spans.size();
     for (std::uint64_t i = 0; i < spans.size(); ++i) {
         ctx.all_chunks.insert(ctx.all_chunks.end(), i);
@@ -39,6 +45,7 @@ void load_chunks(FileIndexData& ctx) {
             ctx.chunk_lines[i] =
                 spans[i].last_line_num - spans[i].first_line_num + 1;
     }
+    return {};
 }
 
 // Array positions an any() leaf is expanded over, per file; wider arrays keep
@@ -55,15 +62,16 @@ using Positions = dstd::HashMap<dstd::String, dstd::Vector<dstd::String>>;
 
 // For each any() path, the catalog paths `<path>.<k>` in position order
 // (`args.<path>.<k>` for a dftracer arg written without the prefix).
-Positions any_positions(const Snapshot& snapshot, const FileRef& file,
-                        const Query& query) {
+dstd::Result<Positions> any_positions(const Snapshot& snapshot,
+                                      const FileRef& file, const Query& query) {
     Positions out;
     dstd::Vector<dstd::Pair<std::uint64_t, dstd::String>> found;
-    const auto catalog = common::unwrap(index::catalog(snapshot, file));
+    const auto listed = index::catalog(snapshot, file);
+    if (!listed) return listed.error();
     for (const dstd::String& path : query.any_paths()) {
         found.clear();
         for (const dstd::String& base : {path, "args." + path}) {
-            for (const auto& [p, stat] : catalog) {
+            for (const auto& [p, stat] : *listed) {
                 if (p.size() <= base.size() + 1 || !p.starts_with(base) ||
                     p[base.size()] != '.')
                     continue;
@@ -138,44 +146,54 @@ duql::detail::QueryNodePtr expand(const duql::detail::QueryNode& node,
 // The query with every any() leaf replaced by the OR of the leaf on each
 // array position the file's catalog holds, which matches exactly the same
 // records; nullopt when the query has no any() leaf.
-dstd::Optional<Query> expand_any(const Snapshot& snapshot, const FileRef& file,
-                                 const Query& query) {
-    if (query.any_paths().empty()) return dstd::nullopt;
+dstd::Result<dstd::Optional<Query>> expand_any(const Snapshot& snapshot,
+                                               const FileRef& file,
+                                               const Query& query) {
+    if (query.any_paths().empty()) return dstd::Optional<Query>();
+    const auto positions = any_positions(snapshot, file, query);
+    if (!positions) return positions.error();
     duql::detail::QueryNodePtr root =
-        expand(duql::detail::QueryAccess::root(query),
-               any_positions(snapshot, file, query));
-    return duql::detail::QueryAccess::from_node(std::move(root));
+        expand(duql::detail::QueryAccess::root(query), *positions);
+    return dstd::Optional<Query>(
+        duql::detail::QueryAccess::from_node(std::move(root)));
 }
 
-ChunkPrunerOutput prune_file_chunks(const Snapshot& snapshot,
-                                    const dstd::String& file_path,
-                                    const Query& query_in) {
+dstd::Result<ChunkPrunerOutput> prune_file_chunks(const Snapshot& snapshot,
+                                                  const dstd::String& file_path,
+                                                  const Query& query_in) {
     ChunkPrunerOutput out;
     const auto file = snapshot.file(get_logical_path(file_path));
     out.success = true;
     out.file_may_match = true;
     if (!file) return out;
 
-    const dstd::Optional<Query> expanded =
-        expand_any(snapshot, *file, query_in);
-    const Query& query = expanded ? *expanded : query_in;
+    const auto expanded = expand_any(snapshot, *file, query_in);
+    if (!expanded) return expanded.error();
+    const Query& query = *expanded ? **expanded : query_in;
 
     FileIndexData ctx;
     ctx.snapshot = &snapshot;
     ctx.file = &*file;
-    ctx.by_path = indexed_by_path(snapshot, *file);
+    const auto by_path = indexed_by_path(snapshot, *file);
+    if (!by_path.has_value()) return by_path.error();
+    ctx.by_path = *by_path;
     auto conds = make_query_conditions(ctx);
     if (!file_may_match(duql::detail::QueryAccess::root(query), conds)) {
+        if (ctx.error) return std::move(*ctx.error);
         out.file_may_match = false;
         return out;
     }
 
-    load_chunks(ctx);
+    if (auto loaded = load_chunks(ctx); !loaded) return loaded.error();
     out.total_checkpoints = ctx.total_chunks;
-    if (ctx.all_chunks.empty()) return out;
+    if (ctx.all_chunks.empty()) {
+        if (ctx.error) return std::move(*ctx.error);
+        return out;
+    }
 
     auto candidates =
         evaluate(duql::detail::QueryAccess::root(query), conds, ctx.all_chunks);
+    if (ctx.error) return std::move(*ctx.error);
     out.candidate_checkpoints.assign(candidates.begin(), candidates.end());
     out.file_may_match = !out.candidate_checkpoints.empty();
     return out;
@@ -203,23 +221,25 @@ ChunkExplanation::ByExtension explain_alone(const Query& query,
 
 }  // namespace
 
-ChunkExplanation explain_file_chunks(const Snapshot& snapshot,
-                                     const dstd::String& file_path,
-                                     const Query& query_in) {
+dstd::Result<ChunkExplanation> explain_file_chunks(
+    const Snapshot& snapshot, const dstd::String& file_path,
+    const Query& query_in) {
     ChunkExplanation out;
     const auto file = snapshot.file(get_logical_path(file_path));
     if (!file) return out;
     out.indexed = true;
-    const dstd::Optional<Query> expanded =
-        expand_any(snapshot, *file, query_in);
-    const Query& query = expanded ? *expanded : query_in;
+    const auto expanded = expand_any(snapshot, *file, query_in);
+    if (!expanded) return expanded.error();
+    const Query& query = *expanded ? **expanded : query_in;
 
     FileIndexData ctx;
     ctx.snapshot = &snapshot;
     ctx.file = &*file;
-    ctx.by_path = indexed_by_path(snapshot, *file);
+    const auto by_path = indexed_by_path(snapshot, *file);
+    if (!by_path.has_value()) return by_path.error();
+    ctx.by_path = *by_path;
     auto conds = make_query_conditions(ctx);
-    load_chunks(ctx);
+    if (auto loaded = load_chunks(ctx); !loaded) return loaded.error();
     out.total_chunks = ctx.total_chunks;
 
     out.file_may_match =
@@ -230,6 +250,7 @@ ChunkExplanation explain_file_chunks(const Snapshot& snapshot,
         out.read.assign(read.begin(), read.end());
         out.file_may_match = ctx.all_chunks.empty() || !out.read.empty();
     }
+    if (ctx.error) return std::move(*ctx.error);
 
     for (auto ext : index::store::ALL_EXTENSIONS) {
         if (!index::store::PRUNING_EXTENSIONS.has(ext) ||
@@ -254,13 +275,15 @@ ChunkExplanation explain_file_chunks(const Snapshot& snapshot,
     return out;
 }
 
-coro::CoroTask<ChunkPrunerOutput> ChunkPruner::operator()(
+coro::CoroTask<dstd::Result<ChunkPrunerOutput>> ChunkPruner::operator()(
     const ChunkPrunerInput& input) {
     DFTRACER_UTILS_TRACE_SCOPE("prune chunks");
     dstd::Optional<Snapshot> owned;
     const Snapshot* snapshot = input.snapshot;
     if (!snapshot) {
-        owned.emplace(common::unwrap(open_snapshot(input.index_path)));
+        auto opened = open_snapshot(input.index_path);
+        if (!opened) co_return opened.error();
+        owned.emplace(std::move(*opened));
         snapshot = &*owned;
     }
     co_return prune_file_chunks(*snapshot, input.file_path, input.query);
@@ -269,21 +292,23 @@ coro::CoroTask<ChunkPrunerOutput> ChunkPruner::operator()(
 dstd::Result<ChunkPrunerBatchOutput> ChunkPruner::process_batch(
     const ChunkPrunerBatchInput& input) {
     ChunkPrunerBatchOutput batch_out;
-    try {
-        dstd::Optional<Snapshot> owned;
-        const Snapshot* snapshot = input.snapshot;
-        if (!snapshot) {
-            owned.emplace(common::unwrap(open_snapshot(input.index_path)));
-            snapshot = &*owned;
-        }
-        batch_out.outputs.reserve(input.items.size());
-        for (const auto& item : input.items)
-            batch_out.outputs.push_back(
-                prune_file_chunks(*snapshot, item.file_path, item.query));
-    } catch (const std::exception& e) {
-        return common::make_error(
-            common::ErrorCode::Indexer,
-            dstd::String("ChunkPruner: batch failed: ") + e.what());
+    dstd::Optional<Snapshot> owned;
+    const Snapshot* snapshot = input.snapshot;
+    auto failed = [](const dstd::Error& e) {
+        return common::make_error<"ChunkPruner: batch failed: {}">(
+            common::ErrorCode::Indexer, e.message());
+    };
+    if (!snapshot) {
+        auto opened = open_snapshot(input.index_path);
+        if (!opened) return failed(opened.error());
+        owned.emplace(std::move(*opened));
+        snapshot = &*owned;
+    }
+    batch_out.outputs.reserve(input.items.size());
+    for (const auto& item : input.items) {
+        auto pruned = prune_file_chunks(*snapshot, item.file_path, item.query);
+        if (!pruned) return failed(pruned.error());
+        batch_out.outputs.push_back(std::move(*pruned));
     }
     return batch_out;
 }

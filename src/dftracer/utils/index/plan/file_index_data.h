@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_INDEX_PLAN_FILE_INDEX_DATA_H
 #define DFTRACER_UTILS_INDEX_PLAN_FILE_INDEX_DATA_H
 
+#include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -48,6 +49,15 @@ struct FileIndexData {
     /// Lines per chunk from the member table: a chunk whose lines are not all
     /// observed records holds records the kinds never saw.
     dstd::HashMap<std::uint64_t, std::uint64_t> chunk_lines;
+    /// The first index read error, or corrupt evidence, met while answering.
+    /// A failed read finds no evidence, which only keeps more chunks, so the
+    /// caller of the Conditions reads this after it evaluates them.
+    dstd::Optional<dstd::Error> error;
+
+    /// Keeps `e` as @ref error unless an earlier one is held.
+    void fail(dstd::Error e) {
+        if (!error) error = std::move(e);
+    }
 
     using Zones = dstd::HashMap<std::uint64_t, index::extensions::kinds::Zone>;
     using Counts = dstd::HashMap<std::uint64_t, GranuleCounts>;

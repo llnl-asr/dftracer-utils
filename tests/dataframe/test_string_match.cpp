@@ -200,6 +200,16 @@ TEST_SUITE("string match") {
         check_variant(*plain, "plain");
     }
 
+    // A Linux x86-64 build (the wheels) must carry the padded copy; a
+    // toolchain without the branch-padding flag would drop it silently.
+    TEST_CASE("a Linux x86-64 build carries the jcc kernels") {
+#if defined(__linux__) && defined(__x86_64__)
+        CHECK(string_match_variant(StringKernel::Jcc) != nullptr);
+#else
+        MESSAGE("only a Linux x86-64 build must carry the jcc kernels");
+#endif
+    }
+
     TEST_CASE("the jcc kernels match the per-row reference when built") {
         const StringMatch* jcc = string_match_variant(StringKernel::Jcc);
         if (!jcc) {

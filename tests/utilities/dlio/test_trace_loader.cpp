@@ -98,8 +98,8 @@ TEST_SUITE("dlio trace loader") {
         const dstd::String index_path = dstd::String(
             trace::internal::determine_index_path(paths[0], o.index_dir));
 
-        const dlio::AggregatedTraces a =
-            dlio::load_aggregated_traces(index_path, files, config);
+        const dlio::AggregatedTraces a = dftu_utils_test::ok(
+            dlio::load_aggregated_traces(index_path, files, config));
         REQUIRE(a.any_data);
         CHECK(a.chunks_reread == 0);
         CHECK(a.quantiles_available);
@@ -109,8 +109,8 @@ TEST_SUITE("dlio trace loader") {
         CHECK(a.trace_fetch_block_metrics.accumulated_time ==
               doctest::Approx(static_cast<double>(dur_sum) * 1e-6));
 
-        const dlio::AggregatedTraces b =
-            dlio::load_aggregated_traces(index_path, files, config);
+        const dlio::AggregatedTraces b = dftu_utils_test::ok(
+            dlio::load_aggregated_traces(index_path, files, config));
         CHECK(a.computation_times == b.computation_times);
         CHECK(a.preprocess_times == b.preprocess_times);
     }

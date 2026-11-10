@@ -78,6 +78,14 @@ TEST_SUITE("trace_gen::TraceWriter") {
         CHECK(saw_metadata);
     }
 
+    TEST_CASE("close reports a file that cannot be created") {
+        TestEnvironment env(0);
+        TraceWriter writer(env.dir() + "/missing_dir/x.pfw.gz");
+        writer.write("[\n");
+        CHECK_FALSE(writer.flush().has_value());
+        CHECK_FALSE(writer.close().has_value());
+    }
+
     TEST_CASE("escapes control characters in string fields") {
         TestEnvironment env(0);
         const dstd::String gz_path = env.dir() + "/escaped.pfw.gz";

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/dlio/distributions.h>
 #include <doctest/doctest.h>
+#include <memory/fresh_process.h>
 
 #include <cmath>
 #include <random>
@@ -145,6 +145,29 @@ TEST_SUITE("FittedDistribution pdf/cdf/quantile") {
     }
 }
 
+TEST_SUITE("out of domain arguments") {
+    TEST_CASE("return NaN and do not throw") {
+        FittedDistribution fit{
+            DistributionKind::Normal, {0.0, 1.0, 0.0}, 0.0, 0.0, 0.0, true};
+        CHECK(std::isnan(quantile(fit, 2.0)));
+        CHECK(std::isnan(cdf(fit, std::nan(""))));
+    }
+
+    TEST_CASE("a fit over data with a NaN is invalid") {
+        auto data = generate_samples(50, [](std::mt19937_64& r) {
+            return std::normal_distribution<double>(1.0, 0.2)(r);
+        });
+        data.push_back(std::nan(""));
+        for (const auto kind :
+             {DistributionKind::Normal, DistributionKind::Gamma,
+              DistributionKind::Weibull, DistributionKind::Lognormal,
+              DistributionKind::Exponential}) {
+            const auto fit = fit_single_distribution(kind, data);
+            CHECK_FALSE(fit.valid);
+        }
+    }
+}
+
 TEST_SUITE("make_sampler") {
     TEST_CASE("Normal sampler reproduces fit mean within tolerance") {
         FittedDistribution fit{
@@ -170,9 +193,15 @@ TEST_SUITE("make_sampler") {
         }
     }
 
-    TEST_CASE("throws on invalid fit") {
+    TEST_CASE("ends the process on an invalid fit") {
+        auto result = fresh_process::run("invalid fit sampler scenario");
+        CHECK(result.aborted_with(
+            "make_sampler called with invalid FittedDistribution"));
+    }
+
+    TEST_CASE("invalid fit sampler scenario" * doctest::skip()) {
+        fresh_process::announce();
         FittedDistribution fit;  // valid = false
-        CHECK_THROWS_AS(make_sampler(fit),
-                        dftracer::utils::common::DFTUtilsException);
+        auto sampler = make_sampler(fit);
     }
 }

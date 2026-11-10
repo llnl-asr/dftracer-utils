@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/dlio/mixture.h>
@@ -10,7 +10,6 @@
 #include <limits>
 #include <numeric>
 #include <random>
-#include <stdexcept>
 
 namespace dftracer::utils::utilities::dlio {
 
@@ -68,6 +67,8 @@ FittedMixture fit_gaussian_mixture(const dstd::Vector<double>& data, int K,
                                    const MixtureFitOptions& options) {
     FittedMixture m;
     if (K <= 0 || data.size() < static_cast<std::size_t>(K) * 2) return m;
+    for (const double x : data)
+        if (!std::isfinite(x)) return m;
 
     auto sorted = data;
     std::sort(sorted.begin(), sorted.end());
@@ -195,11 +196,8 @@ double cdf(const FittedMixture& mix, double x) {
 
 Sampler make_sampler(const FittedMixture& mix, dstd::Optional<double> min_bound,
                      dstd::Optional<double> max_bound) {
-    if (!mix.valid) {
-        throw common::DFTUtilsException(
-            common::ErrorCode::InvalidArgument,
-            "make_sampler called with invalid FittedMixture");
-    }
+    if (!mix.valid)
+        dstd::fatal("make_sampler called with invalid FittedMixture");
 
     auto weights = mix.weights;
     auto comps = mix.components;

@@ -39,6 +39,7 @@ struct MixtureFitOptions {
 FittedMixture fit_gaussian_mixture(const dstd::Vector<double>& data, int K,
                                    const MixtureFitOptions& options = {});
 
+/// A NaN `x` returns NaN.
 double pdf(const FittedMixture& mix, double x);
 double cdf(const FittedMixture& mix, double x);
 
@@ -47,6 +48,7 @@ double cdf(const FittedMixture& mix, double x);
 int free_parameter_count(const FittedMixture& mix);
 
 /// Sampler from a fitted mixture. Draws a component by weight then a Normal.
+/// A mixture with `valid == false` is a broken contract and ends the process.
 Sampler make_sampler(const FittedMixture& mix,
                      dstd::Optional<double> min_bound = dstd::nullopt,
                      dstd::Optional<double> max_bound = dstd::nullopt);

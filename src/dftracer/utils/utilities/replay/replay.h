@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/json/parser.h>
@@ -273,20 +274,21 @@ class ReplayEngine {
 
     /**
      * Stream parsed Trace events of one trace file. Drives
-     * TraceReader::read_json under the hood; each call yields one event.
+     * TraceReader::read_json under the hood; each call yields one event. A
+     * line that cannot be read yields its error and ends the stream.
      */
-    coro::AsyncGenerator<Trace> stream_traces(dstd::String file);
+    coro::AsyncGenerator<dstd::Result<Trace>> stream_traces(dstd::String file);
 
     /**
      * Replay files in parallel, one lane per file, at most one file per
      * executor thread, with the file workers spawned on `scope`. Waits of a
      * millisecond or more suspend on the timer. `result` gets the per-file
      * results merged in input order and must outlive the awaited coroutine.
+     * Returns the first read error of a file; `result` is then not merged.
      */
-    coro::CoroTask<void> run_pipelined(coro::Scope& scope,
-                                       const dstd::Vector<dstd::String>& files,
-                                       ReplayResult& result,
-                                       std::size_t channel_capacity = 4096);
+    coro::CoroTask<dstd::Result<void>> run_pipelined(
+        coro::Scope& scope, const dstd::Vector<dstd::String>& files,
+        ReplayResult& result, std::size_t channel_capacity = 4096);
 
    private:
     struct Lane {
@@ -318,8 +320,8 @@ class ReplayEngine {
 
     void replay_one_trace(const Trace& trace, Lane& lane);
 
-    coro::CoroTask<void> replay_file(dstd::String file, Lane& lane,
-                                     std::size_t channel_capacity);
+    coro::CoroTask<dstd::Result<void>> replay_file(
+        dstd::String file, Lane& lane, std::size_t channel_capacity);
 
     /**
      * Populate a Trace from a parsed JsonParser document.

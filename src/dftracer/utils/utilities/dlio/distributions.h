@@ -48,7 +48,8 @@ dstd::Optional<FittedDistribution> best_fit_by_ks(
     const dstd::Vector<FittedDistribution>& fits);
 
 /// Distribution PDF / CDF / inverse-CDF. Behavior is undefined when
-/// `fit.valid == false`.
+/// `fit.valid == false`. An argument outside the domain (a NaN `x`, a `p`
+/// outside [0, 1]) returns NaN, and an overflow returns infinity.
 double pdf(const FittedDistribution& fit, double x);
 double cdf(const FittedDistribution& fit, double x);
 double quantile(const FittedDistribution& fit, double p);
@@ -57,7 +58,8 @@ double quantile(const FittedDistribution& fit, double p);
 /// consume it directly without an explicit cast.
 using Sampler = dstd::Function<double(std::mt19937_64&)>;
 
-/// Builds a Sampler from a fitted distribution.
+/// Builds a Sampler from a fitted distribution. A fit with `valid == false` is
+/// a broken contract and ends the process.
 /// Optional min/max bounds clamp the output (applied after sampling).
 Sampler make_sampler(const FittedDistribution& fit,
                      dstd::Optional<double> min_bound = dstd::nullopt,

@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_UTILITIES_DLIO_TRACE_LOADER_H
 
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
@@ -106,9 +107,8 @@ struct TraceLoaderOptions {
 /// Loads aggregated DLIO trace data with one aggregation query over `files`,
 /// grouped by (pid, `config.time_interval_us` window, cat, name). `index_path`
 /// is the index store of `files` and `config` the config it was built with.
-/// Blocks until the query ends and throws @ref
-/// dftracer::utils::common::DFTUtilsException "DFTUtilsException" on failure.
-AggregatedTraces load_aggregated_traces(
+/// Blocks until the query ends. Returns an Io error when the query fails.
+dstd::Result<AggregatedTraces> load_aggregated_traces(
     dstd::StringView index_path, const dstd::Vector<dstd::String>& files,
     const index::schemas::dft::agg::AggregationConfig& config,
     const TraceLoaderOptions& options = {});
@@ -116,9 +116,10 @@ AggregatedTraces load_aggregated_traces(
 /// Overlays (cat, name) overrides from a YAML or JSON file onto the component
 /// selectors in `options`. Top-level keys fetch_block, fetch_iter, preprocess
 /// and item each take an optional `cat` and `name`; omitted keys and fields are
-/// left untouched. Throws @ref dftracer::utils::common::DFTUtilsException
-/// "DFTUtilsException" on a missing file or parse error.
-void load_event_map(dstd::StringView path, TraceLoaderOptions& options);
+/// left untouched. Returns an InvalidArgument error on a missing file, a parse
+/// error or a document that is not a mapping.
+dstd::Result<void> load_event_map(dstd::StringView path,
+                                  TraceLoaderOptions& options);
 
 /// Convenience: build a @ref BarrierSimulatorContext from loaded traces.
 BarrierSimulatorContext make_simulator_context(const AggregatedTraces& traces,

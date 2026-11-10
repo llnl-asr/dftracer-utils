@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/dlio/distributions.h>
@@ -11,6 +11,9 @@
 #include <random>
 
 // Boost.Math standalone is configured globally via -DBOOST_MATH_STANDALONE.
+// The error policies are set per file in src/CMakeLists.txt: a domain, pole,
+// overflow, evaluation or rounding error returns NaN or infinity and sets
+// errno, and nothing throws.
 #include <boost/math/distributions/exponential.hpp>
 #include <boost/math/distributions/gamma.hpp>
 #include <boost/math/distributions/lognormal.hpp>
@@ -33,6 +36,7 @@ struct SampleSummary {
     double min = std::numeric_limits<double>::infinity();
     double max = -std::numeric_limits<double>::infinity();
     bool any_non_positive = false;
+    bool any_non_finite = false;
 };
 
 SampleSummary summarize(const dstd::Vector<double>& data) {
@@ -40,6 +44,7 @@ SampleSummary summarize(const dstd::Vector<double>& data) {
     double m2 = 0.0;
     for (double x : data) {
         if (x <= 0.0) s.any_non_positive = true;
+        if (!std::isfinite(x)) s.any_non_finite = true;
         ++s.n;
         const double delta = x - s.mean;
         s.mean += delta / static_cast<double>(s.n);
@@ -61,6 +66,7 @@ double ks_statistic(const dstd::Vector<double>& sorted_data,
     for (std::size_t i = 0; i < sorted_data.size(); ++i) {
         const double x = sorted_data[i];
         const double f_theo = dist_cdf(x);
+        if (!std::isfinite(f_theo)) return f_theo;
         const double f_lo = static_cast<double>(i) / n;
         const double f_hi = static_cast<double>(i + 1) / n;
         max_diff = std::max(max_diff, std::abs(f_theo - f_lo));
@@ -95,6 +101,11 @@ void finalize_fit(FittedDistribution& f, const Dist& dist,
     std::sort(sorted.begin(), sorted.end());
     f.ks_stat = ks_statistic(
         sorted, [&](double x) { return boost::math::cdf(dist, x); });
+    if (!std::isfinite(f.ks_stat)) {
+        f.ks_stat = 1.0;
+        f.valid = false;
+        return;
+    }
     f.log_likelihood = log_likelihood(
         data, [&](double x) { return boost::math::pdf(dist, x); });
     f.bic = compute_bic(f.log_likelihood, s.n, free_parameter_count(f.kind));
@@ -106,7 +117,7 @@ FittedDistribution fit_normal(const dstd::Vector<double>& data,
                               const SampleSummary& s) {
     FittedDistribution f;
     f.kind = DistributionKind::Normal;
-    if (s.n < 2 || s.variance <= 0.0) return f;
+    if (s.n < 2 || s.any_non_finite || s.variance <= 0.0) return f;
     const double sigma = std::sqrt(s.variance);
     f.params = {s.mean, sigma, 0.0};
     f.valid = true;
@@ -120,7 +131,7 @@ FittedDistribution fit_lognormal(const dstd::Vector<double>& data,
                                  const SampleSummary& s) {
     FittedDistribution f;
     f.kind = DistributionKind::Lognormal;
-    if (s.n < 2 || s.any_non_positive) return f;
+    if (s.n < 2 || s.any_non_finite || s.any_non_positive) return f;
 
     double mean_log = 0.0;
     for (double x : data) mean_log += std::log(x);
@@ -147,7 +158,8 @@ FittedDistribution fit_exponential(const dstd::Vector<double>& data,
                                    const SampleSummary& s) {
     FittedDistribution f;
     f.kind = DistributionKind::Exponential;
-    if (s.n < 1 || s.mean <= 0.0 || s.any_non_positive) return f;
+    if (s.n < 1 || s.any_non_finite || s.mean <= 0.0 || s.any_non_positive)
+        return f;
     const double rate = 1.0 / s.mean;
     f.params = {rate, 0.0, 0.0};
     f.valid = true;
@@ -169,7 +181,8 @@ FittedDistribution fit_gamma(const dstd::Vector<double>& data,
                              const SampleSummary& s) {
     FittedDistribution f;
     f.kind = DistributionKind::Gamma;
-    if (s.n < 2 || s.any_non_positive || s.variance <= 0.0) return f;
+    if (s.n < 2 || s.any_non_finite || s.any_non_positive || s.variance <= 0.0)
+        return f;
 
     // Method-of-moments initial estimate.
     double k = s.mean * s.mean / s.variance;
@@ -215,7 +228,8 @@ FittedDistribution fit_weibull(const dstd::Vector<double>& data,
                                const SampleSummary& s) {
     FittedDistribution f;
     f.kind = DistributionKind::Weibull;
-    if (s.n < 2 || s.any_non_positive || s.variance <= 0.0) return f;
+    if (s.n < 2 || s.any_non_finite || s.any_non_positive || s.variance <= 0.0)
+        return f;
 
     double sum_log = 0.0;
     for (double x : data) sum_log += std::log(x);
@@ -389,11 +403,8 @@ double quantile(const FittedDistribution& fit, double p) {
 Sampler make_sampler(const FittedDistribution& fit,
                      dstd::Optional<double> min_bound,
                      dstd::Optional<double> max_bound) {
-    if (!fit.valid) {
-        throw common::DFTUtilsException(
-            common::ErrorCode::InvalidArgument,
-            "make_sampler called with invalid FittedDistribution");
-    }
+    if (!fit.valid)
+        dstd::fatal("make_sampler called with invalid FittedDistribution");
     const auto p0 = fit.params[0];
     const auto p1 = fit.params[1];
     const auto kind = fit.kind;

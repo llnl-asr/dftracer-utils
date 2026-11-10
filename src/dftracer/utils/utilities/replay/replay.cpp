@@ -9,6 +9,7 @@
 #include <dftracer/utils/coro/when_any.h>
 #include <dftracer/utils/dataframe/containment.h>
 #include <dftracer/utils/dstd/algorithm.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/hash_map.h>
@@ -86,7 +87,8 @@ ReplayEngine::Lane ReplayEngine::make_lane() const {
     return lane;
 }
 
-coro::AsyncGenerator<Trace> ReplayEngine::stream_traces(dstd::String file) {
+coro::AsyncGenerator<dstd::Result<Trace>> ReplayEngine::stream_traces(
+    dstd::String file) {
     using reader::ReadConfig;
     using reader::TraceReader;
     using reader::TraceReaderConfig;
@@ -101,17 +103,21 @@ coro::AsyncGenerator<Trace> ReplayEngine::stream_traces(dstd::String file) {
     for (;;) {
         auto opt = co_await gen.next();
         if (!opt) break;
-        const auto line = common::unwrap(std::move(*opt));
+        if (!*opt) {
+            co_yield opt->error();
+            break;
+        }
+        const auto& line = **opt;
         if (!line.parser) continue;
         Trace trace;
         if (parse_trace_json(*line.parser, trace)) {
-            co_yield std::move(trace);
+            co_yield dstd::Result<Trace>(std::move(trace));
         }
     }
 }
 
-coro::CoroTask<void> ReplayEngine::replay_file(dstd::String file, Lane& lane,
-                                               std::size_t channel_capacity) {
+coro::CoroTask<dstd::Result<void>> ReplayEngine::replay_file(
+    dstd::String file, Lane& lane, std::size_t channel_capacity) {
     coro::Channel<Trace> ch_instance(channel_capacity);
     auto* channel = &ch_instance;
 
@@ -119,19 +125,21 @@ coro::CoroTask<void> ReplayEngine::replay_file(dstd::String file, Lane& lane,
     // them inside a nested scope: the extra spawn-and-return coroutine layer
     // let the scope report completion before the consumer had drained the
     // channel, dropping every buffered event under load.
-    auto producer = [this, channel, &file]() -> coro::CoroTask<void> {
+    auto producer = [this, channel,
+                     &file]() -> coro::CoroTask<dstd::Result<void>> {
         auto p = channel->producer();
         auto guard = p.guard();
         auto gen = stream_traces(file);
         for (;;) {
             auto trace = co_await gen.next();
             if (!trace) break;
-            const auto send_ok = co_await p.send(std::move(*trace));
+            if (!*trace) co_return trace->error();
+            const auto send_ok = co_await p.send(std::move(**trace));
             if (!send_ok) {
-                co_return;
+                co_return dstd::Result<void>{};
             }
         }
-        co_return;
+        co_return dstd::Result<void>{};
     };
     auto consumer = [this, channel, &lane]() -> coro::CoroTask<void> {
         auto c = channel->consumer();
@@ -146,12 +154,11 @@ coro::CoroTask<void> ReplayEngine::replay_file(dstd::String file, Lane& lane,
         co_return;
     };
 
-    co_await coro::when_all(producer(), consumer());
-
-    co_return;
+    auto [produced, consumed] = co_await coro::when_all(producer(), consumer());
+    co_return std::move(produced);
 }
 
-coro::CoroTask<void> ReplayEngine::run_pipelined(
+coro::CoroTask<dstd::Result<void>> ReplayEngine::run_pipelined(
     coro::Scope& scope, const dstd::Vector<dstd::String>& files,
     ReplayResult& result, std::size_t channel_capacity) {
     admitted_.store(0, std::memory_order_relaxed);
@@ -163,23 +170,32 @@ coro::CoroTask<void> ReplayEngine::run_pipelined(
         std::min(files.size(), std::max<std::size_t>(threads, 1));
     std::atomic<std::size_t> next{0};
 
-    dstd::Vector<coro::SpawnFuture<void>> runs;
+    dstd::Vector<coro::SpawnFuture<dstd::Result<void>>> runs;
     runs.reserve(workers);
     for (std::size_t w = 0; w < workers; ++w) {
-        runs.push_back(
-            scope.spawn_future([this, &files, &lanes, &next,
-                                channel_capacity]() -> coro::CoroTask<void> {
+        runs.push_back(scope.spawn_future(
+            [this, &files, &lanes, &next,
+             channel_capacity]() -> coro::CoroTask<dstd::Result<void>> {
                 for (std::size_t i = next.fetch_add(1); i < files.size();
                      i = next.fetch_add(1)) {
                     lanes[i] = make_lane();
-                    co_await replay_file(files[i], lanes[i], channel_capacity);
+                    auto replayed = co_await replay_file(files[i], lanes[i],
+                                                         channel_capacity);
+                    if (!replayed) co_return replayed.error();
                 }
+                co_return dstd::Result<void>{};
             }));
     }
-    co_await coro::when_all(std::move(runs));
+    auto done = co_await coro::when_all(std::move(runs));
+    for (auto& worker : done) {
+        if (!worker) {
+            for (const auto& other : done) other.discard();
+            co_return std::move(worker);
+        }
+    }
 
     for (const Lane& lane : lanes) result.merge(lane.result);
-    co_return;
+    co_return dstd::Result<void>{};
 }
 
 namespace {
@@ -187,9 +203,9 @@ namespace {
 // Sync drive used by the existing replay(file)/replay(vector) entry points.
 // Pipeline-driven callers use ReplayEngine::run_pipelined instead.
 template <typename OnEvent>
-coro::CoroTask<void> read_file_events(dstd::String trace_file,
-                                      dstd::String index_file,
-                                      OnEvent on_event) {
+coro::CoroTask<dstd::Result<void>> read_file_events(dstd::String trace_file,
+                                                    dstd::String index_file,
+                                                    OnEvent on_event) {
     using reader::ReadConfig;
     using reader::TraceReader;
     using reader::TraceReaderConfig;
@@ -206,11 +222,12 @@ coro::CoroTask<void> read_file_events(dstd::String trace_file,
     for (;;) {
         auto opt = co_await gen.next();
         if (!opt) break;
-        const auto line = common::unwrap(std::move(*opt));
+        if (!*opt) co_return opt->error();
+        const auto& line = **opt;
         if (!line.parser) continue;
         on_event(*line.parser);
     }
-    co_return;
+    co_return dstd::Result<void>{};
 }
 
 }  // namespace
@@ -229,22 +246,17 @@ ReplayResult ReplayEngine::replay_file_sync(dstd::StringView trace_file,
 
     auto start_time = std::chrono::steady_clock::now();
 
-    try {
-        auto read =
-            read_file_events(dstd::String(trace_file), dstd::String(index_file),
-                             [this, &lane](json::JsonParser& parser) {
-                                 Trace trace;
-                                 if (parse_trace_json(parser, trace))
-                                     replay_one_trace(trace, lane);
-                             })
-                .get();
-        if (!read) {
-            lane.result.error_messages.push_back(
-                "Replay stopped: " + dstd::String(read.error().format()));
-        }
-    } catch (const std::exception& e) {
-        lane.result.error_messages.push_back("Exception during replay: " +
-                                             dstd::String(e.what()));
+    auto read =
+        read_file_events(dstd::String(trace_file), dstd::String(index_file),
+                         [this, &lane](json::JsonParser& parser) {
+                             Trace trace;
+                             if (parse_trace_json(parser, trace))
+                                 replay_one_trace(trace, lane);
+                         })
+            .get();
+    if (!read) {
+        lane.result.error_messages.push_back(
+            dstd::fmt<"Replay stopped: {}">(read.error().format()));
     }
     ReplayResult result = std::move(lane.result);
 
@@ -625,38 +637,41 @@ ReplayResult ReplayEngine::replay_with_call_tree(
     Lane lane = make_lane();
     ReplayResult& result = lane.result;
     auto start_time = std::chrono::steady_clock::now();
-    try {
+    // The block ends the locals (events, files) before end_time is read.
+    {
         auto globbed = glob_trace_files(trace_directory, pattern);
         if (!globbed) {
             result.error_messages.push_back(
-                common::str_cat("Cannot list trace directory ", trace_directory,
-                                ": ", globbed.error().message()));
+                dstd::fmt<"Cannot list trace directory {}: {}">(
+                    trace_directory, globbed.error().message()));
             return std::move(lane.result);
         }
         dstd::Vector<dstd::String> files = std::move(*globbed);
         if (files.empty()) {
-            result.error_messages.push_back(common::str_cat(
-                "No trace files in directory: ", trace_directory));
+            result.error_messages.push_back(
+                dstd::fmt<"No trace files in directory: {}">(trace_directory));
             return std::move(lane.result);
         }
 
         // Read every event once.
         dstd::Vector<Trace> events;
-        auto read_events = [&]() -> coro::CoroTask<void> {
+        auto read_events = [&]() -> coro::CoroTask<dstd::Result<void>> {
             for (const dstd::String& file : files) {
                 auto gen = stream_traces(file);
                 for (;;) {
                     auto opt = co_await gen.next();
                     if (!opt) break;
-                    events.push_back(std::move(*opt));
+                    if (!*opt) co_return opt->error();
+                    events.push_back(std::move(**opt));
                 }
             }
-            co_return;
+            co_return dstd::Result<void>{};
         }()
                                         .get();
         if (!read_events) {
-            result.error_messages.push_back(common::str_cat(
-                "Reading the traces stopped: ", read_events.error().message()));
+            result.error_messages.push_back(
+                dstd::fmt<"Reading the traces stopped: {}">(
+                    read_events.error().message()));
             return std::move(lane.result);
         }
 
@@ -755,9 +770,6 @@ ReplayResult ReplayEngine::replay_with_call_tree(
             for (std::int64_t i = 0; i < n; ++i)
                 replay_one_trace(events[static_cast<std::size_t>(i)], lane);
         }
-    } catch (const std::exception& e) {
-        result.error_messages.push_back("Exception during call tree replay: " +
-                                        dstd::String(e.what()));
     }
     auto end_time = std::chrono::steady_clock::now();
     result.total_duration =

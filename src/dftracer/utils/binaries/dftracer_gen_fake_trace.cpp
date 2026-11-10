@@ -8,6 +8,7 @@
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -890,7 +891,7 @@ struct RankTrace {
         }
     }
 
-    void run() {
+    dstd::Result<void> run() {
         emit_header();
         for (int epoch = 0; epoch < opts.epoch_count; ++epoch) {
             for (int step = 0; step < opts.steps_per_epoch; ++step) {
@@ -906,19 +907,20 @@ struct RankTrace {
             }
         }
         writer.write("]\n");
-        writer.close();
+        return writer.close();
     }
 };
 
 // One file per rank. The pointers must outlive the task.
-coro::CoroTask<void> generate_rank(const GenOptions* opts,
-                                   const TraceNames* names, int rank,
-                                   const dstd::String* file,
-                                   std::size_t* event_count) {
+coro::CoroTask<dstd::Result<void>> generate_rank(const GenOptions* opts,
+                                                 const TraceNames* names,
+                                                 int rank,
+                                                 const dstd::String* file,
+                                                 std::size_t* event_count) {
     RankTrace trace(*opts, *names, rank, *file);
-    trace.run();
+    auto ran = trace.run();
     *event_count = trace.rank_events;
-    co_return;
+    co_return ran;
 }
 
 // Prints the results after generation.
@@ -1065,7 +1067,7 @@ int main(int argc, char** argv) {
                     for (int rank = 0; rank < opts.rank_count; ++rank) {
                         ranks.push_back(rank);
                     }
-                    co_await coro::parallel_map(
+                    auto generated = co_await coro::parallel_map(
                         std::move(ranks),
                         [&](int rank) {
                             return generate_rank(&opts, &names, rank,
@@ -1073,6 +1075,13 @@ int main(int argc, char** argv) {
                                                  &rank_event_counts[rank]);
                         },
                         {.max_in_flight = executor_threads});
+                    for (const auto& rank_result : generated) {
+                        if (!rank_result) {
+                            std::fprintf(stderr, "Error: %s\n",
+                                         rank_result.error().format().c_str());
+                            co_return 1;
+                        }
+                    }
                     print_summary(opts, names, generated_files,
                                   rank_event_counts);
                     if (!opts.verify) co_return 0;

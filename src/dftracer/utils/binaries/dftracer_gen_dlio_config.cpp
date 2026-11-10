@@ -212,11 +212,10 @@ int main(int argc, char** argv) {
             loader_opts.seed = cli.seed;
             // Remap component (cat, name) selectors from the event map, if any.
             if (!cli.event_map.empty()) {
-                try {
-                    utilities::dlio::load_event_map(dstd::String(cli.event_map),
-                                                    loader_opts);
-                } catch (const std::exception& e) {
-                    DFTRACER_UTILS_LOG_ERROR("{}", e.what());
+                const auto mapped = utilities::dlio::load_event_map(
+                    dstd::String(cli.event_map), loader_opts);
+                if (!mapped) {
+                    DFTRACER_UTILS_LOG_ERROR("{}", mapped.error().message());
                     return 1;
                 }
             }
@@ -235,8 +234,15 @@ int main(int argc, char** argv) {
                 }
                 dstd::Vector<dstd::String> files;
                 for (const auto& f : resolved->all_files) files.emplace_back(f);
-                traces = utilities::dlio::load_aggregated_traces(
+                auto loaded = utilities::dlio::load_aggregated_traces(
                     index_path, files, query_config, loader_opts);
+                if (!loaded) {
+                    DFTRACER_UTILS_LOG_ERROR(
+                        "Failed to query the aggregation: {}",
+                        loaded.error().message());
+                    return 1;
+                }
+                traces = std::move(*loaded);
             } catch (const std::exception& e) {
                 DFTRACER_UTILS_LOG_ERROR("Failed to query the aggregation: {}",
                                          e.what());
@@ -343,8 +349,13 @@ int main(int argc, char** argv) {
                                          out_path);
                 return 1;
             }
-            dstd::String yaml =
+            auto rendered =
                 utilities::dlio::render_dlio_yaml(&comp_block, prep_block_ptr);
+            if (!rendered) {
+                DFTRACER_UTILS_LOG_ERROR("{}", rendered.error().message());
+                return 1;
+            }
+            dstd::String yaml = std::move(*rendered);
             yaml += "\n";
             const bool wrote = std::fwrite(yaml.data(), 1, yaml.size(),
                                            out.get()) == yaml.size();

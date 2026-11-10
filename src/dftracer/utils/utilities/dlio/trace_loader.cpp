@@ -3,12 +3,12 @@
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_partial.h>
 #include <dftracer/utils/trace/agg_query.h>
 #include <dftracer/utils/utilities/dlio/trace_loader.h>
-#include <yaml-cpp/yaml.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -108,7 +108,7 @@ dstd::Vector<dstd::Vector<double>> flatten_per_rank(
 
 }  // namespace
 
-AggregatedTraces load_aggregated_traces(
+dstd::Result<AggregatedTraces> load_aggregated_traces(
     dstd::StringView index_path, const dstd::Vector<dstd::String>& files,
     const index::schemas::dft::agg::AggregationConfig& config,
     const TraceLoaderOptions& options) {
@@ -136,9 +136,8 @@ AggregatedTraces load_aggregated_traces(
 
     auto queried = trace::run_agg_query(query).get();
     if (!queried) {
-        throw common::DFTUtilsException(
-            common::ErrorCode::Io, "dlio: aggregation query failed: " +
-                                       dstd::String(queried.error().format()));
+        return common::make_error<"dlio: aggregation query failed: {}">(
+            common::ErrorCode::Io, queried.error().format());
     }
     trace::AggQueryResult& result = *queried;
     out.chunks_reread = result.stats.chunks_reread;
@@ -362,40 +361,6 @@ BarrierSimulatorContext make_simulator_context(const AggregatedTraces& traces,
     ctx.worker_count = worker_count;
     ctx.prefetch_factor = prefetch_factor;
     return ctx;
-}
-
-namespace {
-
-void overlay_selector(const YAML::Node& root, const char* key,
-                      EventSelector& sel) {
-    const auto node = root[key];
-    if (!node || !node.IsMap()) return;
-    if (const auto cat = node["cat"]) sel.cat = cat.as<std::string>();
-    if (const auto name = node["name"]) sel.name = name.as<std::string>();
-}
-
-}  // namespace
-
-void load_event_map(dstd::StringView path, TraceLoaderOptions& options) {
-    YAML::Node root;
-    try {
-        root = YAML::LoadFile(std::string(path));
-    } catch (const YAML::Exception& e) {
-        throw common::DFTUtilsException(
-            common::ErrorCode::InvalidArgument,
-            common::str_cat("dlio: failed to parse event map ", path, ": ",
-                            e.what()));
-    }
-    if (!root.IsMap()) {
-        throw common::DFTUtilsException(
-            common::ErrorCode::InvalidArgument,
-            common::str_cat("dlio: event map ", path,
-                            " must be a mapping of component names"));
-    }
-    overlay_selector(root, "fetch_block", options.fetch_block);
-    overlay_selector(root, "fetch_iter", options.fetch_iter);
-    overlay_selector(root, "preprocess", options.preprocess);
-    overlay_selector(root, "item", options.item);
 }
 
 }  // namespace dftracer::utils::utilities::dlio

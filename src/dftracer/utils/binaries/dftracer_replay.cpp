@@ -397,8 +397,15 @@ coro::CoroTask<void> task_execute(RunCtx* ctx, coro::Scope* scope) {
     } else {
         // Pipelined path: producer (read+parse) feeds Channel<Trace>;
         // consumer (apply_timing+execute) drains it.
-        co_await engine.run_pipelined(*scope, ctx->trace_files, ctx->result,
-                                      ctx->cli->channel_capacity);
+        auto replayed = co_await engine.run_pipelined(
+            *scope, ctx->trace_files, ctx->result, ctx->cli->channel_capacity);
+        if (!replayed) {
+            std::fprintf(stderr, "Error: %s\n",
+                         replayed.error().format().c_str());
+            ctx->failed = true;
+            ctx->exit_code = 1;
+            co_return;
+        }
     }
 
     ctx->execute_ms = std::chrono::duration<double, std::milli>(

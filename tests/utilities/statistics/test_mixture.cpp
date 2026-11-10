@@ -4,6 +4,7 @@
 #include <dftracer/utils/utilities/dlio/distributions.h>
 #include <dftracer/utils/utilities/dlio/mixture.h>
 #include <doctest/doctest.h>
+#include <memory/fresh_process.h>
 
 #include <algorithm>
 #include <cmath>
@@ -118,6 +119,31 @@ TEST_SUITE("FittedMixture pdf/cdf/sampler") {
         for (int i = 0; i < n; ++i) sum += sampler(rng);
         // True mixture mean = 0.5*1 + 0.5*3 = 2.0
         CHECK(sum / n == doctest::Approx(2.0).epsilon(0.05));
+    }
+
+    TEST_CASE("a fit over data with a NaN is invalid") {
+        dstd::Vector<double> data{1.0, 2.0, 3.0, 4.0, std::nan(""), 5.0};
+        CHECK_FALSE(fit_gaussian_mixture(data, 2).valid);
+    }
+
+    TEST_CASE("a NaN argument gives NaN") {
+        FittedMixture m;
+        m.weights = {1.0};
+        m.components = {{0.0, 1.0}};
+        m.valid = true;
+        CHECK(std::isnan(cdf(m, std::nan(""))));
+    }
+
+    TEST_CASE("ends the process on an invalid mixture") {
+        auto result = fresh_process::run("invalid mixture sampler scenario");
+        CHECK(result.aborted_with(
+            "make_sampler called with invalid FittedMixture"));
+    }
+
+    TEST_CASE("invalid mixture sampler scenario" * doctest::skip()) {
+        fresh_process::announce();
+        FittedMixture m;  // valid = false
+        auto sampler = make_sampler(m);
     }
 }
 

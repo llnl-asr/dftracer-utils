@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/dlio/yaml_emit.h>
 #include <yaml-cpp/yaml.h>
@@ -78,25 +79,30 @@ YAML::Node emit_block(const DlioTimingBlock& block) {
 
 }  // namespace
 
-dstd::String render_dlio_yaml(const DlioTimingBlock* computation,
-                              const DlioTimingBlock* preprocess) {
-    YAML::Node root;
-    if (computation) {
-        YAML::Node train;
-        train["computation_time"] = emit_block(*computation);
-        root["train"] = train;
+dstd::Result<dstd::String> render_dlio_yaml(const DlioTimingBlock* computation,
+                                            const DlioTimingBlock* preprocess) {
+    try {
+        YAML::Node root;
+        if (computation) {
+            YAML::Node train;
+            train["computation_time"] = emit_block(*computation);
+            root["train"] = train;
+        }
+        if (preprocess) {
+            YAML::Node reader;
+            reader["preprocess_time"] = emit_block(*preprocess);
+            root["reader"] = reader;
+        }
+        YAML::Emitter emit;
+        emit.SetIndent(2);
+        emit.SetMapFormat(YAML::Block);
+        emit.SetSeqFormat(YAML::Block);
+        emit << root;
+        return dstd::String(emit.c_str());
+    } catch (const YAML::Exception& e) {
+        return common::make_error<"dlio: cannot emit the config YAML: {}">(
+            common::ErrorCode::Internal, e.what());
     }
-    if (preprocess) {
-        YAML::Node reader;
-        reader["preprocess_time"] = emit_block(*preprocess);
-        root["reader"] = reader;
-    }
-    YAML::Emitter emit;
-    emit.SetIndent(2);
-    emit.SetMapFormat(YAML::Block);
-    emit.SetSeqFormat(YAML::Block);
-    emit << root;
-    return dstd::String(emit.c_str());
 }
 
 }  // namespace dftracer::utils::utilities::dlio

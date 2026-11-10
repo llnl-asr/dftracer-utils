@@ -2,8 +2,9 @@
 #ifndef DFTRACER_UTILS_UTILITIES_TRACE_GEN_FAKE_TRACE_WRITER_H
 #define DFTRACER_UTILS_UTILITIES_TRACE_GEN_FAKE_TRACE_WRITER_H
 
-#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/json/json_escape.h>
@@ -12,7 +13,6 @@
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
 
 #include <cstdint>
-#include <cstdio>
 #include <random>
 
 /// Synthetic chrome/Perfetto trace emission (gzip .pfw.gz). A production
@@ -23,7 +23,9 @@ namespace dftracer::utils::utilities::trace_gen {
 // ---------------------------------------------------------------------------
 // TraceWriter - appends whole lines to a GzipLineWriterBlocking, so the output
 //               is multi-member (parallel-inflatable/indexable) with members
-//               of about flush_threshold bytes.
+//               of about flush_threshold bytes. The first open or write error
+//               is kept: later writes do nothing, and flush() and close()
+//               return it.
 // ---------------------------------------------------------------------------
 class TraceWriter {
    public:
@@ -32,48 +34,61 @@ class TraceWriter {
         : flush_threshold_(flush_threshold) {
         fileio::GzipWriterOptions opts;
         opts.member_size = flush_threshold;
-        writer_.emplace(common::unwrap(fileio::GzipLineWriterBlocking::open(
-            dstd::String(path), std::move(opts))));
+        auto opened = fileio::GzipLineWriterBlocking::open(dstd::String(path),
+                                                           std::move(opts));
+        if (!opened) {
+            error_ = opened.error();
+            return;
+        }
+        writer_.emplace(std::move(*opened));
         buf_.reserve(flush_threshold * 2);
     }
 
-    ~TraceWriter() {
-        try {
-            close();
-        } catch (...) {
-        }
-    }
+    ~TraceWriter() { close().discard(); }
 
     TraceWriter(const TraceWriter&) = delete;
     TraceWriter& operator=(const TraceWriter&) = delete;
 
     /// `s` must hold whole lines.
     void write(dstd::StringView s) {
+        if (error_) return;
         buf_ += s;
         if (buf_.size() >= flush_threshold_) drain();
     }
 
-    void flush() {
+    /// Writes the buffered lines and ends the gzip member.
+    dstd::Result<void> flush() {
         drain();
-        common::unwrap(writer_->cut());
+        if (error_) return *error_;
+        auto cut = writer_->cut();
+        if (!cut) error_ = cut.error();
+        if (error_) return *error_;
+        return {};
     }
 
-    void close() {
-        if (!writer_) return;
-        drain();
-        auto w = std::move(*writer_);
-        writer_.reset();
-        common::unwrap(w.close());
+    /// Writes the buffered lines and closes the file. Safe to call twice.
+    dstd::Result<void> close() {
+        if (writer_) {
+            drain();
+            auto w = std::move(*writer_);
+            writer_.reset();
+            auto closed = w.close();
+            if (!closed && !error_) error_ = closed.error();
+        }
+        if (error_) return *error_;
+        return {};
     }
 
    private:
     void drain() {
-        if (buf_.empty()) return;
-        common::unwrap(writer_->append(buf_));
+        if (error_ || buf_.empty()) return;
+        auto appended = writer_->append(buf_);
+        if (!appended) error_ = appended.error();
         buf_.clear();
     }
 
     dstd::Optional<fileio::GzipLineWriterBlocking> writer_;
+    dstd::Optional<dstd::Error> error_;
     dstd::String buf_;
     std::size_t flush_threshold_;
 };
@@ -83,10 +98,9 @@ inline dstd::String make_hash(dstd::StringView name) {
     hash::HasherUtility hasher;
     hasher.reset();
     auto h = hasher.process(name);
-    char buf[17];
-    std::snprintf(buf, sizeof(buf), "%016llx",
-                  static_cast<unsigned long long>(h.value));
-    return dstd::String(buf);
+    char buf[16];
+    const auto text = dstd::fmt_to<"{:016x}">(buf, sizeof(buf), h.value);
+    return dstd::String(buf, text.size);
 }
 
 /// +/-30% random variance around base
@@ -150,9 +164,8 @@ inline void emit_event(TraceWriter& w, const EventArgs& a) {
     buf.reserve(512);
 
     buf += R"({"id":)";
-    std::snprintf(num_buf, sizeof(num_buf), "%llu",
-                  static_cast<unsigned long long>(a.id));
-    buf += num_buf;
+    buf.append(num_buf,
+               dstd::fmt_to<"{}">(num_buf, sizeof(num_buf), a.id).size);
 
     buf += R"(,"name":")";
     json::append_json_escaped(buf, a.name);
@@ -162,16 +175,13 @@ inline void emit_event(TraceWriter& w, const EventArgs& a) {
     trace::EventType ty = a.type != trace::EventType::Unknown
                               ? a.type
                               : trace::event_type_from_cat(a.cat);
-    std::snprintf(
-        num_buf, sizeof(num_buf),
-        R"(","pid":%llu,"tid":%llu,"ts":%llu,"dur":%llu,"ph":%d,"type":%d)",
-        static_cast<unsigned long long>(a.pid),
-        static_cast<unsigned long long>(a.tid),
-        static_cast<unsigned long long>(a.ts),
-        static_cast<unsigned long long>(a.dur),
-        trace::phase_to_int(trace::RecordPhase::Complete),
-        trace::event_type_to_int(ty));
-    buf += num_buf;
+    buf.append(num_buf,
+               dstd::fmt_to<
+                   R"(","pid":{},"tid":{},"ts":{},"dur":{},"ph":{},"type":{})">(
+                   num_buf, sizeof(num_buf), a.pid, a.tid, a.ts, a.dur,
+                   trace::phase_to_int(trace::RecordPhase::Complete),
+                   trace::event_type_to_int(ty))
+                   .size);
 
     buf += R"(,"args":{)";
 
@@ -179,8 +189,9 @@ inline void emit_event(TraceWriter& w, const EventArgs& a) {
     json::append_json_escaped(buf, a.hhash);
     buf += '"';
 
-    std::snprintf(num_buf, sizeof(num_buf), R"(,"level":%d)", a.level);
-    buf += num_buf;
+    buf.append(
+        num_buf,
+        dstd::fmt_to<R"(,"level":{})">(num_buf, sizeof(num_buf), a.level).size);
 
     if (!a.fhash.empty()) {
         buf += R"(,"fhash":")";

@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/config.h>
-#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/fs/fs.h>
@@ -31,17 +31,13 @@ dstd::String to_string(const char* p, std::int32_t n) {
 }
 
 // The utilities are coroutines; a registry op is synchronous. Drive one to
-// completion on the default runtime, reporting a throw as failure rather than
-// unwinding through the C ABI seam a plugin calls across.
+// completion on the default runtime, reporting an error result as failure at
+// the C ABI seam a plugin calls across.
 template <class Fn>
 bool run_sync(const char* name, Fn body) {
-    try {
-        common::unwrap(default_runtime().block_on(
-            coro::named(name, coro::with_scope(std::move(body)))));
-        return true;
-    } catch (const std::exception&) {
-        return false;
-    }
+    return default_runtime()
+        .block_on(coro::named(name, coro::with_scope(std::move(body))))
+        .has_value();
 }
 
 dftu_series* paths_column(const dstd::Vector<dstd::Path>& paths) {
@@ -54,14 +50,16 @@ dftu_series* paths_column(const dstd::Vector<dstd::Path>& paths) {
 dftu_series* scan_dir(const char* root, std::int32_t root_size) {
     const dstd::String dir = to_string(root, root_size);
     dstd::Vector<dstd::Path> paths;
-    if (!run_sync(
-            "dftu.fs.scan_dir", [&](coro::Scope&) -> coro::CoroTask<void> {
-                auto listing_task = runtime::fs::list_dir(dstd::PathView(dir));
-                auto listing = co_await std::move(listing_task);
-                if (!listing) throw common::DFTUtilsException(listing.error());
-                for (auto& entry : *listing)
-                    paths.push_back(std::move(entry.path));
-            })) {
+    if (!run_sync("dftu.fs.scan_dir",
+                  [&](coro::Scope&) -> coro::CoroTask<dstd::Result<void>> {
+                      auto listing_task =
+                          runtime::fs::list_dir(dstd::PathView(dir));
+                      auto listing = co_await std::move(listing_task);
+                      if (!listing) co_return listing.error();
+                      for (auto& entry : *listing)
+                          paths.push_back(std::move(entry.path));
+                      co_return dstd::Result<void>{};
+                  })) {
         return nullptr;
     }
     return paths_column(paths);
@@ -79,16 +77,16 @@ dftu_series* scan_dir_pattern(const char* root, std::int32_t root_size,
         options.patterns.push_back(std::move(name));
     }
     dstd::Vector<dstd::Path> paths;
-    if (!run_sync("dftu.fs.scan_dir_pattern",
-                  [&](coro::Scope& scope) -> coro::CoroTask<void> {
-                      auto found_task = runtime::fs::find_all(
-                          scope, dstd::PathView(dir), options);
-                      auto found = co_await std::move(found_task);
-                      if (!found)
-                          throw common::DFTUtilsException(found.error());
-                      for (auto& file : *found)
-                          paths.push_back(std::move(file.path));
-                  })) {
+    if (!run_sync(
+            "dftu.fs.scan_dir_pattern",
+            [&](coro::Scope& scope) -> coro::CoroTask<dstd::Result<void>> {
+                auto found_task =
+                    runtime::fs::find_all(scope, dstd::PathView(dir), options);
+                auto found = co_await std::move(found_task);
+                if (!found) co_return found.error();
+                for (auto& file : *found) paths.push_back(std::move(file.path));
+                co_return dstd::Result<void>{};
+            })) {
         return nullptr;
     }
     return paths_column(paths);
@@ -101,9 +99,10 @@ std::int32_t compress(const char* in, std::int32_t in_size, const char* out,
             .with_output(to_string(out, out_size));
     bool ok = false;
     if (!run_sync("dftu.file.compress",
-                  [&](coro::Scope&) -> coro::CoroTask<void> {
+                  [&](coro::Scope&) -> coro::CoroTask<dstd::Result<void>> {
                       fileio::FileCompressorUtility compressor;
                       ok = (co_await compressor(input)).has_value();
+                      co_return dstd::Result<void>{};
                   })) {
         return 0;
     }
@@ -117,9 +116,10 @@ std::int32_t decompress(const char* in, std::int32_t in_size, const char* out,
             .with_output(to_string(out, out_size));
     bool ok = false;
     if (!run_sync("dftu.file.decompress",
-                  [&](coro::Scope&) -> coro::CoroTask<void> {
+                  [&](coro::Scope&) -> coro::CoroTask<dstd::Result<void>> {
                       fileio::FileDecompressorUtility decompressor;
                       ok = (co_await decompressor(input)).has_value();
+                      co_return dstd::Result<void>{};
                   })) {
         return 0;
     }

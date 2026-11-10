@@ -226,6 +226,7 @@ set(DFTRACER_UTILS_UTILITIES_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/dlio/trace_loader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/dlio/optimizer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/dlio/yaml_emit.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/dlio/event_map_yaml.cpp
 )
 
 set(DFTRACER_UTILS_INDEX_SOURCES
@@ -1566,6 +1567,22 @@ create_library(
     ${DFTU_ARROW_PACKAGES}
   STATIC_BUNDLED_PACKAGES
     yaml-cpp)
+
+# The two files that call yaml-cpp catch its exceptions.
+set_source_files_properties(
+  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/dlio/yaml_emit.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/dlio/event_map_yaml.cpp
+  PROPERTIES COMPILE_OPTIONS -fexceptions SKIP_PRECOMPILE_HEADERS ON)
+
+# Boost.Math reports a domain, pole, overflow, evaluation or rounding error
+# through errno and a NaN or infinite result, and never throws.
+set_source_files_properties(
+  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/dlio/distributions.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/dlio/mixture.cpp
+  PROPERTIES
+    COMPILE_DEFINITIONS
+    "BOOST_MATH_DOMAIN_ERROR_POLICY=errno_on_error;BOOST_MATH_POLE_ERROR_POLICY=errno_on_error;BOOST_MATH_OVERFLOW_ERROR_POLICY=errno_on_error;BOOST_MATH_EVALUATION_ERROR_POLICY=errno_on_error;BOOST_MATH_ROUNDING_ERROR_POLICY=errno_on_error"
+)
 
 foreach(variant objects shared static)
   dftu_variant_target(VARIANT_TARGET dftracer_utils_utilities ${variant})

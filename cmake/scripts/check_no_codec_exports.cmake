@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MIT
-# Fails when a shared library of ours exports a zlib, zlib-ng or zstd symbol.
+# Fails when a shared library of ours exports a zlib, zlib-ng or zstd symbol,
+# or, outside macOS, a Vectorscan symbol.
 # The zlib-ng and zstd archives are linked with hidden visibility, so a process
 # that also loads another zlib or zstd binds none of its own calls to ours.
 #
@@ -22,6 +23,14 @@ set(zlib_name
 
 set(zstd_name "^(ZSTD_|ZSTDMT_|ZDICT_|HUF_|FSE_|HIST_|POOL_|ERR_getErrorString$)")
 
+# The Vectorscan archive keeps its hs_* API default-visible; duql links it
+# with --exclude-libs, which macOS ld does not have.
+if(SUFFIX STREQUAL ".dylib")
+  set(hs_name "")
+else()
+  set(hs_name "^(hs_|ch_)")
+endif()
+
 set(found "")
 foreach(lib IN LISTS libs)
   if(NOT EXISTS "${lib}")
@@ -38,7 +47,9 @@ foreach(lib IN LISTS libs)
   foreach(line IN LISTS lines)
     string(REGEX REPLACE "^.* " "" sym "${line}")
     string(REGEX REPLACE "^_" "" sym "${sym}")
-    if(sym MATCHES "${zlib_name}" OR sym MATCHES "${zstd_name}")
+    if(sym MATCHES "${zlib_name}"
+       OR sym MATCHES "${zstd_name}"
+       OR (hs_name AND sym MATCHES "${hs_name}"))
       list(APPEND found "${lib}: ${sym}")
     endif()
   endforeach()
@@ -46,7 +57,7 @@ endforeach()
 
 if(found)
   list(JOIN found "\n  " text)
-  message(FATAL_ERROR "codec symbols exported:\n  ${text}")
+  message(FATAL_ERROR "codec or Vectorscan symbols exported:\n  ${text}")
 endif()
 list(LENGTH libs count)
 message(STATUS "no zlib or zstd symbol exported by ${count} libraries: ${libs}")

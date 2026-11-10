@@ -47,9 +47,22 @@ endif()
 set(DFTU_PC_PRIVATE_json "-lsimdjson")
 set(DFTU_PC_PRIVATE_io "-ldftracer_zlib -ldeflate")
 set(DFTU_PC_PRIVATE_store "-ldeflate -lzstd")
+# Keep the static Vectorscan archive's symbols out of a shared library's
+# dynamic symbol table (GNU-style linkers only).
+function(dftu_exclude_vectorscan_symbols target)
+  if(APPLE OR WIN32)
+    return()
+  endif()
+  get_target_property(hs_lib dftracer_utils_vectorscan::hs IMPORTED_LOCATION)
+  if(hs_lib)
+    get_filename_component(hs_name "${hs_lib}" NAME)
+    target_link_options(${target} PRIVATE "LINKER:--exclude-libs,${hs_name}")
+  endif()
+endfunction()
+
 set(DFTU_PC_PRIVATE_duql "-lsimdjson -lpcre2-8 ${DFTU_PC_VECTORSCAN} -ldftracer_hwy")
 set(DFTU_PC_PRIVATE_dataframe "-lsimdjson -ldftracer_hwy_contrib -ldftracer_hwy -ldftracer_utf8proc_static -lzstd ${DFTU_PC_NANOARROW}")
-set(DFTU_PC_PRIVATE_trace "-lsimdjson -lyaml-cpp -ldftracer_zlib -ldeflate -lzstd ${DFTU_PC_VECTORSCAN} ${DFTU_PC_NANOARROW}")
+set(DFTU_PC_PRIVATE_trace "-lsimdjson -lyaml-cpp -ldftracer_zlib -ldeflate -lzstd ${DFTU_PC_NANOARROW}")
 set(DFTU_PC_PRIVATE_utilities "-lyaml-cpp ${DFTU_PC_NANOARROW}")
 
 # ##############################################################################
@@ -1138,7 +1151,8 @@ set(DFTRACER_UTILS_DUQL_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/subsumption.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/substr_simd.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/pattern.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/abi.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/abi.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/literal_set.cpp)
 
 # Highway per-target dispatch functions are referenced only within their TU.
 set_source_files_properties(
@@ -1201,6 +1215,9 @@ foreach(variant objects shared static)
       if(DFTRACER_UTILS_ENABLE_VECTORSCAN)
         target_link_libraries(${VARIANT_TARGET}
                               PRIVATE dftracer_utils_vectorscan::hs)
+        if(variant STREQUAL "shared")
+          dftu_exclude_vectorscan_symbols(${VARIANT_TARGET})
+        endif()
       endif()
     endif()
     link_simdjson(${VARIANT_TARGET} ${VARIANT_UPPER})
@@ -1433,26 +1450,21 @@ create_library(
     dftracer_utils_zlib
     yaml-cpp
     libdeflate
-    zstd
-    ${DFTU_VECTORSCAN_PACKAGES})
+    zstd)
 
 foreach(variant objects shared static)
   dftu_variant_target(VARIANT_TARGET dftracer_utils_trace ${variant})
   set(VARIANT_UPPER ${DFTU_LINK_TYPE_${variant}})
   if(TARGET ${VARIANT_TARGET})
     link_simdjson(${VARIANT_TARGET} ${VARIANT_UPPER})
-    # The one library gets yaml-cpp, zlib-ng, libdeflate, zstd and vectorscan
-    # from utilities, and a second entry for any of them makes the linker warn
-    # about a duplicate.
+    # The one library gets yaml-cpp, zlib-ng, libdeflate, zstd from utilities,
+    # and a second entry for any of them makes the linker warn about a
+    # duplicate. Vectorscan lives in duql; trace reaches it through duql.
     if(NOT DFTRACER_UTILS_SINGLE_LIBRARY OR variant STREQUAL "objects")
       link_yaml_cpp(${VARIANT_TARGET})
       link_zlib(${VARIANT_TARGET})
       link_libdeflate(${VARIANT_TARGET})
       link_zstd(${VARIANT_TARGET})
-      if(DFTRACER_UTILS_ENABLE_VECTORSCAN)
-        target_link_libraries(${VARIANT_TARGET}
-                              PRIVATE dftracer_utils_vectorscan::hs)
-      endif()
     endif()
     if(DFTRACER_UTILS_ENABLE_ARROW)
       link_nanoarrow(${VARIANT_TARGET} ${VARIANT_UPPER})
@@ -1542,6 +1554,9 @@ foreach(variant objects shared static)
       if(DFTRACER_UTILS_ENABLE_VECTORSCAN)
         target_link_libraries(${VARIANT_TARGET}
                               PRIVATE dftracer_utils_vectorscan::hs)
+        if(variant STREQUAL "shared")
+          dftu_exclude_vectorscan_symbols(${VARIANT_TARGET})
+        endif()
       endif()
     endif()
 

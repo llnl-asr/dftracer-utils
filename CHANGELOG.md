@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Link Vectorscan only into the duql library, so the trace library no longer holds a second copy and is about 10 MB smaller on Linux x86-64.
+  On Linux the duql library no longer exports the `hs_*` symbols of Vectorscan.
 - Rename the `morsel_rows` parameter of `LazyFrame.collect` and `LazyFrame.stream` to `batch_size` in C++ and Python.
 - Report the first input error of the duql builder from `Pipe::text()` and `Source::text()`, which now give a `dstd::Expected<dstd::String, DuqlError>`, in place of raising `std::invalid_argument`.
   A `Col`, `Pipe` or `Source` keeps the first error of the calls that built it, such as a number that is not finite or a `bucket` with a bad mode.

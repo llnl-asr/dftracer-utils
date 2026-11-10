@@ -2,18 +2,13 @@
 #ifndef DFTRACER_UTILS_INDEX_PLAN_PREFILTER_H
 #define DFTRACER_UTILS_INDEX_PLAN_PREFILTER_H
 
-#include <dftracer/utils/common/config.h>
-#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/duql/literal_set.h>
 #include <dftracer/utils/duql/query.h>
 
 #include <cstddef>
 #include <cstdint>
-
-#ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
-struct hs_database;
-#endif
 
 namespace dftracer::utils::index::plan {
 
@@ -85,14 +80,11 @@ class Prefilter {
 
     dstd::Vector<dstd::Vector<dstd::String>> clauses_;
     dstd::Vector<Range> ranges_;
-#ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
-    /// One literal database over the distinct needles; null with none, or
-    /// when no clause has HS_MIN_ALTERNATIVES needles.
-    dstd::SharedPtr<hs_database> db_;
-    /// Per clause needle, its id in `db_`.
+    /// One literal set over the distinct needles; empty with none, or when
+    /// no clause has HS_MIN_ALTERNATIVES needles.
+    duql::LiteralSet literals_;
+    /// Per clause needle, its id in `literals_`.
     dstd::Vector<dstd::Vector<unsigned>> ids_;
-    std::size_t distinct_ = 0;
-#endif
     /// Per needle, the offset of its rarest byte, which memchr looks for.
     dstd::Vector<dstd::Vector<std::size_t>> pivots_;
 };

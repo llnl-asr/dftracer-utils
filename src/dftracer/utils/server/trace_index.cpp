@@ -6,6 +6,7 @@
 #include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/hash_map.h>
@@ -50,7 +51,7 @@ namespace {
 // span from its time role's zonemap to the latest time plus the longest
 // duration. Events without a clock sit at ts 0, so a dftracer file starts at
 // its first start above 0 when it has one.
-dftracer::utils::index::gzip::TimeBounds timeline_bounds(
+dstd::Result<dftracer::utils::index::gzip::TimeBounds> timeline_bounds(
     const dftracer::utils::index::Snapshot& snapshot,
     const dftracer::utils::index::FileRef& file,
     const dftracer::utils::index::RecordSchema& schema) {
@@ -58,18 +59,20 @@ dftracer::utils::index::gzip::TimeBounds timeline_bounds(
         index::gzip::TimeBounds bounds;
         const auto& roles = schema.roles;
         if (roles.time.empty()) return bounds;
-        const auto time =
-            common::unwrap(index::extensions::kinds::file_value_range(
-                snapshot, file, roles.time));
+        const auto time_range = index::extensions::kinds::file_value_range(
+            snapshot, file, roles.time);
+        if (!time_range) return time_range.error();
+        const auto& time = *time_range;
         if (!time) return bounds;
         const double time_us = index::micros_per(roles.time_unit);
         double end = time->second * time_us;
-        if (!roles.duration.empty())
-            if (const auto dur =
-                    common::unwrap(index::extensions::kinds::file_value_range(
-                        snapshot, file, roles.duration));
-                dur && dur->second > 0)
+        if (!roles.duration.empty()) {
+            const auto dur_range = index::extensions::kinds::file_value_range(
+                snapshot, file, roles.duration);
+            if (!dur_range) return dur_range.error();
+            if (const auto& dur = *dur_range; dur && dur->second > 0)
                 end += dur->second * index::micros_per(roles.duration_unit);
+        }
         bounds.valid = true;
         bounds.min_timestamp_us = static_cast<std::uint64_t>(
             std::llround(std::max(0.0, time->first * time_us)));
@@ -77,11 +80,14 @@ dftracer::utils::index::gzip::TimeBounds timeline_bounds(
             static_cast<std::uint64_t>(std::llround(std::max(0.0, end)));
         return bounds;
     }
-    auto bounds = common::unwrap(
-        dftracer::utils::index::extensions::kinds::file_time_bounds(snapshot,
-                                                                    file));
+    auto found = dftracer::utils::index::extensions::kinds::file_time_bounds(
+        snapshot, file);
+    if (!found) return found.error();
+    auto bounds = *found;
     if (!bounds.valid || bounds.min_timestamp_us != 0) return bounds;
-    const auto stats = common::unwrap(index::scalar_stats(snapshot, file));
+    const auto scalar = index::scalar_stats(snapshot, file);
+    if (!scalar) return scalar.error();
+    const auto& stats = *scalar;
     if (stats &&
         stats->stats.min_nonzero_timestamp_us <= bounds.max_timestamp_us)
         bounds.min_timestamp_us = stats->stats.min_nonzero_timestamp_us;
@@ -90,9 +96,11 @@ dftracer::utils::index::gzip::TimeBounds timeline_bounds(
 
 // True when the index at `root` no longer matches `paths`: a path is not
 // indexed, its stat changed, or the index holds a path that is not listed.
-bool index_is_stale(dstd::StringView root,
-                    const dstd::Vector<dstd::String>& paths) {
-    const auto snapshot = common::unwrap(index::plan::open_snapshot(root));
+dstd::Result<bool> index_is_stale(dstd::StringView root,
+                                  const dstd::Vector<dstd::String>& paths) {
+    auto opened = index::plan::open_snapshot(root);
+    if (!opened) return opened.error();
+    const auto& snapshot = *opened;
     dstd::HashSet<dstd::StringView> listed;
     dstd::Vector<dstd::String> logical_paths;
     logical_paths.reserve(paths.size());
@@ -109,9 +117,60 @@ bool index_is_stale(dstd::StringView root,
             index::Freshness::Current)
             return true;
     }
-    for (const auto& file : common::unwrap(snapshot.files()))
+    const auto files = snapshot.files();
+    if (!files) return files.error();
+    for (const auto& file : *files)
         if (listed.find(file.path()) == listed.end()) return true;
     return false;
+}
+
+dstd::Result<dstd::SharedPtr<const TraceIndex::FileChunkMeta>> read_chunk_meta(
+    const TraceIndex::FileInfo& file) {
+    auto opened = index::plan::open_snapshot(file.index_path);
+    if (!opened) return opened.error();
+    const auto& snapshot = *opened;
+    const auto ref =
+        snapshot.file(index::store::internal::get_logical_path(file.path));
+    if (!ref) return dstd::SharedPtr<const TraceIndex::FileChunkMeta>{};
+    auto m = dstd::make_shared<TraceIndex::FileChunkMeta>();
+    auto spans = index::spans(snapshot, *ref);
+    if (!spans) return spans.error();
+    m->spans = std::move(*spans);
+    auto stats = index::chunk_stats(snapshot, *ref);
+    if (!stats) return stats.error();
+    m->stats = std::move(*stats);
+    return dstd::SharedPtr<const TraceIndex::FileChunkMeta>(std::move(m));
+}
+
+// Read one file's record schema and time bounds from its index into `info`
+// and `schema`. A failure leaves them as they are.
+dstd::Result<void> read_file_bounds(
+    TraceIndex::FileInfo& info,
+    const dftracer::utils::index::RecordSchema*& schema_out) {
+    auto opened = index::plan::open_snapshot(info.index_path);
+    if (!opened) return opened.error();
+    const auto& snapshot = *opened;
+    const auto file =
+        snapshot.file(index::store::internal::get_logical_path(info.path));
+    if (!file) return {};
+    if (auto loaded = index::load_index_schemas(info.index_path); !loaded)
+        return loaded.error();
+    auto recorded = index::plan::recorded_schema(snapshot, info.path);
+    if (!recorded) return recorded.error();
+    const auto* schema = *recorded;
+    if (!schema) {
+        auto detected = index::detect_file_schema(info.path);
+        if (!detected) return detected.error();
+        schema = *detected;
+    }
+    schema_out = schema;
+    auto bounds = timeline_bounds(snapshot, *file, *schema);
+    if (!bounds) return bounds.error();
+    if (bounds->valid) {
+        info.min_timestamp_us = bounds->min_timestamp_us;
+        info.max_timestamp_us = bounds->max_timestamp_us;
+    }
+    return {};
 }
 
 }  // namespace
@@ -518,7 +577,7 @@ TraceIndex::TraceIndex(const dstd::String& directory,
                            ? common::constants::indexer::DEFAULT_CHECKPOINT_SIZE
                            : checkpoint_size) {}
 
-coro::CoroTask<void> TraceIndex::initialize() {
+coro::CoroTask<dstd::Result<void>> TraceIndex::initialize() {
     runtime::fs::FindOptions find_options;
     find_options.patterns =
         runtime::fs::names_of(common::constants::indexer::INPUT_FILE_PATTERNS);
@@ -528,7 +587,7 @@ coro::CoroTask<void> TraceIndex::initialize() {
                                      find_options);
     });
     auto found = co_await std::move(scoped);
-    if (!found) throw common::DFTUtilsException(found.error());
+    if (!found) co_return found.error();
     const auto& entries = *found;
 
     files_.clear();
@@ -542,7 +601,9 @@ coro::CoroTask<void> TraceIndex::initialize() {
     dstd::Vector<std::size_t> large_files;
     dstd::Vector<const dftracer::utils::index::RecordSchema*> file_schemas(
         entries.size(), nullptr);
-    record_schema_ = common::unwrap(index::get_schema("dftracer"));
+    auto default_schema = index::get_schema("dftracer");
+    if (!default_schema) co_return default_schema.error();
+    record_schema_ = *default_schema;
 
     // The reuse decision below is existence-only, so a changed .pfw would be
     // served from a stale index. Drop any (shared) index root whose sources
@@ -555,16 +616,19 @@ coro::CoroTask<void> TraceIndex::initialize() {
                 .emplace_back(entry.path.str());
         for (auto& [root, paths] : by_root) {
             const dstd::String store = index::store_of(root);
-            if (!common::unwrap(dstd::fs::exists(dstd::PathView(store)))) {
+            const auto store_exists = dstd::fs::exists(dstd::PathView(store));
+            if (!store_exists.has_value()) co_return store_exists.error();
+            if (!*store_exists) {
                 continue;
             }
             bool stale = false;
-            try {
-                stale = index_is_stale(root, paths);
-            } catch (const std::exception& e) {
+            const auto checked = index_is_stale(root, paths);
+            if (checked.has_value()) {
+                stale = *checked;
+            } else {
                 DFTRACER_UTILS_LOG_WARN(
                     "TraceIndex: stale check failed for {}: {}; rebuilding",
-                    root, e.what());
+                    root, checked.error().message());
                 stale = true;
             }
             if (stale) {
@@ -591,8 +655,10 @@ coro::CoroTask<void> TraceIndex::initialize() {
         std::size_t idx = files_.size();
         path_to_index_[info.path] = idx;
 
-        info.has_bloom_data = common::unwrap(
-            dstd::fs::exists(dstd::PathView(index::store_of(info.index_path))));
+        const auto has_store =
+            dstd::fs::exists(dstd::PathView(index::store_of(info.index_path)));
+        if (!has_store.has_value()) co_return has_store.error();
+        info.has_bloom_data = *has_store;
         info.has_checkpoint_index = info.has_bloom_data;
         if (!info.has_bloom_data) {
             needs_build.push_back(idx);
@@ -625,7 +691,8 @@ coro::CoroTask<void> TraceIndex::initialize() {
         auto init_task =
             [files_ptr, needs_build_ptr, large_files_ptr, global_min_ts_ptr,
              global_max_ts_ptr, schemas_ptr, index_dir, max_concurrent,
-             checkpoint_size](coro::Scope&) -> coro::CoroTask<void> {
+             checkpoint_size](
+                coro::Scope&) -> coro::CoroTask<dstd::Result<void>> {
             if (!needs_build_ptr->empty()) {
                 DFTRACER_UTILS_LOG_INFO(
                     "TraceIndex: building index for {} file(s) ...",
@@ -663,11 +730,9 @@ coro::CoroTask<void> TraceIndex::initialize() {
                     }
 
                     dstd::Optional<index::Snapshot> snapshot;
-                    try {
-                        snapshot.emplace(
-                            common::unwrap(index::plan::open_snapshot(ipath)));
-                    } catch (const std::exception&) {
-                    }
+                    if (auto opened = index::plan::open_snapshot(ipath);
+                        opened.has_value())
+                        snapshot.emplace(std::move(*opened));
 
                     for (auto idx : idxs) {
                         auto* info = &(*files_ptr)[idx];
@@ -684,8 +749,11 @@ coro::CoroTask<void> TraceIndex::initialize() {
                         if (bloom_ok) {
                             info->index_path = ipath;
                             info->has_bloom_data = true;
-                            info->has_checkpoint_index = common::unwrap(
-                                dstd::fs::exists(dstd::PathView(ipath)));
+                            const auto has_index =
+                                dstd::fs::exists(dstd::PathView(ipath));
+                            if (!has_index.has_value())
+                                co_return has_index.error();
+                            info->has_checkpoint_index = *has_index;
                             large_files_ptr->push_back(idx);
                         } else {
                             DFTRACER_UTILS_LOG_WARN(
@@ -724,40 +792,14 @@ coro::CoroTask<void> TraceIndex::initialize() {
                                 auto* info = &(*files_ptr)[fi];
 
                                 if (info->has_bloom_data) {
-                                    try {
-                                        const auto snapshot = common::unwrap(
-                                            index::plan::open_snapshot(
-                                                info->index_path));
-                                        const auto file = snapshot.file(
-                                            index::store::internal::
-                                                get_logical_path(info->path));
-                                        if (file) {
-                                            common::unwrap(
-                                                index::load_index_schemas(
-                                                    info->index_path));
-                                            const auto* schema = common::unwrap(
-                                                index::plan::recorded_schema(
-                                                    snapshot, info->path));
-                                            if (!schema)
-                                                schema = common::unwrap(
-                                                    index::detect_file_schema(
-                                                        info->path));
-                                            (*schemas_ptr)[fi] = schema;
-                                            auto bounds = timeline_bounds(
-                                                snapshot, *file, *schema);
-                                            if (bounds.valid) {
-                                                info->min_timestamp_us =
-                                                    bounds.min_timestamp_us;
-                                                info->max_timestamp_us =
-                                                    bounds.max_timestamp_us;
-                                            }
-                                        }
-                                    } catch (const std::exception& e) {
+                                    if (auto read = read_file_bounds(
+                                            *info, (*schemas_ptr)[fi]);
+                                        !read)
                                         DFTRACER_UTILS_LOG_WARN(
                                             "TraceIndex: failed to read time "
                                             "bounds from {}: {}",
-                                            info->index_path, e.what());
-                                    }
+                                            info->index_path,
+                                            read.error().message());
                                 }
 
                                 auto meta_input =
@@ -797,7 +839,7 @@ coro::CoroTask<void> TraceIndex::initialize() {
                 }
             }
 
-            co_return;
+            co_return dstd::Result<void>{};
         };
 
         const auto ran = configure_default_runtime(settings).block_on(
@@ -805,23 +847,23 @@ coro::CoroTask<void> TraceIndex::initialize() {
         if (!ran) {
             DFTRACER_UTILS_LOG_ERROR("TraceIndex: init failed: {}",
                                      ran.error().format());
-            co_await coro::stop_here();
+            co_return ran.error();
         }
     }
 
     // One time unit per trace: resolve it once from the first file's CM.
     if (!files_.empty()) {
-        try {
-            utilities::reader::TraceReaderConfig cfg;
-            cfg.file_path = files_.front().path;
-            cfg.index_dir = index_dir_;
-            utilities::reader::TraceReader reader(cfg);
-            auto metric = co_await reader.read_time_metric();
-            time_metric_ = common::unwrap(std::move(metric));
-        } catch (const std::exception& e) {
+        utilities::reader::TraceReaderConfig cfg;
+        cfg.file_path = files_.front().path;
+        cfg.index_dir = index_dir_;
+        utilities::reader::TraceReader reader(cfg);
+        auto metric = co_await reader.read_time_metric();
+        if (metric)
+            time_metric_ = *metric;
+        else
             DFTRACER_UTILS_LOG_WARN(
-                "TraceIndex: failed to resolve time_metric: {}", e.what());
-        }
+                "TraceIndex: failed to resolve time_metric: {}",
+                metric.error().message());
         if (time_metric_ != TimeMetric::Us) {
             DFTRACER_UTILS_LOG_INFO(
                 "TraceIndex: trace time unit is {} (scaling viz to us)",
@@ -833,15 +875,14 @@ coro::CoroTask<void> TraceIndex::initialize() {
     // records; files of another are reported, and a request that reads them
     // fails with the View's error.
     if (!files_.empty()) {
-        try {
-            dstd::Vector<dftracer::utils::index::plan::RowSetFile> sources;
-            sources.reserve(files_.size());
-            for (const FileInfo& f : files_)
-                sources.push_back(
-                    {dstd::String(dstd::StringView(f.path)),
-                     dstd::String(dstd::StringView(f.index_path))});
-            record_schema_ = common::unwrap(
-                dftracer::utils::index::plan::files_schema(sources));
+        dstd::Vector<dftracer::utils::index::plan::RowSetFile> sources;
+        sources.reserve(files_.size());
+        for (const FileInfo& f : files_)
+            sources.push_back({dstd::String(dstd::StringView(f.path)),
+                               dstd::String(dstd::StringView(f.index_path))});
+        auto voted = dftracer::utils::index::plan::files_schema(sources);
+        if (voted) {
+            record_schema_ = *voted;
             for (std::size_t i = 0; i < files_.size(); ++i) {
                 const auto* schema = file_schemas[i];
                 if (schema && schema->id != record_schema_->id)
@@ -850,10 +891,10 @@ coro::CoroTask<void> TraceIndex::initialize() {
                         "serves files of one record schema",
                         files_[i].path, schema->id, record_schema_->id);
             }
-        } catch (const std::exception& e) {
+        } else {
             DFTRACER_UTILS_LOG_WARN(
                 "TraceIndex: failed to resolve the record schema: {}",
-                e.what());
+                voted.error().message());
         }
     }
 
@@ -868,6 +909,7 @@ coro::CoroTask<void> TraceIndex::initialize() {
     // viewer opens with several summary-backed requests at once, and all of
     // them would otherwise queue behind the load.
     load_persisted_viz_summary();
+    co_return dstd::Result<void>{};
 }
 
 dstd::String TraceIndex::resolve(dstd::StringView rowset, dstd::StringView key,
@@ -927,68 +969,53 @@ dstd::String TraceIndex::viz_summary_fingerprint() const {
         mix(&f.min_timestamp_us, sizeof f.min_timestamp_us);
         mix(&f.max_timestamp_us, sizeof f.max_timestamp_us);
     }
-    char out[17];
-    std::snprintf(out, sizeof out, "%016llx",
-                  static_cast<unsigned long long>(h));
-    return dstd::String(out);
+    return dstd::fmt<"{:016x}">(h);
 }
 
 bool TraceIndex::load_persisted_viz_summary() {
-    try {
-        const auto path = viz_summary_cache_path();
-        const auto loaded = dstd::fs::read_file(path.view());
-        if (!loaded || loaded->empty()) return false;
-        const dstd::String& buf = *loaded;
+    const auto path = viz_summary_cache_path();
+    const auto loaded = dstd::fs::read_file(path.view());
+    if (!loaded || loaded->empty()) return false;
+    const dstd::String& buf = *loaded;
 
-        BufReader r{buf.data(), buf.data() + buf.size()};
-        if (r.u32() != VIZ_SUMMARY_MAGIC ||
-            r.u32() != VIZ_SUMMARY_FORMAT_VERSION)
-            return false;
-        dstd::String fp = r.str();
-        if (!r.ok || fp != viz_summary_fingerprint()) return false;
-
-        auto summary = dstd::make_unique<VizSummary>();
-        if (!deserialize_summary(r, *summary)) return false;
-
-        set_viz_summary(std::move(summary));
-        DFTRACER_UTILS_LOG_INFO("TraceIndex: loaded cached viz summary from {}",
-                                path);
-        return true;
-    } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_WARN("TraceIndex: viz summary cache load failed: {}",
-                                e.what());
+    BufReader r{buf.data(), buf.data() + buf.size()};
+    if (r.u32() != VIZ_SUMMARY_MAGIC || r.u32() != VIZ_SUMMARY_FORMAT_VERSION)
         return false;
-    }
+    dstd::String fp = r.str();
+    if (!r.ok || fp != viz_summary_fingerprint()) return false;
+
+    auto summary = dstd::make_unique<VizSummary>();
+    if (!deserialize_summary(r, *summary)) return false;
+
+    set_viz_summary(std::move(summary));
+    DFTRACER_UTILS_LOG_INFO("TraceIndex: loaded cached viz summary from {}",
+                            path);
+    return true;
 }
 
 void TraceIndex::persist_viz_summary() const {
     if (viz_summary_state_.load(std::memory_order_acquire) != 2 ||
         !viz_summary_)
         return;
-    try {
-        BufWriter w;
-        w.u32(VIZ_SUMMARY_MAGIC);
-        w.u32(VIZ_SUMMARY_FORMAT_VERSION);
-        w.str(viz_summary_fingerprint());
-        serialize_summary(w, *viz_summary_);
+    BufWriter w;
+    w.u32(VIZ_SUMMARY_MAGIC);
+    w.u32(VIZ_SUMMARY_FORMAT_VERSION);
+    w.str(viz_summary_fingerprint());
+    serialize_summary(w, *viz_summary_);
 
-        const auto path = viz_summary_cache_path();
-        dstd::String tmp_text(path.str());
-        tmp_text.append(".tmp");
-        const dstd::Path tmp{dstd::StringView(tmp_text)};
-        if (!dstd::fs::write_file(tmp.view(),
-                                  dstd::StringView(w.b.data(), w.b.size()))) {
-            dstd::fs::remove(tmp.view()).discard();
-            return;
-        }
-        // A cache that cannot be published is dropped, and the next run
-        // builds it again.
-        if (!dstd::fs::rename(tmp.view(), path.view())) {
-            dstd::fs::remove(tmp.view()).discard();
-        }
-    } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_WARN(
-            "TraceIndex: viz summary cache write failed: {}", e.what());
+    const auto path = viz_summary_cache_path();
+    dstd::String tmp_text(path.str());
+    tmp_text.append(".tmp");
+    const dstd::Path tmp{dstd::StringView(tmp_text)};
+    if (!dstd::fs::write_file(tmp.view(),
+                              dstd::StringView(w.b.data(), w.b.size()))) {
+        dstd::fs::remove(tmp.view()).discard();
+        return;
+    }
+    // A cache that cannot be published is dropped, and the next run
+    // builds it again.
+    if (!dstd::fs::rename(tmp.view(), path.view())) {
+        dstd::fs::remove(tmp.view()).discard();
     }
 }
 
@@ -1016,22 +1043,13 @@ dstd::SharedPtr<const TraceIndex::FileChunkMeta> TraceIndex::chunk_meta(
     // immutable, so a rare concurrent double-read just discards one copy.
     dstd::SharedPtr<const FileChunkMeta> meta;  // null == known-unavailable
     if (!file.index_path.empty()) {
-        try {
-            const auto snapshot =
-                common::unwrap(index::plan::open_snapshot(file.index_path));
-            const auto ref = snapshot.file(
-                index::store::internal::get_logical_path(file.path));
-            if (ref) {
-                auto m = dstd::make_shared<FileChunkMeta>();
-                m->spans = common::unwrap(index::spans(snapshot, *ref));
-                m->stats = common::unwrap(index::chunk_stats(snapshot, *ref));
-                meta = std::move(m);
-            }
-        } catch (const std::exception& e) {
+        auto built = read_chunk_meta(file);
+        if (built)
+            meta = std::move(*built);
+        else
             DFTRACER_UTILS_LOG_WARN(
                 "TraceIndex: chunk metadata read failed for {}: {}", file.path,
-                e.what());
-        }
+                built.error().message());
     }
 
     std::lock_guard<std::mutex> lock(chunk_meta_mutex_);

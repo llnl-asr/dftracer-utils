@@ -130,7 +130,7 @@ const void* detail::agg_ext_vtable() { return &g_agg; }
         acc->spiller = dataframe::AggSpiller(memory_budget_);
         return acc;
     });
-    return slot ? reinterpret_cast<::dftu_agg*>(slot->get()) : nullptr;
+    return reinterpret_cast<::dftu_agg*>(slot->get());
 }
 
 void PluginFold::agg_accumulate(::dftu_agg* a, const ::dftu_dataframe* df) {

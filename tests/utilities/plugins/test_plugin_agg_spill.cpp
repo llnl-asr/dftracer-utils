@@ -226,7 +226,7 @@ dstd::Map<dstd::String, Row> run_with_budget(dftu_plugin& p,
                 unit,
                 {}}));
         }
-        master.merge(*pf);
+        dftu_utils_test::ok(master.merge(*pf));
     }
     *runs = master.agg_spill_runs(ACC_NAME);
     finalize_now(master);

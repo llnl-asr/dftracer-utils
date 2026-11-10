@@ -476,7 +476,7 @@ class FailingFold final : public Fold {
     }
     void seal_unit(const ScanUnit&) override {}
     void drop_unit(const ScanUnit&) override {}
-    void merge(Fold&) override {}
+    dstd::Result<void> merge(Fold&) override { return {}; }
     dftracer::utils::coro::CoroTask<bool> finalize(
         const CoverageSet&) override {
         co_return false;
@@ -501,7 +501,7 @@ class RecordingFold final : public Fold {
     }
     void seal_unit(const ScanUnit&) override {}
     void drop_unit(const ScanUnit&) override {}
-    void merge(Fold&) override {}
+    dstd::Result<void> merge(Fold&) override { return {}; }
     dftracer::utils::coro::CoroTask<bool> finalize(
         const CoverageSet&) override {
         co_return false;

@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_SERVER_HTTP_RESPONSE_H
 
 #include <dftracer/utils/coro/async_generator.h>
+#include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/span.h>
@@ -42,6 +43,11 @@ struct HttpResponse {
     static HttpResponse not_found();
     static HttpResponse bad_request(const dstd::String &msg);
     static HttpResponse internal_error(const dstd::String &msg);
+
+    /// The response an error stands for, with its message as the body: 400
+    /// for a bad argument (the InvalidArgument code of @ref common::ErrorCode,
+    /// or a duql parse error), 500 for every other error.
+    static HttpResponse from_error(const dstd::Error &error);
 
     static HttpResponse streaming(
         dstd::UniquePtr<StreamGenerator> gen,

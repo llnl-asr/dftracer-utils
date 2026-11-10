@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/field_ref.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
@@ -67,7 +68,7 @@ static dstd::String serialize_counters_body(const dstd::Vector<double>& read,
     b.append_comma();
     b.append_key_value("ops", ops);
     b.end_object();
-    return dstd::String(b);
+    return json_string(b);
 }
 
 // Re-aggregate the summary's finest counter buckets into `buckets` output
@@ -124,14 +125,16 @@ coro::CoroTask<HttpResponse> handle_viz_counters(const HttpRequest& req,
     if (bucket_us <= 0) bucket_us = 1;
 
     const dstd::String cache_key =
-        dstd::String(req.path) + "?" + params.canonical_key();
+        dstd::fmt<"{}?{}">(req.path, params.canonical_key());
     if (auto hit = index.viz_cache().get(cache_key))
         co_return HttpResponse::ok(std::move(*hit));
 
     // Zoomed-out, unfiltered counter tracks come from the activity summary.
     const TraceFields fields(index.record_schema());
     if (viz_summary_eligible(params, fields)) {
-        const VizSummary* s = co_await ensure_viz_summary(index);
+        const auto ensured = co_await ensure_viz_summary(index);
+        if (!ensured) co_return HttpResponse::from_error(ensured.error());
+        const VizSummary* s = *ensured;
         if (s != nullptr && s->t_end > s->t_begin) {
             if (const VizSummary::Level* level = s->level_for(bucket_us)) {
                 co_return HttpResponse::ok(serve_counters_from_summary(
@@ -169,7 +172,7 @@ coro::CoroTask<HttpResponse> handle_viz_counters(const HttpRequest& req,
             fold_counter(ev, begin, bucket_us, nb, acc);
         });
     };
-    auto r = common::unwrap(co_await v.map_batches<CounterAcc>(
+    auto mapped = co_await v.map_batches<CounterAcc>(
         fold_events,
         [](CounterAcc&& x, CounterAcc&& y) {
             if (y.ops.empty()) return std::move(x);
@@ -177,7 +180,9 @@ coro::CoroTask<HttpResponse> handle_viz_counters(const HttpRequest& req,
             x.merge_from(y);
             return std::move(x);
         },
-        slots, limit > 0 ? static_cast<std::uint64_t>(limit) : 0));
+        slots, limit > 0 ? static_cast<std::uint64_t>(limit) : 0);
+    if (!mapped) co_return HttpResponse::from_error(mapped.error());
+    auto& r = *mapped;
 
     bool truncated = r.stats.truncated;
     CounterAcc total = std::move(r.value);

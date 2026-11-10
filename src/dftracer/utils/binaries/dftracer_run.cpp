@@ -157,17 +157,21 @@ class RunArgParse : public binaries::ArgParse {
 
 // Layer config low to high: shared pconfig, shared pargs, block pconfig, block
 // pargs.
-static ConfigTree build_config(const SharedConfig& shared,
-                               const PluginBlock& block) {
+static dstd::Result<ConfigTree> build_config(const SharedConfig& shared,
+                                             const PluginBlock& block) {
     ConfigTree tree;
-    if (!shared.pconfig.empty())
-        tree.merge_from(
-            ConfigTree::from_json_file(dstd::String(shared.pconfig)));
+    if (!shared.pconfig.empty()) {
+        auto file = ConfigTree::from_json_file(dstd::String(shared.pconfig));
+        if (!file) return file.error();
+        tree.merge_from(*file);
+    }
     for (const auto& [k, v] : shared.pargs)
         tree.set(dstd::String(k), dstd::String(v));
-    if (!block.pconfig.empty())
-        tree.merge_from(
-            ConfigTree::from_json_file(dstd::String(block.pconfig)));
+    if (!block.pconfig.empty()) {
+        auto file = ConfigTree::from_json_file(dstd::String(block.pconfig));
+        if (!file) return file.error();
+        tree.merge_from(*file);
+    }
     for (const auto& [k, v] : block.pargs)
         tree.set(dstd::String(k), dstd::String(v));
     return tree;
@@ -187,15 +191,12 @@ static dstd::Result<Plugins> build_plugins(const PluginArgs& plugin_args) {
     auto builder = Plugins::builder();
     for (const auto& block : plugin_args.blocks) {
         if (block_has_config(plugin_args.shared, block)) {
-            try {
-                builder.add(dstd::String(block.path),
-                            build_config(plugin_args.shared, block));
-            } catch (const std::exception& e) {
-                return common::make_error(
-                    common::ErrorCode::InvalidArgument,
-                    common::str_cat("plugin '", block.path,
-                                    "' config error: ", e.what()));
-            }
+            auto config = build_config(plugin_args.shared, block);
+            if (!config)
+                return common::make_error<"plugin '{}' config error: {}">(
+                    common::ErrorCode::InvalidArgument, block.path,
+                    config.error().message());
+            builder.add(dstd::String(block.path), std::move(*config));
         } else {
             builder.add(dstd::String(block.path));
         }

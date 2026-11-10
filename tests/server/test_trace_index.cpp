@@ -50,7 +50,8 @@ TEST_CASE("TraceIndex - discovers .pfw.gz files") {
 
     auto body = [&]() -> coro::CoroTask<void> {
         TraceIndex index(dstd::String(env.dir()), dstd::String(env.dir()));
-        co_await index.initialize();
+        auto initialized = co_await index.initialize();
+        CHECK(initialized.has_value());
 
         file_count = index.file_count();
         if (file_count >= 2) {
@@ -78,7 +79,8 @@ TEST_CASE("TraceIndex - find_file by path") {
 
     auto body = [&]() -> coro::CoroTask<void> {
         TraceIndex index(dstd::String(env.dir()), dstd::String(env.dir()));
-        co_await index.initialize();
+        auto initialized = co_await index.initialize();
+        CHECK(initialized.has_value());
 
         auto* info = index.find_file(dstd::String(file));
         if (info != nullptr) {
@@ -106,7 +108,8 @@ TEST_CASE("TraceIndex - find_file returns nullptr for missing file") {
 
     auto body = [&]() -> coro::CoroTask<void> {
         TraceIndex index(dstd::String(env.dir()), dstd::String(env.dir()));
-        co_await index.initialize();
+        auto initialized = co_await index.initialize();
+        CHECK(initialized.has_value());
 
         auto* info = index.find_file("/nonexistent/path.pfw.gz");
         if (info == nullptr) {
@@ -132,7 +135,8 @@ TEST_CASE("TraceIndex - file_at by index") {
 
     auto body = [&]() -> coro::CoroTask<void> {
         TraceIndex index(dstd::String(env.dir()), dstd::String(env.dir()));
-        co_await index.initialize();
+        auto initialized = co_await index.initialize();
+        CHECK(initialized.has_value());
 
         REQUIRE(index.file_count() >= 1);
         auto* info = index.file_at(0);
@@ -160,7 +164,8 @@ TEST_CASE("TraceIndex - empty directory") {
 
     auto body = [&]() -> coro::CoroTask<void> {
         TraceIndex index(dstd::String(dir.str()), dstd::String(dir.str()));
-        co_await index.initialize();
+        auto initialized = co_await index.initialize();
+        CHECK(initialized.has_value());
 
         count.store(index.file_count());
         co_return;
@@ -202,7 +207,8 @@ TEST_CASE("TraceIndex - genesis output resolves run keys through runs") {
     dstd::String schema, app, nodes;
     auto body = [&]() -> coro::CoroTask<void> {
         TraceIndex index(dstd::String(env.dir()), dstd::String(env.dir()));
-        co_await index.initialize();
+        auto initialized = co_await index.initialize();
+        CHECK(initialized.has_value());
         schema = index.record_schema().id;
         app = index.resolve("runs", "run", "app", "ab");
         nodes = index.resolve("runs", "run", "nodes", "ab");

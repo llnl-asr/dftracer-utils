@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
@@ -9,45 +10,65 @@
 
 #include <cerrno>
 #include <cstdlib>
-#include <stdexcept>
 
 namespace dftracer::utils::plugins {
 
-ConfigTree::Node ConfigTree::build_node(const simdjson::dom::element& el) {
+dstd::Result<ConfigTree::Node> ConfigTree::build_node(
+    const simdjson::dom::element& el) {
+    auto fail = [](simdjson::error_code err) {
+        return common::make_error<"plugin config does not read: {}">(
+            common::ErrorCode::Parse, simdjson::error_message(err));
+    };
     Node n;
     switch (el.type()) {
         case simdjson::dom::element_type::OBJECT: {
             n.kind = DFTU_VAL_OBJECT;
-            for (auto kv : simdjson::dom::object(el))
-                n.members.emplace_back(dstd::String(kv.key),
-                                       build_node(kv.value));
+            simdjson::dom::object object;
+            if (const auto err = el.get_object().get(object)) return fail(err);
+            for (auto kv : object) {
+                auto child = build_node(kv.value);
+                if (!child) return child.error();
+                n.members.emplace_back(dstd::String(kv.key), std::move(*child));
+            }
             break;
         }
         case simdjson::dom::element_type::ARRAY: {
             n.kind = DFTU_VAL_ARRAY;
-            for (auto item : simdjson::dom::array(el))
-                n.items.push_back(build_node(item));
+            simdjson::dom::array array;
+            if (const auto err = el.get_array().get(array)) return fail(err);
+            for (auto item : array) {
+                auto child = build_node(item);
+                if (!child) return child.error();
+                n.items.push_back(std::move(*child));
+            }
             break;
         }
-        case simdjson::dom::element_type::STRING:
+        case simdjson::dom::element_type::STRING: {
             n.kind = DFTU_VAL_STR;
-            n.str = dstd::String(dstd::StringView(el.get_string()));
+            dstd::StringView sv;
+            if (const auto err = el.get_string().get(sv)) return fail(err);
+            n.str = dstd::String(sv);
             break;
-        case simdjson::dom::element_type::INT64:
+        }
+        case simdjson::dom::element_type::INT64: {
             n.kind = DFTU_VAL_I64;
-            n.i64 = el.get_int64();
+            if (const auto err = el.get_int64().get(n.i64)) return fail(err);
             break;
-        case simdjson::dom::element_type::UINT64:
+        }
+        case simdjson::dom::element_type::UINT64: {
             n.kind = DFTU_VAL_I64;
-            n.i64 = static_cast<std::int64_t>(std::uint64_t(el.get_uint64()));
+            std::uint64_t u = 0;
+            if (const auto err = el.get_uint64().get(u)) return fail(err);
+            n.i64 = static_cast<std::int64_t>(u);
             break;
+        }
         case simdjson::dom::element_type::DOUBLE:
             n.kind = DFTU_VAL_F64;
-            n.f64 = el.get_double();
+            if (const auto err = el.get_double().get(n.f64)) return fail(err);
             break;
         case simdjson::dom::element_type::BOOL:
             n.kind = DFTU_VAL_BOOL;
-            n.b = el.get_bool();
+            if (const auto err = el.get_bool().get(n.b)) return fail(err);
             break;
         case simdjson::dom::element_type::NULL_VALUE:
         default:
@@ -57,41 +78,42 @@ ConfigTree::Node ConfigTree::build_node(const simdjson::dom::element& el) {
     return n;
 }
 
-ConfigTree ConfigTree::from_json_file(dstd::StringView path) {
+dstd::Result<ConfigTree> ConfigTree::from_json_file(dstd::StringView path) {
     simdjson::dom::parser parser;
     simdjson::dom::element doc;
     const auto err = parser.load(path).get(doc);
-    if (err) {
-        dstd::String msg("failed to parse plugin config '");
-        msg.append(path).append("': ").append(simdjson::error_message(err));
-        throw std::runtime_error(msg.c_str());
-    }
-    if (doc.type() != simdjson::dom::element_type::OBJECT) {
-        dstd::String msg("plugin config '");
-        msg.append(path).append("' root must be a JSON object");
-        throw std::runtime_error(msg.c_str());
-    }
+    if (err)
+        return common::make_error<"failed to parse plugin config '{}': {}">(
+            err == simdjson::IO_ERROR ? common::ErrorCode::Io
+                                      : common::ErrorCode::Parse,
+            path, simdjson::error_message(err));
+    if (doc.type() != simdjson::dom::element_type::OBJECT)
+        return common::make_error<
+            "plugin config '{}' root must be a JSON "
+            "object">(common::ErrorCode::InvalidArgument, path);
     ConfigTree tree;
-    tree.root_node_ = build_node(doc);
+    auto root = build_node(doc);
+    if (!root) return root.error();
+    tree.root_node_ = std::move(*root);
     return tree;
 }
 
-ConfigTree ConfigTree::from_json_string(dstd::StringView json) {
+dstd::Result<ConfigTree> ConfigTree::from_json_string(dstd::StringView json) {
     simdjson::dom::parser parser;
     simdjson::dom::element doc;
     // The padded copy must outlive `doc`, which borrows its buffer.
     simdjson::padded_string padded(json);
     const auto err = parser.parse(padded).get(doc);
-    if (err) {
-        dstd::String msg("failed to parse plugin config: ");
-        msg.append(simdjson::error_message(err));
-        throw std::runtime_error(msg.c_str());
-    }
-    if (doc.type() != simdjson::dom::element_type::OBJECT) {
-        throw std::runtime_error("plugin config root must be a JSON object");
-    }
+    if (err)
+        return common::make_error<"failed to parse plugin config: {}">(
+            common::ErrorCode::Parse, simdjson::error_message(err));
+    if (doc.type() != simdjson::dom::element_type::OBJECT)
+        return common::make_error(common::ErrorCode::InvalidArgument,
+                                  "plugin config root must be a JSON object");
     ConfigTree tree;
-    tree.root_node_ = build_node(doc);
+    auto root = build_node(doc);
+    if (!root) return root.error();
+    tree.root_node_ = std::move(*root);
     return tree;
 }
 

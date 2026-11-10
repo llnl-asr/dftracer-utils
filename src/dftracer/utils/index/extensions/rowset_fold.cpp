@@ -305,12 +305,13 @@ void RowSetFold::drop_unit(const trace::views::detail::ScanUnit&) {
         for (auto& c : p.columns) c.clear();
 }
 
-void RowSetFold::merge(trace::views::detail::Fold& slice) {
+dstd::Result<void> RowSetFold::merge(trace::views::detail::Fold& slice) {
     auto& other = static_cast<RowSetFold&>(slice);
     abandoned_ = abandoned_ || other.abandoned_;
     bytes_ += other.bytes_;
     for (std::size_t r = 0; r < sealed_.size(); ++r)
         absorb(r, other.sealed_[r]);
+    return {};
 }
 
 dstd::Result<void> RowSetFold::write(index::FileBuild& build) const {

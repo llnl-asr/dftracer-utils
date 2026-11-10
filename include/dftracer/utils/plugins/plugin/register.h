@@ -457,7 +457,11 @@ dftu_plugin* make_plugin(const dftu_value* config) {
         vt.config_keys = &detail::config_key_thunk<Slice>;
     if constexpr (detail::MeasurableSlice<Slice>)
         vt.bytes = [](void* slice) -> std::uint64_t {
-            return static_cast<const Slice*>(slice)->bytes();
+            try {
+                return static_cast<const Slice*>(slice)->bytes();
+            } catch (...) {
+                return 0;
+            }
         };
     if constexpr (detail::ReclaimableSlice<Slice>)
         vt.reclaim = [](void* slice, std::uint64_t want) -> std::uint64_t {
@@ -547,7 +551,11 @@ const dftu_state_desc& state_desc_of(const char* name) {
         };
         if constexpr (Measurable<State>)
             d.bytes = [](const void* s) -> std::uint64_t {
-                return static_cast<const Box*>(s)->state.bytes();
+                try {
+                    return static_cast<const Box*>(s)->state.bytes();
+                } catch (...) {
+                    return 0;
+                }
             };
         if constexpr (Spillable<State>) {
             d.serialize = [](const void* s, dftu_bytes* out,

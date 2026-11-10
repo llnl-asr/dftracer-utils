@@ -129,7 +129,7 @@ dstd::String openapi_json(const Router& router) {
     }
     b.end_object();      // paths
     b.end_object();      // root
-    return dstd::String(b);
+    return json_string(b);
 }
 
 }  // namespace

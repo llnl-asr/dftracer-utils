@@ -69,11 +69,12 @@ struct CountingFold : Fold {
     }
     void seal_unit(const ScanUnit&) override { ++sealed_units; }
     void drop_unit(const ScanUnit&) override {}
-    void merge(Fold& other) override {
+    dstd::Result<void> merge(Fold& other) override {
         auto& o = static_cast<CountingFold&>(other);
         count += o.count;
         ts_sum += o.ts_sum;
         sealed_units += o.sealed_units;
+        return {};
     }
     coro::CoroTask<bool> finalize(const CoverageSet&) override {
         co_return true;
@@ -91,7 +92,7 @@ struct FailingFold : Fold {
     }
     void seal_unit(const ScanUnit&) override {}
     void drop_unit(const ScanUnit&) override {}
-    void merge(Fold&) override {}
+    dstd::Result<void> merge(Fold&) override { return {}; }
     coro::CoroTask<bool> finalize(const CoverageSet&) override {
         co_return true;
     }
@@ -298,9 +299,10 @@ TEST_SUITE("Fold") {
             }
             void seal_unit(const ScanUnit&) override {}
             void drop_unit(const ScanUnit&) override {}
-            void merge(Fold& o) override {
+            dstd::Result<void> merge(Fold& o) override {
                 for (auto& [t, nv] : static_cast<DictProbe&>(o).got)
                     got.insert({t, nv});
+                return {};
             }
             coro::CoroTask<bool> finalize(const CoverageSet&) override {
                 co_return true;

@@ -108,8 +108,9 @@ class Plugins {
     /// so they co-scan with its other branches. Call before session.execute().
     /// The returned handle resolves like every other @ref
     /// dftracer::utils::trace::views::ViewSession "ViewSession" handle:
-    /// `->results` and `->stats` throw if read before session.execute()
-    /// completes.
+    /// `->results` and `->stats` end the process if read before
+    /// session.execute() completes; execute() returns the error of a failed
+    /// scan as a Result.
     ///
     /// The index prune that run() applies would starve a co-scanning branch
     /// (e.g. a collect()) of events it is entitled to, so attach() only

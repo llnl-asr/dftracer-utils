@@ -224,12 +224,13 @@ class NativeRowFold : public Fold {
     void seal_unit(const ScanUnit&) override {}
     void drop_unit(const ScanUnit&) override {}
 
-    void merge(Fold& other) override {
+    dstd::Result<void> merge(Fold& other) override {
         auto& o = static_cast<NativeRowFold&>(other);
         events_.insert(events_.end(),
                        std::make_move_iterator(o.events_.begin()),
                        std::make_move_iterator(o.events_.end()));
         o.events_.clear();
+        return {};
     }
 
     coro::CoroTask<bool> finalize(const CoverageSet&) override {

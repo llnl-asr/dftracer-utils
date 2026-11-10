@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/duql/errc.h>
 #include <dftracer/utils/server/http_response.h>
 
 #include <algorithm>
@@ -96,6 +98,14 @@ HttpResponse HttpResponse::internal_error(const dstd::String &msg) {
                         .status_text = "Internal Server Error",
                         .headers = {{"Content-Type", "text/plain"}},
                         .body = msg};
+}
+
+HttpResponse HttpResponse::from_error(const dstd::Error &error) {
+    const dstd::String message(error.message());
+    if (common::errorcode_of(error) == common::ErrorCode::InvalidArgument ||
+        error.is_code(duql::DuqlErrc::Parse))
+        return bad_request(message);
+    return internal_error(message);
 }
 
 HttpResponse HttpResponse::streaming(dstd::UniquePtr<StreamGenerator> gen,

@@ -238,8 +238,12 @@ coro::CoroTask<HttpResponse> handle_viz_proctree(const HttpRequest& req,
     // The per-process totals are exact and whole-trace, so the summary answers
     // this identically to a scan; only a single-file view has to scan.
     bool single_file = !params.get("file").empty();
-    const VizSummary* summary =
-        single_file ? nullptr : co_await ensure_viz_summary(index);
+    const VizSummary* summary = nullptr;
+    if (!single_file) {
+        const auto ensured = co_await ensure_viz_summary(index);
+        if (!ensured) co_return HttpResponse::from_error(ensured.error());
+        summary = *ensured;
+    }
     if (summary != nullptr) {
         Acc& acc = accs[0];
         for (const auto& p : summary->procs) {
@@ -259,11 +263,12 @@ coro::CoroTask<HttpResponse> handle_viz_proctree(const HttpRequest& req,
         auto files =
             select_viz_target_files(index, params, static_cast<double>(gmin),
                                     static_cast<double>(gmax));
-        common::unwrap(
+        const auto scanned =
             co_await views::View::from_files(to_view_files(files))
                 .phase(views::Phase::Events)
                 .cancel_when([&req]() { return req.cancel_token.cancelled(); })
-                .for_each_batch(on_batch, slots));
+                .for_each_batch(on_batch, slots);
+        if (!scanned) co_return HttpResponse::from_error(scanned.error());
     }
 
     dstd::HashMap<std::int64_t, std::uint64_t> first_ts;
@@ -394,7 +399,7 @@ coro::CoroTask<HttpResponse> handle_viz_proctree(const HttpRequest& req,
     sb.start_object();
     sb.append_key_value("nodes", nodes);
     sb.end_object();
-    co_return HttpResponse::ok(dstd::String(sb));
+    co_return HttpResponse::ok(json_string(sb));
 }
 
 }  // namespace dftracer::utils::server

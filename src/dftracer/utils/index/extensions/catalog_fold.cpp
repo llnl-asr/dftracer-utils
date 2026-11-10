@@ -46,7 +46,7 @@ dstd::Result<void> CatalogFold::step(
     return {};
 }
 
-void CatalogFold::merge(trace::views::detail::Fold& slice) {
+dstd::Result<void> CatalogFold::merge(trace::views::detail::Fold& slice) {
     auto& other = static_cast<CatalogFold&>(slice);
     for (auto& [file, ofs] : other.files_) {
         FileState& fs = files_[file];
@@ -58,6 +58,7 @@ void CatalogFold::merge(trace::views::detail::Fold& slice) {
             st.count += o.count;
         }
     }
+    return {};
 }
 
 dstd::HashMap<dstd::String, index::store::PathStat> CatalogFold::paths() const {

@@ -402,7 +402,9 @@ TEST_CASE("plugin ABI: config tree reads scalars, nested, array, and default") {
             .discard();
     }
 
-    plugins::ConfigTree tree = plugins::ConfigTree::from_json_file(path);
+    auto loaded = plugins::ConfigTree::from_json_file(path);
+    REQUIRE(loaded.has_value());
+    plugins::ConfigTree tree = std::move(*loaded);
     dftu_plugin* p =
         dftracer::utils::plugins::make_plugin<ConfigSlice>(tree.root());
     auto* slice = static_cast<ConfigSlice*>(p->make_slice(p->self));

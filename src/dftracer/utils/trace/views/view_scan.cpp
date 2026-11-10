@@ -782,7 +782,8 @@ coro::CoroTask<dstd::Result<ExportStats>> for_each_scanned_batch(
 
     for (std::size_t w = 0; w < nworkers; ++w)
         for (std::size_t k = 0; k < folds.size(); ++k)
-            folds[k]->merge(*fslice[w][k]);
+            if (auto merged = folds[k]->merge(*fslice[w][k]); !merged)
+                co_return merged.error();
 
     ExportStats st;
     st.chunks_skipped = skipped;

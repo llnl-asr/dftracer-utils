@@ -1401,7 +1401,7 @@ class DistinctRowFold : public Fold {
     void seal_unit(const ScanUnit&) override {}
     void drop_unit(const ScanUnit&) override {}
 
-    void merge(Fold& other) override {
+    dstd::Result<void> merge(Fold& other) override {
         auto& o = static_cast<DistinctRowFold&>(other);
         for (std::size_t i = 0; i < kinds_.size(); ++i)
             kinds_[i] |= o.kinds_[i];
@@ -1417,6 +1417,7 @@ class DistinctRowFold : public Fold {
         }
         o.entries_.clear();
         o.index_.clear();
+        return {};
     }
 
     coro::CoroTask<bool> finalize(const CoverageSet&) override {
@@ -2091,7 +2092,7 @@ class BranchDriverFold : public Fold {
     void drop_unit(const ScanUnit&) override {}
     // Each slice's consumers hold their own state and the branch reduces them
     // in finalize, so there is nothing to fold slice-to-slice here.
-    void merge(Fold&) override {}
+    dstd::Result<void> merge(Fold&) override { return {}; }
 
     coro::CoroTask<bool> finalize(const CoverageSet&) override {
         for (const auto* br : *branches_) {

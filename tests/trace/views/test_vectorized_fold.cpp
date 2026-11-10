@@ -95,7 +95,7 @@ TEST_SUITE("VectorizedFold") {
             dstd::Span<const views::detail::FoldEvent>(ea), unit, {}}));
         dftu_utils_test::ok(b->step(views::detail::FoldBatch{
             dstd::Span<const views::detail::FoldEvent>(eb), unit, {}}));
-        a->merge(*b);
+        dftu_utils_test::ok(a->merge(*b));
 
         const auto* av =
             static_cast<views::detail::VectorizedFold<Acc>*>(a.get());

@@ -140,7 +140,12 @@ static coro::CoroTask<int> run_server(const ServerArgParse* cli) {
 
     TraceIndex trace_index(dir, index_dir, executor_threads,
                            cli->checkpoint_size);
-    co_await trace_index.initialize();
+    auto initialized = co_await trace_index.initialize();
+    if (!initialized) {
+        DFTRACER_UTILS_LOG_ERROR("Failed to index {}: {}", dir,
+                                 initialized.error().message());
+        co_return 1;
+    }
 
     Router router;
     router.set_auth_token(dstd::String(cli->auth_token));
@@ -193,12 +198,10 @@ static coro::CoroTask<int> run_server(const ServerArgParse* cli) {
             // The summary also builds on the first viz request, so a
             // failed prewarm is logged and the server keeps running.
             ctx.spawn([index_ptr]() -> coro::CoroTask<void> {
-                try {
-                    co_await prewarm_viz_summary(*index_ptr);
-                } catch (const std::exception& e) {
+                auto prewarmed = co_await prewarm_viz_summary(*index_ptr);
+                if (!prewarmed)
                     DFTRACER_UTILS_LOG_ERROR("viz prewarm failed: {}",
-                                             e.what());
-                }
+                                             prewarmed.error().message());
             });
 #endif
             auto on_connection =

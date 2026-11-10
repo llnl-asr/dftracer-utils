@@ -98,7 +98,7 @@ class StreamRowFold : public Fold {
     void seal_unit(const ScanUnit& unit) override { end_unit(unit); }
     void drop_unit(const ScanUnit& unit) override { end_unit(unit); }
     void skip_unit(const ScanUnit& unit) override { end_unit(unit); }
-    void merge(Fold&) override {}
+    dstd::Result<void> merge(Fold&) override { return {}; }
 
     coro::CoroTask<bool> finalize(const CoverageSet&) override {
         co_return true;

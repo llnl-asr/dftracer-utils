@@ -59,11 +59,12 @@ class TypedCollectFold : public Fold {
     void seal_unit(const ScanUnit&) override {}
     void drop_unit(const ScanUnit&) override {}
 
-    void merge(Fold& other) override {
+    dstd::Result<void> merge(Fold& other) override {
         auto& o = static_cast<TypedCollectFold&>(other);
         regular_.append(std::move(o.regular_));
         aggregated_.append(std::move(o.aggregated_));
         counters_.append(std::move(o.counters_));
+        return {};
     }
 
     coro::CoroTask<bool> finalize(const CoverageSet&) override {

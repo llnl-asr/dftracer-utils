@@ -41,13 +41,7 @@ coro::CoroTask<HttpResponse> handle_prov_graph(const HttpRequest& req,
     }
     auto graph = co_await trace::provenance::extract_provenance_graph(
         v, slots, std::move(opts));
-    if (!graph) {
-        const dstd::String message(graph.error().message());
-        co_return common::errorcode_of(graph.error()) ==
-                common::ErrorCode::InvalidArgument
-            ? HttpResponse::bad_request(message)
-            : HttpResponse::internal_error(message);
-    }
+    if (!graph) co_return HttpResponse::from_error(graph.error());
     co_return HttpResponse::ok(graph->to_json());
 }
 

@@ -112,16 +112,7 @@ coro::CoroTask<void> TcpListener::accept_loop(coro::Scope& scope,
         track_active(fd);
         scope.spawn([this, fd, addr_copy,
                      handler = shared_handler]() -> coro::CoroTask<void> {
-            // One failed connection must not end the server, so its error is
-            // logged here instead of reaching the scope's join.
-            try {
-                co_await (*handler)(fd, addr_copy);
-            } catch (const std::exception& e) {
-                DFTRACER_UTILS_LOG_ERROR("connection handler failed: {}",
-                                         e.what());
-            } catch (...) {
-                DFTRACER_UTILS_LOG_ERROR("{}", "connection handler failed");
-            }
+            co_await (*handler)(fd, addr_copy);
             co_await runtime::io::close(fd);
             untrack_active(fd);
         });

@@ -6,6 +6,7 @@
 // CounterAcc fold, and the ph="C" counter-series fold, plus group-value
 // extraction and containment-depth assignment. Internal to the server.
 
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
@@ -702,19 +703,18 @@ inline void extrapolate_aggregate(const AggRec& r, double interval,
     // (dftu_cnt, dur_sum, tag_min, ...). The record's ts is its window start;
     // we rewrite that one occurrence.
     const dstd::String ts_key =
-        "\"ts\":" + dstd::to_string(static_cast<long long>(r.ts));
+        dstd::fmt<"\"ts\":{}">(static_cast<long long>(r.ts));
     const bool has_dur = std::isfinite(ev_dur);
     const dstd::String tail =
-        has_dur ? ",\"dur\":" + dstd::to_string(ev_dur) + ",\"est\":true}"
+        has_dur ? dstd::fmt<",\"dur\":{:f},\"est\":true}">(ev_dur)
                 : dstd::String(",\"est\":true}");
     for (std::int64_t i = i_lo; i <= i_hi; i += step) {
         double ts_i = r.ts + static_cast<double>(i) * spacing;
         dstd::String e = r.raw;
         auto pos = e.find(ts_key);
         if (pos != dstd::String::npos)
-            e.replace(
-                pos, ts_key.size(),
-                "\"ts\":" + dstd::to_string(static_cast<long long>(ts_i)));
+            e.replace(pos, ts_key.size(),
+                      dstd::fmt<"\"ts\":{}">(static_cast<long long>(ts_i)));
         if (e.empty() || e.back() != '}') continue;
         e.pop_back();
         e += tail;

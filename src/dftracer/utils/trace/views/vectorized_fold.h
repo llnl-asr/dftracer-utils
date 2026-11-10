@@ -84,8 +84,9 @@ class VectorizedFold : public Fold {
     void seal_unit(const ScanUnit&) override {}
     void drop_unit(const ScanUnit&) override {}
 
-    void merge(Fold& other) override {
+    dstd::Result<void> merge(Fold& other) override {
         (*merge_)(state_, static_cast<VectorizedFold&>(other).state_);
+        return {};
     }
 
     coro::CoroTask<bool> finalize(const CoverageSet&) override {

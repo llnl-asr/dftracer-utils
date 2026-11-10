@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/spill_dir.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
@@ -110,7 +111,7 @@ void StateAccum::maybe_spill() {
     bool written = false;
     if (!dir.empty()) {
         const dstd::Path path =
-            dir.view() / ("run_" + dstd::to_string(runs_.size()) + ".bin");
+            dir.view() / dstd::fmt<"run_{}.bin">(runs_.size());
         const dstd::StringView blob(static_cast<const char*>(out.data),
                                     static_cast<std::size_t>(out.len));
         if (dstd::fs::write_file(path, blob)) {

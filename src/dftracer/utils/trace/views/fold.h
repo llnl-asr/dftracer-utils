@@ -112,7 +112,7 @@ class Fold {
     virtual void drop_unit(const ScanUnit& unit) = 0;
     /// A unit the scan passes over unread (covered or pruned mid-scan).
     virtual void skip_unit(const ScanUnit&) {}
-    virtual void merge(Fold& slice) = 0;
+    virtual dstd::Result<void> merge(Fold& slice) = 0;
 
     /// `covered` bounds what a fold may claim. Returns false to persist
     /// nothing.

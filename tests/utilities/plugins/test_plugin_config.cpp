@@ -4,6 +4,7 @@
 // dropped. A plugin that declares none keeps the old unchecked behaviour.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/plugins/config.h>
 #include <dftracer/utils/plugins/plugins.h>
@@ -21,7 +22,9 @@ namespace {
 
 // The fixture declares `label` required and `stride` optional.
 plugins::ConfigTree config_of(const dstd::String& json) {
-    return plugins::ConfigTree::from_json_string(json);
+    auto tree = plugins::ConfigTree::from_json_string(json);
+    REQUIRE(tree.has_value());
+    return std::move(*tree);
 }
 
 auto load(plugins::ConfigTree cfg) {
@@ -98,4 +101,27 @@ TEST_CASE("no config at all still fails when a key is required") {
     auto set = plugins::Plugins::builder().add(CONFIG_KEYS_PLUGIN_PATH).build();
     REQUIRE(!set.has_value());
     CHECK(has_substr(set.error().message(), "required key 'label' is missing"));
+}
+
+TEST_CASE("a config that is not JSON is a parse error") {
+    auto tree = plugins::ConfigTree::from_json_string("{not json");
+    REQUIRE(!tree.has_value());
+    CHECK(common::errorcode_of(tree.error()) == common::ErrorCode::Parse);
+    CHECK(has_substr(tree.error().message(), "failed to parse plugin config"));
+}
+
+TEST_CASE("a config whose root is not an object is an invalid argument") {
+    auto tree = plugins::ConfigTree::from_json_string("[1, 2]");
+    REQUIRE(!tree.has_value());
+    CHECK(common::errorcode_of(tree.error()) ==
+          common::ErrorCode::InvalidArgument);
+    CHECK(has_substr(tree.error().message(),
+                     "plugin config root must be a JSON object"));
+}
+
+TEST_CASE("a config file that is missing is an I/O error") {
+    auto tree = plugins::ConfigTree::from_json_file(
+        "/nonexistent/dftracer-utils-no-such-config.json");
+    REQUIRE(!tree.has_value());
+    CHECK(common::errorcode_of(tree.error()) == common::ErrorCode::Io);
 }

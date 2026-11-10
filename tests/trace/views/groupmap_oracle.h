@@ -891,7 +891,7 @@ class OracleAggFold : public dftracer::utils::trace::views::detail::Fold {
         const dftracer::utils::trace::views::detail::ScanUnit&) override {}
     void drop_unit(
         const dftracer::utils::trace::views::detail::ScanUnit&) override {}
-    void merge(Fold& other) override {
+    dftracer::utils::dstd::Result<void> merge(Fold& other) override {
         auto& o = static_cast<OracleAggFold&>(other);
         merge_maps(map_, o.map_, *plan_);
         o.map_.clear();
@@ -901,6 +901,7 @@ class OracleAggFold : public dftracer::utils::trace::views::detail::Fold {
         for (auto& [h, n] : o.maps_.host) maps_.host.emplace(h, std::move(n));
         o.maps_.fpath.clear();
         o.maps_.host.clear();
+        return {};
     }
     dftracer::utils::coro::CoroTask<bool> finalize(
         const dftracer::utils::trace::views::detail::CoverageSet&) override {

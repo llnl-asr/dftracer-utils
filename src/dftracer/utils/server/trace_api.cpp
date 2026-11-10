@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
@@ -59,7 +60,7 @@ static coro::CoroTask<HttpResponse> handle_files(const HttpRequest& /*req*/,
     b.append_comma();
     b.append_key_value("count", static_cast<std::int64_t>(index.file_count()));
     b.end_object();
-    co_return HttpResponse::ok(dstd::String(b));
+    co_return HttpResponse::ok(json_string(b));
 }
 
 // --- GET /api/files/info ---
@@ -99,7 +100,7 @@ static coro::CoroTask<HttpResponse> handle_file_info(const HttpRequest& /*req*/,
     b.append_key_value("uncompressed_size",
                        static_cast<std::int64_t>(info->uncompressed_size));
     b.end_object();
-    co_return HttpResponse::ok(dstd::String(b));
+    co_return HttpResponse::ok(json_string(b));
 }
 
 // --- GET /api/info ---
@@ -186,7 +187,7 @@ static coro::CoroTask<HttpResponse> handle_info(const HttpRequest& /*req*/,
     }
     b.end_array();
     b.end_object();
-    co_return HttpResponse::ok(dstd::String(b));
+    co_return HttpResponse::ok(json_string(b));
 }
 
 void register_trace_api(Router& router, TraceIndex& index) {
@@ -265,7 +266,7 @@ void register_trace_api(Router& router, TraceIndex& index) {
             }
             b.end_object();
             b.end_object();
-            co_return HttpResponse::ok(dstd::String(b));
+            co_return HttpResponse::ok(json_string(b));
         },
         RouteDoc{"Values of a source row set, by key: column `value` of the "
                  "rows whose column `key` is one of `keys`.",
@@ -282,8 +283,7 @@ void register_trace_api(Router& router, TraceIndex& index) {
            const QueryParams& params) -> coro::CoroTask<HttpResponse> {
             dstd::String id(params.get("id"));
             bool found = CancelRegistry::instance().cancel(id);
-            co_return HttpResponse::ok(dstd::String("{\"cancelled\":") +
-                                       (found ? "true" : "false") + "}");
+            co_return HttpResponse::ok(dstd::fmt<"{\"cancelled\":{}}">(found));
         },
         RouteDoc{"Cancel an in-flight request by its X-Request-Id.",
                  "Control",

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/scope_exit.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -63,22 +64,12 @@ coro::CoroTask<void> handle_connection(int client_fd,
             CancelRegistry::instance().create(req_id, client_fd);
         req.cancel_token = token;
 
-        // Remove the registration on every exit path, including a throw from
-        // the streaming branch below, so a client-controlled req_id cannot leak
-        // a CancelState for the process lifetime.
+        // Remove the registration on every exit path, so a client-controlled
+        // req_id cannot leak a CancelState for the process lifetime.
         auto cancel_guard =
             dstd::defer([&] { CancelRegistry::instance().remove(req_id); });
 
-        HttpResponse resp;
-        try {
-            resp = co_await router.handle(req);
-        } catch (const std::exception& e) {
-            DFTRACER_UTILS_LOG_ERROR("Handler exception: {}", e.what());
-            resp = HttpResponse::internal_error(e.what());
-        } catch (...) {
-            DFTRACER_UTILS_LOG_ERROR("Handler threw unknown exception");
-            resp = HttpResponse::internal_error("Internal server error");
-        }
+        HttpResponse resp = co_await router.handle(req);
         if (resp.is_streaming()) {
             auto hdrs = resp.serialize_headers();
             auto hdr_rc = co_await runtime::io::send(client_fd, hdrs.data(),
@@ -101,12 +92,13 @@ coro::CoroTask<void> handle_connection(int client_fd,
                         payload_size += sv.size() + 1;
                     }
 
-                    int hex_size = std::snprintf(hex, sizeof(hex), "%zx\r\n",
-                                                 payload_size);
+                    const std::size_t hex_size =
+                        dstd::fmt_to<"{:x}\r\n">(hex, sizeof(hex), payload_size)
+                            .size;
 
                     iovs.clear();
                     iovs.reserve(chunk->views.size() * 2 + 2);
-                    iovs.push_back({hex, static_cast<std::size_t>(hex_size)});
+                    iovs.push_back({hex, hex_size});
                     for (const auto& sv : chunk->views) {
                         iovs.push_back(
                             {const_cast<char*>(sv.data()), sv.size()});

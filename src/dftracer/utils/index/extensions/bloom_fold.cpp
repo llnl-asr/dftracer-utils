@@ -664,7 +664,7 @@ void BloomFold::drop_unit(const trace::views::detail::ScanUnit& unit) {
     it->second.auto_chunks.erase(unit.checkpoint_idx);
 }
 
-void BloomFold::merge(trace::views::detail::Fold& slice) {
+dstd::Result<void> BloomFold::merge(trace::views::detail::Fold& slice) {
     auto& other = static_cast<BloomFold&>(slice);
     last_state_ = nullptr;
     for (auto& [file, ofs] : other.files_) {
@@ -704,6 +704,7 @@ void BloomFold::merge(trace::views::detail::Fold& slice) {
             st.count += o.count;
         }
     }
+    return {};
 }
 
 coro::CoroTask<bool> BloomFold::finalize(

@@ -61,10 +61,9 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
 // any server-side predicate forces a live scan (pid/tid select whole lanes and
 // stay eligible); append_app_spans injects the summary's cached app spans.
 bool viz_summary_eligible(const QueryParams& params, const TraceFields& fields);
-coro::CoroTask<void> append_app_spans(dstd::Vector<dstd::String>& out,
-                                      TraceIndex& index, double begin,
-                                      double end, const QueryParams& params,
-                                      const TraceFields& fields);
+coro::CoroTask<dstd::Result<void>> append_app_spans(
+    dstd::Vector<dstd::String>& out, TraceIndex& index, double begin,
+    double end, const QueryParams& params, const TraceFields& fields);
 
 }  // namespace dftracer::utils::server
 

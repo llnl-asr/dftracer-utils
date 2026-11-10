@@ -98,6 +98,12 @@ std::uint64_t expected_dur_sum() {
     return total;
 }
 
+plugins::ConfigTree config_of(const dstd::String& json) {
+    auto tree = plugins::ConfigTree::from_json_string(json);
+    REQUIRE(tree.has_value());
+    return std::move(*tree);
+}
+
 }  // namespace
 
 TEST_CASE("reference_plugin: every service reports OK") {
@@ -106,8 +112,7 @@ TEST_CASE("reference_plugin: every service reports OK") {
 
     auto set = plugins::Plugins::builder()
                    .add(REFERENCE_PLUGIN_PATH,
-                        plugins::ConfigTree::from_json_string(
-                            R"({"workdir": ")" + env.dir() + R"("})"))
+                        config_of(R"({"workdir": ")" + env.dir() + R"("})"))
                    .build();
     INFO((set.has_value() ? dstd::String{}
                           : dstd::String(set.error().message())));
@@ -131,9 +136,8 @@ TEST_CASE("reference_plugin: a forced-missing service fails loudly") {
 
     auto set = plugins::Plugins::builder()
                    .add(REFERENCE_PLUGIN_PATH,
-                        plugins::ConfigTree::from_json_string(
-                            R"({"workdir": ")" + env.dir() +
-                            R"(", "force_missing": "dftu.svc.agg@1"})"))
+                        config_of(R"({"workdir": ")" + env.dir() +
+                                  R"(", "force_missing": "dftu.svc.agg@1"})"))
                    .build();
     INFO((set.has_value() ? dstd::String{}
                           : dstd::String(set.error().message())));

@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/field_ref.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -11,6 +12,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/duql/errc.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/json/json_doc_guard.h>
@@ -50,9 +52,11 @@ using namespace dftracer::utils::trace;
 using namespace dftracer::utils::trace::views;
 using dftracer::utils::json::json_number;
 
-static duql::Query parsed_query(dstd::StringView text) {
+static dstd::Result<duql::Query> parsed_query(dstd::StringView text) {
     auto parsed = duql::Query::from_string(text);
-    if (!parsed) throw duql::DuqlParseError(parsed.error());
+    if (!parsed)
+        return common::make_error(duql::DuqlErrc::Parse,
+                                  parsed.error().format());
     return std::move(*parsed);
 }
 
@@ -196,7 +200,7 @@ static dstd::String serialize_density_body(
     }
     b.end_object();
     b.end_object();
-    return dstd::String(b);
+    return json_string(b);
 }
 
 // The summary is unfiltered, so any server-side predicate forces a live scan.
@@ -211,13 +215,14 @@ bool viz_summary_eligible(const QueryParams& params,
              (!params.get("pid").empty() || !params.get("tid").empty()));
 }
 
-coro::CoroTask<void> append_app_spans(dstd::Vector<dstd::String>& out,
-                                      TraceIndex& index, double begin,
-                                      double end, const QueryParams& params,
-                                      const TraceFields& fields) {
-    if (!viz_summary_eligible(params, fields)) co_return;
-    const VizSummary* s = co_await ensure_viz_summary(index);
-    if (!s) co_return;
+coro::CoroTask<dstd::Result<void>> append_app_spans(
+    dstd::Vector<dstd::String>& out, TraceIndex& index, double begin,
+    double end, const QueryParams& params, const TraceFields& fields) {
+    if (!viz_summary_eligible(params, fields)) co_return dstd::Result<void>{};
+    const auto ensured = co_await ensure_viz_summary(index);
+    if (!ensured) co_return ensured.error();
+    const VizSummary* s = *ensured;
+    if (!s) co_return dstd::Result<void>{};
     auto pid_s = params.get("pid");
     auto tid_s = params.get("tid");
     bool has_pid = !pid_s.empty();
@@ -233,6 +238,7 @@ coro::CoroTask<void> append_app_spans(dstd::Vector<dstd::String>& out,
             static_cast<double>(sp.begin) < end)
             out.push_back(sp.json);
     }
+    co_return dstd::Result<void>{};
 }
 
 // Re-aggregate one pyramid level's buckets over [begin_abs, end_abs] into
@@ -392,7 +398,7 @@ static dstd::String serve_density_from_summary(
         const std::size_t ncols =
             static_cast<std::size_t>((end_abs - begin_abs) / threshold) + 1;
         for (const auto& cd : s.counter_series) {
-            dstd::String series = cd.name + "." + cd.key;
+            dstd::String series = dstd::fmt<"{}.{}">(cd.name, cd.key);
             for (std::size_t i = 0; i < cd.buckets.size(); ++i) {
                 double ts_mid = static_cast<double>(s.t_begin) +
                                 (static_cast<double>(cd.buckets[i]) + 0.5) *
@@ -518,7 +524,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
                            static_cast<unsigned>(width));
 
     const dstd::String cache_key =
-        dstd::String(req.path) + "?" + params.canonical_key();
+        dstd::fmt<"{}?{}">(req.path, params.canonical_key());
     if (auto hit = index.viz_cache().get(cache_key))
         co_return HttpResponse::ok(std::move(*hit));
 
@@ -528,7 +534,9 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     double cfg_agg_interval = 0;  // trace-declared aggregation window, us
     bool trace_has_agg = false;
     if (threshold > 0 && viz_summary_eligible(params, fields)) {
-        const VizSummary* s = co_await ensure_viz_summary(index);
+        const auto ensured = co_await ensure_viz_summary(index);
+        if (!ensured) co_return HttpResponse::from_error(ensured.error());
+        const VizSummary* s = *ensured;
         if (s && s->t_end > s->t_begin) {
             cfg_agg_interval = s->agg_interval_us;
             trace_has_agg = s->has_aggregated;
@@ -580,7 +588,9 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     double enc_threshold_us = 0;
     double enc_threshold_native = 0;
     if (lookback > 0 && viz_summary_eligible(params, fields)) {
-        const VizSummary* s = co_await ensure_viz_summary(index);
+        const auto ensured = co_await ensure_viz_summary(index);
+        if (!ensured) co_return HttpResponse::from_error(ensured.error());
+        const VizSummary* s = *ensured;
         if (s != nullptr && s->long_threshold_us > 0) {
             enc_summary = s;
             enc_threshold_us = s->long_threshold_us;
@@ -657,6 +667,14 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     // into per-(name.arg) counter blocks on the same column grid, so counters
     // land in the same density map and render as ordinary events. The two
     // phases split as fused partition branches so a single decode feeds both.
+    auto events_query = parsed_query("ph == 1 or ph == \"X\"");
+    if (!events_query) co_return HttpResponse::from_error(events_query.error());
+    auto counters_query = parsed_query("ph == 2 or ph == \"C\"");
+    if (!counters_query)
+        co_return HttpResponse::from_error(counters_query.error());
+    auto aggregates_query = parsed_query("ph == 3 or ph == \"A\"");
+    if (!aggregates_query)
+        co_return HttpResponse::from_error(aggregates_query.error());
     Acc ev_out, cs_out, ag_out;
     bool truncated = false;
     auto fold_event = [&group_col, threshold, begin](
@@ -689,10 +707,9 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
             });
     };
     auto pass1 = [&](views::ViewSession& p1run) {
-        auto ev_h = p1run.fold<Acc>(parsed_query("ph == 1 or ph == \"X\""),
-                                    fold_event, merge_acc);
+        auto ev_h = p1run.fold<Acc>(*events_query, fold_event, merge_acc);
         auto cs_h = p1run.fold<Acc>(
-            parsed_query("ph == 2 or ph == \"C\""),
+            *counters_query,
             [begin, threshold, ncols](Acc& acc, json::Value& jv,
                                       dstd::StringView) {
                 fold_counter_density(jv, begin, threshold, ncols, acc.dens);
@@ -703,7 +720,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
         // selection) and give it a renderable span below once the aggregation
         // window is known.
         auto ag_h = p1run.fold<Acc>(
-            parsed_query("ph == 3 or ph == \"A\""),
+            *aggregates_query,
             [](Acc& acc, json::Value& jv, dstd::StringView raw) {
                 collect_aggregated(jv, raw, acc.agg);
             },
@@ -719,7 +736,8 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     dataframe::LazyFrame p1 =
         fields.by_path ? capped(make_window_view(begin, end)).branch(pass1_path)
                        : capped(make_window_view(begin, end)).branch(pass1);
-    common::unwrap(co_await p1.collect());
+    const auto pass1_done = co_await p1.collect();
+    if (!pass1_done) co_return HttpResponse::from_error(pass1_done.error());
 
     DensityMap dens = std::move(ev_out.dens);
     // Fold the counter blocks into the same density map (disjoint keys:
@@ -787,7 +805,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
             dstd::Optional<views::Deferred<Acc>> agg_h, enc_h;
             if (want_agg)
                 agg_h = s.fold<Acc>(
-                    parsed_query("ph == 3 or ph == \"A\""),
+                    *aggregates_query,
                     [agg_lo](Acc& acc, json::Value& jv, dstd::StringView raw) {
                         double ts = 0, dur = 0;
                         if (!parse_ts_dur(jv, ts, dur) || ts < agg_lo) return;
@@ -817,7 +835,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
                     merge_acc);
             else if (want_enc)
                 enc_h = s.fold<Acc>(
-                    parsed_query("ph == 1 or ph == \"X\""),
+                    *events_query,
                     [enclose](Acc& acc, json::Value& jv, dstd::StringView raw) {
                         enclose(acc, jv, raw);
                     },
@@ -832,7 +850,8 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
         views::View back_view =
             make_window_view(std::min(agg_lo, enc_lo), begin);
         dataframe::LazyFrame lb = capped(back_view).branch(back);
-        common::unwrap(co_await lb.collect());
+        const auto back_done = co_await lb.collect();
+        if (!back_done) co_return HttpResponse::from_error(back_done.error());
         for (auto& r : agg_back.agg) ag_out.agg.emplace_back(std::move(r));
         if (want_enc) {
             truncated = truncated || back_truncated;
@@ -928,7 +947,9 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
 
     drop_unreferenced_hash_records(big);
 
-    co_await append_app_spans(big, index, begin, end, params, fields);
+    const auto app_spans =
+        co_await append_app_spans(big, index, begin, end, params, fields);
+    if (!app_spans) co_return HttpResponse::from_error(app_spans.error());
 
     // Aggregated (ph=3) records ride through as whole events so selection keeps
     // every arg (dur_sum, tag_min, ...); we only tag them and give them the

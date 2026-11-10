@@ -125,15 +125,11 @@ class StableRegistry {
     }
 
     /// Return the element for @p key, creating it via @p make() (invoked only
-    /// on a miss). Returns nullptr if construction or insertion throws.
+    /// on a miss).
     template <class Factory>
     T* get_or_create(std::uint64_t key, Factory&& make) {
         if (T* e = find(key)) return e;
-        try {
-            return push(key, make());
-        } catch (...) {
-            return nullptr;
-        }
+        return push(key, make());
     }
 
    private:
@@ -185,7 +181,7 @@ class PluginFold : public trace::views::detail::Fold {
     dstd::Result<void> step(const FoldBatch& batch) override;
     void seal_unit(const ScanUnit&) override {}
     void drop_unit(const ScanUnit&) override {}
-    void merge(Fold& other) override;
+    dstd::Result<void> merge(Fold& other) override;
     coro::CoroTask<bool> finalize(const CoverageSet& covered) override;
 
     // The fuse worker awaits this after step(); consumed once, then null.
@@ -213,7 +209,7 @@ class PluginFold : public trace::views::detail::Fold {
     int result_emit(const char* name, dftu_result_value* v);
 
     // Get-or-create this slice's named dft.ext.agg accumulator; null on a bad
-    // op code, a missing output name, or an allocation failure. A name seen
+    // op code or a missing output name. A name seen
     // before keeps its creation-time specs. agg_accumulate skips a batch
     // missing any referenced column.
     dftu_agg* agg_new(const char* name, const char* const* key_names,
@@ -245,7 +241,7 @@ class PluginFold : public trace::views::detail::Fold {
     bool slice_reclaim_refused() const { return reclaim_refused_; }
 
     // Allocate a lazy CoroTask into this step's arena, returning its stable
-    // address as an opaque dftu_task*; null if allocation throws.
+    // address as an opaque dftu_task*.
     ::dftu_task* emplace_task(coro::CoroTask<void>&& task);
 
     // dftu_svc_compose backing. Ops are arena-owned (scan-lifetime); the

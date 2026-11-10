@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/field_ref.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
@@ -96,7 +97,7 @@ static dstd::String calltree_json_from_arena(dstd::String blob, double dur_us,
     b.append_colon();
     serialize_flame_node(b, arena, 0);
     b.end_object();
-    return dstd::String(b);
+    return json_string(b);
 }
 
 // GET /api/viz/calltree: merge events into a flamegraph tree. The hierarchy
@@ -135,7 +136,7 @@ coro::CoroTask<HttpResponse> handle_viz_calltree(const HttpRequest& req,
         limit > 0 ? limit : std::numeric_limits<std::int64_t>::max();
 
     const dstd::String cache_key =
-        dstd::String(req.path) + "?" + params.canonical_key();
+        dstd::fmt<"{}?{}">(req.path, params.canonical_key());
     if (auto hit = index.viz_cache().get(cache_key))
         co_return HttpResponse::ok(std::move(*hit));
 
@@ -168,7 +169,9 @@ coro::CoroTask<HttpResponse> handle_viz_calltree(const HttpRequest& req,
     const dstd::Vector<dstd::String> group_args(group.begin(), group.end());
     dataframe::LazyResult<dstd::String> partial = v.flamegraph_partial(
         partition, ts_field, dur_field, name_field, group_args);
-    dstd::String blob = common::unwrap(co_await partial.collect());
+    auto collected = co_await partial.collect();
+    if (!collected) co_return HttpResponse::from_error(collected.error());
+    dstd::String blob = std::move(*collected);
     if (cancel.cancelled()) co_return HttpResponse::ok(CANCELLED_TREE);
 
     const double dur_us =

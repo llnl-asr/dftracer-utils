@@ -55,9 +55,10 @@ dstd::UniquePtr<Served> serve(const dstd::String& name,
     s->index = dstd::make_unique<TraceIndex>(dstd::String(s->dir.str()),
                                              dstd::String(s->dir.file("idx")));
     Runtime rt(4);
-    auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-        co_await s->index->initialize();
-    });
+    auto task = coro::with_scope(
+        [&](coro::Scope&) -> coro::CoroTask<dstd::Result<void>> {
+            co_return co_await s->index->initialize();
+        });
     dftu_utils_test::ok(rt.submit(std::move(task), "setup").wait());
     rt.shutdown();
     REQUIRE(s->index->file_count() == 1);

@@ -49,7 +49,9 @@ using dftracer::utils::json::json_number;
 coro::CoroTask<HttpResponse> handle_viz_layers(const HttpRequest& /*req*/,
                                                const QueryParams& /*p*/,
                                                TraceIndex& index) {
-    const VizSummary* s = co_await ensure_viz_summary(index);
+    const auto ensured = co_await ensure_viz_summary(index);
+    if (!ensured) co_return HttpResponse::from_error(ensured.error());
+    const VizSummary* s = *ensured;
     auto& b = scratch_json_builder();
     b.start_object();
     b.escape_and_append_with_quotes("layers");
@@ -73,7 +75,7 @@ coro::CoroTask<HttpResponse> handle_viz_layers(const HttpRequest& /*req*/,
     b.append_key_value("io_files",
                        static_cast<std::int64_t>(s ? s->io_files : 0));
     b.end_object();
-    co_return HttpResponse::ok(dstd::String(b));
+    co_return HttpResponse::ok(json_string(b));
 }
 
 // GET /api/viz/columns: the complete set of groupable columns in the trace
@@ -138,7 +140,7 @@ coro::CoroTask<HttpResponse> handle_viz_columns(const HttpRequest& /*req*/,
     b.append_comma();
     b.append_key_value("ready", true);
     b.end_object();
-    co_return HttpResponse::ok(dstd::String(b));
+    co_return HttpResponse::ok(json_string(b));
 }
 
 coro::CoroTask<HttpResponse> handle_viz_breaks(const HttpRequest& /*req*/,
@@ -152,7 +154,9 @@ coro::CoroTask<HttpResponse> handle_viz_breaks(const HttpRequest& /*req*/,
         if (global_min == std::numeric_limits<std::uint64_t>::max())
             global_min = 0;
     }
-    const VizSummary* s = co_await ensure_viz_summary(index);
+    const auto ensured = co_await ensure_viz_summary(index);
+    if (!ensured) co_return HttpResponse::from_error(ensured.error());
+    const VizSummary* s = *ensured;
     auto& b = scratch_json_builder();
     b.start_object();
     b.escape_and_append_with_quotes("gaps");
@@ -176,7 +180,7 @@ coro::CoroTask<HttpResponse> handle_viz_breaks(const HttpRequest& /*req*/,
     b.append_comma();
     b.append_key_value("multi_run", s && !s->idle_gaps.empty());
     b.end_object();
-    co_return HttpResponse::ok(dstd::String(b));
+    co_return HttpResponse::ok(json_string(b));
 }
 
 }  // namespace dftracer::utils::server

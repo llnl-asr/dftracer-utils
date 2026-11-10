@@ -56,7 +56,7 @@ class CatalogFold : public trace::views::detail::Fold {
         const trace::views::detail::FoldBatch& batch) override;
     void seal_unit(const trace::views::detail::ScanUnit&) override {}
     void drop_unit(const trace::views::detail::ScanUnit&) override {}
-    void merge(trace::views::detail::Fold& slice) override;
+    dstd::Result<void> merge(trace::views::detail::Fold& slice) override;
     /// Writes the catalog of each covered file whose index has none current.
     /// A locked index logs a warning and writes nothing.
     coro::CoroTask<bool> finalize(

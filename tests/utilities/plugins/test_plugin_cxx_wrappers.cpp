@@ -108,7 +108,7 @@ void run_wrappers(dstd::StringIntern& intern,
         trace::views::detail::ScanUnit unit;
         dftu_utils_test::ok(pf->step(trace::views::detail::FoldBatch{
             dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}}));
-        master.merge(*pf);
+        dftu_utils_test::ok(master.merge(*pf));
     }
     Runtime rt(1);
     dftu_utils_test::ok(

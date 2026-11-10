@@ -62,8 +62,10 @@ struct CountFold : dftracer::utils::trace::views::detail::Fold {
         const dftracer::utils::trace::views::detail::ScanUnit&) override {}
     void drop_unit(
         const dftracer::utils::trace::views::detail::ScanUnit&) override {}
-    void merge(dftracer::utils::trace::views::detail::Fold& o) override {
+    dftracer::utils::dstd::Result<void> merge(
+        dftracer::utils::trace::views::detail::Fold& o) override {
         local += static_cast<CountFold&>(o).local;
+        return {};
     }
     dftracer::utils::coro::CoroTask<bool> finalize(
         const dftracer::utils::trace::views::detail::CoverageSet&) override {

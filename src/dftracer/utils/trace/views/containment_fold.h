@@ -131,7 +131,7 @@ class ContainmentFold : public Fold {
     dstd::Result<void> step(const FoldBatch& batch) override;
     void seal_unit(const ScanUnit&) override {}
     void drop_unit(const ScanUnit&) override {}
-    void merge(Fold& other) override;
+    dstd::Result<void> merge(Fold& other) override;
     coro::CoroTask<bool> finalize(const CoverageSet&) override {
         co_return true;
     }

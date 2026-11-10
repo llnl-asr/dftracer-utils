@@ -131,7 +131,7 @@ TEST_CASE("merged slices give the catalog of one fold") {
     feed(a, fx.events(0, third), unit_of(0));
     feed(static_cast<extensions::BloomFold&>(*b),
          fx.events(third, fx.order.size()), unit_of(1));
-    a.merge(*b);
+    dftu_utils_test::ok(a.merge(*b));
 
     check_same(catalog_of(a, "/t/a.pfw.gz"), fx.expected());
 }

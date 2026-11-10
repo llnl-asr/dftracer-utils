@@ -4,10 +4,12 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/duql/errc.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/json_value.h>
@@ -94,7 +96,7 @@ static dstd::String build_viz_events_body(dstd::Vector<dstd::String>& events,
     b.append_key_value("global_min_timestamp_us", display_global_min);
     b.end_object();
     b.end_object();
-    return dstd::String(b);
+    return json_string(b);
 }
 
 coro::CoroTask<HttpResponse> handle_viz_events(const HttpRequest& req,
@@ -154,7 +156,9 @@ coro::CoroTask<HttpResponse> handle_viz_events(const HttpRequest& req,
     // are exactly a subset of the summary's cached long_events. Serve them from
     // memory instead of scanning every file (minutes for a large trace).
     if (min_dur > 0 && viz_summary_eligible(params, fields)) {
-        const VizSummary* s = co_await ensure_viz_summary(index);
+        const auto ensured = co_await ensure_viz_summary(index);
+        if (!ensured) co_return HttpResponse::from_error(ensured.error());
+        const VizSummary* s = *ensured;
         if (s != nullptr && s->long_threshold_us > 0 &&
             min_dur >= s->long_threshold_us) {
             auto pid_s = params.get("pid");
@@ -190,8 +194,10 @@ coro::CoroTask<HttpResponse> handle_viz_events(const HttpRequest& req,
             dstd::Vector<dstd::String> collected;
             collected.reserve(hits.size());
             for (const auto* ev : hits) collected.push_back(ev->json);
-            co_await append_app_spans(collected, index, begin, end, params,
-                                      fields);
+            const auto app_spans = co_await append_app_spans(
+                collected, index, begin, end, params, fields);
+            if (!app_spans)
+                co_return HttpResponse::from_error(app_spans.error());
             dstd::String body = build_viz_events_body(
                 collected, global_min, original_begin, original_end, limit,
                 false, index.native_to_us(index.global_min_timestamp_us()),
@@ -214,7 +220,7 @@ coro::CoroTask<HttpResponse> handle_viz_events(const HttpRequest& req,
             .cancel_when([&req]() { return req.cancel_token.cancelled(); });
     if (view.query) v = v.filter(*view.query);
     if (!single_file || fields.by_path) v = v.time_range(scan_begin, end);
-    auto scan = common::unwrap(co_await v.map_batches<EvAcc>(
+    auto mapped = co_await v.map_batches<EvAcc>(
         [&fields](EvAcc& a, const dstd::Vector<dstd::StringView>& events) {
             a.events.reserve(a.events.size() + events.size());
             fields.for_each_event(events, [&a](dstd::StringView ev) {
@@ -226,7 +232,9 @@ coro::CoroTask<HttpResponse> handle_viz_events(const HttpRequest& req,
             for (auto& s : y.events) x.events.emplace_back(std::move(s));
             return std::move(x);
         },
-        slots, limit > 0 ? static_cast<std::uint64_t>(limit) : 0));
+        slots, limit > 0 ? static_cast<std::uint64_t>(limit) : 0);
+    if (!mapped) co_return HttpResponse::from_error(mapped.error());
+    auto& scan = *mapped;
 
     bool truncated = scan.stats.truncated;
     dstd::Vector<dstd::String> collected_events = std::move(scan.value.events);
@@ -235,8 +243,9 @@ coro::CoroTask<HttpResponse> handle_viz_events(const HttpRequest& req,
         truncated = true;
     }
 
-    co_await append_app_spans(collected_events, index, begin, end, params,
-                              fields);
+    const auto app_spans = co_await append_app_spans(
+        collected_events, index, begin, end, params, fields);
+    if (!app_spans) co_return HttpResponse::from_error(app_spans.error());
 
     dstd::String body = build_viz_events_body(
         collected_events, global_min, original_begin, original_end, limit,
@@ -311,12 +320,12 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
     if (fields.by_path && fields.time.empty())
         co_return HttpResponse::ok(
             R"({"events":[],"count":0,"offset":0,"limit":0})");
-    dstd::String text =
-        fields.by_path ? fields.time + " is missing" : dstd::String("ts == 0");
+    dstd::String text = fields.by_path ? dstd::fmt<"{} is missing">(fields.time)
+                                       : dstd::String("ts == 0");
     if (const auto user = params.get("duql"); !user.empty()) {
         if (auto refused = refuse_duql(user, req.path))
             co_return std::move(*refused);
-        text = "(" + text + ") and (" + dstd::String(user) + ")";
+        text = dstd::fmt<"({}) and ({})">(text, user);
     }
 
     // Every match, sorted once, is cached as "<count>\n" plus one row object
@@ -330,7 +339,7 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
         b.start_object();
         b.escape_and_append_with_quotes("events");
         b.append_colon();
-        b.append_raw("[" + page + "]");
+        b.append_raw(dstd::fmt<"[{}]">(page));
         b.append_comma();
         b.append_key_value("count", count);
         b.append_comma();
@@ -338,12 +347,12 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
         b.append_comma();
         b.append_key_value("limit", limit);
         b.end_object();
-        return dstd::String(b);
+        return json_string(b);
     };
-    const dstd::String all_key = dstd::String("untimed\n") +
-                                 dstd::String(params.get("file")) + "\n" + text;
-    const dstd::String page_key = all_key + "\n" + dstd::to_string(offset) +
-                                  "\n" + dstd::to_string(limit);
+    const dstd::String all_key =
+        dstd::fmt<"untimed\n{}\n{}">(params.get("file"), text);
+    const dstd::String page_key =
+        dstd::fmt<"{}\n{}\n{}">(all_key, offset, limit);
     if (auto hit = index.viz_cache().get(all_key)) {
         const dstd::StringView text_rows(*hit);
         const std::size_t head = text_rows.find('\n');
@@ -392,7 +401,9 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
                 descending.push_back(names[c] == "dur");
             }
     auto row_query = duql::Query::from_string(text);
-    if (!row_query) throw duql::DuqlParseError(row_query.error());
+    if (!row_query)
+        co_return HttpResponse::from_error(
+            dstd::Error{duql::DuqlErrc::Parse, row_query.error().format()});
     dataframe::LazyFrame sorted =
         views::View::from_files(
             to_view_files(collect_candidate_files(index, params)))
@@ -410,15 +421,17 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
     for (;;) {
         auto next_part = co_await morsels.next();
         if (!next_part) break;
-        auto part = common::unwrap(std::move(*next_part));
-        const dataframe::DataFrame rows =
-            common::unwrap(co_await dataframe::join_chunks(std::move(part)));
+        if (!*next_part) co_return HttpResponse::from_error(next_part->error());
+        auto part = std::move(**next_part);
+        auto joined = co_await dataframe::join_chunks(std::move(part));
+        if (!joined) co_return HttpResponse::from_error(joined.error());
+        const dataframe::DataFrame rows = std::move(*joined);
         // The builder is per thread: no co_await until its text is out.
         auto& rb = scratch_json_builder();
         for (std::int64_t r = 0; r < rows.num_rows(); ++r, ++count) {
             const bool in_page = count >= first && count < last;
             if (!whole && !in_page) continue;
-            const std::size_t at = dstd::StringView(rb).size();
+            const std::size_t at = json_view(rb).size();
             rb.start_object();
             for (std::size_t c = 0; c < rows.names.size(); ++c) {
                 if (c > 0) rb.append_comma();
@@ -438,7 +451,7 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
                 rb.append_raw(R"(,"cat":null,"ph":1)");
             }
             rb.end_object();
-            const dstd::StringView row = dstd::StringView(rb).substr(at);
+            const dstd::StringView row = json_view(rb).substr(at);
             if (whole) {
                 all_rows += '\n';
                 all_rows += row;
@@ -456,8 +469,7 @@ coro::CoroTask<HttpResponse> handle_viz_untimed(const HttpRequest& req,
     dstd::String body = respond(page, count);
     if (!req.cancel_token.cancelled()) {
         if (whole)
-            index.viz_cache().put(all_key,
-                                  dstd::to_string(count) + std::move(all_rows));
+            index.viz_cache().put(all_key, dstd::fmt<"{}{}">(count, all_rows));
         else
             index.viz_cache().put(page_key, body);
     }

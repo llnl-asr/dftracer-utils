@@ -317,18 +317,20 @@ int ph_init(PluginHostObject* self, PyObject* args, PyObject* kwds) {
         const char* config_json = nullptr;
         bool ok = PyArg_ParseTuple(item, "s|z", &path, &config_json) != 0;
         if (ok) {
-            try {
-                if (config_json)
-                    builder.add(path,
-                                ConfigTree::from_json_string(config_json));
-                else
-                    builder.add(path);
-            } catch (const std::exception& e) {
-                PyErr_SetString(dftracer::utils::python::g_dft_value_error
-                                    ? dftracer::utils::python::g_dft_value_error
-                                    : PyExc_ValueError,
-                                e.what());
-                ok = false;
+            if (config_json) {
+                auto tree = ConfigTree::from_json_string(config_json);
+                if (tree) {
+                    builder.add(path, std::move(*tree));
+                } else {
+                    PyErr_SetString(
+                        dftracer::utils::python::g_dft_value_error
+                            ? dftracer::utils::python::g_dft_value_error
+                            : PyExc_ValueError,
+                        tree.error().c_str());
+                    ok = false;
+                }
+            } else {
+                builder.add(path);
             }
         }
         Py_DECREF(item);

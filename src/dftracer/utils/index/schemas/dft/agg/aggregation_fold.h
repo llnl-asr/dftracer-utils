@@ -178,7 +178,7 @@ class AggregationFold : public trace::views::detail::Fold {
 
     void seal_unit(const trace::views::detail::ScanUnit&) override {}
     void drop_unit(const trace::views::detail::ScanUnit&) override {}
-    void merge(trace::views::detail::Fold& other) override;
+    dstd::Result<void> merge(trace::views::detail::Fold& other) override;
 
     coro::CoroTask<bool> finalize(
         const trace::views::detail::CoverageSet&) override {

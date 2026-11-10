@@ -82,7 +82,7 @@ class BloomFold : public trace::views::detail::Fold {
     bool spill_pending() const { return spill_pending_; }
     void seal_unit(const trace::views::detail::ScanUnit& /*unit*/) override {}
     void drop_unit(const trace::views::detail::ScanUnit& unit) override;
-    void merge(trace::views::detail::Fold& slice) override;
+    dstd::Result<void> merge(trace::views::detail::Fold& slice) override;
     coro::CoroTask<bool> finalize(
         const trace::views::detail::CoverageSet& covered) override;
 

@@ -235,11 +235,12 @@ dstd::Result<void> ContainmentFold::step(const FoldBatch& batch) {
     return {};
 }
 
-void ContainmentFold::merge(Fold& other) {
+dstd::Result<void> ContainmentFold::merge(Fold& other) {
     auto& o = static_cast<ContainmentFold&>(other);
     rows_.insert(rows_.end(), std::make_move_iterator(o.rows_.begin()),
                  std::make_move_iterator(o.rows_.end()));
     o.rows_.clear();
+    return {};
 }
 
 dataframe::DataFrame build_call_tree(

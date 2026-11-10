@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_SERVER_VIZ_SUMMARY_BUILD_H
 
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/server/trace_index.h>
 #include <dftracer/utils/server/viz_summary.h>
 
@@ -10,7 +11,8 @@ namespace dftracer::utils::server {
 
 // Return the trace's activity summary (the mipmap over the whole trace),
 // building it on first use. Concurrent callers wait for the in-flight build.
-coro::CoroTask<const VizSummary*> ensure_viz_summary(TraceIndex& index);
+coro::CoroTask<dstd::Result<const VizSummary*>> ensure_viz_summary(
+    TraceIndex& index);
 
 }  // namespace dftracer::utils::server
 

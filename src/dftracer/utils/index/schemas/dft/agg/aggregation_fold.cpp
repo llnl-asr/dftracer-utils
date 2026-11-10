@@ -283,7 +283,7 @@ void AggregationFold::release_closed() {
                       referenced_.end());
 }
 
-void AggregationFold::merge(trace::views::detail::Fold& other) {
+dstd::Result<void> AggregationFold::merge(trace::views::detail::Fold& other) {
     auto& o = static_cast<AggregationFold&>(other);
     auto& os = o.state_;
 
@@ -309,6 +309,7 @@ void AggregationFold::merge(trace::views::detail::Fold& other) {
     o.closed_files_.clear();
     o.closed_columns_.clear();
     o.referenced_.clear();
+    return {};
 }
 
 dstd::Result<void> AggregationFold::write(index::FileBuild& build) {

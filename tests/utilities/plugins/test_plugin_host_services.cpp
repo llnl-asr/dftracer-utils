@@ -46,6 +46,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <stdexcept>
 
 using namespace dftracer::utils;
 
@@ -375,4 +376,55 @@ TEST_CASE("plugin host: trace close writes line-ended members and the tail") {
         break;
     }
     CHECK(files == 1);
+}
+
+TEST_CASE("plugin host: trace write prints a float arg with 17 digits") {
+    dftu_utils_test::TestEnvironment env(0);
+    HostFixture fx;
+    dftu_plugin_host& host = fx.host();
+    const auto* tr = static_cast<const dftu_svc_trace*>(
+        host.get_service(host.h, DFTU_SVC_TRACE));
+    REQUIRE(tr != nullptr);
+
+    dftu_trace_writer* w =
+        tr->trace_open_write(host.h, (env.dir() + "/f.pfw.gz").c_str());
+    REQUIRE(w != nullptr);
+    const double values[3] = {0.1, 100.0, 1e20};
+    const char* col_names[1] = {"args.v"};
+    dftu_series* cols[1] = {
+        dftu_series_new_flat(DFTU_TYPE_FLOAT64, values, 3, nullptr)};
+    dftu_dataframe* df = dftu_dataframe_new(col_names, cols, 1);
+    REQUIRE(df != nullptr);
+    CHECK(tr->trace_write(host.h, w, df) == 0);
+    dftu_dataframe_free(df);
+    const dstd::String& buffer =
+        reinterpret_cast<dftracer::utils::plugins::PluginTraceWriter*>(w)
+            ->buffer;
+    CHECK(buffer.find("\"v\":0.10000000000000001}") != dstd::String::npos);
+    CHECK(buffer.find("\"v\":100}") != dstd::String::npos);
+    CHECK(buffer.find("\"v\":1e+20}") != dstd::String::npos);
+    CHECK(tr->trace_close(host.h, w) == 0);
+}
+
+TEST_CASE("plugin host: a trace_read callback that throws fails the read") {
+    dftu_utils_test::TestEnvironment env(0);
+    HostFixture fx;
+    const dstd::String pfw = env.dir() + "/throw.pfw";
+    {
+        dftu_utils_test::FileOut ofs(pfw);
+        ofs << R"({"ph":"X","name":"a","cat":"P","pid":1,"tid":1,"ts":100,"dur":5})"
+            << "\n";
+    }
+    const dstd::String gz = pfw + ".gz";
+    dftu_utils_test::compress_file_to_gzip(pfw, gz);
+    dstd::fs::remove(pfw).discard();
+
+    dftracer::utils::plugins::Host h{&fx.host()};
+    int calls = 0;
+    CHECK(h.trace_read(gz.c_str(), [&](const dftu_dataframe*) {
+        ++calls;
+        throw std::runtime_error("boom");
+    }) == -1);
+    CHECK(calls == 1);
+    CHECK(h.trace_read(gz.c_str(), [&](const dftu_dataframe*) {}) == 0);
 }

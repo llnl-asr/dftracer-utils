@@ -8,6 +8,7 @@
 
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dstd/expected.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -92,7 +93,8 @@ inline dstd::String normalize_event_ts(const dstd::String& event_json,
         if (!dur_result.error() && dur_result.is_uint64()) {
             rewrite_uint_field(
                 modified, "\"dur\":",
-                scale_between(metric, TM::Us, dur_result.get_uint64().value()));
+                scale_between(metric, TM::Us,
+                              dur_result.get_uint64().value_unsafe()));
         }
     }
     return modified;
@@ -137,12 +139,11 @@ inline dstd::Optional<HttpResponse> refuse_duql(dstd::StringView query,
             dstd::StringView word = query.substr(stages[i].span.offset);
             word = word.substr(0, word.find_first_of(" \t\r\n("));
             return HttpResponse::bad_request(
-                "endpoint " + dstd::String(endpoint) +
-                " takes a filter; stages such as '" + dstd::String(word) +
-                "' are not supported here");
+                dstd::fmt<"endpoint {} takes a filter; stages such as '{}' are "
+                          "not supported here">(endpoint, word));
         }
     }
-    return HttpResponse::bad_request("Invalid duql: " + dstd::String(query));
+    return HttpResponse::bad_request(dstd::fmt<"Invalid duql: {}">(query));
 }
 
 inline dftracer::utils::dstd::Expected<VizWindow, HttpResponse>
@@ -201,9 +202,9 @@ inline void append_lane_clause(dstd::String& dsl, const char* field,
         std::all_of(val.begin() + static_cast<std::ptrdiff_t>(digits),
                     val.end(), [](char c) { return std::isdigit(c); });
     if (numeric) {
-        dsl += dstd::String(field) + " == " + val;
+        dsl += dstd::fmt<"{} == {}">(field, val);
     } else {
-        dsl += dstd::String(field) + " == \"" + val + "\"";
+        dsl += dstd::fmt<"{} == \"{}\"">(field, val);
     }
 }
 
@@ -318,9 +319,9 @@ inline void apply_filters(dstd::String& dsl, dstd::StringView filters_str,
         if (!dsl.empty()) dsl += " and ";
         bool numeric = !val.empty() && (std::isdigit(val[0]) || val[0] == '-');
         if (numeric || query_op != "==") {
-            dsl += field_str + " " + query_op + " " + val;
+            dsl += dstd::fmt<"{} {} {}">(field_str, query_op, val);
         } else {
-            dsl += field_str + " " + query_op + " \"" + val + "\"";
+            dsl += dstd::fmt<"{} {} \"{}\"">(field_str, query_op, val);
         }
     }
 }

@@ -255,7 +255,7 @@ RunResult run_state(bool spillable, std::uint64_t budget, int n_slices) {
                 unit,
                 {}}));
         }
-        master.merge(*pf);
+        dftu_utils_test::ok(master.merge(*pf));
     }
 
     RunResult out;
@@ -352,7 +352,7 @@ SliceRun run_slice(bool reclaimable, std::uint64_t budget, int n_slices) {
                 unit,
                 {}}));
         }
-        master.merge(*pf);
+        dftu_utils_test::ok(master.merge(*pf));
     }
     SliceRun out;
     out.reclaims = master.slice_reclaims();

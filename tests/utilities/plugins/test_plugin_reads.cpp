@@ -58,7 +58,9 @@ ViewFile make_trace(dftu_utils_test::TestEnvironment& env) {
 }
 
 plugins::ConfigTree config_of(const dstd::String& json) {
-    return plugins::ConfigTree::from_json_string(json);
+    auto tree = plugins::ConfigTree::from_json_string(json);
+    REQUIRE(tree.has_value());
+    return std::move(*tree);
 }
 
 }  // namespace

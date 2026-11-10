@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
@@ -31,11 +32,13 @@ class ConfigTree {
     ConfigTree(const ConfigTree&) = delete;
     ConfigTree& operator=(const ConfigTree&) = delete;
 
-    // Throws std::runtime_error on an I/O/parse error or a non-object root.
-    static ConfigTree from_json_file(dstd::StringView path);
+    // An error with code Io (unreadable file), Parse (bad JSON) or
+    // InvalidArgument (a root that is not an object).
+    static dstd::Result<ConfigTree> from_json_file(dstd::StringView path);
 
-    // Throws std::runtime_error on a parse error or a non-object root.
-    static ConfigTree from_json_string(dstd::StringView json);
+    // An error with code Parse (bad JSON) or InvalidArgument (a root that is
+    // not an object).
+    static dstd::Result<ConfigTree> from_json_string(dstd::StringView json);
 
     // Set a leaf at the dotted key, inferring its type from raw_value.
     void set(dstd::StringView dotted_key, dstd::StringView raw_value);
@@ -57,7 +60,7 @@ class ConfigTree {
         dstd::Vector<dstd::Pair<dstd::String, Node>> members;
     };
 
-    static Node build_node(const simdjson::dom::element& el);
+    static dstd::Result<Node> build_node(const simdjson::dom::element& el);
     static Node* find_member(Node& obj, dstd::StringView key);
     static Node infer_leaf(dstd::StringView raw_value);
     static void deep_merge(Node& dst, const Node& src);

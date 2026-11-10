@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/field_ref.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
@@ -151,7 +152,7 @@ static dstd::String serialize_stats_body(std::uint64_t total_count,
     b.append_comma();
     b.append_key_value("names", rows);
     b.end_object();
-    return dstd::String(b);
+    return json_string(b);
 }
 
 // Scale duration fields (native trace unit -> us) before serialization. The
@@ -222,7 +223,7 @@ coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
     GroupBy group = parse_group_by(params.get("group"));
 
     const dstd::String cache_key =
-        dstd::String(req.path) + "?" + params.canonical_key();
+        dstd::fmt<"{}?{}">(req.path, params.canonical_key());
     if (auto hit = index.viz_cache().get(cache_key))
         co_return HttpResponse::ok(std::move(*hit));
 
@@ -232,7 +233,9 @@ coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
     // records (the summary rows omit them), keeping counts consistent with any
     // sub-window selection.
     if (viz_stats_summary_eligible(params, begin, end, index)) {
-        const VizSummary* s = co_await ensure_viz_summary(index);
+        const auto ensured = co_await ensure_viz_summary(index);
+        if (!ensured) co_return HttpResponse::from_error(ensured.error());
+        const VizSummary* s = *ensured;
         if (s && !s->has_aggregated) {
             const auto& gr = summary_group_rows(*s, group);
             dstd::Vector<StatRow> rows;
@@ -272,7 +275,9 @@ coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
     // summary long-event list; shorter ones from a scan back bounded by the
     // same threshold. ph=3 aggregates prorate over the trace's aggregation
     // window.
-    const VizSummary* s = co_await ensure_viz_summary(index);
+    const auto ensured = co_await ensure_viz_summary(index);
+    if (!ensured) co_return HttpResponse::from_error(ensured.error());
+    const VizSummary* s = *ensured;
     auto to_native = [&](double us) {
         return index.time_metric() == TraceIndex::TimeMetric::Us
                    ? us
@@ -387,9 +392,10 @@ coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
             }
         });
     };
-    auto scan = common::unwrap(
-        co_await sv.map_batches<StatMap>(fold_events, merge_stats, slots, 0));
-    StatMap by_key = std::move(scan.value);
+    auto scan =
+        co_await sv.map_batches<StatMap>(fold_events, merge_stats, slots, 0);
+    if (!scan) co_return HttpResponse::from_error(scan.error());
+    StatMap by_key = std::move(scan->value);
 
     // Whole-run enclosers that opened before the scan-back window. The scan's
     // query filter did not see these, so re-apply it per event.

@@ -14,6 +14,7 @@
 #include <dftracer/utils/json/dom_form.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/json/value.h>
+#include <dftracer/utils/server/json_builder.h>
 #include <simdjson.h>
 
 #include <cmath>
@@ -163,7 +164,7 @@ struct TraceFields {
         b.append_colon();
         b.append_raw(raw);
         b.end_object();
-        out.assign(dstd::StringView(b));
+        out.assign(json_view(b));
         return true;
     }
 

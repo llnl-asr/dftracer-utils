@@ -91,9 +91,10 @@ dstd::UniquePtr<TraceIndex> build_index(const dstd::String& content,
     auto index = dstd::make_unique<TraceIndex>(
         dstd::String(dir.str()), dstd::String((dir / "idx").str()));
     Runtime rt(4);
-    auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-        co_await index->initialize();
-    });
+    auto task = coro::with_scope(
+        [&](coro::Scope&) -> coro::CoroTask<dstd::Result<void>> {
+            co_return co_await index->initialize();
+        });
     dftu_utils_test::ok(rt.submit(std::move(task), "setup").wait());
     rt.shutdown();
     return index;

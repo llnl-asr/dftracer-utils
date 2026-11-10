@@ -99,9 +99,10 @@ class EngineAggFold : public Fold {
     void seal_unit(const ScanUnit&) override {}
     void drop_unit(const ScanUnit&) override {}
 
-    void merge(Fold& other) override {
+    dstd::Result<void> merge(Fold& other) override {
         auto& o = static_cast<EngineAggFold&>(other);
         dftracer::utils::dataframe::agg_merge(*state_, *o.state_);
+        return {};
     }
 
     coro::CoroTask<bool> finalize(const CoverageSet&) override {

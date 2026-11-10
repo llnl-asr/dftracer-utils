@@ -103,12 +103,13 @@ TEST_SUITE("viz_stats_fastpath") {
             // decodes.
             Runtime rt(4);
             auto task = coro::with_scope([&](coro::Scope&)
-                                             -> coro::CoroTask<void> {
+                                             -> coro::CoroTask<
+                                                 dstd::Result<void>> {
                 co_await utilities::fileio::compress::gzip_rechunk_to_members(
                     dstd::String(src), dstd::String(gz),
-                    /*member_size=*/4096, /*level=*/6);
-                co_await index.initialize();
-                co_return;
+                    /*member_size=*/4096,
+                    /*level=*/6);
+                co_return co_await index.initialize();
             });
             dftu_utils_test::ok(rt.submit(std::move(task), "setup").wait());
             rt.shutdown();

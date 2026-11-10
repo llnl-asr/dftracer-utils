@@ -62,8 +62,10 @@ class TraceIndex {
                std::size_t checkpoint_size =
                    common::constants::indexer::DEFAULT_CHECKPOINT_SIZE);
 
-    /// Scan directory and populate the file list.
-    coro::CoroTask<void> initialize();
+    /// Scan directory and populate the file list. The error is the directory
+    /// scan or index lookup that failed; a file whose index cannot be read is
+    /// logged and served without it.
+    coro::CoroTask<dstd::Result<void>> initialize();
 
     std::size_t file_count() const { return files_.size(); }
     const dstd::Vector<FileInfo>& files() const { return files_; }

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -450,7 +451,7 @@ static void fold_summary(std::size_t w, dstd::StringView event, SumBuild& b) {
             }
             auto args = root["args"];
             if (!args.error() && args.is_object()) {
-                for (auto field : args.get_object()) {
+                for (auto field : args.get_object().value_unsafe()) {
                     auto vv = field.value;
                     double val;
                     if (vv.is_int64())
@@ -770,13 +771,13 @@ static void fold_summary(std::size_t w, dstd::StringView event, SumBuild& b) {
 
 // Build the activity summary by scanning every event once. Blocks the caller
 // (the first overview request) for the scan; cached for the server's lifetime.
-static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
+static coro::CoroTask<dstd::Result<void>> build_viz_summary(TraceIndex& index) {
     auto summary = dstd::make_unique<VizSummary>();
     std::uint64_t gmin = index.global_min_timestamp_us();
     std::uint64_t gmax = index.global_max_timestamp_us();
     if (gmin == std::numeric_limits<std::uint64_t>::max() || gmax <= gmin) {
         index.set_viz_summary(std::move(summary));
-        co_return;
+        co_return dstd::Result<void>{};
     }
 
     std::size_t est_lanes = std::max<std::size_t>(1, index.file_count()) * 8;
@@ -843,10 +844,10 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
     files.reserve(index.files().size());
     for (const auto& f : index.files()) files.push_back(&f);
 
-    common::unwrap(
+    const auto scanned =
         co_await views::View::from_files(to_view_files(files))
-            .phase(
-                views::Phase::Any)  // every record: cells, counters, metadata
+            .phase(views::Phase::Any)  // every record: cells,
+                                       // counters, metadata
             .for_each_batch(
                 [&b](std::size_t w,
                      const dstd::Vector<dstd::StringView>& events) {
@@ -854,7 +855,8 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
                         fold_summary(w, ev, b);
                     });
                 },
-                slots));
+                slots);
+    if (!scanned) co_return scanned.error();
 
     summary->t_begin = gmin;
     summary->t_end = gmax;
@@ -1176,7 +1178,7 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
                 auto ci = cm_apps.find(pid);
                 if (ci != cm_apps.end()) app = ci->second;
             }
-            if (app.empty()) app = "app " + dstd::to_string(pid);
+            if (app.empty()) app = dstd::fmt<"app {}">(pid);
 
             auto& jb = scratch_json_builder();
             jb.start_object();
@@ -1216,7 +1218,7 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
             jb.end_object();
             summary->app_spans.push_back(
                 {start_ts, end_ts, pid, tid,
-                 std::numeric_limits<std::uint32_t>::max(), dstd::String(jb)});
+                 std::numeric_limits<std::uint32_t>::max(), json_string(jb)});
         }
     }
 
@@ -1353,7 +1355,7 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
 
     if (g_shutdown_requested.load(std::memory_order_acquire)) {
         DFTRACER_UTILS_LOG_INFO("viz: summary build abandoned (shutting down)");
-        co_return;
+        co_return dstd::Result<void>{};
     }
 
     std::size_t cells = 0;
@@ -1366,13 +1368,15 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
         summary->levels.back().bucket_us, cells, summary->long_events.size(),
         summary->idle_gaps.size());
     index.set_viz_summary(std::move(summary));
+    co_return dstd::Result<void>{};
 }
 
 // The summary, building it on first use. Requests that arrive during the build
 // wait for it: a whole-trace live scan each (the old fallback) costs more than
 // the build they are waiting on, and the client opens the timeline with half a
 // dozen summary-backed requests at once.
-coro::CoroTask<const VizSummary*> ensure_viz_summary(TraceIndex& index) {
+coro::CoroTask<dstd::Result<const VizSummary*>> ensure_viz_summary(
+    TraceIndex& index) {
     const VizSummary* s = index.viz_summary();
     if (s) co_return s;
     co_await index.viz_summary_mutex().lock();
@@ -1380,7 +1384,8 @@ coro::CoroTask<const VizSummary*> ensure_viz_summary(TraceIndex& index) {
     s = index.viz_summary();
     if (!s) {
         if (!index.load_persisted_viz_summary()) {
-            co_await build_viz_summary(index);
+            const auto built = co_await build_viz_summary(index);
+            if (!built) co_return built.error();
             index.persist_viz_summary();
         }
         s = index.viz_summary();
@@ -1388,8 +1393,10 @@ coro::CoroTask<const VizSummary*> ensure_viz_summary(TraceIndex& index) {
     co_return s;
 }
 
-coro::CoroTask<void> prewarm_viz_summary(TraceIndex& index) {
-    co_await ensure_viz_summary(index);
+coro::CoroTask<dstd::Result<void>> prewarm_viz_summary(TraceIndex& index) {
+    const auto ensured = co_await ensure_viz_summary(index);
+    if (!ensured) co_return ensured.error();
+    co_return dstd::Result<void>{};
 }
 
 }  // namespace dftracer::utils::server

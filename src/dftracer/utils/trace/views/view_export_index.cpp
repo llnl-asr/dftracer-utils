@@ -335,7 +335,9 @@ coro::CoroTask<dstd::Result<ExportStats>> run_export_trace_indexed(
             common::ErrorCode::Io, opts.output_path);
     }
 
-    for (auto& sl : pool) bloom.merge(*sl->bloom);
+    for (auto& sl : pool)
+        if (auto merged = bloom.merge(*sl->bloom); !merged)
+            co_return merged.error();
 
     // Persist the index of every part, one commit each. Registering each with
     // its exact mtime/size makes the resolver accept it as fresh; any later

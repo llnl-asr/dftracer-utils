@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dstd/deque.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -175,11 +176,8 @@ dstd::String op_summary(const dstd::String& name) {
     const dftu_op_desc* desc = ::dftu_op_find(name.c_str());
     if (!desc) return name;
     // dftu_op_signature returns a thread_local buffer reused by the next call.
-    dstd::String out = name + ::dftu_op_signature(desc->sig);
-    out += " [";
-    out += op_kind_name(desc->sig);
-    out += "]";
-    return out;
+    return dstd::fmt<"{}{} [{}]">(name, ::dftu_op_signature(desc->sig),
+                                  op_kind_name(desc->sig));
 }
 
 bool is_numeric(std::int32_t kind) {
@@ -213,14 +211,12 @@ dstd::String config_violation(const dftu_plugin* plugin,
         const dftu_value* v = config ? dftu_obj_get(config, k->name) : nullptr;
         if (!v) {
             if (k->required)
-                return dstd::String("required key '") + k->name +
-                       "' is missing";
+                return dstd::fmt<"required key '{}' is missing">(k->name);
             continue;
         }
         if (!kind_accepts(k->kind, v->kind))
-            return dstd::String("key '") + k->name + "' must be " +
-                   value_kind_name(k->kind) + ", got " +
-                   value_kind_name(v->kind);
+            return dstd::fmt<"key '{}' must be {}, got {}">(
+                k->name, value_kind_name(k->kind), value_kind_name(v->kind));
     }
 
     if (!config) return {};
@@ -231,25 +227,22 @@ dstd::String config_violation(const dftu_plugin* plugin,
         for (const dftu_config_key* k = keys; k->name && !declared; ++k)
             declared = given == k->name;
         if (!declared)
-            return "unknown key '" + dstd::String(given) +
-                   "'; the plugin declares its keys, so this is a typo or a "
-                   "key it does not read";
+            return dstd::fmt<
+                "unknown key '{}'; the plugin declares its keys, so this is a "
+                "typo or a key it does not read">(given);
     }
     return {};
 }
 
-// ConfigTree::from_json_string throws; convert that into the plugin set's
-// Result so a malformed literal fails at build() alongside every other
-// plugin load error, not by throwing out of Builder::add.
+// A malformed literal fails at build() alongside every other plugin load
+// error, not in Builder::add.
 dstd::Result<ConfigTree> parse_config_json(const dstd::String& path,
                                            const dstd::String& json) {
-    try {
-        return ConfigTree::from_json_string(json);
-    } catch (const std::exception& e) {
-        return common::make_error(
-            common::ErrorCode::Parse,
-            "plugin '" + path + "' config does not parse: " + e.what());
-    }
+    auto parsed = ConfigTree::from_json_string(json);
+    if (!parsed)
+        return common::make_error<"plugin '{}' config does not parse: {}">(
+            common::ErrorCode::Parse, path, parsed.error().message());
+    return parsed;
 }
 
 // A plugin built against the dataframe C ABI (a jit plugin builds columns
@@ -279,19 +272,17 @@ dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
     void* handle = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
     if (!handle) {
         const char* why = dlerror();
-        return common::make_error(common::ErrorCode::Io,
-                                  "plugin '" + path + "' failed to load: " +
-                                      (why ? why : "unknown dlopen error"));
+        return common::make_error<"plugin '{}' failed to load: {}">(
+            common::ErrorCode::Io, path, why ? why : "unknown dlopen error");
     }
 
     auto factory = reinterpret_cast<dftu_plugin_factory>(
         dlsym(handle, DFTRACER_UTILS_PLUGIN_FACTORY_SYMBOL));
     if (!factory) {
         dlclose(handle);
-        return common::make_error(common::ErrorCode::NotFound,
-                                  "plugin '" + path + "' exports no '" +
-                                      DFTRACER_UTILS_PLUGIN_FACTORY_SYMBOL +
-                                      "' symbol");
+        return common::make_error<"plugin '{}' exports no '{}' symbol">(
+            common::ErrorCode::NotFound, path,
+            DFTRACER_UTILS_PLUGIN_FACTORY_SYMBOL);
     }
 
     BuildHost build_host(plugin_name_from_path(path));
@@ -321,20 +312,18 @@ dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
         if (plugin && plugin->destroy) plugin->destroy(plugin->self);
         unregister_all();
         dlclose(handle);
-        return common::make_error(
-            common::ErrorCode::InvalidArgument,
-            "plugin '" + path + "' factory asked for '" + build_host.denied() +
-                "', which the build-phase host does not provide. A factory may "
-                "only register ops, state types and ports; the full host "
-                "arrives with the first fold callback");
+        return common::make_error<
+            "plugin '{}' factory asked for '{}', which the build-phase host "
+            "does not provide. A factory may only register ops, state types "
+            "and ports; the full host arrives with the first fold callback">(
+            common::ErrorCode::InvalidArgument, path, build_host.denied());
     }
 
     if (!plugin) {
         unregister_all();
         dlclose(handle);
-        return common::make_error(
-            common::ErrorCode::InvalidArgument,
-            "plugin '" + path + "' factory returned null");
+        return common::make_error<"plugin '{}' factory returned null">(
+            common::ErrorCode::InvalidArgument, path);
     }
 
     if (plugin->abi_version != DFTRACER_UTILS_PLUGIN_ABI_VERSION) {
@@ -342,19 +331,19 @@ dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
         if (plugin->destroy) plugin->destroy(plugin->self);
         unregister_all();
         dlclose(handle);
-        return common::make_error(
-            common::ErrorCode::InvalidArgument,
-            "plugin '" + path + "' ABI version " + dstd::to_string(got) +
-                " does not match host " +
-                dstd::to_string(DFTRACER_UTILS_PLUGIN_ABI_VERSION));
+        return common::make_error<
+            "plugin '{}' ABI version {} does not match "
+            "host {}">(
+            common::ErrorCode::InvalidArgument, path, got,
+            static_cast<std::uint32_t>(DFTRACER_UTILS_PLUGIN_ABI_VERSION));
     }
 
     if (dstd::String bad = config_violation(plugin, config); !bad.empty()) {
         if (plugin->destroy) plugin->destroy(plugin->self);
         unregister_all();
         dlclose(handle);
-        return common::make_error(common::ErrorCode::InvalidArgument,
-                                  "plugin '" + path + "' config: " + bad);
+        return common::make_error<"plugin '{}' config: {}">(
+            common::ErrorCode::InvalidArgument, path, bad);
     }
 
     // A plan_duql that does not parse used to be logged and dropped, which
@@ -375,10 +364,10 @@ dstd::Result<Plugins::Impl::Loaded> load_plugin(const dstd::String& path,
             if (plugin->destroy) plugin->destroy(plugin->self);
             unregister_all();
             dlclose(handle);
-            return common::make_error(common::ErrorCode::InvalidArgument,
-                                      "plugin '" + path + "' plan_duql '" +
-                                          plan + "' does not parse: " +
-                                          dstd::String(parsed.error().message));
+            return common::make_error<
+                "plugin '{}' plan_duql '{}' does not parse: {}">(
+                common::ErrorCode::InvalidArgument, path, plan,
+                dstd::StringView(parsed.error().message));
         }
     }
 
@@ -425,7 +414,7 @@ dstd::Vector<std::size_t> topo_sort(
 // an injected plugin that has none.
 dstd::String plugin_label(const Plugins::Impl& impl, std::size_t i) {
     const dstd::String& name = impl.plugins[i].name;
-    return name.empty() ? ("plugin " + dstd::to_string(i)) : ("'" + name + "'");
+    return name.empty() ? dstd::fmt<"plugin {}">(i) : dstd::fmt<"'{}'">(name);
 }
 
 dstd::Vector<dstd::String> name_list(const char* const* (*slot)(void*),
@@ -447,12 +436,11 @@ dstd::Result<void> settle_order(Plugins::Impl& impl) {
         for (const auto* slot : {&pl->provides, &pl->consumes})
             for (const dstd::String& name : name_list(*slot, pl->self))
                 if (is_host_namespace(name))
-                    return common::make_error(
+                    return common::make_error<
+                        "plugin {} declares '{}'; the 'dftu.' namespace "
+                        "belongs to the host and is refused to plugins">(
                         common::ErrorCode::InvalidArgument,
-                        "plugin " + plugin_label(impl, i) + " declares '" +
-                            name +
-                            "'; the 'dftu.' namespace belongs to the host and "
-                            "is refused to plugins");
+                        plugin_label(impl, i), name);
     }
 
     dstd::HashMap<dstd::String, std::size_t> producer;
@@ -461,12 +449,12 @@ dstd::Result<void> settle_order(Plugins::Impl& impl) {
         for (const dstd::String& name : name_list(pl->provides, pl->self)) {
             auto [it, fresh] = producer.emplace(name, i);
             if (!fresh)
-                return common::make_error(
-                    common::ErrorCode::InvalidArgument,
-                    "plugins " + plugin_label(impl, it->second) + " and " +
-                        plugin_label(impl, i) + " both provide '" + name +
-                        "'. Names are lowercased, so two identifiers that "
-                        "differ only in case collide here");
+                return common::make_error<
+                    "plugins {} and {} both provide '{}'. Names are "
+                    "lowercased, so two identifiers that differ only in case "
+                    "collide here">(common::ErrorCode::InvalidArgument,
+                                    plugin_label(impl, it->second),
+                                    plugin_label(impl, i), name);
         }
     }
 
@@ -476,10 +464,10 @@ dstd::Result<void> settle_order(Plugins::Impl& impl) {
         for (const dstd::String& name : name_list(pl->consumes, pl->self)) {
             auto it = producer.find(name);
             if (it == producer.end())
-                return common::make_error(
-                    common::ErrorCode::NotFound,
-                    "plugin " + plugin_label(impl, i) + " consumes '" + name +
-                        "' which no loaded plugin provides");
+                return common::make_error<
+                    "plugin {} consumes '{}' which no loaded plugin "
+                    "provides">(common::ErrorCode::NotFound,
+                                plugin_label(impl, i), name);
             if (it->second != i) edges.emplace_back(it->second, i);
         }
     }
@@ -491,10 +479,9 @@ dstd::Result<void> settle_order(Plugins::Impl& impl) {
         std::size_t stuck = 0;
         while (stuck < sorted.size() && sorted[stuck]) ++stuck;
         impl.order.clear();
-        return common::make_error(
-            common::ErrorCode::InvalidArgument,
-            "plugin provides/consumes graph has a cycle through " +
-                plugin_label(impl, stuck));
+        return common::make_error<
+            "plugin provides/consumes graph has a cycle through {}">(
+            common::ErrorCode::InvalidArgument, plugin_label(impl, stuck));
     }
     return {};
 }

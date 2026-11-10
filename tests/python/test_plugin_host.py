@@ -64,6 +64,15 @@ class TestPlugins:
             with pytest.raises(Exception):
                 plugins.run(empty)
 
+    def test_bad_config_json_raises_value_error(self):
+        from dftracer.utils import DFTUtilsValueError
+        from dftracer.utils.plugins import _NativePlugins
+
+        with pytest.raises(DFTUtilsValueError, match="failed to parse plugin config"):
+            _NativePlugins([(_PLUGIN, "{not json")], None, None)
+        with pytest.raises(DFTUtilsValueError, match="root must be a JSON object"):
+            _NativePlugins([(_PLUGIN, "[1, 2]")], None, None)
+
     def test_bad_path_raises_on_construction(self):
         # The set is built (dlopen included) at construction time.
         with pytest.raises(ImportError):

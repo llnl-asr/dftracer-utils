@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/field_ref.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
@@ -85,7 +86,7 @@ coro::CoroTask<HttpResponse> handle_viz_histogram(const HttpRequest& req,
     nbuckets = std::clamp(nbuckets, 4, 200);
 
     const dstd::String cache_key =
-        dstd::String(req.path) + "?" + params.canonical_key();
+        dstd::fmt<"{}?{}">(req.path, params.canonical_key());
     if (auto hit = index.viz_cache().get(cache_key))
         co_return HttpResponse::ok(std::move(*hit));
 
@@ -103,7 +104,7 @@ coro::CoroTask<HttpResponse> handle_viz_histogram(const HttpRequest& req,
             .cancel_when([&req]() { return req.cancel_token.cancelled(); });
     if (view.query) dv = dv.filter(*view.query);
     if (!single_file || fields.by_path) dv = dv.time_range(begin, end);
-    auto scan = common::unwrap(co_await dv.map_batches<DurAcc>(
+    auto mapped = co_await dv.map_batches<DurAcc>(
         [&fields](DurAcc& a, const dstd::Vector<dstd::StringView>& events) {
             fields.for_each_event(events, [&a](dstd::StringView e) {
                 EventScalars s;
@@ -116,7 +117,9 @@ coro::CoroTask<HttpResponse> handle_viz_histogram(const HttpRequest& req,
             for (double d : y.durs) x.durs.push_back(d);
             return std::move(x);
         },
-        slots, limit > 0 ? static_cast<std::uint64_t>(limit) : 0));
+        slots, limit > 0 ? static_cast<std::uint64_t>(limit) : 0);
+    if (!mapped) co_return HttpResponse::from_error(mapped.error());
+    auto& scan = *mapped;
 
     bool truncated = scan.stats.truncated;
     dstd::Vector<double> all = std::move(scan.value.durs);
@@ -140,7 +143,7 @@ coro::CoroTask<HttpResponse> handle_viz_histogram(const HttpRequest& req,
         sb.append_comma();
         sb.append_key_value("truncated", truncated);
         sb.end_object();
-        dstd::String body(sb);
+        dstd::String body = json_string(sb);
         if (!req.cancel_token.cancelled())
             index.viz_cache().put(cache_key, body);
         co_return HttpResponse::ok(std::move(body));
@@ -203,7 +206,7 @@ coro::CoroTask<HttpResponse> handle_viz_histogram(const HttpRequest& req,
     }
     sb.append_key_value("buckets", buckets);
     sb.end_object();
-    dstd::String body(sb);
+    dstd::String body = json_string(sb);
     if (!req.cancel_token.cancelled()) index.viz_cache().put(cache_key, body);
     co_return HttpResponse::ok(std::move(body));
 }

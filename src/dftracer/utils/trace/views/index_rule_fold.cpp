@@ -55,7 +55,7 @@ dstd::Result<void> IndexRuleFold::step(const FoldBatch& batch) {
     return {};
 }
 
-void IndexRuleFold::merge(Fold& other) {
+dstd::Result<void> IndexRuleFold::merge(Fold& other) {
     auto& o = static_cast<IndexRuleFold&>(other);
     rows_.reserve(rows_.size() + o.rows_.size());
     for (auto& [key, partial] : o.rows_) {
@@ -67,6 +67,7 @@ void IndexRuleFold::merge(Fold& other) {
     }
     o.rows_ = AggQueryResult::Rows();
     stats_.events_read += o.stats_.events_read;
+    return {};
 }
 
 coro::CoroTask<bool> IndexRuleFold::finalize(const CoverageSet&) {

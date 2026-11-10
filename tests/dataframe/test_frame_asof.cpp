@@ -5,6 +5,7 @@
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/algorithm.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
@@ -614,7 +615,7 @@ DataFrame keyed(const Rows& rows, const dstd::String& id, int by_mode) {
     if (by_mode & 2) {
         dstd::Vector<S> ks;
         for (const I& k : rows.ks)
-            ks.push_back(k ? S("k" + dstd::to_string(*k)) : NS);
+            ks.push_back(k ? S(dstd::fmt<"k{}">(*k)) : NS);
         out.names.emplace_back("ks");
         out.columns.push_back(strs(ks));
     }

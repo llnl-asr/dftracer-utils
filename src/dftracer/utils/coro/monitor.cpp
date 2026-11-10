@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/symbolize.h>
 #include <dftracer/utils/coro/hooks.h>
 #include <dftracer/utils/coro/monitor.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -122,10 +123,9 @@ const char* kind_str(CoroutineOrigin k) {
 dstd::String thread_str(int spawn_tid, int finish_tid) {
     if (spawn_tid < 0 && finish_tid < 0) return "";
     if (spawn_tid >= 0 && finish_tid >= 0 && spawn_tid != finish_tid) {
-        return " @t" + dstd::to_string(spawn_tid) + ">t" +
-               dstd::to_string(finish_tid);
+        return dstd::fmt<" @t{}>t{}">(spawn_tid, finish_tid);
     }
-    return " @t" + dstd::to_string(finish_tid >= 0 ? finish_tid : spawn_tid);
+    return dstd::fmt<" @t{}">(finish_tid >= 0 ? finish_tid : spawn_tid);
 }
 
 void render_table(const dstd::Vector<Done>& recs) {
@@ -135,8 +135,8 @@ void render_table(const dstd::Vector<Done>& recs) {
     };
     dstd::HashMap<dstd::String, Agg> by;
     for (const Done& d : recs) {
-        Agg& a = by[dstd::String("[") + kind_str(d.kind) + "] " +
-                    label(d.resume_fn, cache)];
+        Agg& a = by[dstd::fmt<"[{}] {}">(kind_str(d.kind),
+                                         label(d.resume_fn, cache))];
         if (a.count == 0) {
             a.min = d.wall_us;
             a.max = d.wall_us;

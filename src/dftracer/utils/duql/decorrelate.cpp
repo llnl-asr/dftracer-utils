@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -155,7 +156,7 @@ void set_span(Expr& e, Span span) {
 
 // A copy of `e` with `span`: its canonical text parsed again.
 ExprPtr clone(const Expr& e, Span span) {
-    Program tree = parse_canonical("where " + to_text(e));
+    Program tree = parse_canonical(dstd::fmt<"where {}">(to_text(e)));
     ExprPtr out = std::move(
         std::get<Where>(tree.pipeline->stages.front().node).condition);
     set_span(*out, span);
@@ -216,28 +217,29 @@ class Terms {
         const std::size_t l = ok ? count_enclosing(*b->left) : 0;
         const std::size_t r = ok ? count_enclosing(*b->right) : 0;
         if (!ok || (l > 0) == (r > 0))
-            return refuse(text_, t->span,
-                          "'" + term +
-                              "' reads the enclosing row only as one side of "
-                              "'==', '<', '<=', '>', '>=' or 'between' "
-                              "against the sub-query's own fields, in a "
-                              "'where' term joined by 'and'; for intervals "
-                              "write 'lookup ... overlap'");
+            return refuse(
+                text_, t->span,
+                dstd::fmt<
+                    "'{}' reads the enclosing row only as one side of "
+                    "'==', '<', '<=', '>', '>=' or 'between' against "
+                    "the sub-query's own fields, in a 'where' term joined "
+                    "by 'and'; for intervals write 'lookup ... overlap'">(
+                    term));
         ExprPtr inner = std::move(l > 0 ? b->right : b->left);
         ExprPtr outer = std::move(l > 0 ? b->left : b->right);
         const BinaryOp op = l > 0 ? flipped(b->op) : b->op;
         if (reads_own(*outer))
-            return refuse(text_, t->span,
-                          "'" + term +
-                              "' mixes the enclosing row with the "
-                              "sub-query's own fields on one side; compare "
-                              "an expression of each");
+            return refuse(
+                text_, t->span,
+                dstd::fmt<"'{}' mixes the enclosing row with the sub-query's "
+                          "own fields on one side; compare an expression of "
+                          "each">(term));
         auto unroot = [](Expr&, Path& path) { path.root = PathRoot::Record; };
         enclosing(*outer, 0, unroot);
         if (op == BinaryOp::Eq) {
-            keys.push_back(Assign{dstd::String(CORRELATED_KEY_PREFIX) +
-                                      dstd::int_text(out_.outer.size()),
-                                  std::move(inner)});
+            keys.push_back(Assign{
+                dstd::fmt<"{}{}">(CORRELATED_KEY_PREFIX, out_.outer.size()),
+                std::move(inner)});
             out_.outer.push_back(std::move(outer));
             return {};
         }
@@ -246,19 +248,19 @@ class Terms {
             range_ = bounded;
             keys.push_back(Assign{CORRELATED_RANGE, std::move(inner)});
         } else if (bounded != range_) {
-            return refuse(text_, t->span,
-                          "'" + term + "' bounds '" + bounded +
-                              "', another term bounds '" + range_ +
-                              "'; a correlated range bounds one expression; "
-                              "for intervals write 'lookup ... overlap'");
+            return refuse(
+                text_, t->span,
+                dstd::fmt<
+                    "'{}' bounds '{}', another term bounds '{}'; a correlated "
+                    "range bounds one expression; for intervals write "
+                    "'lookup ... overlap'">(term, bounded, range_));
         }
         const bool lower = op == BinaryOp::Gt || op == BinaryOp::Ge;
         auto& slot = lower ? out_.low : out_.high;
         if (slot)
             return refuse(text_, t->span,
-                          "'" + term + "' is a second " +
-                              (lower ? "lower" : "upper") + " bound of '" +
-                              range_ + "'");
+                          dstd::fmt<"'{}' is a second {} bound of '{}'">(
+                              term, (lower ? "lower" : "upper"), range_));
         slot = CorrelatedBound{std::move(outer),
                                op == BinaryOp::Gt || op == BinaryOp::Lt};
         return {};
@@ -298,10 +300,10 @@ dstd::Expected<Rewrite, Refusal> split(const dstd::String& text, Pipeline& p,
         dstd::Optional<Refusal> refusal;
         auto note = [&](Expr& e, Path&) {
             if (refusal) return;
-            refusal = Refusal{text, e.span,
-                              "'" + to_text(e) +
-                                  "' reads the enclosing row in a stage "
-                                  "other than 'where'"};
+            refusal = Refusal{
+                text, e.span,
+                dstd::fmt<"'{}' reads the enclosing row in a stage other than "
+                          "'where'">(to_text(e))};
         };
         slots(s, [&](ExprPtr& e) {
             if (e) enclosing(*e, 0, note);
@@ -324,13 +326,14 @@ dstd::Expected<Rewrite, Refusal> split(const dstd::String& text, Pipeline& p,
                            std::holds_alternative<Group>(node) ||
                            std::holds_alternative<Agg>(node);
         return refuse(text, out.stages[i].span,
-                      dstd::String("'") + STAGE_NAMES[node.index()] +
+                      dstd::fmt<"'{}{}">(
+                          STAGE_NAMES[node.index()],
                           (named ? "' must be the last stage of a correlated "
                                    "sub-query"
                                  : "' after a correlated 'where' depends on "
                                    "the rows of other keys; a correlated "
                                    "sub-query holds only 'where', 'derive' "
-                                   "and a last 'select', 'group' or 'agg'"));
+                                   "and a last 'select', 'group' or 'agg'")));
     }
     return out;
 }
@@ -390,10 +393,10 @@ dstd::Expected<RangeRead, Refusal> range_read(const dstd::String& text,
     if (c && name == "min") return RangeRead::Min;
     if (c && name == "max") return RangeRead::Max;
     if (c && name == "mean") return RangeRead::Mean;
-    return refuse(text, e.span,
-                  "'" + name +
-                      "' over a correlated range; use count, count_if, sum, "
-                      "min, max or mean");
+    return refuse(
+        text, e.span,
+        dstd::fmt<"'{}' over a correlated range; use count, count_if, "
+                  "sum, min, max or mean">(name));
 }
 
 }  // namespace
@@ -418,8 +421,7 @@ dstd::Expected<dstd::Optional<Decorrelated>, Refusal> decorrelate(
     const auto named = name_terminal(r, main.text);
     if (!named) return dstd::Unexpected(named.error());
     for (std::size_t i = 0; i < r.outer.size(); ++i)
-        d.names.push_back(dstd::String(CORRELATED_KEY_PREFIX) +
-                          dstd::int_text(i));
+        d.names.push_back(dstd::fmt<"{}{}">(CORRELATED_KEY_PREFIX, i));
 
     dstd::Vector<Assign> inner = inline_keys(r);
     auto key = [&](const dstd::String& name) {
@@ -444,10 +446,10 @@ dstd::Expected<dstd::Optional<Decorrelated>, Refusal> decorrelate(
                 ? std::get<Select>(tail.node).items.size()
                 : std::get<Agg>(tail.node).aggregates.size();
         if (width != 1)
-            return refuse(main.text, tail.span,
-                          "a sub-query in an expression gives one column; "
-                          "this one gives " +
-                              dstd::int_text(width));
+            return refuse(
+                main.text, tail.span,
+                dstd::fmt<"a sub-query in an expression gives one column; this "
+                          "one gives {}">(width));
         if (auto* s = std::get_if<Select>(&tail.node))
             s->items.front().name = CORRELATED_VALUE;
         else

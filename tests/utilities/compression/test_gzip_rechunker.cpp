@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/file.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
@@ -26,8 +27,8 @@ dstd::String make_lines(std::size_t n) {
     dstd::String s;
     s.reserve(n * 48);
     for (std::size_t i = 0; i < n; ++i) {
-        s += "{\"id\":" + dstd::to_string(i) +
-             ",\"name\":\"read\",\"cat\":\"POSIX\",\"dur\":42}\n";
+        s += dstd::fmt<
+            "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"dur\":42}\n">(i);
     }
     return s;
 }

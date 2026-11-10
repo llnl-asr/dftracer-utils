@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
@@ -139,7 +140,7 @@ TEST_SUITE("duql patterns") {
 
     TEST_CASE("a catastrophic pattern is bounded and stable") {
         const dstd::String record =
-            R"({"s":")" + dstd::String(10000, 'a') + R"(!"})";
+            dstd::fmt<R"({"s":"{}!"})">(dstd::String(10000, 'a'));
         auto ast = parse(R"(s ~ "^(a|aa)+$")");
         REQUIRE(ast);
         simdjson::dom::parser p;
@@ -151,7 +152,7 @@ TEST_SUITE("duql patterns") {
         for (int i = 0; i < 100; ++i)
             CHECK(evaluate_truth(**ast, json::JsonValue(el)) == first);
 
-        const dstd::String value = dstd::String(10000, 'a') + "!";
+        const dstd::String value = dstd::fmt<"{}!">(dstd::String(10000, 'a'));
         const dataframe::Series col = dataframe::Series::strings(
             dstd::Vector<dstd::StringView>{value, "aa"});
         const dataframe::Series m = col.str_search("^(a|aa)+$");
@@ -255,14 +256,16 @@ TEST_SUITE("duql patterns") {
 TEST_CASE("a catastrophic pattern retries on Vectorscan at any length") {
     auto p = compile_regex("^(a|aa)+$", false);
     REQUIRE(p);
-    const dstd::String no = dstd::String(10000, 'a') + "!";
+    const dstd::String no = dstd::fmt<"{}!">(dstd::String(10000, 'a'));
     const dstd::String yes(10000, 'a');
 #ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
     CHECK(match(**p, no) == MatchResult::No);
-    CHECK(match(**p, dstd::String(60, 'a') + "!") == MatchResult::No);
+    CHECK(match(**p, dstd::fmt<"{}!">(dstd::String(60, 'a'))) ==
+          MatchResult::No);
 #else
     CHECK(match(**p, no) == MatchResult::Limit);
-    CHECK(match(**p, dstd::String(60, 'a') + "!") == MatchResult::Limit);
+    CHECK(match(**p, dstd::fmt<"{}!">(dstd::String(60, 'a'))) ==
+          MatchResult::Limit);
 #endif
     CHECK(match(**p, yes) == MatchResult::Yes);
 }
@@ -277,7 +280,7 @@ TEST_CASE("the engine path gives exact results") {
         REQUIRE(p);
         return match(**p, s);
     };
-    const dstd::String hard = dstd::String(10000, 'a') + "!";
+    const dstd::String hard = dstd::fmt<"{}!">(dstd::String(10000, 'a'));
 #ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
     CHECK(m("^(a|aa)+$", false, hard) == MatchResult::No);
     CHECK(m("^(a|aa)+$", true, hard) == MatchResult::No);
@@ -305,11 +308,14 @@ TEST_CASE("the engine path gives exact results") {
     CHECK(m("^.$", false, "\xc3\xa9") == MatchResult::Yes);
     CHECK(m("\xc3\xa9", true, "\xc3\x89") == MatchResult::Yes);
 #ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
-    CHECK(m("^(a|aa)+$", false, hard + "\xc3\xa9") == MatchResult::No);
+    CHECK(m("^(a|aa)+$", false, dstd::fmt<"{}\xc3\xa9">(hard)) ==
+          MatchResult::No);
 #else
-    CHECK(m("^(a|aa)+$", false, hard + "\xc3\xa9") == MatchResult::Limit);
+    CHECK(m("^(a|aa)+$", false, dstd::fmt<"{}\xc3\xa9">(hard)) ==
+          MatchResult::Limit);
 #endif
-    CHECK(m("^(a|aa)+$", false, hard + "\xc0\xaf") == MatchResult::Limit);
+    CHECK(m("^(a|aa)+$", false, dstd::fmt<"{}\xc0\xaf">(hard)) ==
+          MatchResult::Limit);
 
     CHECK(m("^a\\Xc$", false, "abc") == MatchResult::Yes);
     CHECK(m("^a\\Xc$", false, "ac") == MatchResult::No);

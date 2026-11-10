@@ -8,6 +8,7 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/result.h>
@@ -283,11 +284,9 @@ class FieldExpr {
         for (std::size_t i = 0; i < names.size(); ++i) {
             std::int64_t idx = df.column_index(names[i]);
             if (idx < 0) {
-                return common::make_error(
-                    common::ErrorCode::InvalidArgument,
-                    common::str_cat("field expression references column not "
-                                    "present in frame: ",
-                                    names[i]));
+                return common::make_error<
+                    "field expression references column not present in "
+                    "frame: {}">(common::ErrorCode::InvalidArgument, names[i]);
             }
             index.emplace(names[i], static_cast<std::int32_t>(i));
             held.push_back(df.column(names[i]));

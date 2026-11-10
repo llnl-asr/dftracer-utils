@@ -5,6 +5,7 @@
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dstd/algorithm.h>
 #include <dftracer/utils/dstd/deque.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/little_endian.h>
@@ -384,7 +385,7 @@ void fill_commit(detail::Commit& commit,
 
 dstd::String verified_key(const detail::FileData& file,
                           std::uint64_t sequence) {
-    return common::str_cat(file.name, ":", file.writer_random, ":", sequence);
+    return dstd::fmt<"{}:{}:{}">(file.name, file.writer_random, sequence);
 }
 
 void build_commits(detail::FileData& file, std::size_t file_index) {

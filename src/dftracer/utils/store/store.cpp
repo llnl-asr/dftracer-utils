@@ -6,6 +6,7 @@
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/coro/executor.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -474,10 +475,10 @@ Store::State::get_or_open(dstd::StringView dir) {
     }
     const auto made = dstd::fs::create_directories(key.view());
     if (!made.has_value()) {
-        return dstd::Unexpected<dstd::Error>(dstd::Error(
-            dstd::Condition::Io,
-            common::str_cat("store: cannot create the directory ", key.str(),
-                            ": ", made.error().message())));
+        return dstd::Unexpected<dstd::Error>(
+            dstd::Error::from_format<
+                "store: cannot create the directory {}: {}">(
+                dstd::Condition::Io, key.str(), made.error().message()));
     }
     // A state outlives the call that opened it, so it is not charged to that
     // call's pool.
@@ -495,10 +496,10 @@ Store::State::get_or_open(dstd::StringView dir) {
 dstd::Expected<void, dstd::Error> Store::State::ensure_dir_locked() {
     const auto made = dstd::fs::create_directories(dir.view());
     if (!made.has_value()) {
-        return dstd::Unexpected<dstd::Error>(dstd::Error(
-            dstd::Condition::Io,
-            common::str_cat("store: cannot create the directory ", dir.str(),
-                            ": ", made.error().message())));
+        return dstd::Unexpected<dstd::Error>(
+            dstd::Error::from_format<
+                "store: cannot create the directory {}: {}">(
+                dstd::Condition::Io, dir.str(), made.error().message()));
     }
     return {};
 }
@@ -855,9 +856,8 @@ coro::CoroTask<dstd::Expected<PackReport, dstd::Error>> Store::State::pack_task(
             dstd::fs::remove((self->dir / dstd::PathView(file.name)).view());
         if (!removed.has_value()) {
             co_return Failure(
-                dstd::Error(dstd::Condition::Io,
-                            common::str_cat("store: cannot delete ", file.name,
-                                            ": ", removed.error().message())));
+                dstd::Error::from_format<"store: cannot delete {}: {}">(
+                    dstd::Condition::Io, file.name, removed.error().message()));
         }
         ++report.files_deleted;
         report.bytes_deleted += file.size;

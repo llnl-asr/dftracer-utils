@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
@@ -40,8 +41,9 @@ void cleanup(const dstd::Vector<dstd::String>& paths) {
 
 TEST_CASE("ShardedWriter - one shard per worker with header/footer placement") {
     dstd::String base = tmp_path("test_sharded_basic");
-    dstd::Vector<dstd::String> expected = {base + ".shard_0", base + ".shard_1",
-                                           base + ".shard_2"};
+    dstd::Vector<dstd::String> expected = {dstd::fmt<"{}.shard_0">(base),
+                                           dstd::fmt<"{}.shard_1">(base),
+                                           dstd::fmt<"{}.shard_2">(base)};
     cleanup(expected);
 
     Runtime runtime(2);
@@ -74,8 +76,8 @@ TEST_CASE("ShardedWriter - one shard per worker with header/footer placement") {
 
 TEST_CASE("ShardedWriter - gzip_extension appends .gz to shard names") {
     dstd::String base = tmp_path("test_sharded_gz");
-    dstd::Vector<dstd::String> expected = {base + ".shard_0.gz",
-                                           base + ".shard_1.gz"};
+    dstd::Vector<dstd::String> expected = {dstd::fmt<"{}.shard_0.gz">(base),
+                                           dstd::fmt<"{}.shard_1.gz">(base)};
     cleanup(expected);
 
     Runtime runtime(2);
@@ -98,7 +100,7 @@ TEST_CASE("ShardedWriter - gzip_extension appends .gz to shard names") {
 
 TEST_CASE("ShardedWriter - out-of-range worker_idx fails") {
     dstd::String base = tmp_path("test_sharded_oor");
-    cleanup({base + ".shard_0"});
+    cleanup({dstd::fmt<"{}.shard_0">(base)});
 
     Runtime runtime(2);
     auto task = [&]() -> CoroTask<int> {
@@ -111,5 +113,5 @@ TEST_CASE("ShardedWriter - out-of-range worker_idx fails") {
     };
     CHECK(dftu_utils_test::ok(runtime.submit(task(), "sharded_oor").get()) ==
           0);
-    cleanup({base + ".shard_0"});
+    cleanup({dstd::fmt<"{}.shard_0">(base)});
 }

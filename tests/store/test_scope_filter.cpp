@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -30,7 +31,7 @@ std::uint64_t file_hash(const dstd::String& path) {
 dstd::Vector<std::uint64_t> hashes_of(std::size_t first, std::size_t count) {
     dstd::Vector<std::uint64_t> hashes;
     for (std::size_t i = first; i < first + count; ++i) {
-        hashes.push_back(file_hash("/traces/" + dstd::to_string(i) + ".pfw"));
+        hashes.push_back(file_hash(dstd::fmt<"/traces/{}.pfw">(i)));
     }
     return hashes;
 }

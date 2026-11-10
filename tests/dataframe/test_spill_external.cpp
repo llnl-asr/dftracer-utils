@@ -8,6 +8,7 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
@@ -137,7 +138,7 @@ struct SpillDirVar {
     dstd::Path dir;
     SpillDirVar() {
         dir = dstd::fs::current_path().value() /
-              ("spill_external_" + dstd::to_string(::getpid()));
+              (dstd::fmt<"spill_external_{}">(::getpid()));
         REQUIRE(dstd::fs::remove_all(dir).has_value());
         REQUIRE(dstd::fs::create_directories(dir).has_value());
         ::setenv("DFTRACER_UTILS_SPILL_DIR", dir.c_str(), 1);

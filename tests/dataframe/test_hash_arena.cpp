@@ -9,6 +9,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazy/hash_arena.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -58,11 +59,10 @@ TEST_SUITE("hash arena") {
 
     TEST_CASE("many colliding keys all stay distinct and findable") {
         lazy_internal::HashArena a;
-        for (int i = 0; i < 200; ++i)
-            CHECK(put(a, 7, "k" + dstd::to_string(i)));
+        for (int i = 0; i < 200; ++i) CHECK(put(a, 7, dstd::fmt<"k{}">(i)));
         for (int i = 0; i < 200; ++i) {
-            CHECK_FALSE(put(a, 7, "k" + dstd::to_string(i)));
-            CHECK(has(a, 7, "k" + dstd::to_string(i)));
+            CHECK_FALSE(put(a, 7, dstd::fmt<"k{}">(i)));
+            CHECK(has(a, 7, dstd::fmt<"k{}">(i)));
         }
     }
 
@@ -101,7 +101,7 @@ TEST_SUITE("hash arena") {
             lazy_internal::HashArena a(*pool);
             for (int i = 0; i < 5000; ++i)
                 CHECK(put(a, static_cast<std::uint64_t>(i) * 2654435761u,
-                          "key" + dstd::to_string(i)));
+                          dstd::fmt<"key{}">(i)));
             CHECK(pool->live() >= a.bytes());
             CHECK(a.bytes() > 0);
         }
@@ -119,12 +119,12 @@ TEST_SUITE("hash arena") {
         // chunks and start the next ones.
         constexpr int KEYS = 40000;
         auto key_of = [](int i) {
-            return "key-" + dstd::to_string(i) + dstd::String(56, 'x');
+            return dstd::fmt<"key-{}{}">(i, dstd::String(56, 'x'));
         };
         // One hash for two keys. The chain must keep them apart.
         constexpr std::uint64_t SHARED = 99;
-        const dstd::String first = "shared-" + key_of(0);
-        const dstd::String second = "shared-" + key_of(1);
+        const dstd::String first = dstd::fmt<"shared-{}">(key_of(0));
+        const dstd::String second = dstd::fmt<"shared-{}">(key_of(1));
         std::size_t key_bytes = first.size() + second.size();
         std::size_t key_max = std::max(first.size(), second.size());
         for (int i = 0; i < KEYS; ++i) {
@@ -146,7 +146,7 @@ TEST_SUITE("hash arena") {
         CHECK(all);
         CHECK(has(a, SHARED, first));
         CHECK(has(a, SHARED, second));
-        CHECK_FALSE(has(a, SHARED, "shared-" + key_of(2)));
+        CHECK_FALSE(has(a, SHARED, dstd::fmt<"shared-{}">(key_of(2))));
         CHECK_FALSE(put(a, SHARED, first));
     }
 
@@ -157,7 +157,7 @@ TEST_SUITE("hash arena") {
         bool bounded = true;
         while (large < 2) {
             const std::size_t before = a.table_buckets();
-            const dstd::String key = "k" + dstd::to_string(at);
+            const dstd::String key = dstd::fmt<"k{}">(at);
             const std::uint64_t bound =
                 a.bytes_after(1, key.size(), key.size());
             REQUIRE(put(a, ++at, key));
@@ -173,7 +173,7 @@ TEST_SUITE("hash arena") {
         CHECK(bounded);
         bool all = true;
         for (std::uint64_t k = 1; k <= at; ++k)
-            all = all && has(a, k, "k" + dstd::to_string(k - 1));
+            all = all && has(a, k, dstd::fmt<"k{}">(k - 1));
         CHECK(all);
     }
 
@@ -201,8 +201,7 @@ TEST_SUITE("hash arena") {
             dstd::Vector<dstd::String> batch;
             std::size_t key_bytes = 0;
             for (std::size_t k = 0; k < keys; ++k) {
-                batch.push_back("r" + dstd::to_string(round) + "k" +
-                                dstd::to_string(k));
+                batch.push_back(dstd::fmt<"r{}k{}">(round, k));
                 key_bytes += batch.back().size();
             }
             const std::uint64_t bound = a.bytes_after(keys, key_bytes);

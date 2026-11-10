@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
@@ -77,7 +78,8 @@ bool on_map(const Query& q, std::int64_t run) {
 
 TEST_CASE("lookups evaluate on JSON and flattened records") {
     const dstd::String lets = "let runs = where run > 0; ";
-    const Query arrow = bound(lets + "where run -> runs.app == \"laghos\"");
+    const Query arrow =
+        bound(dstd::fmt<"{}where run -> runs.app == \"laghos\"">(lets));
     CHECK(on_json(arrow, R"({"run":1})"));
     CHECK_FALSE(on_json(arrow, R"({"run":2})"));
     CHECK_FALSE(on_json(arrow, R"({"run":3})"));
@@ -87,7 +89,7 @@ TEST_CASE("lookups evaluate on JSON and flattened records") {
 
     // Run 2 has two rows with equal values: one value, no conflict.
     const Query same =
-        bound(lets + "where (run -> runs.app) ?? \"x\" == \"amg\"");
+        bound(dstd::fmt<"{}where (run -> runs.app) ?? \"x\" == \"amg\"">(lets));
     CHECK(on_json(same, R"({"run":2})"));
 }
 
@@ -234,9 +236,8 @@ TEST_CASE("a range sub-query reads the rows between the enclosing bounds") {
     const dstd::Vector<const dataframe::Series*> keys = {&k, &a, &b};
     auto band = [&](const dstd::String& agg) {
         const auto [bp, bl] = lookup_of(
-            "derive v = (from data | where pid == ^.pid and ts between ^.lo "
-            "and ^.hi | agg { v = " +
-            agg + " })");
+            dstd::fmt<"derive v = (from data | where pid == ^.pid and ts "
+                      "between ^.lo and ^.hi | agg { v = {} })">(agg));
         return dftu_utils_test::ok(lookup_column(*bl, keys, 6));
     };
     auto ints = [](const dataframe::Series& s) {

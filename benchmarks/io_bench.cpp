@@ -23,6 +23,7 @@
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
@@ -134,7 +135,7 @@ coro::CoroTask<void> stat_call_task(Shared& shared, std::size_t rounds) {
 }
 
 dstd::String task_dir(const Shared& shared, std::size_t seed) {
-    return common::str_cat(shared.path, ".d", seed);
+    return dstd::fmt<"{}.d{}">(shared.path, seed);
 }
 
 coro::CoroTask<void> mkdir_op_task(Shared& shared, std::size_t rounds,

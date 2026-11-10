@@ -5,6 +5,7 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/time.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
@@ -158,7 +159,7 @@ TEST_CASE("PaddedStripedWriter - the caller's scope joins before close") {
     dstd::Vector<dstd::String> payloads;
     dstd::Vector<dstd::Vector<std::uint8_t>> members;
     for (std::size_t i = 0; i < WORKERS; ++i) {
-        payloads.push_back(R"({"w":)" + dstd::to_string(i) + "}\n");
+        payloads.push_back(dstd::fmt<"{\"w\":{}}\n">(i));
         members.push_back(gzip_member(payloads.back()));
     }
     Runtime runtime(4);
@@ -340,7 +341,8 @@ dstd::Vector<std::uint8_t> exact_member(const dstd::String& head, char fill,
         size = total - 20 - 5 * blocks;
     }
     REQUIRE(size > head.size());
-    payload = head + dstd::String(size - head.size() - 1, fill) + "\n";
+    payload =
+        dstd::fmt<"{}{}\n">(head, dstd::String(size - head.size() - 1, fill));
     const std::size_t xlen = total - (20 + payload.size() + 5 * blocks);
     REQUIRE(xlen <= 65535);
     dstd::Vector<std::uint8_t> m = {0x1f, 0x8b, 8, 0x04, 0, 0, 0, 0, 0, 0xff};
@@ -417,7 +419,7 @@ TEST_CASE("PaddedStripedWriter - every stripe ends in whole gzip members") {
     dstd::Vector<dstd::String> payloads(31);
     dstd::Vector<dstd::Vector<std::uint8_t>> members;
     for (std::size_t k = 0; k < payloads.size(); ++k)
-        members.push_back(exact_member("{\"k\":" + dstd::to_string(k) + "}\n",
+        members.push_back(exact_member(dstd::fmt<"{\"k\":{}}\n">(k),
                                        static_cast<char>('a' + k % 26),
                                        STRIPE - PAD_MAX - k, payloads[k]));
     dstd::String path = tmp_path("test_padded_whole_members.json.gz");

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/error.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/memory/detail/heap.h>
 
 #include <atomic>
@@ -20,8 +20,6 @@ struct Error::Context {
 };
 
 namespace {
-
-constexpr std::size_t INT32_DIGITS = 11;
 
 // A context pointer with the low bit set is a StaticMessage, not a heap block.
 constexpr std::uintptr_t STATIC_TAG = 1;
@@ -92,21 +90,7 @@ String Error::format() const {
     const StringView condition_text = condition_name(condition());
     const StringView text = message();
 
-    String out;
-    out.reserve(domain_name.size() + 1 + INT32_DIGITS + 1 +
-                condition_text.size() + 2 + text.size());
-    out.append(domain_name.data(), domain_name.size());
-    out.push_back('#');
-    char code_buffer[INT32_DIGITS + 1];
-    const auto code_end =
-        to_chars(code_buffer, code_buffer + sizeof(code_buffer), code());
-    out.append(code_buffer,
-               static_cast<std::size_t>(code_end.ptr - code_buffer));
-    out.push_back(' ');
-    out.append(condition_text.data(), condition_text.size());
-    out.append(": ");
-    if (!text.empty()) out.append(text.data(), text.size());
-    return out;
+    return fmt<"{}#{} {}: {}">(domain_name, code(), condition_text, text);
 }
 
 Error::Context* Error::make_context(StringView message) noexcept {

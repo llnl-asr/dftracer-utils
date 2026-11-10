@@ -5,6 +5,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/runtime/io/io_uring_backend.h>
 #include <fcntl.h>
 #include <sched.h>
@@ -1005,9 +1006,8 @@ dstd::Result<void> IoUringBackend::start() {
                    IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_DEFER_TASKRUN |
                        IORING_SETUP_TASKRUN_FLAG | IORING_SETUP_R_DISABLED);
     if (!is_sq_polled_ && !should_enable_ring_ && !ring_.init(RING_ENTRIES)) {
-        return common::make_error(
-            common::ErrorCode::Internal,
-            common::str_cat("io_uring setup failed: ", std::strerror(errno)));
+        return common::make_error<"io_uring setup failed: {}">(
+            common::ErrorCode::Internal, std::strerror(errno));
     }
     timed_enter_ =
         (ring_.features() & ~masked_features_ & IORING_FEAT_EXT_ARG) != 0;
@@ -1026,9 +1026,8 @@ dstd::Result<void> IoUringBackend::start() {
     if (!wake_fd_.valid()) {
         const int error = errno;
         ring_.destroy();
-        return common::make_error(
-            common::ErrorCode::Internal,
-            common::str_cat("eventfd failed: ", std::strerror(error)));
+        return common::make_error<"eventfd failed: {}">(
+            common::ErrorCode::Internal, std::strerror(error));
     }
     if (auto started = pool_.start(); !started) {
         stop();
@@ -1043,9 +1042,8 @@ dstd::Result<void> IoUringBackend::start() {
     }
     if (enabled < 0) {
         stop();
-        return common::make_error(common::ErrorCode::Internal,
-                                  common::str_cat("io_uring enable failed: ",
-                                                  std::strerror(-enabled)));
+        return common::make_error<"io_uring enable failed: {}">(
+            common::ErrorCode::Internal, std::strerror(-enabled));
     }
     return {};
 }

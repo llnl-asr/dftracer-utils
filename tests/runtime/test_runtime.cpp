@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -413,7 +414,7 @@ TEST_CASE("Runtime - wait_all with no tasks is no-op") {
 TEST_CASE("Runtime - wait_all waits for multiple tasks") {
     Runtime rt(4);
     for (int i = 0; i < 20; ++i) {
-        rt.submit(add_async(i, i), "batch-" + dstd::to_string(i));
+        rt.submit(add_async(i, i), dstd::fmt<"batch-{}">(i));
     }
     rt.wait_all();
     auto p = rt.progress();
@@ -425,7 +426,7 @@ TEST_CASE("Runtime - concurrent submits complete correctly") {
     dstd::Vector<TypedTaskHandle<int>> handles;
     for (int i = 0; i < 10; ++i) {
         handles.push_back(
-            rt.submit(add_async(i, 100), "concurrent-" + dstd::to_string(i)));
+            rt.submit(add_async(i, 100), dstd::fmt<"concurrent-{}">(i)));
     }
     for (int i = 0; i < 10; ++i) {
         CHECK(dftu_utils_test::ok(handles[i].get()) == i + 100);

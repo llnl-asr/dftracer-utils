@@ -10,6 +10,7 @@
 #include <dftracer/utils/dataframe/internal/string_simd.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -141,16 +142,18 @@ dstd::String r_pad(const dstd::String& s, std::int64_t w, char f, int mode) {
     const std::int64_t left = mode == 0   ? gap
                               : mode == 1 ? 0
                                           : gap / 2 + (gap & w & 1);
-    return dstd::String(static_cast<std::size_t>(left), f) + s +
-           dstd::String(static_cast<std::size_t>(gap - left), f);
+    return dstd::fmt<"{}{}{}">(
+        dstd::String(static_cast<std::size_t>(left), f), s,
+        dstd::String(static_cast<std::size_t>(gap - left), f));
 }
 dstd::String r_zfill(const dstd::String& s, std::int64_t w) {
     const auto len = static_cast<std::int64_t>(s.size());
     if (len >= w) return s;
     const auto n = static_cast<std::size_t>(w - len);
     if (!s.empty() && (s[0] == '+' || s[0] == '-'))
-        return s.substr(0, 1) + dstd::String(n, '0') + s.substr(1);
-    return dstd::String(n, '0') + s;
+        return dstd::fmt<"{}{}{}">(s.substr(0, 1), dstd::String(n, '0'),
+                                   s.substr(1));
+    return dstd::fmt<"{}{}">(dstd::String(n, '0'), s);
 }
 dstd::String r_slice(const dstd::String& s, std::int64_t start,
                      std::int64_t length) {

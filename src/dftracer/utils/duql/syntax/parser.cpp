@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -73,15 +74,16 @@ class Parser {
                 }
             }
             if (!ok)
-                return fail(v,
-                            "duql version must be MAJOR or MAJOR.MINOR, not " +
-                                dstd::String(v.text));
+                return fail(
+                    v, dstd::fmt<
+                           "duql version must be MAJOR or MAJOR.MINOR, not {}">(
+                           v.text));
             if (major != DUQL_VERSION_MAJOR || minor > DUQL_VERSION_MINOR)
-                return fail(v, "Unsupported duql version " +
-                                   dstd::String(v.text) +
-                                   "; this build reads duql " +
-                                   dstd::int_text(DUQL_VERSION_MAJOR) + "." +
-                                   dstd::int_text(DUQL_VERSION_MINOR));
+                return fail(
+                    v, dstd::fmt<
+                           "Unsupported duql version {}; this build reads duql "
+                           "{}.{}">(v.text, DUQL_VERSION_MAJOR,
+                                    DUQL_VERSION_MINOR));
         }
         while (true) {
             if (word("let") && peek(1).kind == Tok::Name &&
@@ -119,11 +121,13 @@ class Parser {
             q.pipeline = std::move(*body);
         }
         if (cur().kind != Tok::End)
-            return fail(cur(), cur().kind == Tok::Pipe
-                                   ? "Expected a stage after '|'"
-                                   : "Expected '|', an operator or the end of "
-                                     "the query, got '" +
-                                         shown(cur()) + "'");
+            return fail(
+                cur(),
+                cur().kind == Tok::Pipe
+                    ? "Expected a stage after '|'"
+                    : dstd::fmt<
+                          "Expected '|', an operator or the end of the query, "
+                          "got '{}'">(shown(cur())));
         return q;
     }
 
@@ -251,13 +255,13 @@ class Parser {
     }
     // The token as written, for a message: a parameter keeps its `$`.
     static dstd::String shown(const Token& t) {
-        return t.kind == Tok::Param ? "$" + dstd::String(t.text)
+        return t.kind == Tok::Param ? dstd::fmt<"${}">(t.text)
                                     : dstd::String(t.text);
     }
     Res<const Token*> expect_token(Tok k, dstd::StringView what) {
         if (!at(k))
-            return fail(cur(), "Expected " + dstd::String(what) + ", got '" +
-                                   shown(cur()) + "'");
+            return fail(cur(),
+                        dstd::fmt<"Expected {}, got '{}'">(what, shown(cur())));
         return &advance();
     }
     Res<void> expect(Tok k, dstd::StringView what) {
@@ -267,14 +271,14 @@ class Parser {
     }
     Res<void> expect_word(dstd::StringView w) {
         if (!accept_word(w))
-            return fail(cur(), "Expected '" + dstd::String(w) + "', got '" +
-                                   shown(cur()) + "'");
+            return fail(cur(),
+                        dstd::fmt<"Expected '{}', got '{}'">(w, shown(cur())));
         return {};
     }
     Res<dstd::String> name(dstd::StringView what) {
         if (!at(Tok::Name) || reserved(cur().text))
-            return fail(cur(), "Expected " + dstd::String(what) + ", got '" +
-                                   shown(cur()) + "'");
+            return fail(cur(),
+                        dstd::fmt<"Expected {}, got '{}'">(what, shown(cur())));
         return dstd::String(advance().text);
     }
     Res<dstd::String> int_text(dstd::StringView what) {
@@ -284,7 +288,7 @@ class Parser {
     }
     // A row count: an integer, or a parameter kept as `$name`.
     Res<dstd::String> count_text() {
-        if (at(Tok::Param)) return "$" + dstd::String(advance().text);
+        if (at(Tok::Param)) return dstd::fmt<"${}">(advance().text);
         return int_text("a row count or a parameter");
     }
     Res<dstd::Pair<ExprPtr, ExprPtr>> join_key() {
@@ -380,9 +384,10 @@ class Parser {
                 s.rowsets.push_back(std::move(r));
             }
             if (!accept(Tok::Semi) && !at(Tok::Rbrace))
-                return fail(cur(),
-                            "Expected ';' between source members, got '" +
-                                dstd::String(cur().text) + "'");
+                return fail(
+                    cur(),
+                    dstd::fmt<"Expected ';' between source members, got '{}'">(
+                        cur().text));
         }
         advance();
         return s;
@@ -452,8 +457,9 @@ class Parser {
                 continue;
             }
             if (!at(Tok::Name) || !stage_word(cur().text))
-                return fail(cur(), "Expected a stage after '|', got '" +
-                                       dstd::String(cur().text) + "'");
+                return fail(cur(),
+                            dstd::fmt<"Expected a stage after '|', got '{}'">(
+                                cur().text));
             auto s = stage();
             if (!s) return dstd::Unexpected(s.error());
             p->stages.push_back(std::move(*s));
@@ -579,7 +585,7 @@ class Parser {
         auto open = expect(Tok::Lparen, "'('");
         if (!open) return dstd::Unexpected(open.error());
         if (!word("from"))
-            return fail(cur(), dstd::String(what) + " starts with 'from'");
+            return fail(cur(), dstd::fmt<"{} starts with 'from'">(what));
         auto p = pipeline();
         if (!p) return dstd::Unexpected(p.error());
         auto close = expect(Tok::Rparen, "')'");
@@ -618,14 +624,18 @@ class Parser {
             if (!col) return dstd::Unexpected(col.error());
             p.column = std::move(*col);
             if (!at(Tok::Regex))
-                return fail(cur(),
-                            "Expected '~' after the column of 'parse', got '" +
-                                shown(cur()) + "'");
+                return fail(
+                    cur(),
+                    dstd::fmt<
+                        "Expected '~' after the column of 'parse', got '{}'">(
+                        shown(cur())));
             advance();
             if (!at(Tok::String) && !at(Tok::Param))
-                return fail(cur(),
-                            "Expected a pattern string or a parameter, got '" +
-                                shown(cur()) + "'");
+                return fail(
+                    cur(),
+                    dstd::fmt<
+                        "Expected a pattern string or a parameter, got '{}'">(
+                        shown(cur())));
             auto pat = primary();
             if (!pat) return dstd::Unexpected(pat.error());
             p.pattern = std::move(*pat);
@@ -794,12 +804,13 @@ class Parser {
             if (at(Tok::Int) || at(Tok::Float))
                 sm.amount = dstd::String(advance().text);
             else if (at(Tok::Param))
-                sm.amount = "$" + dstd::String(advance().text);
+                sm.amount = dstd::fmt<"${}">(advance().text);
             else
-                return fail(cur(),
-                            "Expected a row count, a percentage or a "
-                            "parameter, got '" +
-                                shown(cur()) + "'");
+                return fail(
+                    cur(),
+                    dstd::fmt<
+                        "Expected a row count, a percentage or a parameter, "
+                        "got '{}'">(shown(cur())));
             sm.percent = accept(Tok::Percent);
             if (accept_word("seed")) {
                 auto seed = count_text();
@@ -1017,8 +1028,7 @@ class Parser {
             }
             s.node = std::move(ss);
         } else {
-            return fail(first,
-                        "Unknown stage '" + dstd::String(first.text) + "'");
+            return fail(first, dstd::fmt<"Unknown stage '{}'">(first.text));
         }
         s.span = span_from(first);
         return s;
@@ -1336,10 +1346,10 @@ class Parser {
                 p.steps.push_back({"*", false, {}});
             } else if (at(Tok::Name)) {
                 if (reserved(cur().text))
-                    return fail(cur(),
-                                "'" + dstd::String(cur().text) +
-                                    "' is a keyword; quote the key as `" +
-                                    dstd::String(cur().text) + "`");
+                    return fail(
+                        cur(),
+                        dstd::fmt<"'{}' is a keyword; quote the key as `{}`">(
+                            cur().text, cur().text));
                 p.steps.push_back({dstd::String(advance().text), false, {}});
             } else if (at(Tok::Qname)) {
                 p.steps.push_back({dstd::String(advance().text), true, {}});
@@ -1354,8 +1364,8 @@ class Parser {
                 p.steps.push_back({dstd::String(f.substr(0, dot)), false, {}});
                 p.steps.push_back({dstd::String(f.substr(dot + 1)), false, {}});
             } else {
-                return fail(cur(), "Expected a key, got '" +
-                                       dstd::String(cur().text) + "'");
+                return fail(cur(),
+                            dstd::fmt<"Expected a key, got '{}'">(cur().text));
             }
             auto ended = indexes(p, first, out);
             if (!ended.has_value()) return dstd::Unexpected(ended.error());
@@ -1529,13 +1539,11 @@ class Parser {
             const auto r = dstd::from_chars(t.text.data(),
                                             t.text.data() + t.text.size(), v);
             if (r.ec != std::errc{})
-                return fail(t,
-                            "Invalid integer: '" + dstd::String(t.text) + "'");
+                return fail(t, dstd::fmt<"Invalid integer: '{}'">(t.text));
             lit.value = static_cast<std::uint64_t>(v);
         } else {
             const dstd::Optional<double> d = dstd::from_chars<double>(t.text);
-            if (!d)
-                return fail(t, "Invalid float: '" + dstd::String(t.text) + "'");
+            if (!d) return fail(t, dstd::fmt<"Invalid float: '{}'">(t.text));
             lit.value = *d;
         }
         advance();
@@ -1628,8 +1636,9 @@ class Parser {
                     return make(std::move(*c), t);
                 }
                 if (reserved(t.text))
-                    return fail(t, "Expected a value, got the keyword '" +
-                                       dstd::String(t.text) + "'");
+                    return fail(
+                        t, dstd::fmt<"Expected a value, got the keyword '{}'">(
+                               t.text));
                 // A dotted name directly followed by '(' is a call.
                 std::size_t k = 0;
                 while (peek(k).kind == Tok::Name &&
@@ -1652,10 +1661,10 @@ class Parser {
                 return path_expr(t);
             }
             default:
-                return fail(t, t.kind == Tok::End
-                                   ? "Unexpected end of query"
-                                   : "Expected a value, got '" +
-                                         dstd::String(t.text) + "'");
+                return fail(
+                    t, t.kind == Tok::End
+                           ? "Unexpected end of query"
+                           : dstd::fmt<"Expected a value, got '{}'">(t.text));
         }
     }
 };

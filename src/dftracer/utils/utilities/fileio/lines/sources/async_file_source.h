@@ -5,6 +5,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/file.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/runtime/io/io.h>
@@ -17,8 +18,10 @@ inline coro::CoroTask<dstd::File> async_open_read(dstd::StringView file_path) {
     ssize_t fd = co_await ::dftracer::utils::runtime::io::open(
         file_path.c_str(), O_RDONLY);
     if (fd < 0) {
-        throw common::DFTUtilsException(common::ErrorCode::Io,
-                                        "Cannot open file: " + file_path);
+        throw common::DFTUtilsException(
+            common::make_error<"Cannot open file: {}">(common::ErrorCode::Io,
+                                                       file_path)
+                .error());
     }
     co_return dstd::File::from_native_handle(static_cast<int>(fd));
 }
@@ -28,9 +31,9 @@ inline coro::CoroTask<dstd::File> async_open_read(dstd::StringView file_path) {
 inline common::DFTUtilsException make_read_error(dstd::StringView file_path,
                                                  ssize_t neg_errno) {
     return common::DFTUtilsException(
-        common::ErrorCode::Io,
-        "Read error on file: " + file_path +
-            " (errno=" + dstd::to_string(static_cast<int>(-neg_errno)) + ")");
+        common::make_error<"Read error on file: {} (errno={})">(
+            common::ErrorCode::Io, file_path, static_cast<int>(-neg_errno))
+            .error());
 }
 
 }  // namespace dftracer::utils::utilities::fileio::lines::sources

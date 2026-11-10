@@ -5,6 +5,7 @@
 #include <dftracer/utils/dataframe/agg_expr.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -87,7 +88,7 @@ dstd::String render(const Series& c, std::int64_t i) {
                 if (j > off[i]) out += ",";
                 out += render(vals, j);
             }
-            return out + "]";
+            return dstd::fmt<"{}]">(out);
         }
         case TypeId::Struct: {
             dstd::String out = "{";
@@ -95,7 +96,7 @@ dstd::String render(const Series& c, std::int64_t i) {
                 if (f) out += ",";
                 out += render(c.child(f), i);
             }
-            return out + "}";
+            return dstd::fmt<"{}}">(out);
         }
         case TypeId::Uint64:
             return dstd::to_string(c.data<std::uint64_t>()[i]);
@@ -312,7 +313,7 @@ TEST_CASE("Distinct estimates and Sample bounds beyond k") {
     dstd::Vector<std::int64_t> k(static_cast<std::size_t>(n), 0);
     dstd::Vector<dstd::String> v;
     v.reserve(static_cast<std::size_t>(n));
-    for (std::int64_t i = 0; i < n; ++i) v.push_back("v" + dstd::to_string(i));
+    for (std::int64_t i = 0; i < n; ++i) v.push_back(dstd::fmt<"v{}">(i));
     Series sk = Series::flat_i64(k.data(), n);
     Series sv = Series::strings(v);
     const dstd::Vector<const Series*> keys{&sk};

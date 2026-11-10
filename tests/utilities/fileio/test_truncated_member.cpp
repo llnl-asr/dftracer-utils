@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -44,9 +45,8 @@ dstd::String lines(int n) {
     dstd::String s;
     for (int i = 0; i < n; ++i)
         s +=
-            "{\"id\":" + dstd::to_string(i) +
-            ",\"name\":\"read\",\"ph\":\"X\",\"ts\":" + dstd::to_string(i * 7) +
-            "}\n";
+            dstd::fmt<"{\"id\":{},\"name\":\"read\",\"ph\":\"X\",\"ts\":{}}\n">(
+                i, i * 7);
     return s;
 }
 
@@ -88,7 +88,7 @@ TEST_CASE("a cut member keeps the complete lines of the prefix") {
 
 TEST_CASE("a cut inside the first line keeps nothing") {
     const dstd::String text(200000, 'x');
-    const auto comp = gzip(text + "\n");
+    const auto comp = gzip(dstd::fmt<"{}\n">(text));
     dstd::Vector<std::uint8_t> cut(comp.begin(), comp.begin() + 40);
     dstd::Vector<std::uint8_t> out;
     auto keep =

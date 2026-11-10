@@ -8,6 +8,7 @@
 #include <dftracer/utils/coro/detail/coro.h>
 #include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/future.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/shutdown.h>
@@ -133,7 +134,7 @@ TaskHandle Runtime::submit(coro::CoroTask<void> task, dstd::StringView name) {
         memory::detail::Scope bookkeeping_scope{
             memory::detail::Manager::get().general()};
         if (name.empty()) {
-            task_name = "task-" + dstd::to_string(task_name_counter_++);
+            task_name = dstd::fmt<"task-{}">(task_name_counter_++);
         } else {
             task_name.assign(name.data(), name.size());
         }

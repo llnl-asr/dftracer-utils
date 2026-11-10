@@ -12,6 +12,7 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/sketch.h>
 #include <dftracer/utils/dstd/base64.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -77,7 +78,7 @@ dstd::Vector<GroupAgg> quantile_aggs() {
     dstd::Vector<GroupAgg> aggs;
     for (double q : QUANTILES)
         aggs.push_back(
-            GroupAgg{Agg::SketchQuantile, "s", "q" + dstd::to_string(q), q});
+            GroupAgg{Agg::SketchQuantile, "s", dstd::fmt<"q{}">(q), q});
     return aggs;
 }
 
@@ -179,7 +180,7 @@ struct Fixture {
                                  concat(g2a, g2b)};
         for (std::size_t qi = 0; qi < QUANTILES.size(); ++qi) {
             const Series c =
-                r.column("q" + dstd::to_string(QUANTILES[qi])).materialize();
+                r.column(dstd::fmt<"q{}">(QUANTILES[qi])).materialize();
             REQUIRE(c.type() == TypeId::Float64);
             for (int g = 0; g < 3; ++g) {
                 REQUIRE_FALSE(c.is_null(rows[g]));
@@ -202,7 +203,7 @@ TEST_CASE("sketch_quantile: merged cells equal one sketch over the group") {
     const DataFrame r = dftu_utils_test::ok(d.group_by("k", quantile_aggs()));
     REQUIRE(r.num_rows() == 1);
     for (double q : QUANTILES)
-        CHECK(r.column("q" + dstd::to_string(q)).data<double>()[0] ==
+        CHECK(r.column(dstd::fmt<"q{}">(q)).data<double>()[0] ==
               clamped(g0, q));
 }
 

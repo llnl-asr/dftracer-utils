@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -117,8 +118,8 @@ TEST_SUITE("store api") {
     TEST_CASE("two opens of one directory share one state") {
         dftu_utils_test::ScopedTestDir dir("store_api_shared");
         Store first = open_store(dir);
-        auto second_open = Store::open(
-            dstd::StringView((dir.str() + "/").data(), dir.str().size() + 1));
+        auto second_open = Store::open(dstd::StringView(
+            (dstd::fmt<"{}/">(dir.str())).data(), dir.str().size() + 1));
         REQUIRE(second_open.has_value());
         Store second = std::move(*second_open);
 
@@ -631,7 +632,7 @@ TEST_SUITE("store api") {
         // them at its interval with no flush.
         Rows rows;
         for (int i = 0; i < 512; ++i) {
-            const dstd::String key = "k" + dstd::to_string(1000 + i);
+            const dstd::String key = dstd::fmt<"k{}">(1000 + i);
             rows.emplace_back(
                 key,
                 dstd::String(16 * 1024, static_cast<char>('a' + (i % 26))));
@@ -728,8 +729,7 @@ TEST_SUITE("store api") {
         for (int round = 0; round < 4; ++round) {
             Batch batch = store.batch(ns, scope);
             for (int i = 0; i < 256; ++i) {
-                const dstd::String key =
-                    "k" + dstd::to_string(round * 1000 + i);
+                const dstd::String key = dstd::fmt<"k{}">(round * 1000 + i);
                 const dstd::String value(4096, static_cast<char>('a' + round));
                 batch.put(view_of(key), view_of(value));
             }

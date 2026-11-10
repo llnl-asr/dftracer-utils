@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/calendar.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -170,9 +171,10 @@ class Lowering {
         for (std::size_t i = 0; i < p.stages.size(); ++i) {
             const Stage& s = p.stages[i];
             if (i == 0 && std::holds_alternative<Where>(s.node)) continue;
-            return fail(s.span, "'" + stage_name(s) +
-                                    "' is a pipeline stage; this takes a "
-                                    "filter");
+            return fail(
+                s.span,
+                dstd::fmt<"'{}' is a pipeline stage; this takes a filter">(
+                    stage_name(s)));
         }
         return condition(*std::get<Where>(p.stages.front().node).condition);
     }
@@ -185,26 +187,31 @@ class Lowering {
             if (r.name == "data") continue;
             names_.push_back(r.name);
             rowsets_.push_back(r.name);
-            key_text_ += "source " + r.name + " = " +
-                         syntax::to_text(*r.pipeline) + ";\n";
+            key_text_ += dstd::fmt<"source {} = {};\n">(
+                r.name, syntax::to_text(*r.pipeline));
             all.push_back(&r);
         }
         for (const auto& d : q.decls) {
             const auto* let = std::get_if<Let>(&d);
             if (!let) return fail(Span{}, declaration_message(d));
             if (let->name == "all" || let->name == "data")
-                return fail(Span{}, "'" + let->name +
-                                        "' names a built-in row set; give the "
-                                        "let another name");
+                return fail(
+                    Span{},
+                    dstd::fmt<
+                        "'{}' names a built-in row set; give the let another "
+                        "name">(let->name));
             if (listed(let->name, rowsets_))
-                return fail(Span{}, "'" + let->name +
-                                        "' names a row set of the source; "
-                                        "give the let another name");
+                return fail(
+                    Span{},
+                    dstd::fmt<
+                        "'{}' names a row set of the source; give the let "
+                        "another name">(let->name));
             if (listed(let->name, names_))
-                return fail(Span{}, "'" + let->name + "' is declared twice");
+                return fail(Span{},
+                            dstd::fmt<"'{}' is declared twice">(let->name));
             names_.push_back(let->name);
-            key_text_ += "let " + let->name + " = " +
-                         syntax::to_text(*let->pipeline) + ";\n";
+            key_text_ += dstd::fmt<"let {} = {};\n">(
+                let->name, syntax::to_text(*let->pipeline));
             all.push_back(let);
         }
         dstd::Vector<dstd::String> bound;
@@ -215,12 +222,12 @@ class Lowering {
                 for (const auto& v : *list)
                     text += (text.empty() ? "" : ", ") +
                             duql::term_text(*make_term(constant(v)));
-                text = "[" + text + "]";
+                text = dstd::fmt<"[{}]">(text);
             } else {
                 text = duql::term_text(
                     *make_term(constant(std::get<duql::LiteralValue>(value))));
             }
-            bound.push_back(dstd::String(name) + "=" + text + ";\n");
+            bound.push_back(dstd::fmt<"{}={};\n">(name, text));
         }
         std::sort(bound.begin(), bound.end());
         for (const auto& b : bound) key_text_ += b;
@@ -498,9 +505,10 @@ class Lowering {
 
     Result<void> need_view(Span span, const dstd::String& what) const {
         if (!view_)
-            return fail(span, what +
-                                  " reads other rows, which only a View "
-                                  "pipeline has; run it with View::duql");
+            return fail(
+                span,
+                dstd::fmt<"{} reads other rows, which only a View pipeline "
+                          "has; run it with View::duql">(what));
         return {};
     }
 
@@ -527,9 +535,11 @@ class Lowering {
             if (!v) return dstd::Unexpected(v.error());
             const auto* path = std::get_if<dstd::String>(&*v);
             if (!path)
-                return fail(Span{}, "'from $" + prm->name +
-                                        "' reads a file: bind it to a path "
-                                        "string");
+                return fail(
+                    Span{},
+                    dstd::fmt<
+                        "'from ${}' reads a file: bind it to a path string">(
+                        prm->name));
             in = {duql::InputKind::File, *path};
             return {};
         }
@@ -558,13 +568,16 @@ class Lowering {
         for (const auto& l : lets_)
             if (l.let->name == name) return l;
         if (name == current_)
-            return fail(span, "'" + name + "' refers to itself");
+            return fail(span, dstd::fmt<"'{}' refers to itself">(name));
         if (listed(name, names_))
-            return fail(span, "'" + name +
-                                  "' is declared after its use; declare a let "
-                                  "before what reads it");
-        return fail(span,
-                    "'" + name + "' is not a let or a row set of the source");
+            return fail(
+                span,
+                dstd::fmt<
+                    "'{}' is declared after its use; declare a let before "
+                    "what reads it">(name));
+        return fail(
+            span,
+            dstd::fmt<"'{}' is not a let or a row set of the source">(name));
     }
 
     Result<duql::PipelineUnion> union_of(const From& f) const {
@@ -626,7 +639,8 @@ class Lowering {
         if (!flat) return dstd::Unexpected(flat.error());
         auto lowered = lower_steps(std::move(in), steps);
         if (!lowered) return dstd::Unexpected(lowered.error());
-        dstd::String key = key_text_ + (sub ? "sub " : "let " + name + " ") +
+        dstd::String key = key_text_ +
+                           (sub ? "sub " : dstd::fmt<"let {} ">(name)) +
                            syntax::to_text(p);
         prog_.sides.push_back(
             {std::move(name), std::move(*lowered), std::move(key)});
@@ -698,7 +712,7 @@ class Lowering {
                 t.side = let->side;
                 return {};
             }
-        t.name = "__sub_" + dstd::int_text(subs_++);
+        t.name = dstd::fmt<"__sub_{}">(subs_++);
         const auto side = add_side(t.name, p, true, duql::InputKind::Data);
         if (!side) return dstd::Unexpected(side.error());
         t.side = *side;
@@ -751,14 +765,14 @@ class Lowering {
             if (!key) return dstd::Unexpected(key.error());
             t.high = (*d)->high->open ? duql::TermOp::Lt : duql::TermOp::Le;
         }
-        t.name = "__sub_" + dstd::int_text(subs_++);
+        t.name = dstd::fmt<"__sub_{}">(subs_++);
         const auto side =
             add_side(t.name, *(*d)->side, true, duql::InputKind::Data);
         if (!side) return dstd::Unexpected(side.error());
         t.side = *side;
         if ((*d)->empty) {
             const auto empty =
-                add_side("__sub_" + dstd::int_text(subs_++), *(*d)->empty, true,
+                add_side(dstd::fmt<"__sub_{}">(subs_++), *(*d)->empty, true,
                          duql::InputKind::Data);
             if (!empty) return dstd::Unexpected(empty.error());
             t.empty = *empty;
@@ -790,8 +804,9 @@ class Lowering {
             t.target.size() + (t.range != duql::RangeRead::None ? 1 : 0);
         if (const auto w = width(t.side); w && *w != subject + added)
             return fail(
-                span, "the sub-query gives " + dstd::int_text(*w - added) +
-                          " columns; 'in' compares " + dstd::int_text(subject));
+                span,
+                dstd::fmt<"the sub-query gives {} columns; 'in' compares {}">(
+                    *w - added, subject));
         t.slot = slot();
         return t;
     }
@@ -811,10 +826,10 @@ class Lowering {
         const auto side = side_of(*n.pipeline, t);
         if (!side) return dstd::Unexpected(side.error());
         if (const auto w = width(t.side); w && *w != 1)
-            return fail(span,
-                        "a sub-query in an expression gives one column; this "
-                        "one gives " +
-                            dstd::int_text(*w));
+            return fail(
+                span,
+                dstd::fmt<"a sub-query in an expression gives one column; this "
+                          "one gives {}">(*w));
         t.slot = slot();
         return t;
     }
@@ -833,10 +848,11 @@ class Lowering {
         const auto* tup = std::get_if<Tuple>(&a.key->node);
         if (a.target_key) {
             if (tup)
-                return fail(span,
-                            "a tuple key finds the row set's columns by its "
-                            "paths; drop '(...)' after '" +
-                                a.rowset + "'");
+                return fail(
+                    span,
+                    dstd::fmt<
+                        "a tuple key finds the row set's columns by its paths; "
+                        "drop '(...)' after '{}'">(a.rowset));
             auto target = path_text(*a.target_key, span);
             if (!target) return dstd::Unexpected(target.error());
             t.target.push_back(std::move(*target));
@@ -846,9 +862,10 @@ class Lowering {
                 return path_text(*p, k.span);
             if (const auto* inner = std::get_if<Arrow>(&k.node))
                 return path_text(inner->path, k.span);
-            return fail(k.span, "name the key column of '" + a.rowset +
-                                    "' for this key: write 'k -> " + a.rowset +
-                                    "(id).path'");
+            return fail(
+                k.span,
+                dstd::fmt<"name the key column of '{}' for this key: write "
+                          "'k -> {}(id).path'">(a.rowset, a.rowset));
         };
         auto keys = key_terms(*a.key);
         if (!keys) return dstd::Unexpected(keys.error());
@@ -997,9 +1014,9 @@ class Lowering {
     }
 
     dstd::String unknown_function(const dstd::String& name) const {
-        dstd::String out = "Unknown function '" + name + "'; ";
+        dstd::String out = dstd::fmt<"Unknown function '{}'; ">(name);
         if (!plugins_ || plugins_->namespaces.empty())
-            return out + "no plugin is loaded";
+            return dstd::fmt<"{}no plugin is loaded">(out);
         out += "loaded plugin namespaces: ";
         for (std::size_t i = 0; i < plugins_->namespaces.size(); ++i)
             out += (i ? ", " : "") + plugins_->namespaces[i];
@@ -1011,17 +1028,18 @@ class Lowering {
         if (kind == duql::PluginKind::None)
             return fail(span, unknown_function(c.name));
         if (kind != duql::PluginKind::Table)
-            return fail(span, "'" + c.name +
-                                  "' is not a table function; 'call' runs a "
-                                  "table to table op");
+            return fail(
+                span,
+                dstd::fmt<"'{}' is not a table function; 'call' runs a table "
+                          "to table op">(c.name));
         duql::PipelineCall out;
         out.op = c.name;
         out.text = text_of(span);
         for (const auto& a : c.args) {
             if (!a.name.empty())
-                return fail(a.value->span, "'" + c.name +
-                                               "' takes no named argument '" +
-                                               a.name + "'");
+                return fail(a.value->span,
+                            dstd::fmt<"'{}' takes no named argument '{}'">(
+                                c.name, a.name));
             const auto v = literal(*a.value);
             if (!v) return dstd::Unexpected(v.error());
             if (!*v)
@@ -1038,35 +1056,38 @@ class Lowering {
         if (kind == duql::PluginKind::None)
             return fail(span, unknown_function(c.name));
         if (kind != duql::PluginKind::Column)
-            return fail(span, "'" + c.name +
-                                  "' is not a column function; a table "
-                                  "function runs as 'call " +
-                                  c.name + "(...)'");
+            return fail(
+                span,
+                dstd::fmt<"'{}' is not a column function; a table function "
+                          "runs as 'call {}(...)'">(c.name, c.name));
         if (!plug_)
             return fail(
                 span,
-                "'" + c.name + "' is a plugin function; it stands in " +
+                dstd::fmt<"'{}' is a plugin function; it stands in {}">(
+                    c.name,
                     (side_depth_ > 0 ? "a 'derive' or 'select' of the main "
                                        "pipeline, not in a 'let' or a sub-query"
-                                     : "a 'derive' or 'select' entry"));
+                                     : "a 'derive' or 'select' entry")));
         if (c.args.empty())
             return fail(
-                span, "'" + c.name + "' takes a column as its first argument");
+                span,
+                dstd::fmt<"'{}' takes a column as its first argument">(c.name));
         for (const auto& a : c.args) {
             if (!a.name.empty())
-                return fail(a.value->span, "'" + c.name +
-                                               "' takes no named argument '" +
-                                               a.name + "'");
-            if (std::holds_alternative<Duration>(a.value->node))
                 return fail(a.value->span,
-                            "'" + c.name + "' takes no duration argument");
+                            dstd::fmt<"'{}' takes no named argument '{}'">(
+                                c.name, a.name));
+            if (std::holds_alternative<Duration>(a.value->node))
+                return fail(
+                    a.value->span,
+                    dstd::fmt<"'{}' takes no duration argument">(c.name));
         }
         auto* sink = plug_;
         plug_ = nullptr;
         duql::PipelinePlugin st;
         st.op = c.name;
         st.text = text_of(span);
-        const dstd::String name = "__duql_p_" + dstd::int_text(plug_count_++);
+        const dstd::String name = dstd::fmt<"__duql_p_{}">(plug_count_++);
         auto first = term(*c.args[0].value);
         if (!first) return dstd::Unexpected(first.error());
         st.arg = {name, dstd::to_shared_ptr(std::move(*first)),
@@ -1078,21 +1099,24 @@ class Lowering {
             if (!v) return dstd::Unexpected(v.error());
             if (*v && std::holds_alternative<dstd::String>((*v)->value)) {
                 if (st.str)
-                    return fail(e.span,
-                                "'" + c.name + "' takes one text argument");
+                    return fail(
+                        e.span,
+                        dstd::fmt<"'{}' takes one text argument">(c.name));
                 st.str = std::get<dstd::String>((*v)->value);
             } else if (*v) {
                 if (st.scalars.size() == 2)
-                    return fail(e.span, "'" + c.name +
-                                            "' takes at most 2 number "
-                                            "arguments");
+                    return fail(
+                        e.span,
+                        dstd::fmt<"'{}' takes at most 2 number arguments">(
+                            c.name));
                 st.scalars.push_back((*v)->value);
             } else {
                 if (st.arg2)
-                    return fail(e.span, "'" + c.name +
-                                            "' takes one second column "
-                                            "argument");
-                const dstd::String second = name + "_b";
+                    return fail(
+                        e.span,
+                        dstd::fmt<"'{}' takes one second column argument">(
+                            c.name));
+                const dstd::String second = dstd::fmt<"{}_b">(name);
                 auto other = term(e);
                 if (!other) return dstd::Unexpected(other.error());
                 st.arg2 = duql::PipelineItem{
@@ -1415,9 +1439,8 @@ class Lowering {
                     out.keep_empty = n.keep_empty;
                     if (out.name == out.index)
                         return fail(s.span,
-                                    "'expand' names the element and its index "
-                                    "'" +
-                                        out.name + "'");
+                                    dstd::fmt<"'expand' names the element and "
+                                              "its index '{}'">(out.name));
                     return out;
                 } else if constexpr (std::is_same_v<T, Pivot>) {
                     duql::PipelinePivot out;
@@ -1454,9 +1477,10 @@ class Lowering {
                     out.key = n.key_name;
                     out.value = n.value_name;
                     if (out.key == out.value)
-                        return fail(s.span,
-                                    "'unpivot' names its key and value '" +
-                                        out.key + "'");
+                        return fail(
+                            s.span,
+                            dstd::fmt<"'unpivot' names its key and value '{}'">(
+                                out.key));
                     return out;
                 } else if constexpr (std::is_same_v<T, Lookup>) {
                     auto looked =
@@ -1518,8 +1542,10 @@ class Lowering {
                     if (!call) return dstd::Unexpected(call.error());
                     return std::move(*call);
                 } else if constexpr (std::is_same_v<T, Use>) {
-                    return fail(s.span, "Unknown stage or pipeline macro '" +
-                                            n.call.name + "'");
+                    return fail(
+                        s.span,
+                        dstd::fmt<"Unknown stage or pipeline macro '{}'">(
+                            n.call.name));
                 } else {
                     static_assert(sizeof(T) == 0, "unhandled stage");
                 }
@@ -1535,12 +1561,14 @@ class Lowering {
         const Expr& named = k2 ? *k2 : k;
         const auto* p = std::get_if<Path>(&named.node);
         if (!p)
-            return fail(named.span,
-                        k2 ? dstd::String("'") + clause +
-                                 " k == c' names a column of the row set with c"
-                           : "name the row set's " + dstd::String(clause) +
-                                 " column: 'lookup " + rowset + " ... " +
-                                 clause + " expr == column'");
+            return fail(
+                named.span,
+                k2 ? dstd::fmt<
+                         "'{} k == c' names a column of the row set with c">(
+                         clause)
+                   : dstd::fmt<
+                         "name the row set's {} column: 'lookup {} ... {} "
+                         "expr == column'">(clause, rowset, clause));
         return path_text(*p, named.span);
     }
 
@@ -1552,7 +1580,7 @@ class Lowering {
         dstd::String shown = rowset;
         if (inline_side) {
             shown = "(from ...)";
-            out.name = "__lookup_" + dstd::int_text(lookups_++);
+            out.name = dstd::fmt<"__lookup_{}">(lookups_++);
             ++lookup_side_;
             auto restore = dstd::defer([&] { --lookup_side_; });
             const auto side =
@@ -1651,8 +1679,9 @@ class Lowering {
                 duql::TermOp::Add, role_field(roles_->time), std::move(dur)}));
         }
         out.name = n.as.empty() ? dstd::String("session") : n.as;
-        out.text = duql::term_text(*out.time) +
-                   (out.end ? " end " + duql::term_text(*out.end) : "");
+        out.text =
+            duql::term_text(*out.time) +
+            (out.end ? dstd::fmt<" end {}">(duql::term_text(*out.end)) : "");
         return out;
     }
 
@@ -1661,11 +1690,12 @@ class Lowering {
         const auto missing = [&](dstd::StringView role) {
             const dstd::String schema =
                 roles_ && !roles_->schema.empty()
-                    ? "record schema '" + roles_->schema + "'"
+                    ? dstd::fmt<"record schema '{}'">(roles_->schema)
                     : dstd::String("this record schema");
-            return fail(span, "'" + dstd::String(stage) + "' needs the " +
-                                  dstd::String(role) + " role, which " +
-                                  schema + " does not bind");
+            return fail(
+                span,
+                dstd::fmt<"'{}' needs the {} role, which {} does not bind">(
+                    stage, role, schema));
         };
         if (time && (!roles_ || roles_->time.empty())) return missing("time");
         if (duration && (!roles_ || roles_->duration.empty()))
@@ -1707,7 +1737,8 @@ class Lowering {
         if (const auto* d = std::get_if<Duration>(&e.node)) {
             const auto per = unit_ns(d->unit);
             if (!per)
-                return fail(e.span, "Unknown duration unit '" + d->unit + "'");
+                return fail(e.span,
+                            dstd::fmt<"Unknown duration unit '{}'">(d->unit));
             double amount = 0;
             if (dstd::from_chars_double(d->amount.data(),
                                         d->amount.data() + d->amount.size(),
@@ -1735,11 +1766,12 @@ class Lowering {
             const auto unit = unit_of(time);
             if (!unit) return dstd::Unexpected(unit.error());
             if (!*unit)
-                return fail(w.span,
-                            "'" + dstd::String(what) +
-                                "' with a duration needs a time key with a "
-                                "time or duration role; give a number in the "
-                                "key's units");
+                return fail(
+                    w.span,
+                    dstd::fmt<
+                        "'{}' with a duration needs a time key with a time "
+                        "or duration role; give a number in the key's units">(
+                        what));
             const auto c = duration(w, time);
             if (!c) return dstd::Unexpected(c.error());
             if (const auto* u = std::get_if<std::uint64_t>(&c->value))
@@ -1752,13 +1784,15 @@ class Lowering {
             if (*lit) v = number((*lit)->value);
         }
         if (!v)
-            return fail(w.span, "'" + dstd::String(what) +
-                                    "' takes a number in the time key's "
-                                    "units, a duration or a parameter");
+            return fail(
+                w.span,
+                dstd::fmt<
+                    "'{}' takes a number in the time key's units, a duration "
+                    "or a parameter">(what));
         if (!(*v >= 0) || !std::isfinite(*v))
-            return fail(w.span, "'" + dstd::String(what) +
-                                    "' must be a finite non-negative "
-                                    "distance");
+            return fail(
+                w.span,
+                dstd::fmt<"'{}' must be a finite non-negative distance">(what));
         return *v;
     }
 
@@ -1868,9 +1902,10 @@ class Lowering {
                         "'over' with a width needs a 'sort' key in the "
                         "'window' block");
         if (win_order_->size() > 1)
-            return fail(span,
-                        "'over' with a width needs exactly one sort key, got " +
-                            dstd::int_text(win_order_->size()));
+            return fail(
+                span,
+                dstd::fmt<"'over' with a width needs exactly one sort key, "
+                          "got {}">(win_order_->size()));
         const SortKey& key = win_order_->front();
         if (key.descending)
             return fail(span,
@@ -1916,11 +1951,12 @@ class Lowering {
                     break;
             }
         if (!framed)
-            return fail(span,
-                        "'" + c.name +
-                            "' takes no frame; 'over' follows sum, mean, min, "
-                            "max, count, count_if, count_distinct, collect, "
-                            "arg_max, arg_min, var, std or quantile");
+            return fail(
+                span,
+                dstd::fmt<
+                    "'{}' takes no frame; 'over' follows sum, mean, min, "
+                    "max, count, count_if, count_distinct, collect, arg_max, "
+                    "arg_min, var, std or quantile">(c.name));
         auto call = window_call(c, span, &o);
         if (!call) return dstd::Unexpected(call.error());
         return std::move(**call);
@@ -1933,9 +1969,11 @@ class Lowering {
         const WinInfo* w = window_info(c.name);
         if (!win_) {
             if (w && w->window_only)
-                return fail(span, "'" + c.name +
-                                      "' is a window function; it stands in a "
-                                      "'window' block");
+                return fail(
+                    span,
+                    dstd::fmt<
+                        "'{}' is a window function; it stands in a 'window' "
+                        "block">(c.name));
             return dstd::Optional<duql::TermPtr>{};
         }
         if (win_arg_ && (w || aggregate_info(c.name)))
@@ -1946,7 +1984,8 @@ class Lowering {
         if (!w) {
             if (aggregate_info(c.name))
                 return fail(
-                    span, "'" + c.name + "' does not run in a 'window' block");
+                    span,
+                    dstd::fmt<"'{}' does not run in a 'window' block">(c.name));
             return dstd::Optional<duql::TermPtr>{};
         }
         if ((w->fn == duql::WinFn::Min || w->fn == duql::WinFn::Max) &&
@@ -1957,13 +1996,13 @@ class Lowering {
             return fail(span, arity(c.name, w->min_args, w->max_args, n));
         for (const auto& arg : c.args)
             if (!arg.name.empty())
-                return fail(arg.value->span, "'" + c.name +
-                                                 "' takes no named argument '" +
-                                                 arg.name + "'");
+                return fail(arg.value->span,
+                            dstd::fmt<"'{}' takes no named argument '{}'">(
+                                c.name, arg.name));
         const bool arg_by =
             w->fn == duql::WinFn::Argmax || w->fn == duql::WinFn::Argmin;
         duql::PipelineWinCall call;
-        call.column = "__duql_w_" + dstd::int_text(win_->size());
+        call.column = dstd::fmt<"__duql_w_{}">(win_->size());
         call.fn = w->fn;
         call.text = text_of(span);
         if (n > 0 && w->fn != duql::WinFn::Ntile) {
@@ -1993,10 +2032,11 @@ class Lowering {
             const auto k = whole_number(at);
             if (!k) return dstd::Unexpected(k.error());
             if (!*k || **k < 1)
-                return fail(at.span,
-                            "'" + c.name +
-                                "' takes a positive integer, written as a "
-                                "literal or a parameter");
+                return fail(
+                    at.span,
+                    dstd::fmt<
+                        "'{}' takes a positive integer, written as a literal "
+                        "or a parameter">(c.name));
             call.offset = **k;
         } else if (n > 1 && !arg_by) {
             const Expr& at = *c.args[1].value;
@@ -2069,15 +2109,15 @@ class Lowering {
                                             text_of(e.span)});
             }
             if (out.size() == before)
-                return fail(e.span, stage == "pivot"
-                                        ? "each entry of a 'pivot' block is "
-                                          "one aggregate call, such as 'n = "
-                                          "count()'"
-                                        : "each entry of a '" +
-                                              dstd::String(stage) +
-                                              "' block holds an aggregate "
-                                              "call, such as 'n = count()' or "
-                                              "'ms = sum(dur) / 1000'");
+                return fail(e.span,
+                            stage == "pivot"
+                                ? "each entry of a 'pivot' block is "
+                                  "one aggregate call, such as 'n = "
+                                  "count()'"
+                                : dstd::fmt<"each entry of a '{}' block holds "
+                                            "an aggregate call, "
+                                            "such as 'n = count()' or 'ms = "
+                                            "sum(dur) / 1000'">(stage));
         }
         if (!derive.items.empty()) {
             after_.push_back(std::move(derive));
@@ -2110,7 +2150,7 @@ class Lowering {
             return dstd::Optional<duql::TermPtr>{};
         dstd::String name = agg_name_;
         if (name.empty()) {
-            name = "__duql_a_" + dstd::int_text(agg_hidden_.size());
+            name = dstd::fmt<"__duql_a_{}">(agg_hidden_.size());
             agg_hidden_.push_back(name);
         }
         agg_name_.clear();
@@ -2129,24 +2169,26 @@ class Lowering {
     }
 
     static dstd::String plugin_aggregate_stage(const dstd::String& name) {
-        return "'" + name +
-               "' is a plugin aggregate; it stands in a 'group' or 'agg' "
-               "block";
+        return dstd::fmt<
+            "'{}' is a plugin aggregate; it stands in a 'group' "
+            "or 'agg' block">(name);
     }
 
     Result<duql::PipelineAgg> plugin_aggregate(const Call& c, Span span,
                                                const dstd::String& name) const {
         if (c.args.empty())
             return fail(
-                span, "'" + c.name + "' takes a column as its first argument");
+                span,
+                dstd::fmt<"'{}' takes a column as its first argument">(c.name));
         for (const auto& a : c.args) {
             if (!a.name.empty())
-                return fail(a.value->span, "'" + c.name +
-                                               "' takes no named argument '" +
-                                               a.name + "'");
-            if (std::holds_alternative<Duration>(a.value->node))
                 return fail(a.value->span,
-                            "'" + c.name + "' takes no duration argument");
+                            dstd::fmt<"'{}' takes no named argument '{}'">(
+                                c.name, a.name));
+            if (std::holds_alternative<Duration>(a.value->node))
+                return fail(
+                    a.value->span,
+                    dstd::fmt<"'{}' takes no duration argument">(c.name));
         }
         duql::PipelineAgg agg;
         agg.name = name;
@@ -2155,21 +2197,21 @@ class Lowering {
         auto first = term(*c.args[0].value);
         if (!first) return dstd::Unexpected(first.error());
         agg.arg = dstd::to_shared_ptr(std::move(*first));
-        agg.text = c.name + "(" + duql::term_text(*agg.arg);
+        agg.text = dstd::fmt<"{}({}">(c.name, duql::term_text(*agg.arg));
         for (std::size_t k = 1; k < c.args.size(); ++k) {
             const Expr& e = *c.args[k].value;
             const auto v = literal(e);
             if (!v) return dstd::Unexpected(v.error());
             if (!*v)
-                return fail(e.span,
-                            "an operand of '" + c.name +
-                                "' after the column is a number literal or "
-                                "a parameter");
+                return fail(
+                    e.span,
+                    dstd::fmt<"an operand of '{}' after the column is a number "
+                              "literal or a parameter">(c.name));
             if (!number((*v)->value))
-                return fail(e.span,
-                            "an operand of '" + c.name + "' is a number");
+                return fail(e.span, dstd::fmt<"an operand of '{}' is a number">(
+                                        c.name));
             agg.params.push_back((*v)->value);
-            agg.text += ", " + text_of(e);
+            agg.text += dstd::fmt<", {}">(text_of(e));
         }
         agg.text += ")";
         return agg;
@@ -2185,9 +2227,9 @@ class Lowering {
                         arity(c->name, info->min_args, info->max_args, n));
         for (const auto& arg : c->args)
             if (!arg.name.empty())
-                return fail(arg.value->span, "'" + c->name +
-                                                 "' takes no named argument '" +
-                                                 arg.name + "'");
+                return fail(arg.value->span,
+                            dstd::fmt<"'{}' takes no named argument '{}'">(
+                                c->name, arg.name));
         if (duql::is_occupancy(info->fn)) {
             const auto role = require_role(span, c->name, true, true);
             if (!role) return dstd::Unexpected(role.error());
@@ -2195,7 +2237,7 @@ class Lowering {
         duql::PipelineAgg agg;
         agg.name = name;
         agg.fn = info->fn;
-        agg.text = c->name + "(";
+        agg.text = dstd::fmt<"{}(">(c->name);
         if (n > 0) {
             const Expr* first = c->args[0].value.get();
             const auto* inner = std::get_if<Call>(&first->node);
@@ -2210,15 +2252,16 @@ class Lowering {
             auto arg = term(*first);
             if (!arg) return dstd::Unexpected(arg.error());
             agg.arg = dstd::to_shared_ptr(std::move(*arg));
-            agg.text += agg.merged ? "merge(" + duql::term_text(*agg.arg) + ")"
-                                   : duql::term_text(*agg.arg);
+            agg.text += agg.merged
+                            ? dstd::fmt<"merge({})">(duql::term_text(*agg.arg))
+                            : duql::term_text(*agg.arg);
         }
         if (info->fn == duql::AggFn::Argmax ||
             info->fn == duql::AggFn::Argmin) {
             auto by = term(*c->args[1].value);
             if (!by) return dstd::Unexpected(by.error());
             agg.by = dstd::to_shared_ptr(std::move(*by));
-            agg.text += ", " + duql::term_text(*agg.by);
+            agg.text += dstd::fmt<", {}">(duql::term_text(*agg.by));
         }
         if (info->fn == duql::AggFn::Quantile) {
             const Expr& level = *c->args[1].value;
@@ -2230,7 +2273,8 @@ class Lowering {
                             "a quantile level is a number in [0, 1], written "
                             "as a literal or a parameter");
             agg.q = *q;
-            agg.text += ", " + duql::term_text(*make_term(duql::TConst{*q}));
+            agg.text += dstd::fmt<", {}">(
+                duql::term_text(*make_term(duql::TConst{*q})));
         }
         agg.text += ")";
         return agg;
@@ -2297,12 +2341,13 @@ class Lowering {
                         if (scaled)
                             return fail(
                                 e.span,
-                                "'" + text_of(e) +
-                                    "' scales a field with a time or duration "
-                                    "role, so a duration beside it has no "
-                                    "clear unit; compare the field itself, or "
-                                    "give the unit with as_time(" +
-                                    text_of(e) + ", \"ms\")");
+                                dstd::fmt<"'{}' scales a field with a time or "
+                                          "duration role, "
+                                          "so a duration beside it has no "
+                                          "clear unit; compare "
+                                          "the field itself, or give the unit "
+                                          "with as_time({}, "
+                                          "\"ms\")">(text_of(e), text_of(e)));
                     }
                     return Unit{};
                 default:
@@ -2504,7 +2549,8 @@ class Lowering {
         const auto& d = std::get<Duration>(dur.node);
         const auto per = unit_ns(d.unit);
         if (!per)
-            return fail(dur.span, "Unknown duration unit '" + d.unit + "'");
+            return fail(dur.span,
+                        dstd::fmt<"Unknown duration unit '{}'">(d.unit));
         double amount = 0;
         const auto r = dstd::from_chars_double(
             d.amount.data(), d.amount.data() + d.amount.size(), amount);
@@ -2512,13 +2558,13 @@ class Lowering {
         const auto unit = unit_of(other);
         if (!unit) return dstd::Unexpected(unit.error());
         if (!*unit)
-            return fail(other.span,
-                        "'" +
-                            dstd::String(src_.substr(other.span.offset,
-                                                     other.span.length)) +
-                            "' has no time or duration role to give the "
-                            "duration a unit; write as_time(x, \"ns\") to give "
-                            "it one");
+            return fail(
+                other.span,
+                dstd::fmt<
+                    "'{}' has no time or duration role to give the duration "
+                    "a unit; write as_time(x, \"ns\") to give it one">(
+                    dstd::String(
+                        src_.substr(other.span.offset, other.span.length))));
         const double v =
             amount * static_cast<double>(*per) / static_cast<double>(**unit);
         if (std::trunc(v) == v && v < 1.8e19)
@@ -2560,9 +2606,10 @@ class Lowering {
             c.name != "now")
             return dstd::Optional<duql::TermPtr>{};
         if (!roles_)
-            return fail(span, "'" + c.name +
-                                  "' needs the record schema's time roles; "
-                                  "run the query on a View");
+            return fail(
+                span,
+                dstd::fmt<"'{}' needs the record schema's time roles; run the "
+                          "query on a View">(c.name));
         const std::size_t want = c.name == "now"          ? 0u
                                  : c.name == "to_seconds" ? 1u
                                                           : 2u;
@@ -2630,14 +2677,13 @@ class Lowering {
     static dstd::String arity(dstd::StringView name, std::size_t lo,
                               std::size_t hi, std::size_t got) {
         auto args = [](std::size_t k) {
-            return dstd::int_text(k) + (k == 1 ? " argument" : " arguments");
+            return dstd::fmt<"{}{}">(k, (k == 1 ? " argument" : " arguments"));
         };
         dstd::String want = lo == hi ? args(lo)
                             : hi == SIZE_MAX
-                                ? "at least " + args(lo)
-                                : dstd::int_text(lo) + " to " + args(hi);
-        return "'" + dstd::String(name) + "' takes " + want + ", got " +
-               dstd::int_text(got);
+                                ? dstd::fmt<"at least {}">(args(lo))
+                                : dstd::fmt<"{} to {}">(lo, args(hi));
+        return dstd::fmt<"'{}' takes {}, got {}">(name, want, got);
     }
 
     duql::DuqlError error_at(Span span, dstd::String msg) const {
@@ -2858,9 +2904,8 @@ class Lowering {
             return duql::compile_contains(pattern, true);
         }();
         if (!r)
-            return fail(at.span, "Invalid pattern at offset " +
-                                     dstd::int_text(r.error().offset) + ": " +
-                                     r.error().message);
+            return fail(at.span, dstd::fmt<"Invalid pattern at offset {}: {}">(
+                                     r.error().offset, r.error().message));
         return std::move(*r);
     }
 
@@ -3339,17 +3384,18 @@ class Lowering {
 
     Result<duql::TermPtr> quantifier(const Call& c, Span span) const {
         if (c.args.size() == 1)
-            return fail(span,
-                        "'" + c.name + "(p)' compares with a value, as in '" +
-                            c.name + "(p) == v'; with a condition write '" +
-                            c.name + "(p, e)'");
+            return fail(
+                span,
+                dstd::fmt<"'{}(p)' compares with a value, as in '{}(p) == v'; "
+                          "with a condition write '{}(p, e)'">(c.name, c.name,
+                                                               c.name));
         if (c.args.size() != 2)
             return fail(span, arity(c.name, 2, 2, c.args.size()));
         for (const auto& a : c.args)
             if (!a.name.empty())
-                return fail(a.value->span, "'" + c.name +
-                                               "' takes no named argument '" +
-                                               a.name + "'");
+                return fail(a.value->span,
+                            dstd::fmt<"'{}' takes no named argument '{}'">(
+                                c.name, a.name));
         if (quant_ > 0) return fail(span, NESTED_QUANTIFIER);
         auto subject = term(*c.args[0].value);
         if (!subject) return dstd::Unexpected(subject.error());
@@ -3376,18 +3422,20 @@ class Lowering {
         for (const auto& f : duql::FUNCTIONS)
             if (f.name == c.name) info = &f;
         if (!info && aggregate_info(c.name))
-            return fail(span, "'" + c.name +
-                                  "' is an aggregate; it stands in a 'group' "
-                                  "or 'agg' block");
+            return fail(
+                span,
+                dstd::fmt<"'{}' is an aggregate; it stands in a 'group' or "
+                          "'agg' block">(c.name));
         if (!info && c.name.find('.') != dstd::String::npos)
             return plugin_call(c, span);
-        if (!info) return fail(span, "Unknown function '" + c.name + "'");
+        if (!info)
+            return fail(span, dstd::fmt<"Unknown function '{}'">(c.name));
         const std::size_t n = c.args.size();
         if (info->fn == duql::Fn::Case && n % 2 == 0)
-            return fail(span,
-                        "'case' takes pairs of a condition and a value, then "
-                        "a default: an odd number of arguments, got " +
-                            dstd::int_text(n));
+            return fail(
+                span,
+                dstd::fmt<"'case' takes pairs of a condition and a value, then "
+                          "a default: an odd number of arguments, got {}">(n));
         if (n < info->min_args ||
             (info->max_args != duql::VARIADIC && n > info->max_args))
             return fail(span,
@@ -3398,9 +3446,9 @@ class Lowering {
         duql::TCall t{info->fn, {}, nullptr, nullptr};
         for (const auto& a : c.args) {
             if (!a.name.empty())
-                return fail(a.value->span, "'" + c.name +
-                                               "' takes no named argument '" +
-                                               a.name + "'");
+                return fail(a.value->span,
+                            dstd::fmt<"'{}' takes no named argument '{}'">(
+                                c.name, a.name));
             auto arg = term(*a.value);
             if (!arg) return dstd::Unexpected(arg.error());
             t.args.push_back(std::move(*arg));
@@ -3426,10 +3474,10 @@ class Lowering {
                     if (const auto* want =
                             std::get_if<std::uint64_t>(&g->value);
                         want && *want > groups)
-                        return fail(c.args[2].value->span,
-                                    "extract() group " + dstd::int_text(*want) +
-                                        " is past the pattern's " +
-                                        dstd::int_text(groups) + " groups");
+                        return fail(
+                            c.args[2].value->span,
+                            dstd::fmt<"extract() group {} is past the "
+                                      "pattern's {} groups">(*want, groups));
         }
         if (info->fn == duql::Fn::RegexReplace) {
             const Expr& at = *c.args[1].value;
@@ -3444,22 +3492,23 @@ class Lowering {
             if (!text) return dstd::Unexpected(text.error());
             auto sub = duql::compile_substitution(*t.pattern, *text);
             if (!sub)
-                return fail(to.span, "Invalid replacement at offset " +
-                                         dstd::int_text(sub.error().offset) +
-                                         ": " + sub.error().message);
+                return fail(to.span,
+                            dstd::fmt<"Invalid replacement at offset {}: {}">(
+                                sub.error().offset, sub.error().message));
             t.substitution =
                 dstd::make_shared<const duql::Substitution>(std::move(*sub));
         }
         if (info->fn == duql::Fn::DatePart ||
             info->fn == duql::Fn::FormatTime) {
-            const dstd::String name = c.name + "()";
+            const dstd::String name = dstd::fmt<"{}()">(c.name);
             const auto unit = unit_of(*c.args[0].value);
             if (!unit) return dstd::Unexpected(unit.error());
             if (!*unit)
-                return fail(c.args[0].value->span,
-                            name +
-                                " needs a time: a field with a time or "
-                                "duration role, or as_time(x, unit)");
+                return fail(
+                    c.args[0].value->span,
+                    dstd::fmt<
+                        "{} needs a time: a field with a time or duration "
+                        "role, or as_time(x, unit)">(name));
             t.ns_per_unit = **unit;
             const Expr& at = *c.args[1].value;
             const auto text =
@@ -3471,17 +3520,20 @@ class Lowering {
                 common::DatePart part;
                 if (!common::parse_date_part(*text, &part))
                     return fail(at.span,
-                                "Unknown date part '" + *text +
-                                    "'; use year, month, day, hour, minute, "
-                                    "second, millisecond, microsecond, "
-                                    "nanosecond, day_of_week, day_of_year, "
-                                    "quarter, iso_week or iso_year");
+                                dstd::fmt<"Unknown date part '{}'; use year, "
+                                          "month, day, hour, "
+                                          "minute, second, millisecond, "
+                                          "microsecond, nanosecond, "
+                                          "day_of_week, day_of_year, quarter, "
+                                          "iso_week or iso_year">(*text));
                 t.part = static_cast<std::int32_t>(part);
             } else if (const auto bad = common::invalid_time_format(*text);
                        !bad.empty()) {
-                return fail(at.span, "Unknown time format directive '" +
-                                         dstd::String(bad) +
-                                         "' in format_time()");
+                return fail(
+                    at.span,
+                    dstd::fmt<
+                        "Unknown time format directive '{}' in format_time()">(
+                        bad));
             }
             t.args[1] = make_term(duql::TConst{*text});
         }
@@ -3491,12 +3543,14 @@ class Lowering {
     Result<duql::LiteralValue> bound(const Param& p, Span span) const {
         const auto it = params_.find(p.name);
         if (it == params_.end())
-            return fail(span, "No value bound to parameter $" + p.name);
+            return fail(span,
+                        dstd::fmt<"No value bound to parameter ${}">(p.name));
         if (const auto* v = std::get_if<duql::LiteralValue>(&it->second))
             return *v;
-        return fail(span, "$" + p.name +
-                              " holds a list; a list parameter goes after "
-                              "'in'");
+        return fail(
+            span,
+            dstd::fmt<"${} holds a list; a list parameter goes after 'in'">(
+                p.name));
     }
 
     // A literal, a parameter, or a negated numeric literal, as the value of a
@@ -3517,8 +3571,8 @@ class Lowering {
                         LiteralNode{std::uint64_t{0}});
                 if (*v > static_cast<std::uint64_t>(
                              std::numeric_limits<std::int64_t>::max()))
-                    return fail(e.span,
-                                "Invalid integer: '-" + lit->number_text + "'");
+                    return fail(e.span, dstd::fmt<"Invalid integer: '-{}'">(
+                                            lit->number_text));
                 return dstd::Optional<LiteralNode>(
                     LiteralNode{-static_cast<std::int64_t>(*v)});
             }
@@ -3559,15 +3613,16 @@ dftracer::utils::dstd::Expected<MacroScopes, duql::DuqlError> scopes_of(
     for (const auto& scope : scopes)
         for (const auto& m : scope) {
             if (syntax::is_stage_word(m.name))
-                return dftracer::utils::dstd::Unexpected(
-                    make_error(text, 0, 0,
-                               "macro '" + m.name + "' in " + m.origin +
-                                   " has the name of a stage"));
+                return dftracer::utils::dstd::Unexpected(make_error(
+                    text, 0, 0,
+                    dstd::fmt<"macro '{}' in {} has the name of a stage">(
+                        m.name, m.origin)));
             if (builtin_name(m.name))
                 return dftracer::utils::dstd::Unexpected(make_error(
                     text, 0, 0,
-                    "macro '" + m.name + "' in " + m.origin +
-                        " has the name of a built-in function; rename it"));
+                    dstd::fmt<
+                        "macro '{}' in {} has the name of a built-in function; "
+                        "rename it">(m.name, m.origin)));
         }
     return scopes;
 }
@@ -3585,8 +3640,9 @@ dftracer::utils::dstd::Expected<void, duql::DuqlError> bind_params(
                      Span span) -> const duql::ParamValue* {
         const auto it = params.find(name);
         if (it == params.end()) {
-            error = make_error(text, span.offset, span.length,
-                               "No value bound to parameter $" + name);
+            error =
+                make_error(text, span.offset, span.length,
+                           dstd::fmt<"No value bound to parameter ${}">(name));
             return nullptr;
         }
         return &it->second;
@@ -3599,10 +3655,10 @@ dftracer::utils::dstd::Expected<void, duql::DuqlError> bind_params(
             if (!v) return;
             const auto* list = std::get_if<dstd::Vector<duql::LiteralValue>>(v);
             if (!list) {
-                error = make_error(text, e->span.offset, e->span.length,
-                                   "'in $" + in->list_param +
-                                       "' needs a list bound to $" +
-                                       in->list_param);
+                error =
+                    make_error(text, e->span.offset, e->span.length,
+                               dstd::fmt<"'in ${}' needs a list bound to ${}">(
+                                   in->list_param, in->list_param));
                 return;
             }
             in->list.clear();
@@ -3626,10 +3682,10 @@ dftracer::utils::dstd::Expected<void, duql::DuqlError> bind_params(
             const auto* lit = std::get_if<duql::LiteralValue>(v);
             const auto* s = lit ? std::get_if<dstd::String>(lit) : nullptr;
             if (!s) {
-                error = make_error(text, e->span.offset, e->span.length,
-                                   "'like $" + l->pattern_param +
-                                       "' needs a string bound to $" +
-                                       l->pattern_param);
+                error = make_error(
+                    text, e->span.offset, e->span.length,
+                    dstd::fmt<"'like ${}' needs a string bound to ${}">(
+                        l->pattern_param, l->pattern_param));
                 return;
             }
             l->pattern = *s;
@@ -3652,11 +3708,11 @@ dftracer::utils::dstd::Expected<void, duql::DuqlError> bind_params(
                     at = static_cast<std::int64_t>(*u);
             }
             if (!at) {
-                error = make_error(text, ix->index->span.offset,
-                                   ix->index->span.length,
-                                   "an array index parameter holds an "
-                                   "integer; $" +
-                                       prm->name + " does not");
+                error = make_error(
+                    text, ix->index->span.offset, ix->index->span.length,
+                    dstd::fmt<
+                        "an array index parameter holds an integer; ${} does "
+                        "not">(prm->name));
                 return;
             }
             PathStep step;
@@ -3686,7 +3742,7 @@ dftracer::utils::dstd::Expected<duql::Program, duql::DuqlError> compile_program(
     bool fallback = false;
     const dstd::String source_text =
         source.empty() ? dstd::String()
-                       : "source s {\n" + dstd::String(source) + "\n}";
+                       : dstd::fmt<"source s {\n{}\n}">(source);
     dstd::Optional<syntax::Program> source_tree;
     if (!source.empty()) {
         auto st = syntax::parse(source_text);

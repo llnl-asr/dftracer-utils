@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/syntax/lexer.h>
@@ -239,7 +240,7 @@ dftracer::utils::dstd::Expected<dstd::Vector<Token>, duql::DuqlError> lex(
                 break;
         }
         return dftracer::utils::dstd::Unexpected(make_error(
-            src, start, 1, dstd::String("Unexpected character '") + c + "'"));
+            src, start, 1, dstd::fmt<"Unexpected character '{}'">(c)));
     }
     out.push_back({Tok::End, src.substr(src.size(), 0), src.size(), adjacent});
     return out;

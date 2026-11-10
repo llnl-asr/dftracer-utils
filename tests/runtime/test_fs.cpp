@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
@@ -405,7 +406,7 @@ TEST_CASE("find_all - many files in one folder") {
     dftu_utils_test::ScopedTestDir dir("dftu_test_runtime_fs");
     const dstd::Path root = dir.path() / "flat";
     for (int i = 0; i < 100; ++i) {
-        write_file_at(root / ("file" + dstd::to_string(i) + ".txt"), "x");
+        write_file_at(root / (dstd::fmt<"file{}.txt">(i)), "x");
     }
     CHECK(find_names(root, {}).size() == 100);
 }
@@ -472,7 +473,7 @@ TEST_CASE("find_all - a long list of patterns") {
     }
     FindOptions options;
     for (int i = 1; i <= 100; ++i) {
-        options.patterns.push_back("*.ext" + dstd::to_string(i));
+        options.patterns.push_back(dstd::fmt<"*.ext{}">(i));
     }
     dstd::Vector<FoundFile> files;
     run_in_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {

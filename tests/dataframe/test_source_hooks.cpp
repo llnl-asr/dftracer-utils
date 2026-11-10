@@ -14,6 +14,7 @@
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
 #include <dftracer/utils/dataframe/internal/provider_source.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -595,8 +596,8 @@ void c_apply(void* self, const dftu_apply_request* req,
         const dftu_apply_join_args& j = req->u.join;
         fx->join_is_ours = j.other_vt && j.other_vt->schema == c_schema;
         for (std::int32_t i = 0; i < j.n_on; ++i)
-            fx->join_on.push_back(dstd::String(j.left_on[i]) + "=" +
-                                  j.right_on[i]);
+            fx->join_on.push_back(
+                dstd::fmt<"{}={}">(j.left_on[i], j.right_on[i]));
         fx->join_how = j.how;
         fx->join_suffix = j.suffix;
     }

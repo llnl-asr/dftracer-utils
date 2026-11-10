@@ -28,6 +28,7 @@
 //                                              and every result must be
 //                                              positive and correct)
 
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
@@ -82,12 +83,10 @@ dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> make_strings(
     for (std::size_t i = 0; i < count; ++i) {
         dftracer::utils::dstd::String s;
         if (i % 4 == 3) {
-            s = dftracer::utils::dstd::String(FUNCS[i % 8]) +
-                "::" + dftracer::utils::dstd::to_string(i);
+            s = dftracer::utils::dstd::fmt<"{}::{}">(FUNCS[i % 8], i);
         } else {
-            s = dftracer::utils::dstd::String(DIRS[i % 5]) + "/part" +
-                dftracer::utils::dstd::to_string(i / 5) + "/shard_" +
-                dftracer::utils::dstd::to_string(i) + ".dat";
+            s = dftracer::utils::dstd::fmt<"{}/part{}/shard_{}.dat">(
+                DIRS[i % 5], i / 5, i);
         }
         out.push_back(std::move(s));
     }

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dstd/big_endian.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -351,7 +352,7 @@ class DialectScan {
             } else if (f == 'i' || f == 'm' || f == 's') {
                 if (f == 'i' && !off) icase_ = true;
             } else {
-                fail(dstd::String("inline option '") + f + "'");
+                fail(dstd::fmt<"inline option '{}'">(f));
                 return false;
             }
             ++i_;
@@ -503,7 +504,7 @@ hs_database_t* compile_hs(dstd::StringView pattern, bool icase, bool whole) {
     unsigned flags = HS_FLAG_SINGLEMATCH | HS_FLAG_UTF8 | HS_FLAG_ALLOWEMPTY;
     if (icase) flags |= HS_FLAG_CASELESS;
     dstd::String text(pattern);
-    if (whole) text = "\\A(?:" + text + ")\\z";
+    if (whole) text = dstd::fmt<"\\A(?:{})\\z">(text);
     hs_database_t* db = nullptr;
     hs_compile_error_t* err = nullptr;
     if (hs_compile(text.c_str(), flags, HS_MODE_BLOCK, nullptr, &db, &err) !=
@@ -650,7 +651,8 @@ PatternResult compile_regex(dstd::StringView pattern, bool icase, bool whole) {
     DialectScan scan(pattern);
     if (auto err = scan.run())
         return dftracer::utils::dstd::Unexpected(PatternError{
-            "the duql regex dialect has no " + err->message, err->offset});
+            dstd::fmt<"the duql regex dialect has no {}">(err->message),
+            err->offset});
     std::uint32_t options =
         PCRE2_UTF | PCRE2_MATCH_INVALID_UTF | PCRE2_NEVER_BACKSLASH_C;
     if (icase) options |= PCRE2_CASELESS;
@@ -879,11 +881,10 @@ compile_substitution(const CompiledPattern& p, dstd::StringView to) {
     auto group = [&](std::size_t g,
                      std::size_t at) -> dstd::Optional<PatternError> {
         if (g > p.regex->groups)
-            return PatternError{"replacement refers to group " +
-                                    dstd::int_text(g) +
-                                    " but the pattern has " +
-                                    dstd::int_text(p.regex->groups) + " groups",
-                                at};
+            return PatternError{
+                dstd::fmt<"replacement refers to group {} but the pattern has "
+                          "{} groups">(g, p.regex->groups),
+                at};
         flush();
         sub.pieces.push_back({dstd::String(), g, true});
         return dstd::nullopt;
@@ -924,8 +925,7 @@ compile_substitution(const CompiledPattern& p, dstd::StringView to) {
                     names.begin(), names.end(),
                     [&](const auto& n) { return n.second == ref; });
                 if (it == names.end())
-                    return fail(
-                        "unknown group name '" + dstd::String(ref) + "'", at);
+                    return fail(dstd::fmt<"unknown group name '{}'">(ref), at);
                 g = it->first;
             }
             if (auto e = group(g, at))

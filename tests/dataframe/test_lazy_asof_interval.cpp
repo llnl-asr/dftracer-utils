@@ -10,6 +10,7 @@
 #include <dftracer/utils/dataframe/frame_ops.h>
 #include <dftracer/utils/dataframe/internal/cell_ops.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
@@ -153,7 +154,7 @@ Inputs make_inputs(std::uint32_t seed, std::int64_t nl, std::int64_t nr,
     const auto key = [&](dstd::Vector<I>& g, dstd::Vector<S>& s) {
         const std::int64_t k = pick(8) == 0 ? -1 : pick(4);
         g.push_back(k < 0 ? I{} : I{k});
-        s.push_back(k < 0 ? S{} : S{dstd::String("k") + dstd::to_string(k)});
+        s.push_back(k < 0 ? S{} : S{dstd::fmt<"k{}">(k)});
     };
     const auto time = [&](dstd::Vector<I>& t) {
         t.push_back(pick(20) == 0 ? I{} : I{pick(60)});
@@ -296,7 +297,7 @@ TEST_CASE("interval matches the eager op with overlaps, nulls and outer") {
         const auto key = [&](dstd::Vector<I>& g, dstd::Vector<S>& s) {
             const std::int64_t k = pick(8) == 0 ? -1 : pick(3);
             g.push_back(k < 0 ? I{} : I{k});
-            s.push_back(k < 0 ? S{} : S{"k" + dstd::to_string(k)});
+            s.push_back(k < 0 ? S{} : S{dstd::fmt<"k{}">(k)});
         };
         for (std::int64_t i = 0; i < 300; ++i) {
             key(lg, ls);

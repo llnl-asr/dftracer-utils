@@ -8,6 +8,7 @@
 #include <dftracer/utils/dataframe/internal/spill.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/map.h>
@@ -187,9 +188,8 @@ dstd::Vector<dstd::String> rows_of(const DataFrame& f, bool sorted) {
     dstd::Vector<dstd::String> out(static_cast<std::size_t>(f.num_rows()));
     for (const Series& c : f.columns)
         for (std::int64_t i = 0; i < f.num_rows(); ++i)
-            out[static_cast<std::size_t>(i)] +=
-                (c.is_null(i) ? dstd::String("null") : cell_to_string(c, i)) +
-                "|";
+            out[static_cast<std::size_t>(i)] += dstd::fmt<"{}|">(
+                (c.is_null(i) ? dstd::String("null") : cell_to_string(c, i)));
     if (sorted) std::sort(out.begin(), out.end());
     return out;
 }
@@ -488,7 +488,7 @@ TEST_CASE("unique and head_by keep their results when a grow is refused") {
     // The external path opens a spill directory of its own while it runs;
     // the in-memory path opens none.
     const dstd::Path dir = dstd::fs::temp_directory() /
-                           ("dftu_governor_" + dstd::to_string(::getpid()));
+                           (dstd::fmt<"dftu_governor_{}">(::getpid()));
     dstd::fs::remove_all(dir).has_value();
     dstd::fs::create_directories(dir).has_value();
     ::setenv("DFTRACER_UTILS_SPILL_DIR", dir.c_str(), 1);

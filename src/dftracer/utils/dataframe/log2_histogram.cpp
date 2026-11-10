@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/log2_histogram.h>
 #include <dftracer/utils/dstd/bits.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <simdjson.h>
@@ -140,7 +141,7 @@ dstd::String Log2Histogram::render_ascii(std::size_t max_width,
 dstd::String Log2Histogram::render_blocks(std::size_t max_width,
                                           const dstd::String& unit,
                                           const dstd::String& indent) const {
-    if (total_count_ == 0) return indent + "(no data)\n";
+    if (total_count_ == 0) return dstd::fmt<"{}(no data)\n">(indent);
 
     // Unicode block elements: 8 levels from thinnest to fullest
     static const char* blocks[] = {

@@ -10,6 +10,7 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/kernels/string_match.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_arena.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -40,16 +41,12 @@ constexpr const char* NAMES[] = {
 constexpr const char* CATS[] = {"POSIX", "STDIO", "MPI"};
 
 dftracer::utils::dstd::String record(std::uint32_t i) {
-    dftracer::utils::dstd::String r =
-        R"({"name":")" + dftracer::utils::dstd::String(NAMES[i % 12]) +
-        R"(","cat":")" + CATS[i % 3] + R"(","pid":)" +
-        dftracer::utils::dstd::to_string(i % 7) + R"(,"dur":)" +
-        dftracer::utils::dstd::to_string((i * 37) % 200) +
-        R"(,"args":{"size":)" +
-        dftracer::utils::dstd::to_string((i * 131) % 4096);
-    if (i % 5 == 0)
-        r += R"(,"retry":)" + dftracer::utils::dstd::to_string(i % 3);
-    return r + "}}";
+    dftracer::utils::dstd::String r = dftracer::utils::dstd::fmt<
+        R"({"name":"{}","cat":"{}","pid":{},"dur":{},"args":{"size":{})">(
+        NAMES[i % 12], CATS[i % 3], i % 7, (i * 37) % 200, (i * 131) % 4096);
+    if (i % 5 == 0) r += dftracer::utils::dstd::fmt<R"(,"retry":{})">(i % 3);
+    r += "}}";
+    return r;
 }
 
 // The fields of `q` from `v`, as the indexed reader stores them.
@@ -59,7 +56,7 @@ duql::ValueMap map_of(const duql::Query& q, JsonValue v) {
         JsonValue x = v.at(dftracer::utils::dstd::String(f));
         if (!x.exists() &&
             !dftracer::utils::dstd::StringView(f).starts_with("args."))
-            x = v.at("args." + dftracer::utils::dstd::String(f));
+            x = v.at(dstd::fmt<"args.{}">(f));
         if (!x.exists()) continue;
         if (x.is_string())
             m[dftracer::utils::dstd::String(f)] = dftracer::utils::dstd::String(
@@ -92,7 +89,7 @@ double ns_per_record(std::size_t n, int rounds, F&& body) {
 // A path of `len` bytes holding "/scratch/"; every fifth ends in ".h5".
 dftracer::utils::dstd::String long_path(std::uint32_t i, std::size_t len) {
     dftracer::utils::dstd::String s =
-        "/p/lustre/scratch/run" + dftracer::utils::dstd::to_string(i % 97);
+        dstd::fmt<"/p/lustre/scratch/run{}">(i % 97);
     std::uint32_t x = i * 2654435761u + 1;
     while (s.size() + 3 < len) {
         s += '/';

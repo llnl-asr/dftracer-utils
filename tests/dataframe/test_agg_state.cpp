@@ -4,6 +4,7 @@
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/agg/detail.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -35,8 +36,8 @@ struct Sample {
             k2.push_back(i % 3);
             v.push_back(i);
             by.push_back(i);  // unique so ArgMax has no tie ambiguity
-            tag.push_back("t" + dstd::to_string(i % 5));
-            name.push_back("n" + dstd::to_string(i));
+            tag.push_back(dstd::fmt<"t{}">(i % 5));
+            name.push_back(dstd::fmt<"n{}">(i));
         }
         sk1 = Series::flat_i64(k1.data(), n);
         sk2 = Series::flat_i64(k2.data(), n);

@@ -7,6 +7,7 @@
 //                       a serial walk find different files or sizes)
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -100,8 +101,8 @@ int run_smoke() {
         const dstd::Path dir = root / dstd::to_string(d);
         if (!dstd::fs::create_directories(dir).has_value()) return 2;
         for (int f = 0; f < 40; ++f) {
-            const dstd::Path file = dir / dstd::String(dstd::to_string(f) +
-                                                       dstd::String(".pfw.gz"));
+            const dstd::Path file =
+                dir / dstd::String(dstd::fmt<"{}.pfw.gz">(f));
             if (!dstd::fs::write_file(file, "x")) return 2;
         }
     }

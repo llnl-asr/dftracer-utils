@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/mask.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -265,18 +266,18 @@ TEST_CASE("calendar time agrees between the column and row evaluators") {
               "quarter", "iso_week", "iso_year"})
             for (const char* k : {"-1", "0", "1", "3", "6", "12", "23", "59",
                                   "364", "999", "1969", "2022"})
-                forms.push_back(dstd::String("date_part(") + col + ", \"" +
-                                part + "\") > " + k);
+                forms.push_back(
+                    dstd::fmt<"date_part({}, \"{}\") > {}">(col, part, k));
         for (const char* fmt : {"%F %T.%f", "%Y-%m-%d %H:%M:%S %j",
                                 "%A %B %p %I %y", "%s %z %Z %%"})
             for (const char* k : {"\"0\"", "\"1969\"", "\"2000\"",
                                   "\"2023-11-14\"", "\"A\"", "\"Thu\""})
-                forms.push_back(dstd::String("format_time(") + col + ", \"" +
-                                fmt + "\") < " + k);
+                forms.push_back(
+                    dstd::fmt<"format_time({}, \"{}\") < {}">(col, fmt, k));
     }
     forms.push_back("date_part(as_time(s, \"us\"), \"hour\") > 0");
     for (const dstd::String& form : forms) {
-        const dstd::String text = "where " + form;
+        const dstd::String text = dstd::fmt<"where {}">(form);
         INFO("query: ", text);
         auto p = compile_program(text, {}, &roles);
         REQUIRE_MESSAGE(p.has_value(), (p ? "" : p.error().format()));

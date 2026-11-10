@@ -6,6 +6,7 @@
 #include <dftracer/utils/common/scratch.h>
 #include <dftracer/utils/common/spill_dir.h>
 #include <dftracer/utils/common/spill_dir_internal.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/path.h>
@@ -37,11 +38,10 @@ dstd::Result<dstd::Path> choose_spill_dir(
         else if (::access(env_path.c_str(), W_OK | X_OK) != 0)
             reason = "Permission denied";
         if (!reason.empty())
-            return make_error(
-                ErrorCode::Io,
-                str_cat("spill: cannot use spill directory '", env, "' (",
-                        reason, "); set ", constants::SPILL_DIR_ENV,
-                        " to a writable directory"));
+            return make_error<
+                "spill: cannot use spill directory '{}' ({}); set {} to a "
+                "writable directory">(ErrorCode::Io, env, reason,
+                                      constants::SPILL_DIR_ENV);
         return env_path;
     }
     // The root is found once, so check it again: a cleaner may have removed it
@@ -68,13 +68,11 @@ dstd::Result<dstd::Path> choose_spill_dir(
             continue;
         return dir;
     }
-    return make_error(
-        ErrorCode::Io,
-        str_cat("spill: no spill directory off RAM (no writable local disk, "
-                "and the temp and cache directories are RAM-backed or not "
-                "writable); set ",
-                constants::SPILL_DIR_ENV,
-                " to a directory on a disk or a parallel file system"));
+    return make_error<
+        "spill: no spill directory off RAM (no writable local disk, and the "
+        "temp and cache directories are RAM-backed or not writable); set {} "
+        "to a directory on a disk or a parallel file system">(
+        ErrorCode::Io, constants::SPILL_DIR_ENV);
 }
 
 }  // namespace detail
@@ -216,7 +214,7 @@ void sweep_stale(dstd::PathView root, dstd::StringView prefix) {
     if (!dir) return;
     auto listing = dir->entries();
     if (!listing) return;
-    const dstd::String tag = host_tag() + "_";
+    const dstd::String tag = dstd::fmt<"{}_">(host_tag());
     for (const dstd::fs::DirEntry& entry : *listing) {
         const dstd::StringView name = entry.name;
         if (name.size() <= prefix.size() + 1 ||
@@ -257,15 +255,14 @@ dstd::Result<ScopedSpillSubdir> ScopedSpillSubdir::create(
     }
     static std::atomic<std::uint64_t> counter{0};
     const dstd::Path dir =
-        root->view() / str_cat(prefix, "_", host_tag(), "_", ::getpid(), "_",
-                               counter.fetch_add(1));
+        root->view() / dstd::fmt<"{}_{}_{}_{}">(prefix, host_tag(), ::getpid(),
+                                                counter.fetch_add(1));
     const auto made = dstd::fs::create_directories(dir.view());
     if (!made.has_value())
-        return make_error(
-            ErrorCode::Io,
-            str_cat("spill: cannot create '", dir.str(), "' (",
-                    made.error().message(), "); set ", constants::SPILL_DIR_ENV,
-                    " to a writable directory"));
+        return make_error<
+            "spill: cannot create '{}' ({}); set {} to a writable directory">(
+            ErrorCode::Io, dir.str(), made.error().message(),
+            constants::SPILL_DIR_ENV);
     auto charge = dstd::make_shared<SpillCharge>(spill_dir_in_memory(*root));
     SubdirRegistry& reg = subdirs();
     {

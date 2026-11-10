@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/file.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/path.h>
@@ -58,7 +59,7 @@ struct TempDir {
     dstd::Path path;
     TempDir() {
         path = dstd::fs::temp_directory() /
-               ("dftu_store_open_extent_" + dstd::to_string(::getpid()));
+               (dstd::fmt<"dftu_store_open_extent_{}">(::getpid()));
         REQUIRE(dstd::fs::remove_all(path).has_value());
         REQUIRE(dstd::fs::create_directories(path).has_value());
     }

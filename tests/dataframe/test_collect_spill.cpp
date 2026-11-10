@@ -8,6 +8,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/spill.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
@@ -43,8 +44,8 @@ DataFrame run(dftracer::utils::coro::CoroTask<dstd::Result<DataFrame>> t) {
 struct SpillDirVar {
     dstd::Path dir;
     explicit SpillDirVar(const dstd::String& name) {
-        dir = dstd::fs::temp_directory() /
-              (name + "_" + dstd::to_string(::getpid()));
+        dir =
+            dstd::fs::temp_directory() / (dstd::fmt<"{}_{}">(name, ::getpid()));
         REQUIRE(dstd::fs::remove_all(dir).has_value());
         REQUIRE(dstd::fs::create_directories(dir).has_value());
         ::setenv(DIR_VAR, dir.c_str(), 1);
@@ -80,8 +81,8 @@ DataFrame make_frame() {
         if (i % 5 != 2)
             valid[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
         if (i % 7 != 3) sv[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
-        text.push_back(i % 7 == 3 ? "" : "name-" + dstd::to_string(i % 11));
-        json.push_back("{\"k\":" + dstd::to_string(i) + "}");
+        text.push_back(i % 7 == 3 ? "" : dstd::fmt<"name-{}">(i % 11));
+        json.push_back(dstd::fmt<"{\"k\":{}}">(i));
         inner.push_back(i);
         offs.push_back(static_cast<std::int32_t>(inner.size()));
     }

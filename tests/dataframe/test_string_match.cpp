@@ -9,6 +9,7 @@
 #include <dftracer/utils/dataframe/kernels/string_match.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -36,13 +37,20 @@ Rows make_rows() {
     const dstd::String long_a(70, 'a');
     const dstd::String long_b(130, 'q');
     const dstd::String pool[] = {
-        "read",          "write",
-        "MPI_Send",      "",
-        "a_write",       "cudaMemcpyAsync",
-        "pxexd",         "p e d",
-        "H5Dwrite",      "pread64",
-        long_a + "ped",  long_b + "read",
-        "read" + long_b, long_a + "p" + long_a + "e" + long_a + "d" + long_a};
+        "read",
+        "write",
+        "MPI_Send",
+        "",
+        "a_write",
+        "cudaMemcpyAsync",
+        "pxexd",
+        "p e d",
+        "H5Dwrite",
+        "pread64",
+        dstd::fmt<"{}ped">(long_a),
+        dstd::fmt<"{}read">(long_b),
+        dstd::fmt<"read{}">(long_b),
+        dstd::fmt<"{}p{}e{}d{}">(long_a, long_a, long_a, long_a)};
     Rows rows;
     for (std::int64_t i = 0; i < 210; ++i) {
         if (i % 7 == 3)
@@ -149,7 +157,7 @@ void check_variant(const StringMatch& k, const char* label) {
         }
         for (const dstd::String& lit :
              {dstd::String("read"), dstd::String(""), dstd::String("write"),
-              long_a, dstd::String(130, 'q') + "read"}) {
+              long_a, dstd::fmt<"{}read">(dstd::String(130, 'q'))}) {
             CAPTURE(lit);
             const auto n = static_cast<std::int32_t>(lit.size());
             check_mask(k.eq(c.series.handle(), lit.data(), n), rows,

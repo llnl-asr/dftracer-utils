@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash/xxh3.h>
 #include <dftracer/utils/dstd/hasher.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -201,11 +202,9 @@ std::size_t StringIntern::shard_of(std::size_t h) {
 Error StringIntern::collision(const char* existing, StringView sv) {
     return Error(
         Condition::InvalidArgument,
-        StringView(("string intern: deterministic id collision "
-                    "between '" +
-                    String(record_view(existing)) + "' and '" + String(sv) +
-                    "'; the dictionary is too large for this id "
-                    "space")
+        StringView(fmt<"string intern: deterministic id collision between "
+                       "'{}' and '{}'; the dictionary is too large for this "
+                       "id space">(record_view(existing), sv)
                        .c_str()));
 }
 

@@ -11,6 +11,7 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/view_builder.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -154,21 +155,23 @@ dstd::Vector<Case> cases() {
     for (bool nulls : {false, true}) {
         const dstd::String suffix = nulls ? " nulls" : "";
         const Rows rows = rows_for(nulls);
-        out.push_back({"int64" + suffix, int64_of(nulls)});
-        out.push_back({"float64" + suffix, float64_of(nulls)});
-        out.push_back({"bool" + suffix, bool_of(nulls)});
-        out.push_back({"string" + suffix, strings_of(rows, TypeId::String)});
-        out.push_back({"large string" + suffix, large_of(rows)});
-        out.push_back({"binary" + suffix, strings_of(rows, TypeId::Binary)});
+        out.push_back({dstd::fmt<"int64{}">(suffix), int64_of(nulls)});
+        out.push_back({dstd::fmt<"float64{}">(suffix), float64_of(nulls)});
+        out.push_back({dstd::fmt<"bool{}">(suffix), bool_of(nulls)});
         out.push_back(
-            {"json" + suffix, strings_of(rows, TypeId::String).as_json()});
-        out.push_back({"view" + suffix, view_of(rows)});
-        out.push_back({"dictionary" + suffix,
+            {dstd::fmt<"string{}">(suffix), strings_of(rows, TypeId::String)});
+        out.push_back({dstd::fmt<"large string{}">(suffix), large_of(rows)});
+        out.push_back(
+            {dstd::fmt<"binary{}">(suffix), strings_of(rows, TypeId::Binary)});
+        out.push_back({dstd::fmt<"json{}">(suffix),
+                       strings_of(rows, TypeId::String).as_json()});
+        out.push_back({dstd::fmt<"view{}">(suffix), view_of(rows)});
+        out.push_back({dstd::fmt<"dictionary{}">(suffix),
                        strings_of(rows, TypeId::String).dictionary_encode()});
         out.push_back(
-            {"selection string" + suffix,
+            {dstd::fmt<"selection string{}">(suffix),
              selection_over(strings_of(rows, TypeId::String), scatter())});
-        out.push_back({"selection int64" + suffix,
+        out.push_back({dstd::fmt<"selection int64{}">(suffix),
                        selection_over(int64_of(nulls), scatter())});
     }
     return out;

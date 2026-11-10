@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/map.h>
@@ -109,27 +110,24 @@ ScopeKey file_scope(const dstd::String& path) {
 }
 
 dstd::String own_scope_path(int child, int file) {
-    return "/p" + dstd::to_string(child) + "/f" + dstd::to_string(file) +
-           ".pfw";
+    return dstd::fmt<"/p{}/f{}.pfw">(child, file);
 }
 
 dstd::String durable_scope_path(int child) {
-    return "/p" + dstd::to_string(child) + "/durable.pfw";
+    return dstd::fmt<"/p{}/durable.pfw">(child);
 }
 
 dstd::String raw_key(int child, int file, int n) {
-    return "r" + dstd::to_string(child) + "-" + dstd::to_string(file) + "-" +
-           dstd::to_string(n);
+    return dstd::fmt<"r{}-{}-{}">(child, file, n);
 }
 
 dstd::String raw_value(int child, int file, int n, int round) {
-    return "raw-c" + dstd::to_string(child) + "-i" + dstd::to_string(file) +
-           "-" + raw_key(child, file, n) + "-g" + dstd::to_string(round);
+    return dstd::fmt<"raw-c{}-i{}-{}-g{}">(child, file, raw_key(child, file, n),
+                                           round);
 }
 
 dstd::String fold_key(int child, int file, int k) {
-    return "s" + dstd::to_string(child) + "-" + dstd::to_string(file) + "-" +
-           dstd::to_string(k);
+    return dstd::fmt<"s{}-{}-{}">(child, file, k);
 }
 
 std::int64_t fold_unit(int child, int round) {
@@ -137,19 +135,18 @@ std::int64_t fold_unit(int child, int round) {
            static_cast<std::int64_t>(round - 1) * ROUND_STEP;
 }
 
-dstd::String shared_key(int batch) { return "dup-" + dstd::to_string(batch); }
+dstd::String shared_key(int batch) { return dstd::fmt<"dup-{}">(batch); }
 
 std::int64_t shared_unit(int round) {
     return SHARED_BASE + static_cast<std::int64_t>(round - 1) * ROUND_STEP;
 }
 
 dstd::String durable_key(int child, int n) {
-    return "d" + dstd::to_string(child) + "-" + dstd::to_string(n);
+    return dstd::fmt<"d{}-{}">(child, n);
 }
 
 dstd::String durable_value(int child, int n, int round) {
-    return "dur-c" + dstd::to_string(child) + "-" + dstd::to_string(n) + "-g" +
-           dstd::to_string(round);
+    return dstd::fmt<"dur-c{}-{}-g{}">(child, n, round);
 }
 
 dstd::String row_id(const dstd::String& scope, const dstd::String& key) {
@@ -192,33 +189,32 @@ struct ScanDump {
     }
 
     dstd::String report(const Expected& expected) const {
-        dstd::String out = "rows " + dstd::to_string(rows) + " keys " +
-                           dstd::to_string(counts.size()) + " expected " +
-                           dstd::to_string(expected.size()) + "\n";
+        dstd::String out = dstd::fmt<"rows {} keys {} expected {}\n">(
+            rows, counts.size(), expected.size());
         std::size_t shown = 0;
         for (const auto& entry : counts) {
             if (entry.second != 1 && shown++ < 20) {
-                out += "duplicate x" + dstd::to_string(entry.second) + ": " +
-                       visible(entry.first) + "\n";
+                out += dstd::fmt<"duplicate x{}: {}\n">(entry.second,
+                                                        visible(entry.first));
             }
         }
         for (const auto& entry : expected) {
             const auto count = counts.find(entry.first);
             if (count == counts.end()) {
                 if (shown++ < 40) {
-                    out += "missing: " + visible(entry.first) + "\n";
+                    out += dstd::fmt<"missing: {}\n">(visible(entry.first));
                 }
                 continue;
             }
             const auto value = values.find(entry.first);
             if (value != values.end() && value->second != entry.second &&
                 shown++ < 40) {
-                out += "value: " + visible(entry.first) + "\n";
+                out += dstd::fmt<"value: {}\n">(visible(entry.first));
             }
         }
         for (const auto& entry : counts) {
             if (expected.find(entry.first) == expected.end() && shown++ < 60) {
-                out += "extra: " + visible(entry.first) + "\n";
+                out += dstd::fmt<"extra: {}\n">(visible(entry.first));
             }
         }
         return out;
@@ -299,8 +295,7 @@ std::size_t count_data_files(const dstd::String& root) {
 dstd::String skipped_report(const engine::Snapshot& snapshot) {
     dstd::String out;
     for (const engine::SkippedFile& file : snapshot.skipped()) {
-        out += "skipped " + dstd::String(file.name) + ": " +
-               dstd::String(file.error.message()) + "\n";
+        out += dstd::fmt<"skipped {}: {}\n">(file.name, file.error.message());
     }
     return out;
 }
@@ -393,7 +388,7 @@ struct ChildFailure {
 };
 
 [[noreturn]] void child_fail(const dstd::String& message) {
-    const dstd::String line = "store_processes child: " + message + "\n";
+    const dstd::String line = dstd::fmt<"store_processes child: {}\n">(message);
     std::fputs(line.c_str(), stderr);
     std::fflush(stderr);
     ::_exit(1);
@@ -427,7 +422,7 @@ coro::CoroTask<int> run_workload(engine::Writer& writer, const Namespaces& ids,
                                                   RETRY_ATTEMPTS);
         if (!committed.has_value()) {
             failure.message =
-                "raw " + key + ": " + dstd::String(committed.error().message());
+                dstd::fmt<"raw {}: {}">(key, committed.error().message());
             co_return 1;
         }
     }
@@ -444,8 +439,8 @@ coro::CoroTask<int> run_workload(engine::Writer& writer, const Namespaces& ids,
         auto committed = co_await commit_retrying(writer, std::move(entries),
                                                   RETRY_ATTEMPTS);
         if (!committed.has_value()) {
-            failure.message = "sum scope " + dstd::to_string(file) + ": " +
-                              dstd::String(committed.error().message());
+            failure.message = dstd::fmt<"sum scope {}: {}">(
+                file, committed.error().message());
             co_return 1;
         }
     }
@@ -458,8 +453,8 @@ coro::CoroTask<int> run_workload(engine::Writer& writer, const Namespaces& ids,
         auto committed = co_await commit_retrying(writer, std::move(entries),
                                                   RETRY_ATTEMPTS);
         if (!committed.has_value()) {
-            failure.message = "shared " + key + ": " +
-                              dstd::String(committed.error().message());
+            failure.message =
+                dstd::fmt<"shared {}: {}">(key, committed.error().message());
             co_return 1;
         }
     }
@@ -473,15 +468,15 @@ coro::CoroTask<int> run_workload(engine::Writer& writer, const Namespaces& ids,
         auto committed = co_await commit_retrying(writer, std::move(entries),
                                                   RETRY_ATTEMPTS);
         if (!committed.has_value()) {
-            failure.message = "durable " + key + ": " +
-                              dstd::String(committed.error().message());
+            failure.message =
+                dstd::fmt<"durable {}: {}">(key, committed.error().message());
             co_return 1;
         }
         if (batch == DURABLE_BATCHES / 2 - 1) {
             auto flushed = co_await writer.flush();
             if (!flushed.has_value()) {
                 failure.message =
-                    "durable flush: " + dstd::String(flushed.error().message());
+                    dstd::fmt<"durable flush: {}">(flushed.error().message());
                 co_return 1;
             }
         }
@@ -510,11 +505,11 @@ void run_child(const dstd::String& root, int child, int round,
     options.commit_bytes = std::uint64_t{1} << 20;
     options.commit_interval = std::chrono::milliseconds{20};
     options.host = dstd::String("proc");
-    options.label = dstd::String("round" + dstd::to_string(round));
+    options.label = dstd::String(dstd::fmt<"round{}">(round));
 
     auto created = engine::Writer::create(root, *runtime.executor(), options);
     if (!created.has_value()) {
-        child_fail("create: " + dstd::String(created.error().message()));
+        child_fail(dstd::fmt<"create: {}">(created.error().message()));
     }
     dstd::UniquePtr<engine::Writer> writer = std::move(*created);
 
@@ -544,7 +539,7 @@ void run_child(const dstd::String& root, int child, int round,
     }
     auto closed = closing.get();
     if (!closed.has_value()) {
-        child_fail("close: " + dstd::String(closed.error().message()));
+        child_fail(dstd::fmt<"close: {}">(closed.error().message()));
     }
     ::_exit(0);
 }
@@ -555,15 +550,14 @@ bool child_succeeded(int status) {
 
 dstd::String exit_report(pid_t pid, int status) {
     if (WIFEXITED(status)) {
-        return "child pid " + dstd::to_string(pid) + " exited with code " +
-               dstd::to_string(WEXITSTATUS(status));
+        return dstd::fmt<"child pid {} exited with code {}">(
+            pid, WEXITSTATUS(status));
     }
     if (WIFSIGNALED(status)) {
-        return "child pid " + dstd::to_string(pid) + " was killed by signal " +
-               dstd::to_string(WTERMSIG(status));
+        return dstd::fmt<"child pid {} was killed by signal {}">(
+            pid, WTERMSIG(status));
     }
-    return "child pid " + dstd::to_string(pid) + " ended with status " +
-           dstd::to_string(status);
+    return dstd::fmt<"child pid {} ended with status {}">(pid, status);
 }
 
 void reap_children(const dstd::Vector<pid_t>& pids) {

@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -48,11 +49,9 @@ template <class T>
 dstd::Result<Numbers<T>> read_numbers(const dataframe::Series& s,
                                       const char* what) {
     if (!is_number(s.type()))
-        return common::make_error(
-            common::ErrorCode::InvalidArgument,
-            dstd::String("overlap: the ") + what + " is " +
-                dstd::String(dataframe::type_name(s.type())) +
-                ", not a number");
+        return common::make_error<"overlap: the {} is {}, not a number">(
+            common::ErrorCode::InvalidArgument, what,
+            dataframe::type_name(s.type()));
     const auto n = static_cast<std::size_t>(s.length());
     Numbers<T> out{dstd::Vector<T>(n), dstd::Vector<std::uint8_t>(n)};
     switch (s.type()) {

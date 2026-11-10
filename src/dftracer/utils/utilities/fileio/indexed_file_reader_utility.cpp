@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
@@ -19,8 +20,9 @@ IndexedFileReaderUtility::operator()(const IndexedReadInput& input) const {
     // Validate input
     if (!dftracer::utils::common::input_exists(input.file_path)) {
         throw common::DFTUtilsException(
-            common::ErrorCode::NotFound,
-            "File does not exist: " + input.file_path);
+            common::make_error<"File does not exist: {}">(
+                common::ErrorCode::NotFound, input.file_path)
+                .error());
     }
 
     const dstd::String normalized_index_path =

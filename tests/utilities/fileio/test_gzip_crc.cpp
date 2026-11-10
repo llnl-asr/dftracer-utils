@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/file.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -112,7 +113,7 @@ struct TempFile {
         char tmpl[] = "/tmp/dftu_gzcrc_XXXXXX";
         REQUIRE(::mkdtemp(tmpl) != nullptr);
         dir = tmpl;
-        path = dir + "/t.gz";
+        path = dstd::fmt<"{}/t.gz">(dir);
         std::FILE* f = std::fopen(path.c_str(), "wb");
         REQUIRE(f != nullptr);
         REQUIRE(std::fwrite(bytes.data(), 1, bytes.size(), f) == bytes.size());
@@ -226,7 +227,7 @@ PathResult truncated_decoder(const dstd::String& path) {
 }
 
 PathResult rechunker(const dstd::String& path) {
-    const dstd::String out_path = path + ".rechunked.gz";
+    const dstd::String out_path = dstd::fmt<"{}.rechunked.gz">(path);
     bool ok = true;
     dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         CrcWindow window;

@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/io/io_backend_factory.h>
@@ -49,10 +50,9 @@ constexpr bool HAVE_IO_URING =
 
 dstd::Unexpected<dstd::Error> bad_backend_env(dstd::StringView value,
                                               dstd::StringView why) {
-    return common::make_error(
+    return common::make_error<"{}: '{}' {}">(
         common::ErrorCode::InvalidArgument,
-        common::str_cat(common::constants::io_settings::BACKEND_ENV, ": '",
-                        value, "' ", why));
+        common::constants::io_settings::BACKEND_ENV, value, why);
 }
 
 // Auto when the variable is unset, empty or "auto". Otherwise the backend it

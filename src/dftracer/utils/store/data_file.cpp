@@ -476,12 +476,9 @@ dstd::Expected<std::size_t, dstd::Error> move_data_files(dstd::StringView from,
                                                          dstd::StringView to) {
     const auto io_error = [](dstd::StringView what, dstd::StringView path,
                              dstd::StringView cause) {
-        dstd::String text(what);
-        text.append(path);
-        text.append(": ");
-        text.append(cause);
         return dstd::Unexpected<dstd::Error>(
-            dstd::Error(dstd::Condition::Io, text));
+            dstd::Error::from_format<"{}{}: {}">(dstd::Condition::Io, what,
+                                                 path, cause));
     };
     const dstd::PathView from_dir(from);
     const dstd::PathView to_dir(to);

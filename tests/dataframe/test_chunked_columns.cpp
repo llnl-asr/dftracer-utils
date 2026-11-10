@@ -14,6 +14,7 @@
 #include <dftracer/utils/dataframe/kernels/sort.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/scalar.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -296,7 +297,7 @@ TEST_SUITE("chunked columns") {
         DataFrame df;
         for (Kind kind :
              {Kind::Int64, Kind::Float64, Kind::Bool, Kind::StringFlat}) {
-            df.names.push_back("c" + dstd::to_string(static_cast<int>(kind)));
+            df.names.push_back(dstd::fmt<"c{}">(static_cast<int>(kind)));
             df.columns.push_back(piece_of(kind, 0, N, true, 0));
         }
         DataFrame got = run(df.lazy().collect(6));
@@ -586,7 +587,7 @@ TEST_SUITE("chunked columns") {
                         GroupAgg a;
                         a.op = op;
                         a.column = col;
-                        a.out = dstd::String(col) + "_" + to_string(op);
+                        a.out = dstd::fmt<"{}_{}">(col, to_string(op));
                         aggs.push_back(std::move(a));
                     }
                 const DataFrame want =

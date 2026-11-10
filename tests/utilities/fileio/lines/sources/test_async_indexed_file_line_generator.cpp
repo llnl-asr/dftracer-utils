@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
@@ -57,7 +58,7 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             indexer->build();
 
             auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, gz_path + ".idx")
+                              .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                               .with_line_range(1, 10);
 
             auto gen = async_indexed_file_lines(config);
@@ -79,7 +80,7 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             indexer->build();
 
             auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, gz_path + ".idx")
+                              .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                               .with_line_range(5, 10);
 
             auto gen = async_indexed_file_lines(config);
@@ -101,7 +102,7 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             indexer->build();
 
             auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, gz_path + ".idx")
+                              .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                               .with_line_range(7, 7);
 
             auto gen = async_indexed_file_lines(config);
@@ -125,7 +126,7 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
 
             // end=0 should auto-detect total lines
             auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, gz_path + ".idx")
+                              .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                               .with_line_range(10, 0);
 
             auto gen = async_indexed_file_lines(config);
@@ -148,7 +149,8 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
+            auto reader =
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
             REQUIRE(reader != nullptr);
 
             auto config = IndexedFileLineIteratorConfig()
@@ -177,7 +179,7 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             indexer->build();
 
             auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, gz_path + ".idx")
+                              .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                               .with_byte_range(0, 200);
 
             auto gen = async_indexed_file_lines(config);
@@ -199,7 +201,7 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             indexer->build();
 
             auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, gz_path + ".idx")
+                              .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                               .with_line_range(3, 7);
 
             auto gen = async_indexed_file_lines(config);
@@ -260,7 +262,7 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             indexer->build();
 
             auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, gz_path + ".idx")
+                              .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                               .with_line_range(100, 200)
                               .with_buffer_size(16384);
 
@@ -287,7 +289,7 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             indexer->build();
 
             auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, gz_path + ".idx")
+                              .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                               .with_line_range(5, 15);
 
             // Sync path
@@ -321,7 +323,7 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             indexer->build();
 
             auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, gz_path + ".idx")
+                              .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                               .with_line_range(1, 3);
 
             auto gen = async_indexed_file_lines(config);
@@ -358,7 +360,7 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             indexer->build();
 
             auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, gz_path + ".idx")
+                              .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                               .with_line_range(1, 5);
 
             auto gen1 = async_indexed_file_lines(config);

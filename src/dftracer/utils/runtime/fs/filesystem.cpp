@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/common/test_probes.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/os.h>
@@ -104,8 +105,8 @@ dstd::Expected<dstd::Vector<Entry>, dstd::Error> list_sync(
     }
     if (entries->error() != 0) {
         return dstd::Unexpected(
-            dstd::Error(dstd::Condition::Io,
-                        common::str_cat("Cannot read directory: ", dir.str())));
+            dstd::Error::from_format<"Cannot read directory: {}">(
+                dstd::Condition::Io, dir.str()));
     }
     return listing;
 }
@@ -271,9 +272,9 @@ dstd::Expected<dstd::SharedPtr<FileSystem>, dstd::Error> file_system_for(
     std::lock_guard<std::mutex> lock(reg.mutex);
     const auto found = reg.by_scheme.find(dstd::String(scheme));
     if (found == reg.by_scheme.end()) {
-        return dstd::Unexpected(dstd::Error(
-            dstd::Condition::InvalidArgument,
-            common::str_cat("No file system for scheme: ", scheme)));
+        return dstd::Unexpected(
+            dstd::Error::from_format<"No file system for scheme: {}">(
+                dstd::Condition::InvalidArgument, scheme));
     }
     return found->second;
 }

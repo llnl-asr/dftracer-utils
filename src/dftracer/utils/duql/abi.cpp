@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -143,8 +144,8 @@ dftu_duql* dftu_duql_and(dftu_duql* a, dftu_duql* b) {
         dftu_duql_free(b);
         return nullptr;
     }
-    dftracer::utils::dstd::String s =
-        "(" + a->q.to_string() + " and " + b->q.to_string() + ")";
+    dftracer::utils::dstd::String s = dftracer::utils::dstd::fmt<"({} and {})">(
+        a->q.to_string(), b->q.to_string());
     dftu_duql_free(a);
     dftu_duql_free(b);
     return wrap_string(s);
@@ -156,8 +157,8 @@ dftu_duql* dftu_duql_or(dftu_duql* a, dftu_duql* b) {
         dftu_duql_free(b);
         return nullptr;
     }
-    dftracer::utils::dstd::String s =
-        "(" + a->q.to_string() + " or " + b->q.to_string() + ")";
+    dftracer::utils::dstd::String s = dftracer::utils::dstd::fmt<"({} or {})">(
+        a->q.to_string(), b->q.to_string());
     dftu_duql_free(a);
     dftu_duql_free(b);
     return wrap_string(s);
@@ -165,7 +166,8 @@ dftu_duql* dftu_duql_or(dftu_duql* a, dftu_duql* b) {
 
 dftu_duql* dftu_duql_not(dftu_duql* a) {
     if (!a) return nullptr;
-    dftracer::utils::dstd::String s = "not (" + a->q.to_string() + ")";
+    dftracer::utils::dstd::String s =
+        dftracer::utils::dstd::fmt<"not ({})">(a->q.to_string());
     dftu_duql_free(a);
     return wrap_string(s);
 }

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -75,8 +76,8 @@ dstd::Optional<dstd::String> read_scope(Store& store, const NamespaceSpec& spec,
 TEST_SUITE("store adopt") {
     TEST_CASE("adopt moves the data files and an open target sees them") {
         dftu_utils_test::ScopedTestDir root("store_adopt");
-        const dstd::String from = root.str() + "/from";
-        const dstd::String to = root.str() + "/to";
+        const dstd::String from = dstd::fmt<"{}/from">(root.str());
+        const dstd::String to = dstd::fmt<"{}/to">(root.str());
         const NamespaceSpec spec = spec_of("dftu.test.adopt");
 
         Store target = open_store(to);
@@ -105,8 +106,8 @@ TEST_SUITE("store adopt") {
 
     TEST_CASE("adopt of a folder that cannot be listed is an Io error") {
         dftu_utils_test::ScopedTestDir root("store_adopt_missing");
-        const dstd::String from = root.str() + "/absent";
-        const dstd::String to = root.str() + "/to";
+        const dstd::String from = dstd::fmt<"{}/absent">(root.str());
+        const dstd::String to = dstd::fmt<"{}/to">(root.str());
         auto moved = Store::adopt(sv(from), sv(to));
         REQUIRE_FALSE(moved.has_value());
         CHECK(moved.error().is(dstd::Condition::Io));

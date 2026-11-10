@@ -2,6 +2,7 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/kernels/order.h>
 #include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -56,9 +57,11 @@ ColumnView::ColumnView(const Series& column)
     type_ = column_.type();
     const auto kind = kind_of(type_);
     if (!kind)
-        dstd::fatal((dstd::String("column type '") + type_name(type_) +
-                     "' has no order; check ColumnView::supports first")
-                        .c_str());
+        dstd::fatal(
+            dstd::fmt<
+                "column type '{}' has no order; check ColumnView::supports "
+                "first">(type_name(type_))
+                .c_str());
     kind_ = *kind;
     physical_ = physical_type(type_);
     const dftu_series& h = *column_.handle();

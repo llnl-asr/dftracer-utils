@@ -9,6 +9,7 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/sketch.h>
 #include <dftracer/utils/dstd/algorithm.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -458,7 +459,7 @@ TEST_CASE("DataFrame group_by set_union sorts and joins distinct values") {
     const dstd::String sep(1, '\x1e');
     for (std::int64_t r = 0; r < 2; ++r) {
         if (key[r] == 1)
-            CHECK(out.string_at(r) == "posix" + sep + "stdio");
+            CHECK(out.string_at(r) == dstd::fmt<"posix{}stdio">(sep));
         else
             CHECK(out.string_at(r) == "mpi");
     }
@@ -473,8 +474,8 @@ TEST_CASE("group_agg argmax/sumsq/set_union merge and serialize round-trip") {
         const auto si = static_cast<std::size_t>(i);
         k[si] = i % 2;
         by[si] = (i * 37) % 500;
-        names[si] = "n" + dstd::to_string(i % 17);
-        tags[si] = "t" + dstd::to_string(i % 5);
+        names[si] = dstd::fmt<"n{}">(i % 17);
+        tags[si] = dstd::fmt<"t{}">(i % 5);
     }
     Series key = Series::flat_i64(k.data(), 2000);
     Series by_col = Series::flat_i64(by.data(), 2000);
@@ -538,7 +539,7 @@ TEST_CASE("group_agg_expr argmax/sumsq/set_union via the expression builders") {
             CHECK(g.column("sumsq_dur").data<double>()[r] ==
                   doctest::Approx(10.0 * 10 + 30.0 * 30 + 20.0 * 20));
             CHECK(g.column("tags").string_at(r) ==
-                  "p" + dstd::String(1, '\x1e') + "q");
+                  dstd::fmt<"p{}q">(dstd::String(1, '\x1e')));
         } else {
             CHECK(g.column("argmax_name").string_at(r) == "y");
             CHECK(g.column("sumsq_dur").data<double>()[r] ==
@@ -880,7 +881,7 @@ TEST_CASE(
         const auto u = static_cast<std::size_t>(i);
         a[u] = (i * 7919) % 5;
         c[u] = static_cast<std::int32_t>((i * 31) % 4) - 2;
-        words[u] = "w" + dstd::to_string((i * 13) % 6);
+        words[u] = dstd::fmt<"w{}">((i * 13) % 6);
         views[u] = words[u];
         id[u] = i;
         is_valid[u] = (i % 11) != 0;

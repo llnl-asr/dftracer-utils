@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -177,7 +178,7 @@ TEST_CASE("LineFilterUtility - Edge cases") {
         FilterableLine no_y{Line{very_long, 1}, contains_y};
         CHECK_FALSE(dftu_utils_test::ok((*filter)(no_y).get()).has_value());
 
-        dstd::String with_y = very_long + "y";
+        dstd::String with_y = dstd::fmt<"{}y">(very_long);
         FilterableLine has_y{Line{with_y, 1}, contains_y};
         CHECK(dftu_utils_test::ok((*filter)(has_y).get()).has_value());
     }

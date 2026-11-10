@@ -7,6 +7,7 @@
 #include <dftracer/utils/coro/async_generator.h>
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/file.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/fs/fs.h>
@@ -43,8 +44,9 @@ inline coro::AsyncGenerator<dstd::ByteView> read_binary_file(
     if (!found.has_value()) throw common::DFTUtilsException(found.error());
     if (!*found) {
         throw common::DFTUtilsException(
-            common::ErrorCode::NotFound,
-            common::str_cat("File does not exist: ", path.str()));
+            common::make_error<"File does not exist: {}">(
+                common::ErrorCode::NotFound, path.str())
+                .error());
     }
 
     const dstd::OpenOptions open_options;
@@ -52,8 +54,9 @@ inline coro::AsyncGenerator<dstd::ByteView> read_binary_file(
     auto opened = co_await std::move(opening);
     if (!opened) {
         throw common::DFTUtilsException(
-            common::ErrorCode::Io,
-            common::str_cat("Cannot open file: ", path.str()));
+            common::make_error<"Cannot open file: {}">(common::ErrorCode::Io,
+                                                       path.str())
+                .error());
     }
     const dstd::File file = std::move(*opened);
 
@@ -66,8 +69,9 @@ inline coro::AsyncGenerator<dstd::ByteView> read_binary_file(
         if (bytes_read == -EINTR) continue;
         if (bytes_read < 0) {
             throw common::DFTUtilsException(
-                common::ErrorCode::Io,
-                common::str_cat("Error reading file: ", path.str()));
+                common::make_error<"Error reading file: {}">(
+                    common::ErrorCode::Io, path.str())
+                    .error());
         }
 
         if (bytes_read == 0) break;

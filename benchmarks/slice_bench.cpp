@@ -47,6 +47,7 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -184,8 +185,7 @@ Series string_column(std::int64_t rows) {
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> values(
         static_cast<std::size_t>(rows));
     for (auto& v : values) {
-        v = "row-" + dftracer::utils::dstd::to_string(rng() % 1000000) + "-" +
-            dftracer::utils::dstd::to_string(rng() % 100);
+        v = dstd::fmt<"row-{}-{}">(rng() % 1000000, rng() % 100);
     }
     return Series::strings(values);
 }

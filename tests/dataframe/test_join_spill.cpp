@@ -7,6 +7,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/grace_join.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -83,9 +84,9 @@ dstd::Vector<dstd::String> rows_of(const DataFrame& f) {
     for (std::int64_t r = 0; r < f.num_rows(); ++r) {
         dstd::String row;
         for (const Series& c : cols)
-            row += (c.is_null(r) ? dstd::String("n")
-                                 : dstd::to_string(c.data<std::int64_t>()[r])) +
-                   ",";
+            row += dstd::fmt<"{},">(
+                (c.is_null(r) ? dstd::String("n")
+                              : dstd::to_string(c.data<std::int64_t>()[r])));
         out.push_back(row);
     }
     std::sort(out.begin(), out.end());
@@ -104,22 +105,21 @@ dstd::Vector<dstd::String> reference(const Table& l, const Table& r,
             any = true;
             matched[j] = 1;
             if (how == JoinHow::Semi || how == JoinHow::Anti) break;
-            out.push_back(text(l.key[i]) + "," + dstd::to_string(l.value[i]) +
-                          "," + text(r.key[j]) + "," +
-                          dstd::to_string(r.value[j]) + ",");
+            out.push_back(dstd::fmt<"{},{},{},{},">(
+                text(l.key[i]), l.value[i], text(r.key[j]), r.value[j]));
         }
         const dstd::String left =
-            text(l.key[i]) + "," + dstd::to_string(l.value[i]) + ",";
+            dstd::fmt<"{},{},">(text(l.key[i]), l.value[i]);
         if (how == JoinHow::Semi && any) out.push_back(left);
         if (how == JoinHow::Anti && !any) out.push_back(left);
         if (!any && (how == JoinHow::Left || how == JoinHow::Outer))
-            out.push_back(left + "n,n,");
+            out.push_back(dstd::fmt<"{}n,n,">(left));
     }
     if (how == JoinHow::Right || how == JoinHow::Outer)
         for (std::size_t j = 0; j < r.key.size(); ++j)
             if (!matched[j])
-                out.push_back("n,n," + text(r.key[j]) + "," +
-                              dstd::to_string(r.value[j]) + ",");
+                out.push_back(
+                    dstd::fmt<"n,n,{},{},">(text(r.key[j]), r.value[j]));
     std::sort(out.begin(), out.end());
     return out;
 }
@@ -164,13 +164,13 @@ dstd::Vector<dstd::String> nest_rows_of(const DataFrame& f) {
     const Series rv = rows.child(1).materialize();
     dstd::Vector<dstd::String> out;
     for (std::int64_t i = 0; i < f.num_rows(); ++i) {
-        dstd::String row =
+        dstd::String row = dstd::fmt<"{},{}:">(
             (lk.is_null(i) ? dstd::String("n")
-                           : dstd::to_string(lk.data<std::int64_t>()[i])) +
-            "," + dstd::to_string(lv.data<std::int64_t>()[i]) + ":";
+                           : dstd::to_string(lk.data<std::int64_t>()[i])),
+            lv.data<std::int64_t>()[i]);
         for (std::int32_t j = m.offsets()[i]; j < m.offsets()[i + 1]; ++j)
-            row += dstd::to_string(rk.data<std::int64_t>()[j]) + "=" +
-                   dstd::to_string(rv.data<std::int64_t>()[j]) + ";";
+            row += dstd::fmt<"{}={};">(rk.data<std::int64_t>()[j],
+                                       rv.data<std::int64_t>()[j]);
         out.push_back(row);
     }
     std::sort(out.begin(), out.end());
@@ -408,7 +408,7 @@ TEST_SUITE("join spill") {
         dstd::Vector<dstd::String> rv;
         for (int j = 0; j < 40; ++j) {
             rk.push_back(j);
-            rv.push_back("v" + dstd::to_string(j));
+            rv.push_back(dstd::fmt<"v{}">(j));
         }
         DataFrame l;
         l.names = {"lk"};
@@ -424,7 +424,7 @@ TEST_SUITE("join spill") {
         for (std::int64_t i = 0; i < out.num_rows(); ++i) {
             const std::int64_t key = k.data<std::int64_t>()[i];
             CHECK(v.is_null(i) == (key >= 40));
-            if (key < 40) CHECK(v.string_at(i) == "v" + dstd::to_string(key));
+            if (key < 40) CHECK(v.string_at(i) == dstd::fmt<"v{}">(key));
         }
     }
 

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
 #include <dftracer/utils/runtime/scheduler/watchdog.h>
@@ -177,9 +178,8 @@ bool Watchdog::check_global_timeout() {
             static_cast<long long>(elapsed_ms.count()),
             static_cast<long long>(global_timeout_.count()));
 
-        trigger_timeout(
-            "Global timeout after " + dstd::to_string(elapsed_ms.count()) +
-            " ms (limit: " + dstd::to_string(global_timeout_.count()) + " ms)");
+        trigger_timeout(dstd::fmt<"Global timeout after {} ms (limit: {} ms)">(
+            elapsed_ms.count(), global_timeout_.count()));
 
         return true;
     }

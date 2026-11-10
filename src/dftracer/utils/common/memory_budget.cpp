@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/budget.h>
@@ -78,13 +79,13 @@ MemoryBudgetAdvice memory_budget_advice(std::size_t required_bytes,
 dstd::String format_memory_budget_warning(const MemoryBudgetAdvice &advice) {
     if (advice.fits) return dstd::String();
     auto hb = [](std::size_t b) { return human_bytes(static_cast<double>(b)); };
-    return "workload needs ~" + hb(advice.peak_bytes) + " at peak (" +
-           dstd::to_string(PEAK_MEMORY_FACTOR) + "x the ~" +
-           hb(advice.required_bytes) + " aggregated size); ~" +
-           hb(advice.available_bytes) + " available. Increase memory to ~" +
-           hb(advice.peak_bytes) +
-           ", or split across >=" + dstd::to_string(advice.suggested_nodes) +
-           " nodes.";
+    return dstd::fmt<
+        "workload needs ~{} at peak ({}x the ~{} aggregated "
+        "size); ~{} available. Increase memory to ~{}, or "
+        "split across >={} nodes.">(
+        hb(advice.peak_bytes), PEAK_MEMORY_FACTOR, hb(advice.required_bytes),
+        hb(advice.available_bytes), hb(advice.peak_bytes),
+        advice.suggested_nodes);
 }
 
 }  // namespace dftracer::utils::common

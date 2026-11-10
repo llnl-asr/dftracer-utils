@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -103,7 +104,7 @@ ExprPtr make(ExprNode node, Span span) {
 }
 
 ExprPtr clone(const Expr& e) {
-    auto tree = syntax::parse("where " + syntax::to_text(e));
+    auto tree = syntax::parse(dstd::fmt<"where {}">(syntax::to_text(e)));
     return std::move(
         std::get<Where>(tree->pipeline->stages.front().node).condition);
 }
@@ -193,8 +194,8 @@ class Expander {
             }
         }
         if (found.empty())
-            return fail(span,
-                        "no field matches the pattern '" + join(want) + "'");
+            return fail(span, dstd::fmt<"no field matches the pattern '{}'">(
+                                  join(want)));
         dstd::Vector<Path> out;
         for (const auto& s : found) out.push_back(path_of(s));
         return out;

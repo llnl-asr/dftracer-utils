@@ -4,6 +4,7 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/agg_expr.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -73,7 +74,7 @@ TEST_CASE("set_union of a list of integers is the union of the elements") {
     Series v = Series::list({0, 2, 4, 5}, Series::flat_i64(elems.data(), 5));
     DataFrame r = dftu_utils_test::ok(set_union_of(v, {"a", "a", "b"}));
     REQUIRE(r.num_rows() == 2);
-    CHECK(cell(r, 0) == "1" + SEP + "2" + SEP + "3");
+    CHECK(cell(r, 0) == dstd::fmt<"1{}2{}3">(SEP, SEP));
     CHECK(cell(r, 1) == "9");
 }
 
@@ -83,7 +84,7 @@ TEST_CASE("set_union of a list of strings is the union of the elements") {
         Series::strings(dstd::Vector<dstd::String>{"p", "q", "q", "r"}));
     DataFrame r = dftu_utils_test::ok(set_union_of(v, {"a", "a", "b"}));
     REQUIRE(r.num_rows() == 2);
-    CHECK(cell(r, 0) == "p" + SEP + "q");
+    CHECK(cell(r, 0) == dstd::fmt<"p{}q">(SEP));
     CHECK(cell(r, 1) == "r");
 }
 
@@ -124,7 +125,7 @@ TEST_CASE("a float keeps every digit") {
     Series v = Series::flat_f64(xs.data(), 3);
     DataFrame r = dftu_utils_test::ok(set_union_of(v, {"a", "a", "b"}));
     REQUIRE(r.num_rows() == 2);
-    CHECK(cell(r, 0) == "0.1234567891" + SEP + "0.5");
+    CHECK(cell(r, 0) == dstd::fmt<"0.1234567891{}0.5">(SEP));
     CHECK(cell(r, 1) == "0.5");
 }
 
@@ -132,13 +133,13 @@ TEST_CASE("an empty string is a value") {
     Series v = Series::strings(dstd::Vector<dstd::String>{"x", "", ""});
     DataFrame r = dftu_utils_test::ok(set_union_of(v, {"a", "a", "b"}));
     REQUIRE(r.num_rows() == 2);
-    CHECK(cell(r, 0) == SEP + "x");  // "" sorts before "x"
+    CHECK(cell(r, 0) == dstd::fmt<"{}x">(SEP));  // "" sorts before "x"
     CHECK(cell(r, 1) == "");
 }
 
 TEST_CASE("a string holding the separator is refused") {
-    Series v =
-        Series::strings(dstd::Vector<dstd::String>{"x" + SEP + "y", "z"});
+    Series v = Series::strings(
+        dstd::Vector<dstd::String>{dstd::fmt<"x{}y">(SEP), "z"});
     CHECK(refusal(set_union_of(v, {"a", "a"})).find("separator") !=
           dstd::String::npos);
 }
@@ -171,15 +172,15 @@ TEST_CASE("typed set_union orders integers by value, not by text") {
 }
 
 TEST_CASE("typed set_union keeps a string holding the separator") {
-    Series c =
-        Series::strings(dstd::Vector<dstd::String>{"b" + SEP + "c", "a", "a"});
+    Series c = Series::strings(
+        dstd::Vector<dstd::String>{dstd::fmt<"b{}c">(SEP), "a", "a"});
     DataFrame r = dftu_utils_test::ok(typed_of(c, {"a", "a", "a"}));
     REQUIRE(r.num_rows() == 1);
     const Series& u = r.column("u");
     CHECK(u.child(0).type() == dataframe::TypeId::String);
     CHECK(u.offsets()[1] == 2);
     CHECK(u.child(0).string_at(0) == "a");
-    CHECK(u.child(0).string_at(1) == "b" + SEP + "c");
+    CHECK(u.child(0).string_at(1) == dstd::fmt<"b{}c">(SEP));
 }
 
 TEST_CASE("typed set_union of floats, unsigned integers and bools") {
@@ -237,7 +238,7 @@ TEST_CASE("the text form is unchanged and refuses the separator") {
     Series c = Series::flat_i64(v.data(), 2);
     DataFrame r = dftu_utils_test::ok(set_union_of(c, {"a", "a"}));
     CHECK(r.column("u").type() == dataframe::TypeId::String);
-    CHECK(cell(r, 0) == "10" + SEP + "9");
+    CHECK(cell(r, 0) == dstd::fmt<"10{}9">(SEP));
 }
 
 TEST_CASE("typed set_union merges with a serialized partial") {

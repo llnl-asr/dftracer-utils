@@ -4,6 +4,7 @@
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -86,9 +87,8 @@ struct Input {
         key_valid.assign(static_cast<std::size_t>((rows + 7) / 8), 0);
         for (std::int64_t i = 0; i < rows; ++i) {
             const auto p = static_cast<std::int64_t>(rng() % procs);
-            key_text[i] =
-                "app#host#" + dstd::to_string(p) + "#" + dstd::to_string(p);
-            short_text[i] = "k" + dstd::to_string((i * 7919) % groups);
+            key_text[i] = dstd::fmt<"app#host#{}#{}">(p, p);
+            short_text[i] = dstd::fmt<"k{}">((i * 7919) % groups);
             time[i] = static_cast<std::int64_t>(rng() % 10);
             bigkey[i] = static_cast<std::int64_t>(rng() % groups) * 1000003;
             x[i] = static_cast<double>(rng() % 100000) / 7.0;
@@ -96,7 +96,7 @@ struct Input {
                 x_valid[i >> 3] |= static_cast<std::uint8_t>(1U << (i & 7));
             u[i] = static_cast<double>(i);
             y[i] = static_cast<std::int64_t>(rng() % 1000) - 500;
-            sval[i] = "v" + dstd::to_string(rng() % 50);
+            sval[i] = dstd::fmt<"v{}">(rng() % 50);
             if (rng() % 20 != 0)
                 key_valid[i >> 3] |= static_cast<std::uint8_t>(1U << (i & 7));
         }
@@ -253,12 +253,12 @@ bool bit_equal(const DataFrame& a, const DataFrame& b, dstd::String* why) {
         const Series& p = a.columns[c];
         const Series& q = b.columns[c];
         if (p.type() != q.type()) {
-            *why = a.names[c] + " type";
+            *why = dstd::fmt<"{} type">(a.names[c]);
             return false;
         }
         for (std::int64_t i = 0; i < p.length(); ++i) {
             if (p.is_null(i) != q.is_null(i)) {
-                *why = a.names[c] + " validity at " + dstd::to_string(i);
+                *why = dstd::fmt<"{} validity at {}">(a.names[c], i);
                 return false;
             }
             if (p.is_null(i)) continue;
@@ -284,7 +284,7 @@ bool bit_equal(const DataFrame& a, const DataFrame& b, dstd::String* why) {
                     break;
             }
             if (!same) {
-                *why = a.names[c] + " at row " + dstd::to_string(i);
+                *why = dstd::fmt<"{} at row {}">(a.names[c], i);
                 return false;
             }
         }

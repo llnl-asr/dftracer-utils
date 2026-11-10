@@ -4,6 +4,7 @@
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/expected.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -108,7 +109,7 @@ int child_writes_own_copy(Store& inherited, const Namespace& ns,
     if (const int failed = check_inherited(inherited, ns, parent_scope)) {
         return failed;
     }
-    const dstd::String empty = dir + "/nothing_to_adopt";
+    const dstd::String empty = dstd::fmt<"{}/nothing_to_adopt">(dir);
     auto adopted = Store::adopt(dstd::StringView(empty.data(), empty.size()),
                                 dstd::StringView(dir.data(), dir.size()));
     if (adopted && *adopted != 0) return 28;
@@ -137,7 +138,7 @@ int wait_for(pid_t pid) {
     return WEXITSTATUS(status);
 }
 
-dstd::String key_of(int index) { return common::str_cat("artifact-", index); }
+dstd::String key_of(int index) { return dstd::fmt<"artifact-{}">(index); }
 
 /// Writes its own share of the keys and each key that all processes share.
 int child_writes_keys(const dstd::String& dir, const NamespaceSpec& made,

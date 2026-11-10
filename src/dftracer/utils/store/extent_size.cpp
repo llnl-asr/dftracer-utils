@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/filesystem_info.h>
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/store/extent_size.h>
@@ -14,17 +15,15 @@ namespace {
 constexpr std::uint64_t EXTENT_ALIGNMENT = 4096;
 
 dstd::Unexpected<dstd::Error> override_error(dstd::StringView reason) {
-    return dstd::Unexpected<dstd::Error>(dstd::Error(
+    return dstd::Unexpected<dstd::Error>(dstd::Error::from_format<"{} {}">(
         dstd::Condition::InvalidArgument,
-        common::str_cat(common::constants::store::STORE_EXTENT_BYTES_ENV, " ",
-                        reason)));
+        common::constants::store::STORE_EXTENT_BYTES_ENV, reason));
 }
 
 dstd::Unexpected<dstd::Error> override_range_error() {
-    return override_error(
-        common::str_cat("must be a multiple of ", EXTENT_ALIGNMENT, " in [",
-                        common::constants::store::STORE_MIN_EXTENT_BYTES, ", ",
-                        common::constants::store::STORE_MAX_EXTENT_BYTES, "]"));
+    return override_error(dstd::fmt<"must be a multiple of {} in [{}, {}]">(
+        EXTENT_ALIGNMENT, common::constants::store::STORE_MIN_EXTENT_BYTES,
+        common::constants::store::STORE_MAX_EXTENT_BYTES));
 }
 
 }  // namespace

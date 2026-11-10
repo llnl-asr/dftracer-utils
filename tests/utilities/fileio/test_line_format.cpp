@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
@@ -179,9 +180,8 @@ TEST_CASE("line_format - writer output equals hand-built lines") {
     REQUIRE(lf.has_value());
     dstd::String want;
     for (int i = 0; i < 500; ++i)
-        want += "{\"id\":" + dstd::to_string(i) + ",\"n\":\"n\\\"" +
-                dstd::to_string(i) + "\",\"v\":" + (i % 2 ? "true" : "false") +
-                "}\n";
+        want += dstd::fmt<"{\"id\":{},\"n\":\"n\\\"{}\",\"v\":{}}\n">(
+            i, i, (i % 2 ? "true" : "false"));
 
     bool bad_count = false, null_arg = false, null_mut_arg = false;
     dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
@@ -190,7 +190,7 @@ TEST_CASE("line_format - writer output equals hand-built lines") {
         auto w = co_await GzipLineWriter::open(p1, std::move(o));
         REQUIRE(w.has_value());
         for (int i = 0; i < 500; ++i) {
-            const dstd::String n = "n\"" + dstd::to_string(i);
+            const dstd::String n = dstd::fmt<"n\"{}">(i);
             if (i % 2) {
                 REQUIRE(co_await w->append_json<R"({"id":{},"n":"{}","v":{}})">(
                     i, n, true));
@@ -218,7 +218,7 @@ TEST_CASE("line_format - writer output equals hand-built lines") {
         auto pr = wu->producer();
         REQUIRE(pr.has_value());
         for (int i = 0; i < 500; ++i) {
-            const dstd::String n = "n\"" + dstd::to_string(i);
+            const dstd::String n = dstd::fmt<"n\"{}">(i);
             REQUIRE(co_await pr->append_json(*lf, i, n, i % 2 != 0));
         }
         REQUIRE(co_await pr->flush());

@@ -5,6 +5,7 @@
 #include <dftracer/utils/coro/stop_token.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/time.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/map.h>
@@ -66,8 +67,7 @@ bool has_output(const dstd::String& path) {
 }
 
 dstd::String line(std::size_t i, std::size_t pad = 0) {
-    return "{\"id\":" + dstd::to_string(i) + ",\"p\":\"" +
-           dstd::String(pad, 'x') + "\"}\n";
+    return dstd::fmt<"{\"id\":{},\"p\":\"{}\"}\n">(i, dstd::String(pad, 'x'));
 }
 
 struct Written {
@@ -521,7 +521,8 @@ TEST_CASE("GzipLineWriter - close(tail) without a newline") {
         REQUIRE(s.has_value());
         CHECK(s->uc_bytes == all.size() + 20);
     });
-    CHECK(gunzip_all(dstd::String(path.str())) == all + "tail-without-newline");
+    CHECK(gunzip_all(dstd::String(path.str())) ==
+          dstd::fmt<"{}tail-without-newline">(all));
     dstd::fs::remove(path).discard();
 
     // Only a tail: it forms its own member.
@@ -558,8 +559,7 @@ TEST_CASE("GzipLineWriter - named parts, header, footer, on_part") {
     o.part_header = "[\n";
     o.part_footer = "\n]\n";
     o.part_name = [&](std::size_t i) {
-        return dstd::String(
-            (dir / ("chunk" + dstd::to_string(i) + ".pfw.gz")).str());
+        return dstd::String((dir / (dstd::fmt<"chunk{}.pfw.gz">(i))).str());
     };
     o.on_part = [&](std::size_t p, dstd::StringView path, std::uint64_t uc,
                     std::uint64_t lines) {
@@ -575,8 +575,7 @@ TEST_CASE("GzipLineWriter - named parts, header, footer, on_part") {
     std::uint64_t total_lines = 0;
     for (std::size_t p = 0; p < parts.size(); ++p) {
         CHECK(parts[p].part == p);
-        CHECK(parts[p].path ==
-              (dir / ("chunk" + dstd::to_string(p) + ".pfw.gz")).str());
+        CHECK(parts[p].path == (dir / (dstd::fmt<"chunk{}.pfw.gz">(p))).str());
         const dstd::String file = slurp(parts[p].path);
         const dstd::String text = gunzip_all(parts[p].path);
         REQUIRE(text.size() == parts[p].uc + 5);
@@ -810,7 +809,8 @@ TEST_CASE("GzipLineWriter - producers fill their own members") {
         return {};
     };
     auto mk = [](std::size_t p, std::size_t i) {
-        return dstd::String(1, static_cast<char>('A' + p)) + line(i, i % 30);
+        return dstd::fmt<"{}{}">(dstd::String(1, static_cast<char>('A' + p)),
+                                 line(i, i % 30));
     };
     dstd::MultiSet<dstd::String> expect;
     for (std::size_t p = 0; p < PRODUCERS; ++p)

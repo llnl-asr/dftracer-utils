@@ -6,6 +6,7 @@
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
@@ -62,9 +63,9 @@ class StreamingFileWriterUtility {
                 throw common::DFTUtilsException(found.error());
             if (!*found) {
                 throw common::DFTUtilsException(
-                    common::ErrorCode::NotFound,
-                    common::str_cat("Parent directory does not exist: ",
-                                    parent.str()));
+                    common::make_error<"Parent directory does not exist: {}">(
+                        common::ErrorCode::NotFound, parent.str())
+                        .error());
             }
         }
 
@@ -72,8 +73,9 @@ class StreamingFileWriterUtility {
         file_.reset(std::fopen(path_.c_str(), append_ ? "ab" : "wb"));
         if (!file_) {
             throw common::DFTUtilsException(
-                common::ErrorCode::Io,
-                common::str_cat("Cannot open file for writing: ", path_.str()));
+                common::make_error<"Cannot open file for writing: {}">(
+                    common::ErrorCode::Io, path_.str())
+                    .error());
         }
 
         opened_ = true;
@@ -125,8 +127,9 @@ class StreamingFileWriterUtility {
         if (std::fwrite(chunk.as<char>(), 1, chunk.size(), file_.get()) !=
             chunk.size()) {
             throw common::DFTUtilsException(
-                common::ErrorCode::Io,
-                common::str_cat("Error writing to file: ", path_.str()));
+                common::make_error<"Error writing to file: {}">(
+                    common::ErrorCode::Io, path_.str())
+                    .error());
         }
 
         total_bytes_ += chunk.size();

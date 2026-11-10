@@ -4,6 +4,7 @@
 #include <dftracer/utils/dstd/algorithm.h>
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -742,8 +743,9 @@ Value table_value(const TLookup& l, const LookupTable& t, std::int64_t r) {
     const auto& c = t.cells[static_cast<std::size_t>(r)];
     if (!c) {
         l.slot->failure.set(lookup_error(
-            "View::duql a scan filter reads a list or object column of '" +
-            t.name + "'; read it in a stage after the scan filter"));
+            dstd::fmt<"View::duql a scan filter reads a list or object "
+                      "column of '{}'; read it in a stage after the scan "
+                      "filter">(t.name)));
         return VNull{};
     }
     return of_cell(*c);
@@ -805,7 +807,8 @@ Value slice(const Value& v, const Value& from,
         if (i >= *b && i < *e) append_element(out, el);
         ++i;
     }
-    return parsed(out + "]");
+    out += ']';
+    return parsed(out);
 }
 
 Value flatten(const Value& v) {
@@ -820,7 +823,8 @@ Value flatten(const Value& v) {
         }
         for (auto x : inner) append_element(out, x);
     }
-    return parsed(out + "]");
+    out += ']';
+    return parsed(out);
 }
 
 // The keys or the values of an object, in the byte order of the keys.
@@ -844,7 +848,8 @@ Value members(const Value& v, bool keys) {
         json::append_json_escaped(out, k);
         out += '"';
     }
-    return parsed(out + "]");
+    out += ']';
+    return parsed(out);
 }
 
 Value parse_json(const Value& v) {
@@ -871,7 +876,8 @@ Value split(const Value& v, const Value& sep) {
         if (hit == dstd::StringView::npos) break;
         at = hit + p->size();
     }
-    return parsed(out + "]");
+    out += ']';
+    return parsed(out);
 }
 
 Value index_of(const Value& v, const Value& x) {
@@ -905,7 +911,8 @@ Value sort_array(const Value& v) {
     for (const auto& p : present) append_element(out, p.second);
     for (std::size_t i = 0; i < arr.size() - present.size(); ++i)
         out += out.size() > 1 ? ",null" : "null";
-    return parsed(out + "]");
+    out += ']';
+    return parsed(out);
 }
 
 bool same(simdjson::dom::element a, simdjson::dom::element b) {
@@ -936,7 +943,8 @@ Value unique(const Value& v) {
         kept.push_back(el);
         append_element(out, el);
     }
-    return parsed(out + "]");
+    out += ']';
+    return parsed(out);
 }
 
 Value join(const Value& v, const Value& sep) {
@@ -1013,7 +1021,8 @@ class TermEval {
             const auto t = text_of((*this)(*item), true);
             out += t ? *t : "null";
         }
-        return parsed(out + "]");
+        out += ']';
+        return parsed(out);
     }
 
     // any: YES when some element is YES, NO when every one is NO; all: NO
@@ -1474,7 +1483,7 @@ struct JsonRecord {
     JsonValue lookup(const dstd::String& path) const {
         JsonValue v = event.at(path);
         if (args_fallback && !v.exists() && !common::has_args_prefix(path))
-            v = event.at("args." + path);
+            v = event.at(dstd::fmt<"args.{}">(path));
         return v;
     }
 

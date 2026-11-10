@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/memory/detail/heap.h>
 #include <pthread.h>
@@ -117,9 +118,8 @@ int Thread::create(void (*run)(void*), void* arg,
 }
 
 Error Thread::make_error(int rc) {
-    String message("cannot create a thread: ");
-    message.append(std::strerror(rc));
-    return Error(Condition::Internal, message);
+    return Error::from_format<"cannot create a thread: {}">(Condition::Internal,
+                                                            std::strerror(rc));
 }
 
 void Thread::launch(void (*run)(void*), void* arg, std::size_t stack_size) {

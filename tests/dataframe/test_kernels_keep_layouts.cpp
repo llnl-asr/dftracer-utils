@@ -15,6 +15,7 @@
 #include <dftracer/utils/dataframe/mask.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dstd/algorithm.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/span.h>
@@ -199,9 +200,9 @@ dstd::String truth_of(const Series& m) {
 dstd::String ints_of(const Series& m) {
     dstd::String out;
     for (std::int64_t i = 0; i < m.length(); ++i)
-        out += (m.is_null(i) ? dstd::String("N")
-                             : dstd::to_string(m.data<std::int64_t>()[i])) +
-               ",";
+        out += dstd::fmt<"{},">(
+            (m.is_null(i) ? dstd::String("N")
+                          : dstd::to_string(m.data<std::int64_t>()[i])));
     return out;
 }
 
@@ -535,21 +536,22 @@ TEST_SUITE("kernels keep layouts") {
 
     TEST_CASE("in over every layout equals the flat path") {
         dstd::Vector<dstd::String> lits;
-        for (int i = 0; i < 18; ++i) lits.push_back("lit" + dstd::to_string(i));
+        for (int i = 0; i < 18; ++i) lits.push_back(dstd::fmt<"lit{}">(i));
         lits.push_back("read");
         lits.push_back("a name of exactly 16");
         for (const std::size_t n :
              {std::size_t{1}, std::size_t{2}, lits.size()}) {
-            dstd::String list = "\"" + lits[lits.size() - 1] + "\"";
+            dstd::String list = dstd::fmt<"\"{}\"">(lits[lits.size() - 1]);
             if (n == 1) list = "\"read\"";
             if (n == 2) list = "\"read\", \"write\"";
             if (n == lits.size()) {
                 list.clear();
                 for (const dstd::String& l : lits)
-                    list += (list.empty() ? "" : ", ") + ("\"" + l + "\"");
+                    list +=
+                        (list.empty() ? "" : ", ") + (dstd::fmt<"\"{}\"">(l));
             }
             for (const char* head : {"name in [", "name not in ["}) {
-                const dstd::String q = dstd::String(head) + list + "]";
+                const dstd::String q = dstd::fmt<"{}{}]">(head, list);
                 CAPTURE(q);
                 for (const Case& c : cases()) {
                     CAPTURE(c.name);
@@ -587,9 +589,9 @@ Frame scale_frame(bool long_keys) {
         if (g % 97 == 0)
             f.keys.emplace_back();
         else
-            f.keys.emplace_back(
-                (long_keys ? "a group key longer than sixteen bytes " : "k") +
-                dstd::to_string(g));
+            f.keys.emplace_back(dstd::fmt<"{}{}">(
+                (long_keys ? "a group key longer than sixteen bytes " : "k"),
+                g));
         f.a.push_back(i % 1000);
         f.b.push_back((i * 31) % 977);
         f.c.push_back(i % 13);
@@ -684,7 +686,7 @@ TEST_SUITE("kernels keep layouts: group-by drivers and size checks") {
         constexpr std::size_t N = 100000;
         constexpr std::size_t DISTINCT = 37;
         auto text = [](std::size_t j) {
-            dstd::String t = "name_" + dstd::to_string((j * 7919) % 1000);
+            dstd::String t = dstd::fmt<"name_{}">((j * 7919) % 1000);
             if (j % 5 == 0) t += " with a tail longer than twelve bytes";
             return t;
         };
@@ -740,10 +742,9 @@ TEST_SUITE("kernels keep layouts: group-by drivers and size checks") {
         keys.push_back({"view", view_of(rows), rows});
         Rows unique(N);
         for (std::size_t i = 0; i < N; ++i)
-            unique[i] = i % 13 == 0 ? Row()
-                        : i % 50 == 0
-                            ? Row("duplicated")
-                            : Row("u" + dstd::to_string((i * 7919) % N));
+            unique[i] = i % 13 == 0   ? Row()
+                        : i % 50 == 0 ? Row("duplicated")
+                                      : Row(dstd::fmt<"u{}">((i * 7919) % N));
         keys.push_back({"view mostly unique", view_of(unique), unique});
         keys.push_back({"selection over flat",
                         selection_over(flat_of(rows), sel), pick(rows, sel)});

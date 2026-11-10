@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
@@ -478,11 +479,10 @@ TEST_SUITE("store extent codec") {
         dstd::Vector<std::size_t> sizes;
         std::mt19937_64 rng(11);
         const auto line = [&rng]() {
-            return "{\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":" +
-                   dstd::to_string(rng() % 4096) +
-                   ",\"file\":\"/p/lustre/run/" + dstd::to_string(rng() % 97) +
-                   "/data.h5\",\"size\":" + dstd::to_string(rng() % 65536) +
-                   "}\n";
+            return dstd::fmt<
+                "{\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":{},\"file\":\"/p/"
+                "lustre/run/{}/data.h5\",\"size\":{}}\n">(
+                rng() % 4096, rng() % 97, rng() % 65536);
         };
         for (int sample = 0; sample < 256; ++sample) {
             const std::size_t before = samples.size();

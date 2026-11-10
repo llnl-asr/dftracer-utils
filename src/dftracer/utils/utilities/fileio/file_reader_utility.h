@@ -5,6 +5,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/utilities/text/shared.h>
@@ -42,22 +43,25 @@ class FileReaderUtility {
         if (!found) {
             if (found.error().is(dstd::Condition::NotFound)) {
                 throw common::DFTUtilsException(
-                    common::ErrorCode::NotFound,
-                    common::str_cat("File does not exist: ", input.str()));
+                    common::make_error<"File does not exist: {}">(
+                        common::ErrorCode::NotFound, input.str())
+                        .error());
             }
             throw common::DFTUtilsException(found.error());
         }
         if (found->kind != dstd::fs::FileKind::File) {
             throw common::DFTUtilsException(
-                common::ErrorCode::Io,
-                common::str_cat("Path is not a regular file: ", input.str()));
+                common::make_error<"Path is not a regular file: {}">(
+                    common::ErrorCode::Io, input.str())
+                    .error());
         }
 
         auto content = dstd::fs::read_file(input.view());
         if (!content) {
             throw common::DFTUtilsException(
-                common::ErrorCode::Io,
-                common::str_cat("Cannot open file: ", input.str()));
+                common::make_error<"Cannot open file: {}">(
+                    common::ErrorCode::Io, input.str())
+                    .error());
         }
 
         co_return text::Text{std::move(*content)};

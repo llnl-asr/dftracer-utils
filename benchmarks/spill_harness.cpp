@@ -51,6 +51,7 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -622,9 +623,8 @@ double mib(std::uint64_t bytes) {
 }
 
 dftracer::utils::dstd::String budget_label(std::uint64_t budget) {
-    return budget >= GIB
-               ? dftracer::utils::dstd::to_string(budget / GIB) + " GiB"
-               : dftracer::utils::dstd::to_string(budget / MIB) + " MiB";
+    return budget >= GIB ? dftracer::utils::dstd::fmt<"{} GiB">(budget / GIB)
+                         : dftracer::utils::dstd::fmt<"{} MiB">(budget / MIB);
 }
 
 int drive(const dftracer::utils::dstd::String& self) {

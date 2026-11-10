@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/os.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -577,12 +578,7 @@ Expected<Path, Error> weakly_canonical(PathView path) {
         const StringView name = view.filename();
         // "." is the current directory, so a failure there ends the climb.
         if (name.empty() || name == ".") return Unexpected(resolved.error());
-        String grown(name);
-        if (!tail.empty()) {
-            grown.append("/");
-            grown.append(StringView(tail));
-        }
-        tail = std::move(grown);
+        tail = tail.empty() ? String(name) : fmt<"{}/{}">(name, tail);
         head = view.parent().str();
         if (head.empty()) head = ".";
     }

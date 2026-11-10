@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -26,7 +27,7 @@ class ShardedWriter final : public ParallelWriter {
         shard_offsets_.assign(worker_count, 0);
         per_worker_last_.assign(worker_count, dstd::nullopt);
         for (std::size_t i = 0; i < worker_count; ++i) {
-            shard_paths_[i] = base_path_ + ".shard_" + dstd::to_string(i) + ext;
+            shard_paths_[i] = dstd::fmt<"{}.shard_{}{}">(base_path_, i, ext);
             ssize_t fd = co_await ::dftracer::utils::runtime::io::open(
                 shard_paths_[i].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
             if (fd < 0) {

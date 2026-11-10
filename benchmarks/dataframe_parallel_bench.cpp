@@ -22,6 +22,7 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -411,8 +412,7 @@ int main(int argc, char** argv) {
         static_cast<std::size_t>(srows));
     for (std::int64_t i = 0; i < srows; ++i)
         str_vals[static_cast<std::size_t>(i)] =
-            "event_" + dftracer::utils::dstd::to_string(i % 97) + "_tag" +
-            dftracer::utils::dstd::to_string(i % 13);
+            dftracer::utils::dstd::fmt<"event_{}_tag{}">(i % 97, i % 13);
     Series str_col = Series::strings(str_vals);
 
     auto time_regex = [&](int reps) {
@@ -627,7 +627,7 @@ int main(int argc, char** argv) {
             static_cast<std::size_t>(drows));
         for (std::int64_t i = 0; i < drows; ++i)
             cats[static_cast<std::size_t>(i)] =
-                "c" + dftracer::utils::dstd::to_string(i % dgroups);
+                dftracer::utils::dstd::fmt<"c{}">(i % dgroups);
         dummy_df.columns.push_back(Series::strings(cats));
     }
     auto time_dummies = [&](int reps) {

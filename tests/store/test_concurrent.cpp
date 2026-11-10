@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/file.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -124,7 +125,7 @@ ScopeKey file_scope(const dstd::String& path) {
 }
 
 dstd::String scope_path(int index) {
-    return "/data/file-" + dstd::to_string(index) + ".dft";
+    return dstd::fmt<"/data/file-{}.dft">(index);
 }
 
 engine::WriterOptions store_options(std::uint32_t extent_size,
@@ -272,7 +273,7 @@ RowsByScope index_rows(const dstd::Vector<Row>& rows) {
 
 dstd::String batch_key(int index) {
     const dstd::String digits = dstd::to_string(index);
-    return "b" + dstd::String(3 - digits.size(), '0') + digits + "-k";
+    return dstd::fmt<"b{}{}-k">(dstd::String(3 - digits.size(), '0'), digits);
 }
 
 }  // namespace
@@ -302,15 +303,13 @@ TEST_CASE("many threads commit and one close keeps every key and every sum") {
         return scope_path((thread * 31 + batch * 7) % SCOPES);
     };
     const auto key_of = [](int thread, int batch, int key) {
-        return "t" + dstd::to_string(thread) + "-b" + dstd::to_string(batch) +
-               "-k" + dstd::to_string(key);
+        return dstd::fmt<"t{}-b{}-k{}">(thread, batch, key);
     };
     const auto value_of = [](const dstd::String& tag, int thread, int batch,
                              int key) {
-        return tag + "-" + dstd::to_string(thread) + "-" +
-               dstd::to_string(batch) + "-" + dstd::to_string(key);
+        return dstd::fmt<"{}-{}-{}-{}">(tag, thread, batch, key);
     };
-    const auto fold_key = [](int key) { return "m" + dstd::to_string(key); };
+    const auto fold_key = [](int key) { return dstd::fmt<"m{}">(key); };
 
     RowsByScope expected_a;
     RowsByScope expected_b;
@@ -418,9 +417,8 @@ TEST_CASE("a batch appears whole or not at all in a snapshot taken mid-write") {
                 Batch entries = writer->batch(space, scope, 0);
                 for (int k = 0; k < KEYS; ++k) {
                     const dstd::String key =
-                        batch_key(batch) + dstd::to_string(k);
-                    const dstd::String value =
-                        "v" + dstd::to_string(batch) + "-" + dstd::to_string(k);
+                        dstd::fmt<"{}{}">(batch_key(batch), k);
+                    const dstd::String value = dstd::fmt<"v{}-{}">(batch, k);
                     entries.put(view_of(key), view_of(value));
                 }
                 if (!commit_waiting(*writer, std::move(entries)).has_value()) {
@@ -500,8 +498,8 @@ TEST_CASE("flush makes a committed batch visible in a byte copy") {
 
     Batch entries = writer->batch(*created, scope, 0);
     for (int k = 0; k < 5; ++k) {
-        const dstd::String key = "k" + dstd::to_string(k);
-        const dstd::String value = "v" + dstd::to_string(k);
+        const dstd::String key = dstd::fmt<"k{}">(k);
+        const dstd::String value = dstd::fmt<"v{}">(k);
         entries.put(view_of(key), view_of(value));
     }
     REQUIRE(commit_waiting(*writer, std::move(entries)).has_value());
@@ -515,8 +513,8 @@ TEST_CASE("flush makes a committed batch visible in a byte copy") {
     REQUIRE(snapshot.has_value());
     REQUIRE(snapshot->state(spec, scope) == ScopeState::Ready);
     for (int k = 0; k < 5; ++k) {
-        const dstd::String key = "k" + dstd::to_string(k);
-        const dstd::String expected = "v" + dstd::to_string(k);
+        const dstd::String key = dstd::fmt<"k{}">(k);
+        const dstd::String expected = dstd::fmt<"v{}">(k);
         auto value = snapshot->get(spec, scope, view_of(key));
         REQUIRE(value.has_value());
         REQUIRE(value->has_value());
@@ -615,9 +613,8 @@ TEST_CASE("flush holds every batch committed before it under other threads") {
                    count < BACKGROUND_BATCHES) {
                 Batch entries = writer->batch(space, background_scope, 0);
                 for (int k = 0; k < KEYS; ++k) {
-                    const dstd::String key = "t" + dstd::to_string(t) + "-" +
-                                             dstd::to_string(count) + "-" +
-                                             dstd::to_string(k);
+                    const dstd::String key =
+                        dstd::fmt<"t{}-{}-{}">(t, count, k);
                     entries.put(view_of(key), view_of(value));
                 }
                 if (!commit_waiting(*writer, std::move(entries)).has_value()) {
@@ -632,7 +629,7 @@ TEST_CASE("flush holds every batch committed before it under other threads") {
     int missing = 0;
     int first_missing = -1;
     for (int round = 0; round < ROUNDS; ++round) {
-        const dstd::String key = "marker-" + dstd::to_string(round);
+        const dstd::String key = dstd::fmt<"marker-{}">(round);
         Batch marker = writer->batch(space, marker_scope, 0);
         marker.put(view_of(key), view_of(value));
         REQUIRE(commit_waiting(*writer, std::move(marker)).has_value());
@@ -666,8 +663,7 @@ TEST_CASE("every extent ref carries the sequence of the record that holds it") {
     for (int round = 0; round < ROUNDS; ++round) {
         Batch entries = writer->batch(*created, scope, 0);
         for (int k = 0; k < 3; ++k) {
-            const dstd::String key =
-                "r" + dstd::to_string(round) + "-" + dstd::to_string(k);
+            const dstd::String key = dstd::fmt<"r{}-{}">(round, k);
             entries.put(view_of(key), view_of(value));
         }
         REQUIRE(commit_waiting(*writer, std::move(entries)).has_value());
@@ -725,7 +721,7 @@ TEST_CASE(
 
     int extent = 0;
     const auto commit_extent = [&] {
-        const dstd::String key = "p" + dstd::to_string(extent);
+        const dstd::String key = dstd::fmt<"p{}">(extent);
         Batch entries = writer->batch(*created, scope, 0);
         entries.put(view_of(key), view_of(big_value));
         REQUIRE(commit_waiting(*writer, std::move(entries)).has_value());
@@ -1021,8 +1017,7 @@ TEST_CASE("drops and failures from many threads keep the generation rules") {
 
     const auto scope_of = [](int thread) { return scope_path(thread + 10); };
     const auto key_of = [](int thread, int round, int key) {
-        return "t" + dstd::to_string(thread) + "-r" + dstd::to_string(round) +
-               "-k" + dstd::to_string(key);
+        return dstd::fmt<"t{}-r{}-k{}">(thread, round, key);
     };
 
     std::atomic<bool> failed{false};
@@ -1118,7 +1113,7 @@ TEST_CASE("a writer destroyed without close drains its extent writes") {
         const dstd::String big_value(5000, 't');
         for (int i = 0; i < 64; ++i) {
             Batch entries = writer->batch(*created, scope, 0);
-            entries.put(view_of("k" + dstd::to_string(i)), view_of(big_value));
+            entries.put(view_of(dstd::fmt<"k{}">(i)), view_of(big_value));
             REQUIRE(commit_waiting(*writer, std::move(entries)).has_value());
         }
         Batch open_extent = writer->batch(*created, scope, 0);

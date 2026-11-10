@@ -11,6 +11,7 @@
 #include <dftracer/utils/dataframe/kernels/string_ops.h>  // str_pattern
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -493,9 +494,8 @@ dstd::Result<Expr> expr_format_time(const Expr& a,
     const dftracer::utils::dstd::StringView bad =
         common::invalid_time_format(fmt);
     if (!bad.empty())
-        return common::make_error(
-            common::ErrorCode::InvalidArgument,
-            "expr: invalid time format directive '" + dstd::String(bad) + "'");
+        return common::make_error<"expr: invalid time format directive '{}'">(
+            common::ErrorCode::InvalidArgument, bad);
     return make_time_node(ExprKind::FormatTime, 0, a, ns_per_unit, fmt);
 }
 Expr expr_str_slice(const Expr& a, std::int64_t start, std::int64_t len) {
@@ -644,11 +644,10 @@ namespace {
 dstd::String pattern_identity() {
     static const dstd::String seed = [] {
         std::random_device rd;
-        return dstd::to_string(rd()) + '.' + dstd::to_string(rd()) + '.' +
-               dstd::to_string(rd());
+        return dstd::fmt<"{}.{}.{}">(rd(), rd(), rd());
     }();
     static std::atomic<std::uint64_t> next{0};
-    return "pattern:" + seed + ':' + dstd::to_string(next++);
+    return dstd::fmt<"pattern:{}:{}">(seed, next++);
 }
 
 Expr pattern_node(
@@ -1162,10 +1161,11 @@ class Compiler {
                 Val a0 = compile(n->a.get());
                 if (is_unknown(a0)) return unknown_val();
                 if (!a0.is_scalar && !is_num_type(a0.type))
-                    return fail((dstd::String("expr: ") +
-                                 (fmt ? "format_time" : "date_part") +
-                                 " needs a time or integer operand, got " +
-                                 type_name(a0.type)));
+                    return fail(
+                        dstd::fmt<
+                            "expr: {} needs a time or integer operand, got {}">(
+                            (fmt ? "format_time" : "date_part"),
+                            type_name(a0.type)));
                 Val a = num(a0, fmt ? "format_time" : "date_part");
                 SlotOp op;
                 op.opcode = fmt ? OpFormatTime : OpDatePart;
@@ -1193,10 +1193,11 @@ class Compiler {
                 if (!n->values.valid())
                     return fail("expr: is_in needs a values column");
                 if (value_domain(a.type) != value_domain(n->values.type()))
-                    return fail((dstd::String("expr: is_in over a ") +
-                                 type_name(a.type) + " column needs " +
-                                 type_name(a.type) + " values, got " +
-                                 type_name(n->values.type())));
+                    return fail(
+                        dstd::fmt<
+                            "expr: is_in over a {} column needs {} values, got "
+                            "{}">(type_name(a.type), type_name(a.type),
+                                  type_name(n->values.type())));
                 SlotOp op;
                 op.opcode = OpIsIn;
                 op.a = a.slot;
@@ -1222,9 +1223,8 @@ class Compiler {
             case ExprKind::LitNull: {
                 const auto t = static_cast<TypeId>(n->i);
                 if (!is_num_type(t) && t != TypeId::Bool && t != TypeId::String)
-                    return fail(
-                        (dstd::String("expr: no null literal of type ") +
-                         type_name(t)));
+                    return fail(dstd::fmt<"expr: no null literal of type {}">(
+                        type_name(t)));
                 return col_val(emit(OpConstNull, -1, -1, n->i, {}), t);
             }
             case ExprKind::Arith: {
@@ -1457,8 +1457,8 @@ class Compiler {
                                            ? TypeId::Uint64
                                            : TypeId::Int64);
         if (!is_num_type(v.type))
-            return fail((dstd::String("expr: ") + who +
-                         " needs a numeric operand, got " + type_name(v.type)));
+            return fail(dstd::fmt<"expr: {} needs a numeric operand, got {}">(
+                who, type_name(v.type)));
         if (v.type == TypeId::Int64 || v.type == TypeId::Uint64 ||
             v.type == TypeId::Float64)
             return v;
@@ -1477,16 +1477,16 @@ class Compiler {
                         (is_text_type(a.type) && is_text_type(b.type)) ||
                         (a.type == TypeId::Bool && b.type == TypeId::Bool);
         if (!ok)
-            fail((dstd::String("expr: ") + who + " of " + type_name(a.type) +
-                  " and " + type_name(b.type) + " has no ordering"));
+            fail(dstd::fmt<"expr: {} of {} and {} has no ordering">(
+                who, type_name(a.type), type_name(b.type)));
     }
 
     TypeId common_type(const Val& a, const Val& b, const char* who) {
         if (is_num_type(a.type) && is_num_type(b.type))
             return promote(a.type, b.type);
         if (a.type != b.type) {
-            fail((dstd::String("expr: ") + who + " needs one type, got " +
-                  type_name(a.type) + " and " + type_name(b.type)));
+            fail(dstd::fmt<"expr: {} needs one type, got {} and {}">(
+                who, type_name(a.type), type_name(b.type)));
             return TypeId::Unknown;
         }
         return a.type;
@@ -1503,9 +1503,9 @@ class Compiler {
     DataType as_list(const Val& v, const char* who) {
         if (v.is_scalar || v.type != TypeId::List ||
             v.full.fields.size() != 1) {
-            fail((dstd::String("expr: ") + who +
-                  " needs a List column with a known element type, got " +
-                  type_name(v.is_scalar ? TypeId::Int64 : v.type)));
+            fail(dstd::fmt<"expr: {} needs a List column with a known element "
+                           "type, got {}">(
+                who, type_name(v.is_scalar ? TypeId::Int64 : v.type)));
             return scalar(TypeId::Unknown);
         }
         return v.full.fields.front().type;
@@ -1540,8 +1540,9 @@ class Compiler {
         const std::int64_t group = n->scalar.value.i;
         if (extract && (group < 0 || static_cast<std::uint64_t>(group) >
                                          duql::capture_count(*n->pattern)))
-            return fail(("expr: extract group " + dstd::to_string(group) +
-                         " is not in the pattern"));
+            return fail(
+                dstd::fmt<"expr: extract group {} is not in the pattern">(
+                    group));
         SlotOp op;
         op.opcode = extract   ? OpStrExtract
                     : replace ? OpStrRegexReplace
@@ -1561,8 +1562,8 @@ class Compiler {
         if (!is_num_type(a.type) && !is_text_type(a.type) &&
             a.type != TypeId::Bool)
             return fail(
-                (dstd::String("expr: convert needs a scalar operand, got ") +
-                 type_name(a.type)));
+                dstd::fmt<"expr: convert needs a scalar operand, got {}">(
+                    type_name(a.type)));
         const auto op = static_cast<ConvertOp>(n->i);
         if (op == ConvertOp::Int && a.type == TypeId::Int64) return a;
         if (op == ConvertOp::String && a.type == TypeId::String) return a;
@@ -1605,9 +1606,9 @@ class Compiler {
             const DataType elem = as_list(a0, "join");
             if (elem.id != TypeId::String)
                 return fail(
-                    (dstd::String("expr: join needs a List<String> column, got "
-                                  "List<") +
-                     type_name(elem.id) + ">"));
+                    dstd::fmt<
+                        "expr: join needs a List<String> column, got List<{}>">(
+                        type_name(elem.id)));
             return col_val(emit_str_fn(n, a0.slot, -1), TypeId::String);
         }
         if (fn == StrFn::Get && !a0.is_scalar && a0.type == TypeId::List) {
@@ -1684,8 +1685,7 @@ class Compiler {
 
     Val as_col(Val v, const char* who) {
         if (v.is_scalar)
-            return fail(
-                (dstd::String("expr: ") + who + " needs a column operand"));
+            return fail(dstd::fmt<"expr: {} needs a column operand">(who));
         return v;
     }
 
@@ -1696,9 +1696,8 @@ class Compiler {
         const bool ok =
             a.type == TypeId::String || (binary_ok && a.type == TypeId::Binary);
         if (!ok)
-            return fail((dstd::String("expr: ") + who + " needs a String" +
-                         (binary_ok ? " or Binary" : "") + " column, got " +
-                         type_name(a.type)));
+            return fail(dstd::fmt<"expr: {} needs a String{} column, got {}">(
+                who, (binary_ok ? " or Binary" : ""), type_name(a.type)));
         return a;
     }
 
@@ -1791,8 +1790,8 @@ class Compiler {
         Val c = as_col(c0, "select");
         if (c.type != TypeId::Bool)
             return fail(
-                (dstd::String("expr: select needs a Bool condition, got ") +
-                 type_name(c.type)));
+                dstd::fmt<"expr: select needs a Bool condition, got {}">(
+                    type_name(c.type)));
         if (a.is_scalar && b.is_scalar) {
             const bool f = a.scalar.kind == DFTU_SCALAR_TAG_F64 ||
                            b.scalar.kind == DFTU_SCALAR_TAG_F64;
@@ -2023,8 +2022,8 @@ Series const_column(TypeId t, const dftu_scalar& s, std::int64_t len,
         case TypeId::Map:
             break;
     }
-    error.set(dstd::String("expr: a literal cannot broadcast to a ") +
-              type_name(t) + " column");
+    error.set(dstd::fmt<"expr: a literal cannot broadcast to a {} column">(
+        type_name(t)));
     return {};
 }
 
@@ -3352,9 +3351,8 @@ Series str_fn_eval(const SlotOp& op, const Series& a, const Series* b,
                 dftu_series_compare(r.handle(), DFTU_CMP_EQ, minus_one)};
             if (miss.handle() && dftu_series_any(miss.handle()) != 0) {
                 error.set(
-                    dstd::String(fn == StrFn::Index ? "index" : "rindex") +
-                    ": substring '" + dstd::String(op.text) +
-                    "' not found in every row");
+                    dstd::fmt<"{}: substring '{}' not found in every row">(
+                        fn == StrFn::Index ? "index" : "rindex", op.text));
                 return Series{};
             }
             return r;

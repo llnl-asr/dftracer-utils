@@ -12,6 +12,7 @@
 #include <dftracer/utils/dataframe/internal/native_transform.h>
 #include <dftracer/utils/dataframe/lazy/frame_op.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -237,7 +238,7 @@ TEST_SUITE("output morsels") {
 
     TEST_CASE("unpivot of many value columns leaves in morsels of the share") {
         dstd::Vector<dstd::String> names = {"id"};
-        for (int c = 0; c < 10; ++c) names.push_back("v" + dstd::to_string(c));
+        for (int c = 0; c < 10; ++c) names.push_back(dstd::fmt<"v{}">(c));
         const dstd::Vector<dstd::String> vals(names.begin() + 1, names.end());
         const DataFrame df = ints(names, 4000, 97);
         const auto whole = morsels(df.lazy().unpivot({"id"}, vals));

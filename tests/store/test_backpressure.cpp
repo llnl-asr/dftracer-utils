@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/file.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/map.h>
@@ -134,7 +135,7 @@ ScopeKey file_scope(const dstd::String& path) {
 }
 
 dstd::String scope_path(int index) {
-    return "/data/backpressure-" + dstd::to_string(index) + ".dft";
+    return dstd::fmt<"/data/backpressure-{}.dft">(index);
 }
 
 /// Options that commit only when asked: neither the size nor the interval ever
@@ -214,9 +215,8 @@ Batch fold_batch(engine::Writer& writer, engine::NamespaceId space,
                  const ScopeKey& scope, std::int64_t value, std::size_t keys) {
     Batch batch = writer.batch(space, scope, 0);
     for (std::size_t k = 0; k < keys; ++k) {
-        const dstd::String key =
-            "m" + dstd::String(4 - dstd::to_string(k).size(), '0') +
-            dstd::to_string(k);
+        const dstd::String key = dstd::fmt<"m{}{}">(
+            dstd::String(4 - dstd::to_string(k).size(), '0'), k);
         const dstd::String bytes = i64_bytes(value);
         batch.fold(view_of(key), view_of(bytes));
     }
@@ -224,19 +224,17 @@ Batch fold_batch(engine::Writer& writer, engine::NamespaceId space,
 }
 
 dstd::String raw_key(int thread, int round, std::size_t k) {
-    return "t" + dstd::to_string(thread) + "-b" + dstd::to_string(round) +
-           "-k" + dstd::to_string(k);
+    return dstd::fmt<"t{}-b{}-k{}">(thread, round, k);
 }
 
 dstd::String raw_value(const dstd::String& tag, int thread, int round,
                        std::size_t k) {
-    return tag + "-" + dstd::to_string(thread) + "-" + dstd::to_string(round) +
-           "-" + dstd::to_string(k);
+    return dstd::fmt<"{}-{}-{}-{}">(tag, thread, round, k);
 }
 
 dstd::String fold_key(std::size_t k) {
-    return "m" + dstd::String(4 - dstd::to_string(k).size(), '0') +
-           dstd::to_string(k);
+    return dstd::fmt<"m{}{}">(dstd::String(4 - dstd::to_string(k).size(), '0'),
+                              k);
 }
 
 struct Row {
@@ -430,10 +428,10 @@ TEST_CASE("back pressure: a one extent quota holds one extent at a time") {
     const ScopeKey scope = file_scope(scope_path(0));
 
     const auto key_of = [](int batch, std::size_t k) {
-        return "q" + dstd::to_string(batch) + "-k" + dstd::to_string(k);
+        return dstd::fmt<"q{}-k{}">(batch, k);
     };
     const auto value_of = [](int batch, std::size_t k) {
-        return "v" + dstd::to_string(batch) + "-" + dstd::to_string(k);
+        return dstd::fmt<"v{}-{}">(batch, k);
     };
 
     RowsByScope expected;
@@ -514,8 +512,8 @@ TEST_CASE("back pressure: a Busy commit assigns no copy id or generation") {
     const auto one = [&](const ScopeKey& scope, const dstd::String& tag) {
         return raw_batch(
             *writer, space, scope, BUSY_KEYS, BUSY_VALUE_BYTES,
-            [&tag](std::size_t k) { return tag + "-k" + dstd::to_string(k); },
-            [&tag](std::size_t k) { return tag + "-" + dstd::to_string(k); });
+            [&tag](std::size_t k) { return dstd::fmt<"{}-k{}">(tag, k); },
+            [&tag](std::size_t k) { return dstd::fmt<"{}-{}">(tag, k); });
     };
 
     REQUIRE(writer->commit(one(first_scope, "first")).has_value());
@@ -554,9 +552,9 @@ TEST_CASE("back pressure: a Busy commit assigns no copy id or generation") {
     for (const ScopeKey& scope : {first_scope, refused_scope}) {
         const dstd::String tag = scope == first_scope ? "first" : "refused";
         for (std::size_t k = 0; k < BUSY_KEYS; ++k) {
-            const dstd::String key = tag + "-k" + dstd::to_string(k);
+            const dstd::String key = dstd::fmt<"{}-k{}">(tag, k);
             const dstd::String expected =
-                padded(tag + "-" + dstd::to_string(k), BUSY_VALUE_BYTES);
+                padded(dstd::fmt<"{}-{}">(tag, k), BUSY_VALUE_BYTES);
             auto value =
                 snapshot->get(put_spec("busy", 0), scope, view_of(key));
             REQUIRE(value.has_value());
@@ -583,12 +581,8 @@ TEST_CASE("back pressure: a batch larger than the quota is taken over it") {
     const engine::NamespaceId space = *created;
     const ScopeKey scope = file_scope(scope_path(0));
 
-    const auto key_of = [](std::size_t k) {
-        return "big-k" + dstd::to_string(k);
-    };
-    const auto value_of = [](std::size_t k) {
-        return "big-" + dstd::to_string(k);
-    };
+    const auto key_of = [](std::size_t k) { return dstd::fmt<"big-k{}">(k); };
+    const auto value_of = [](std::size_t k) { return dstd::fmt<"big-{}">(k); };
 
     // Nothing is held, so no write can free room: the batch is taken past the
     // quota rather than refused for a wait nobody can end.
@@ -667,12 +661,10 @@ TEST_CASE("back pressure: the held extent bytes are reserved in the pool") {
         return scope_path(thread % SCOPES);
     };
     const auto key_of = [](int thread, int batch, std::size_t k) {
-        return "t" + dstd::to_string(thread) + "-b" + dstd::to_string(batch) +
-               "-k" + dstd::to_string(k);
+        return dstd::fmt<"t{}-b{}-k{}">(thread, batch, k);
     };
     const auto value_of = [](int thread, int batch, std::size_t k) {
-        return "v" + dstd::to_string(thread) + "-" + dstd::to_string(batch) +
-               "-" + dstd::to_string(k);
+        return dstd::fmt<"v{}-{}-{}">(thread, batch, k);
     };
 
     RowsByScope expected;
@@ -772,10 +764,10 @@ TEST_CASE("back pressure: a pool that refuses every charge still completes") {
     const engine::NamespaceId space = *created;
     const ScopeKey scope = file_scope(scope_path(0));
     const auto key_of = [](int batch, std::size_t k) {
-        return "r" + dstd::to_string(batch) + "-k" + dstd::to_string(k);
+        return dstd::fmt<"r{}-k{}">(batch, k);
     };
     const auto value_of = [](int batch, std::size_t k) {
-        return "v" + dstd::to_string(batch) + "-" + dstd::to_string(k);
+        return dstd::fmt<"v{}-{}">(batch, k);
     };
 
     RowsByScope expected;
@@ -837,8 +829,8 @@ TEST_CASE("back pressure: a latched extent error ends space() and commit") {
     const auto one = [&](const dstd::String& tag) {
         return raw_batch(
             *writer, space, scope, RAW_KEYS, RAW_VALUE_BYTES,
-            [&tag](std::size_t k) { return tag + "-k" + dstd::to_string(k); },
-            [&tag](std::size_t k) { return tag + "-" + dstd::to_string(k); });
+            [&tag](std::size_t k) { return dstd::fmt<"{}-k{}">(tag, k); },
+            [&tag](std::size_t k) { return dstd::fmt<"{}-{}">(tag, k); });
     };
 
     REQUIRE(writer->commit(one("held")).has_value());
@@ -886,8 +878,8 @@ TEST_CASE(
     REQUIRE(writer
                 ->commit(raw_batch(
                     *writer, space, scope, RAW_KEYS, RAW_VALUE_BYTES,
-                    [](std::size_t k) { return "k" + dstd::to_string(k); },
-                    [](std::size_t k) { return "v" + dstd::to_string(k); }))
+                    [](std::size_t k) { return dstd::fmt<"k{}">(k); },
+                    [](std::size_t k) { return dstd::fmt<"v{}">(k); }))
                 .has_value());
     CHECK(engine::WriterTestHook::extents(*writer).held > 0);
 
@@ -932,21 +924,22 @@ TEST_CASE("back pressure: a pool limit below the quota refuses some charges") {
     dstd::Vector<engine::NamespaceId> spaces;
     for (int n = 0; n < NAMESPACES; ++n) {
         auto created =
-            writer->add_namespace(put_spec("limit-" + dstd::to_string(n), 0));
+            writer->add_namespace(put_spec(dstd::fmt<"limit-{}">(n), 0));
         REQUIRE(created.has_value());
         spaces.push_back(*created);
     }
     const ScopeKey scope = file_scope(scope_path(0));
     const auto key_of = [](int n, int s, std::size_t k) {
-        return "n" + dstd::to_string(n) + "-s" + dstd::to_string(s) + "-k" +
-               dstd::to_string(k);
+        return dstd::fmt<"n{}-s{}-k{}">(n, s, k);
     };
     const auto make = [&](int n, int s) {
         return raw_batch(
             *writer, spaces[static_cast<std::size_t>(n)], scope, RAW_KEYS,
             RAW_VALUE_BYTES,
             [&, n, s](std::size_t k) { return key_of(n, s, k); },
-            [&, n, s](std::size_t k) { return key_of(n, s, k) + "-v"; });
+            [&, n, s](std::size_t k) {
+                return dstd::fmt<"{}-v">(key_of(n, s, k));
+            });
     };
 
     int taken = 0;
@@ -1000,8 +993,8 @@ TEST_CASE("back pressure: a pool limit below the quota refuses some charges") {
     auto snapshot = engine::Snapshot::open(dir.str());
     REQUIRE(snapshot.has_value());
     for (int n = 0; n < NAMESPACES; ++n) {
-        auto cursor = snapshot->scan_all(
-            put_spec("limit-" + dstd::to_string(n), 0), {}, {});
+        auto cursor =
+            snapshot->scan_all(put_spec(dstd::fmt<"limit-{}">(n), 0), {}, {});
         CHECK(collect(cursor).size() == SEGMENTS_PER_NAMESPACE * RAW_KEYS);
     }
 }

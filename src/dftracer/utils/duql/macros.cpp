@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/map.h>
@@ -41,7 +42,7 @@ void set_span(ExprPtr& e, Span span) {
 
 // A copy of `e`: its canonical text parsed again.
 ExprPtr clone(const Expr& e) {
-    auto tree = syntax::parse("where " + syntax::to_text(e));
+    auto tree = syntax::parse(dstd::fmt<"where {}">(syntax::to_text(e)));
     if (!tree || !tree->pipeline || tree->pipeline->stages.empty())
         dstd::fatal("duql: a macro body does not print back",
                     syntax::to_text(e).c_str());
@@ -73,8 +74,9 @@ class Expander {
         const auto* expr_body =
             std::get_if<dstd::SharedPtr<const Expr>>(&m->body);
         if (!expr_body)
-            return fail(span, "macro '" + m->name +
-                                  "' is a pipeline; call it as a stage");
+            return fail(
+                span, dstd::fmt<"macro '{}' is a pipeline; call it as a stage">(
+                          m->name));
         ExprPtr body = clone(**expr_body);
         bind(body, *m, call->args);
         stack_.push_back(m->name);
@@ -102,12 +104,13 @@ class Expander {
             if (!body) {
                 if (!first) {
                     if (m)
-                        return fail(span,
-                                    "macro '" + m->name +
-                                        "' is an expression; write 'where " +
-                                        m->name + "(...)'");
-                    return fail(span, "Unknown stage or pipeline macro '" +
-                                          use->call.name + "'");
+                        return fail(
+                            span,
+                            dstd::fmt<"macro '{}' is an expression; write "
+                                      "'where {}(...)'">(m->name, m->name));
+                    return fail(
+                        span, dstd::fmt<"Unknown stage or pipeline macro '{}'">(
+                                  use->call.name));
                 }
                 auto e = dstd::make_unique<Expr>();
                 e->node = std::move(use->call);
@@ -186,23 +189,24 @@ class Expander {
 
     Status check(const Call& call, const Macro& m, Span span) const {
         if (builtin_(m.name))
-            return fail(span,
-                        "macro '" + m.name +
-                            "' has the name of a built-in function; rename it");
+            return fail(
+                span,
+                dstd::fmt<"macro '{}' has the name of a built-in function; "
+                          "rename it">(m.name));
         if (call.args.size() != m.params.size())
-            return fail(span, "macro '" + m.name + "' takes " +
-                                  dstd::int_text(m.params.size()) +
-                                  " argument(s), got " +
-                                  dstd::int_text(call.args.size()));
+            return fail(span,
+                        dstd::fmt<"macro '{}' takes {} argument(s), got {}">(
+                            m.name, m.params.size(), call.args.size()));
         for (const auto& a : call.args)
             if (!a.name.empty())
-                return fail(span, "macro '" + m.name +
-                                      "' takes no named argument '" + a.name +
-                                      "'");
+                return fail(
+                    span, dstd::fmt<"macro '{}' takes no named argument '{}'">(
+                              m.name, a.name));
         if (std::find(stack_.begin(), stack_.end(), m.name) != stack_.end()) {
             dstd::String cycle;
-            for (const auto& n : stack_) cycle += n + " -> ";
-            return fail(span, "macros call each other: " + cycle + m.name);
+            for (const auto& n : stack_) cycle += dstd::fmt<"{} -> ">(n);
+            return fail(
+                span, dstd::fmt<"macros call each other: {}{}">(cycle, m.name));
         }
         return {};
     }
@@ -269,37 +273,36 @@ dstd::Result<void> load_file(PathRegistry& r, dstd::PathView file) {
     const dstd::String origin(file.str());
     auto loaded = dstd::fs::read_file(file);
     if (!loaded)
-        return common::make_error(common::ErrorCode::Io,
-                                  "duql: cannot read macro file " + origin);
+        return common::make_error<"duql: cannot read macro file {}">(
+            common::ErrorCode::Io, origin);
     const dstd::String text = std::move(*loaded);
     auto tree = syntax::parse(text);
     if (!tree)
-        return common::make_error(
-            common::ErrorCode::InvalidArgument,
-            "duql macro file " + origin + ": " + tree.error().format());
+        return common::make_error<"duql macro file {}: {}">(
+            common::ErrorCode::InvalidArgument, origin, tree.error().format());
     if (tree->pipeline)
-        return common::make_error(
-            common::ErrorCode::InvalidArgument,
-            "duql macro file " + origin +
-                " holds a pipeline; it may hold only 'def' declarations");
+        return common::make_error<
+            "duql macro file {} holds a pipeline; it may hold "
+            "only 'def' declarations">(common::ErrorCode::InvalidArgument,
+                                       origin);
     for (const auto& d : tree->decls)
         if (!std::holds_alternative<Def>(d))
-            return common::make_error(common::ErrorCode::InvalidArgument,
-                                      "duql macro file " + origin +
-                                          " may hold only 'def' declarations");
+            return common::make_error<
+                "duql macro file {} may hold only 'def' declarations">(
+                common::ErrorCode::InvalidArgument, origin);
     dstd::Vector<Def> defs = take_defs(tree->decls);
     auto macros = macros_of(defs, text, origin);
     if (!macros)
-        return common::make_error(
-            common::ErrorCode::InvalidArgument,
-            "duql macro file " + origin + ": " + macros.error().format());
+        return common::make_error<"duql macro file {}: {}">(
+            common::ErrorCode::InvalidArgument, origin,
+            macros.error().format());
     for (auto& m : *macros) {
         for (const auto& old : r.macros)
             if (old.name == m.name)
-                return common::make_error(common::ErrorCode::InvalidArgument,
-                                          "duql macro '" + m.name +
-                                              "' is defined in " + old.origin +
-                                              " and " + origin);
+                return common::make_error<
+                    "duql macro '{}' is defined in {} and {}">(
+                    common::ErrorCode::InvalidArgument, m.name, old.origin,
+                    origin);
         r.macros.push_back(std::move(m));
     }
     return {};
@@ -370,7 +373,7 @@ dftracer::utils::dstd::Expected<dstd::Vector<Macro>, DuqlError> macros_of(
             if (m.name == def.name)
                 return dftracer::utils::dstd::Unexpected(syntax::make_error(
                     text, expr ? (*expr)->span.offset : 0, 0,
-                    "macro '" + def.name + "' is defined twice"));
+                    dstd::fmt<"macro '{}' is defined twice">(def.name)));
         if (expr)
             out.push_back({def.name, def.params,
                            dstd::to_shared_ptr(std::move(*expr)), origin});

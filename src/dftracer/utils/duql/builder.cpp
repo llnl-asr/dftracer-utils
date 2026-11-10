@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/builder.h>
 #include <dftracer/utils/duql/syntax/parser.h>
@@ -29,8 +30,8 @@ dstd::Expected<dstd::String, DuqlError> Source::text() const {
     if (!error_.empty()) return dstd::Unexpected(input_error(error_));
     if (members_.empty()) return dstd::String();
     dstd::String joined;
-    for (const auto& m : members_) joined += m + ";\n";
-    auto program = syntax::parse("source s {\n" + joined + "}");
+    for (const auto& m : members_) joined += dstd::fmt<"{};\n">(m);
+    auto program = syntax::parse(dstd::fmt<"source s {\n{}}">(joined));
     if (!program) return dstd::Unexpected(program.error());
     const dstd::String text = syntax::to_text(*program);
     std::size_t pos = 0;

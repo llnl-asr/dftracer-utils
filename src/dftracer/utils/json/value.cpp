@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_arena.h>
@@ -86,9 +87,8 @@ simdjson::error_code open_document(detail::DocumentState& st,
 }
 
 dstd::Unexpected<dstd::Error> parse_error(simdjson::error_code code) {
-    return common::make_error(
-        common::ErrorCode::Parse,
-        dstd::String("invalid JSON: ") + simdjson::error_message(code));
+    return common::make_error<"invalid JSON: {}">(
+        common::ErrorCode::Parse, simdjson::error_message(code));
 }
 
 bool is_space(char c) {

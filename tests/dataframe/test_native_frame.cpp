@@ -7,6 +7,7 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/frame_native.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
@@ -141,7 +142,7 @@ TEST_SUITE("native frame") {
         CHECK_FALSE(frame_from_native(""));
         const dstd::String good = bytes_of(sample());
         CHECK_FALSE(frame_from_native(good.substr(0, good.size() / 2)));
-        CHECK_FALSE(frame_from_native(good + "x"));
+        CHECK_FALSE(frame_from_native(dstd::fmt<"{}x">(good)));
         dstd::String other_version = good;
         other_version[4] = 9;
         CHECK_FALSE(frame_from_native(other_version));

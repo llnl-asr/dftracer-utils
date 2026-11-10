@@ -6,6 +6,7 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/file.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
@@ -128,9 +129,8 @@ class FileDecompressorUtility {
             if (!found.has_value())
                 throw common::DFTUtilsException(found.error());
             if (!*found) {
-                co_return common::make_error(
-                    common::ErrorCode::NotFound,
-                    "Input file does not exist: " + input.input_path);
+                co_return common::make_error<"Input file does not exist: {}">(
+                    common::ErrorCode::NotFound, input.input_path);
             }
 
             // Get compressed file size
@@ -142,18 +142,16 @@ class FileDecompressorUtility {
 
             auto opened = co_await runtime::io::open_file(input.input_path, {});
             if (!opened) {
-                co_return common::make_error(
-                    common::ErrorCode::Io,
-                    "Cannot open file: " + input.input_path);
+                co_return common::make_error<"Cannot open file: {}">(
+                    common::ErrorCode::Io, input.input_path);
             }
             const dstd::File fd_file = std::move(*opened);
             const int fd = fd_file.native_handle();
 
             const auto st = fd_file.stat();
             if (!st) {
-                co_return common::make_error(
-                    common::ErrorCode::Io,
-                    "Cannot stat file: " + input.input_path);
+                co_return common::make_error<"Cannot stat file: {}">(
+                    common::ErrorCode::Io, input.input_path);
             }
 
             fileio::StreamingFileWriterUtility writer(
@@ -180,9 +178,8 @@ class FileDecompressorUtility {
             // Clean up partial output file on error
             dstd::fs::remove(dstd::PathView(input.output_path)).discard();
 
-            co_return common::make_error(
-                common::ErrorCode::Compression,
-                dstd::String("Decompression failed: ") + e.what());
+            co_return common::make_error<"Decompression failed: {}">(
+                common::ErrorCode::Compression, e.what());
         }
 
         FileDecompressionUtilityOutput payload;

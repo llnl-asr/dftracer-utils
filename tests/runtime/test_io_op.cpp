@@ -5,6 +5,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/thread.h>
@@ -78,7 +79,7 @@ class TempDir {
     }
     ~TempDir() { dstd::fs::remove_all(dstd::PathView(path_)).discard(); }
     dstd::String join(const char* name) const {
-        return dstd::String(path_) + "/" + name;
+        return dstd::fmt<"{}/{}">(path_, name);
     }
 
    private:
@@ -1193,7 +1194,7 @@ TEST_CASE("io op: mkdir makes a directory and rmdir refuses a full one") {
     on_each_backend([](Runtime& rt) {
         TempDir dir;
         const dstd::String sub = dir.join("sub");
-        const dstd::String inside = sub + "/file";
+        const dstd::String inside = dstd::fmt<"{}/file">(sub);
         ssize_t made = 1;
         ssize_t made_again = 0;
         ssize_t full = 0;

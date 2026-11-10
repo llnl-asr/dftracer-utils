@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
@@ -86,25 +87,27 @@ dstd::Expected<duql::Pipeline, duql::DuqlError> compile_pipeline(
 }
 
 dstd::String signature(const duql::Pipeline& p) {
-    dstd::String out = "filter=" + p.filter_text;
+    dstd::String out = dstd::fmt<"filter={}">(p.filter_text);
     for (const auto& stage : p.stages) {
-        out += " | " + dstd::int_text(stage.index());
+        out += dstd::fmt<" | {}">(stage.index());
         std::visit(
             [&](const auto& n) {
                 using T = std::decay_t<decltype(n)>;
                 if constexpr (std::is_same_v<T, duql::PipelineWhere>) {
-                    out += " " + n.text;
+                    out += dstd::fmt<" {}">(n.text);
                 } else if constexpr (std::is_same_v<T, duql::PipelineBucket>) {
-                    out += " " + dstd::fixed_text(n.width) + " " + n.text;
+                    out += dstd::fmt<" {:f} {}">(n.width, n.text);
                 } else if constexpr (std::is_same_v<T, duql::PipelineGroup>) {
-                    for (const auto& k : n.keys) out += " k:" + k.text;
+                    for (const auto& k : n.keys)
+                        out += dstd::fmt<" k:{}">(k.text);
                     for (const auto& a : n.aggs)
-                        out += " a:" + a.name + "=" + a.text;
+                        out += dstd::fmt<" a:{}={}">(a.name, a.text);
                 } else if constexpr (std::is_same_v<T, duql::PipelineSort>) {
                     for (const auto& k : n.keys)
-                        out += " " + k.key.text + (k.descending ? " d" : " a");
+                        out += dstd::fmt<" {}{}">(k.key.text,
+                                                  (k.descending ? " d" : " a"));
                 } else if constexpr (std::is_same_v<T, duql::PipelineTake>) {
-                    out += " " + dstd::int_text(n.count);
+                    out += dstd::fmt<" {}">(n.count);
                 }
             },
             stage);
@@ -128,7 +131,7 @@ dstd::String compiled(dstd::StringView text) {
     if (!p) FAIL(p.error().format());
     dstd::String out = signature(p->main);
     for (const auto& side : p->sides)
-        out += " side " + side.name + " (" + signature(side.pipeline) + ")";
+        out += dstd::fmt<" side {} ({})">(side.name, signature(side.pipeline));
     return out;
 }
 
@@ -216,8 +219,7 @@ TEST_CASE("lex - call adjacency") {
 
 TEST_CASE("parse - duql pragma") {
     const auto with = [](int major, int minor) {
-        return "duql " + dstd::int_text(major) + "." + dstd::int_text(minor) +
-               "\nwhere a == 1";
+        return dstd::fmt<"duql {}.{}\nwhere a == 1">(major, minor);
     };
     auto q = duql::syntax::parse(with(duql::syntax::DUQL_VERSION_MAJOR,
                                       duql::syntax::DUQL_VERSION_MINOR));
@@ -225,8 +227,7 @@ TEST_CASE("parse - duql pragma") {
     CHECK(q->pipeline);
 
     auto major_only = duql::syntax::parse(
-        "duql " + dstd::int_text(duql::syntax::DUQL_VERSION_MAJOR) +
-        "\nwhere a == 1");
+        dstd::fmt<"duql {}\nwhere a == 1">(duql::syntax::DUQL_VERSION_MAJOR));
     REQUIRE(major_only.has_value());
 
     for (const auto& text : {with(duql::syntax::DUQL_VERSION_MAJOR + 1, 0),
@@ -244,7 +245,7 @@ TEST_CASE("parse - a computed index round-trips and ends the path") {
     for (const char* q : {"xs[i]", "xs[$n]", "xs[i - 3]", "a.b[i]", "a[0].b[i]",
                           "xs[-1]", "xs[0]"}) {
         CAPTURE(q);
-        const auto first = parsed(dstd::String("where ") + q + " > 1");
+        const auto first = parsed(dstd::fmt<"where {} > 1">(q));
         const auto second = parsed(duql::syntax::to_text(first));
         CHECK(duql::syntax::to_text(second) == duql::syntax::to_text(first));
         CHECK(duql::syntax::equal(first, second));
@@ -264,7 +265,7 @@ TEST_CASE("parse - a computed index round-trips and ends the path") {
 
     for (const char* bad : {"xs[i].b", "xs[i][0]"}) {
         CAPTURE(bad);
-        auto r = duql::syntax::parse(dstd::String("where ") + bad + " == 1");
+        auto r = duql::syntax::parse(dstd::fmt<"where {} == 1">(bad));
         REQUIRE_FALSE(r.has_value());
         CHECK(r.error().format().find("ends the path") != dstd::String::npos);
     }
@@ -281,7 +282,7 @@ TEST_CASE("parse - case-insensitive keywords") {
 
 TEST_CASE("parse - string escapes decode and print back") {
     auto value = [](dstd::StringView text) {
-        const auto q = parsed(dstd::String("where x == ") + dstd::String(text));
+        const auto q = parsed(dstd::fmt<"where x == {}">(text));
         const auto& b = std::get<duql::syntax::Binary>(where_condition(q).node);
         return std::get<dstd::String>(
             std::get<duql::syntax::Literal>(b.right->node).value);
@@ -297,11 +298,11 @@ TEST_CASE("parse - string escapes decode and print back") {
          {R"("\u12")", R"("\ude00")", R"("\ud83d")", R"("\ud83dx")"}) {
         CAPTURE(bad);
         CHECK_FALSE(
-            duql::syntax::parse(dstd::String("where x == ") + bad).has_value());
+            duql::syntax::parse(dstd::fmt<"where x == {}">(bad)).has_value());
     }
     const dstd::String all = "q\" s' b\\ n\n t\t c\x01 u\xc3\xa9";
     const dstd::String printed = duql::syntax::to_text(
-        parsed("where x == " + duql::detail::quote_string(all)));
+        parsed(dstd::fmt<"where x == {}">(duql::detail::quote_string(all))));
     CHECK(value(printed.substr(
               printed.find("== ") + 3,
               printed.rfind('\n') - printed.find("== ") - 3)) == all);
@@ -632,7 +633,7 @@ TEST_CASE("parse - session clauses") {
     CHECK_FALSE(duql::syntax::parse("session pid max 1h").has_value());
     auto r = duql::syntax::parse("session pid");
     REQUIRE_FALSE(r.has_value());
-    CHECK(r.error().indicator == dstd::String(11, ' ') + "^");
+    CHECK(r.error().indicator == dstd::fmt<"{}^">(dstd::String(11, ' ')));
 
     const auto field = parsed("where session == 1");
     const auto& eq =
@@ -776,7 +777,7 @@ TEST_CASE("parse - as-of lookup") {
           dstd::String::npos);
     for (const char* w : {"5ms", "1.5", "$w", "-1"}) {
         const auto e =
-            parsed(dstd::String("lookup s on pid asof ts within ") + w);
+            parsed(dstd::fmt<"lookup s on pid asof ts within {}">(w));
         const auto* x =
             std::get_if<duql::syntax::AsofLookup>(&e.pipeline->stages[0].node);
         REQUIRE(x);
@@ -932,7 +933,7 @@ TEST_CASE("errors - caret position") {
     CHECK(e.line == 1);
     CHECK(e.column == 11);
     CHECK(e.source == "where a == ");
-    CHECK(e.indicator == dstd::String(11, ' ') + "^");
+    CHECK(e.indicator == dstd::fmt<"{}^">(dstd::String(11, ' ')));
 
     auto m = duql::syntax::parse("where a == 1\n| derive y = \n| take 5");
     REQUIRE_FALSE(m.has_value());
@@ -1015,9 +1016,8 @@ TEST_CASE("parse - syntax, printing and errors") {
         INFO(text);
         const auto q = parsed(text);
         const dstd::String printed = duql::syntax::to_text(q);
-        CHECK(printed ==
-              dstd::String("duql " DFTRACER_UTILS_DUQL_VERSION_STRING) + "\n" +
-                  text + "\n");
+        CHECK(printed == dstd::fmt<"{}\n{}\n">(
+                             "duql " DFTRACER_UTILS_DUQL_VERSION_STRING, text));
         CHECK(duql::syntax::equal(q, parsed(printed)));
     }
     const auto dotted = parsed(R"re(parse args.fname ~ "(?<a>x)")re");
@@ -1391,9 +1391,10 @@ TEST_CASE("pipeline macros splice at a stage") {
         "sum(size) }; ";
     const dstd::String hand =
         "where cat == \"POSIX\" | bucket 1ms | agg { b = sum(size) } | sort b";
-    CHECK(compiled(rate + "where dur > 0 | io_rate(1ms) | sort b") ==
-          compiled("where dur > 0 | " + hand));
-    CHECK(compiled(rate + "io_rate(1ms) | sort b") == compiled(hand));
+    CHECK(compiled(dstd::fmt<"{}where dur > 0 | io_rate(1ms) | sort b">(
+              rate)) == compiled(dstd::fmt<"where dur > 0 | {}">(hand)));
+    CHECK(compiled(dstd::fmt<"{}io_rate(1ms) | sort b">(rate)) ==
+          compiled(hand));
     CHECK(
         compiled(
             "def top(n) = sort -dur | where dur > n; where dur > 1 | top(3)") ==
@@ -1448,16 +1449,18 @@ TEST_CASE("pipeline macro errors") {
     const dstd::String defs =
         "def slow(t) = dur > t; def io(d) = where dur > d | take 1; ";
     const dstd::Vector<dstd::Pair<dstd::String, const char*>> errors = {
-        {defs + "where io(1)", "macro 'io' is a pipeline; call it as a stage"},
-        {defs + "where x > 0 | derive y = io(1)",
+        {dstd::fmt<"{}where io(1)">(defs),
          "macro 'io' is a pipeline; call it as a stage"},
-        {defs + "from data | slow(250)",
+        {dstd::fmt<"{}where x > 0 | derive y = io(1)">(defs),
+         "macro 'io' is a pipeline; call it as a stage"},
+        {dstd::fmt<"{}from data | slow(250)">(defs),
          "macro 'slow' is an expression; write 'where slow(...)'"},
-        {defs + "where x > 0 | slow(250)", "is an expression"},
-        {defs + "where x > 0 | nothing(1)",
+        {dstd::fmt<"{}where x > 0 | slow(250)">(defs), "is an expression"},
+        {dstd::fmt<"{}where x > 0 | nothing(1)">(defs),
          "Unknown stage or pipeline macro 'nothing'"},
-        {defs + "from data | io(1, 2)", "takes 1 argument(s), got 2"},
-        {defs + "from data | io(d = 1)", "named argument"},
+        {dstd::fmt<"{}from data | io(1, 2)">(defs),
+         "takes 1 argument(s), got 2"},
+        {dstd::fmt<"{}from data | io(d = 1)">(defs), "named argument"},
         {"def sort(x) = x > 1; where y > 0", "has the name of a stage"},
         {"def a(x) = b(x) | take 1; def b(x) = a(x) | take 1; where y > 0 "
          "| "

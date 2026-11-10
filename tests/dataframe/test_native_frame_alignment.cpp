@@ -8,6 +8,7 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/frame_native.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
@@ -53,7 +54,8 @@ Series binaries(const dstd::Vector<dstd::String>& values) {
 }
 
 dstd::String name_of(std::size_t length, std::size_t index) {
-    return dstd::String(length - 1, 'n') + static_cast<char>('a' + index);
+    return dstd::fmt<"{}{}">(dstd::String(length - 1, 'n'),
+                             static_cast<char>('a' + index));
 }
 
 DataFrame frame_with_name_size(std::size_t length) {

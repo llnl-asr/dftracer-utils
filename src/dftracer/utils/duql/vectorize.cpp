@@ -179,7 +179,7 @@ class Vectorizer {
             const auto& s = f.steps[i];
             if (s.index) {
                 if (key.empty()) return dstd::nullopt;
-                key += '[' + dstd::int_text(*s.index) + ']';
+                key += dstd::fmt<"[{}]">(*s.index);
             } else {
                 if (i > 0) key += '.';
                 key += s.key;
@@ -352,10 +352,9 @@ class Vectorizer {
             } else if (numeric(out) && numeric(v.k)) {
                 out = out == K::Float || v.k == K::Float ? K::Float : K::Int;
             } else {
-                fail(dstd::String(what) +
-                     " chooses between values of different "
-                     "types; convert them with int(), "
-                     "float() or string()");
+                fail(dstd::fmt<
+                     "{} chooses between values of different types; convert "
+                     "them with int(), float() or string()">(what));
                 return K::Nul;
             }
         }
@@ -462,8 +461,9 @@ class Vectorizer {
             if (columns_[i].quant == &q)
                 return {dataframe::expr_col(static_cast<std::int32_t>(i)),
                         K::Bool};
-        return fail(dstd::String(q.all ? "all" : "any") +
-                    "() runs on a list column only through quantify()");
+        return fail(
+            dstd::fmt<"{}() runs on a list column only through quantify()">(
+                q.all ? "all" : "any"));
     }
 
     V node(const TLookup& l) {
@@ -515,9 +515,9 @@ class Vectorizer {
     V column_call(const TCall& c) {
         for (std::size_t i = 0; i < columns_.size(); ++i)
             if (columns_[i].call == &c) return column_value(i);
-        return fail(dstd::String(fn_name(c)) +
-                    "() runs on columns only through "
-                    "call_column()");
+        return fail(
+            dstd::fmt<"{}() runs on columns only through call_column()">(
+                fn_name(c)));
     }
 
     V node(const TMatch& m) {
@@ -1750,8 +1750,8 @@ dstd::Optional<dataframe::DataType> call_type_of(
         case Fn::Unique:
             if (!is_list_type(args[0])) return dstd::nullopt;
             if (!scalar_kind(kind_of(args[0].fields.front().type.id))) {
-                error = dstd::String(fn_info(c.fn).name) +
-                        "() reads an array of arrays or objects";
+                error = dstd::fmt<"{}() reads an array of arrays or objects">(
+                    fn_info(c.fn).name);
                 return dstd::nullopt;
             }
             return dataframe::list_of(args[0].fields.front().type);

@@ -6,6 +6,7 @@
 #include <dftracer/utils/common/spill_dir.h>
 #include <dftracer/utils/common/spill_dir_internal.h>
 #include <dftracer/utils/common/spill_file.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
@@ -30,8 +31,7 @@ class DiskDir {
    public:
     explicit DiskDir(const dstd::String& tag)
         : path_(dstd::fs::current_path().value() /
-                (tag + "_" + dstd::to_string(::getpid()) + "_" +
-                 dstd::to_string(next_id()))) {
+                (dstd::fmt<"{}_{}_{}">(tag, ::getpid(), next_id()))) {
         REQUIRE(dstd::fs::remove_all(path_).has_value());
         REQUIRE(dstd::fs::create_directories(path_).has_value());
     }
@@ -154,9 +154,9 @@ TEST_CASE("the sweep removes dead directories of this host only") {
         if (c == '/' || c == '_') c = '-';
     const auto dead_pid = "2147483646";
     const auto mine =
-        root.path() / ("sweeptest_" + tag + "_" + dead_pid + "_0");
+        root.path() / (dstd::fmt<"sweeptest_{}_{}_0">(tag, dead_pid));
     const auto other =
-        root.path() / (dstd::String("sweeptest_otherhost_") + dead_pid + "_0");
+        root.path() / (dstd::fmt<"sweeptest_otherhost_{}_0">(dead_pid));
     REQUIRE(dstd::fs::create_directories(mine).has_value());
     REQUIRE(dstd::fs::create_directories(other).has_value());
     auto sub = dftracer::utils::common::ScopedSpillSubdir::create("sweeptest");
@@ -182,7 +182,7 @@ TEST_CASE("a spill dir on tmpfs warns once") {
     cfg.sink = sink;
     dftracer::utils::common::logger::init(cfg);
     const dstd::String ram =
-        "/dev/shm/dftu_spill_warn_" + dstd::to_string(::getpid());
+        dstd::fmt<"/dev/shm/dftu_spill_warn_{}">(::getpid());
     {
         EnvGuard env(ram.c_str());
         REQUIRE(dftracer::utils::common::spill_dir().has_value());

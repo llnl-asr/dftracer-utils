@@ -5,6 +5,7 @@
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/algorithm.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -1036,8 +1037,8 @@ void check_col(const DataFrame& d, const Expect& e) {
         bool same = g.has_value() == w.has_value();
         if (same && g) same = e.approx ? *g == doctest::Approx(*w) : *g == *w;
         if (!same)
-            bad = e.name + " differs at sorted row " + dstd::to_string(i) +
-                  ": got " + show(g) + ", want " + show(w);
+            bad = dstd::fmt<"{} differs at sorted row {}: got {}, want {}">(
+                e.name, i, show(g), show(w));
     }
     CHECK_MESSAGE(bad.empty(), bad);
 }
@@ -1116,10 +1117,9 @@ dstd::String frame_name(WindowFunc func, const dstd::String& value,
             tag = "fmean";
             break;
     }
-    return tag + "_" + value +
-           (mode == WindowFrameMode::Rows ? "_rows_" : "_range_") +
-           bound(fc.preceding) + "_" + bound(fc.following) + "_m" +
-           dstd::to_string(fc.min_count);
+    return dstd::fmt<"{}_{}{}{}_{}_m{}">(
+        tag, value, (mode == WindowFrameMode::Rows ? "_rows_" : "_range_"),
+        bound(fc.preceding), bound(fc.following), fc.min_count);
 }
 
 TypeId frame_type(WindowFunc func, TypeId value) {
@@ -1259,7 +1259,7 @@ TEST_CASE("window - randomized frames match a naive per-row reference") {
         for (std::int64_t k : {1, 3, 7, 200}) {
             add(specs, want,
                 offset_spec(WindowFunc::Ntile, dstd::nullopt,
-                            "ntile" + dstd::to_string(k), k),
+                            dstd::fmt<"ntile{}">(k), k),
                 TypeId::Int64,
                 per_row(s,
                         [k](const Part& part, std::size_t i) -> Val {
@@ -1284,8 +1284,8 @@ TEST_CASE("window - randomized frames match a naive per-row reference") {
             const dstd::String& n = vc.name;
             for (std::int64_t k : {1, 3}) {
                 add(specs, want,
-                    offset_spec(WindowFunc::Lag, n,
-                                "lag" + dstd::to_string(k) + "_" + n, k),
+                    offset_spec(WindowFunc::Lag, n, dstd::fmt<"lag{}_{}">(k, n),
+                                k),
                     vc.type,
                     per_row(
                         s,
@@ -1300,7 +1300,7 @@ TEST_CASE("window - randomized frames match a naive per-row reference") {
             for (std::int64_t k : {1, 2}) {
                 add(specs, want,
                     offset_spec(WindowFunc::Lead, n,
-                                "lead" + dstd::to_string(k) + "_" + n, k),
+                                dstd::fmt<"lead{}_{}">(k, n), k),
                     vc.type,
                     per_row(
                         s,
@@ -1312,14 +1312,16 @@ TEST_CASE("window - randomized frames match a naive per-row reference") {
                         }),
                     false);
             }
-            add(specs, want, spec(WindowFunc::FirstValue, n, "first_" + n),
+            add(specs, want,
+                spec(WindowFunc::FirstValue, n, dstd::fmt<"first_{}">(n)),
                 vc.type,
                 per_row(s,
                         [&v](const Part& part, std::size_t) -> Val {
                             return v[part.front()];
                         }),
                 false);
-            add(specs, want, spec(WindowFunc::LastValue, n, "last_" + n),
+            add(specs, want,
+                spec(WindowFunc::LastValue, n, dstd::fmt<"last_{}">(n)),
                 vc.type,
                 per_row(s,
                         [&v](const Part& part, std::size_t) -> Val {
@@ -1329,7 +1331,7 @@ TEST_CASE("window - randomized frames match a naive per-row reference") {
             for (std::int64_t k : {1, 2, 5}) {
                 add(specs, want,
                     offset_spec(WindowFunc::NthValue, n,
-                                "nth" + dstd::to_string(k) + "_" + n, k),
+                                dstd::fmt<"nth{}_{}">(k, n), k),
                     vc.type,
                     per_row(
                         s,
@@ -1341,7 +1343,8 @@ TEST_CASE("window - randomized frames match a naive per-row reference") {
                         }),
                     false);
             }
-            add(specs, want, spec(WindowFunc::FillForward, n, "ffill_" + n),
+            add(specs, want,
+                spec(WindowFunc::FillForward, n, dstd::fmt<"ffill_{}">(n)),
                 vc.type,
                 per_row(s,
                         [&v](const Part& part, std::size_t i) -> Val {
@@ -1350,7 +1353,8 @@ TEST_CASE("window - randomized frames match a naive per-row reference") {
                             return Val{};
                         }),
                 false);
-            add(specs, want, spec(WindowFunc::RunningSum, n, "rsum_" + n),
+            add(specs, want,
+                spec(WindowFunc::RunningSum, n, dstd::fmt<"rsum_{}">(n)),
                 vc.type,
                 per_row(s,
                         [&v](const Part& part, std::size_t i) -> Val {
@@ -1360,7 +1364,8 @@ TEST_CASE("window - randomized frames match a naive per-row reference") {
                             return sum;
                         }),
                 false);
-            add(specs, want, spec(WindowFunc::RunningMin, n, "rmin_" + n),
+            add(specs, want,
+                spec(WindowFunc::RunningMin, n, dstd::fmt<"rmin_{}">(n)),
                 vc.type,
                 per_row(s,
                         [&v](const Part& part, std::size_t i) -> Val {
@@ -1372,7 +1377,8 @@ TEST_CASE("window - randomized frames match a naive per-row reference") {
                             return best;
                         }),
                 false);
-            add(specs, want, spec(WindowFunc::RunningMax, n, "rmax_" + n),
+            add(specs, want,
+                spec(WindowFunc::RunningMax, n, dstd::fmt<"rmax_{}">(n)),
                 vc.type,
                 per_row(s,
                         [&v](const Part& part, std::size_t i) -> Val {
@@ -1384,7 +1390,8 @@ TEST_CASE("window - randomized frames match a naive per-row reference") {
                             return best;
                         }),
                 false);
-            add(specs, want, spec(WindowFunc::RunningProd, n, "rprod_" + n),
+            add(specs, want,
+                spec(WindowFunc::RunningProd, n, dstd::fmt<"rprod_{}">(n)),
                 TypeId::Float64,
                 per_row(s,
                         [&v](const Part& part, std::size_t i) -> Val {
@@ -1394,7 +1401,8 @@ TEST_CASE("window - randomized frames match a naive per-row reference") {
                             return prod;
                         }),
                 true);
-            add(specs, want, spec(WindowFunc::Delta, n, "delta_" + n), vc.type,
+            add(specs, want,
+                spec(WindowFunc::Delta, n, dstd::fmt<"delta_{}">(n)), vc.type,
                 per_row(s,
                         [&v](const Part& part, std::size_t i) -> Val {
                             if (i == 0) return Val{};
@@ -1865,7 +1873,7 @@ void run_stat_frames(std::uint64_t seed, bool order_nulls, WindowFrameMode mode,
     dstd::Vector<dstd::Function<void(const DataFrame&)>> checks;
     int id = 0;
     const auto uniq = [&id](const char* tag, const dstd::String& col) {
-        return dstd::String(tag) + "_" + col + "_" + dstd::to_string(id++);
+        return dstd::fmt<"{}_{}_{}">(tag, col, id++);
     };
 
     for (const FrameCase& fc : frames) {
@@ -2397,9 +2405,9 @@ TEST_CASE("lag and lead read the row `offset` back or ahead in the partition") {
     dstd::Vector<WindowColumn> specs;
     for (std::int64_t n : offsets) {
         specs.push_back(
-            offset_spec(WindowFunc::Lag, "v", "lag" + dstd::to_string(n), n));
+            offset_spec(WindowFunc::Lag, "v", dstd::fmt<"lag{}">(n), n));
         specs.push_back(
-            offset_spec(WindowFunc::Lead, "v", "lead" + dstd::to_string(n), n));
+            offset_spec(WindowFunc::Lead, "v", dstd::fmt<"lead{}">(n), n));
     }
     const DataFrame out =
         dftu_utils_test::ok(dataframe::window(frame, {"k"}, {"ord"}, specs));
@@ -2408,7 +2416,7 @@ TEST_CASE("lag and lead read the row `offset` back or ahead in the partition") {
     for (std::int64_t n : offsets) {
         for (const char* dir : {"lag", "lead"}) {
             const Series col =
-                out.column(dir + dstd::to_string(n)).materialize();
+                out.column(dstd::fmt<"{}{}">(dir, n)).materialize();
             for (std::size_t r = 0; r < 7; ++r) {
                 const std::int64_t local =
                     static_cast<std::int64_t>(r) - start_of(r);

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/big_endian.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
@@ -90,7 +91,7 @@ dstd::String key_text(dstd::StringView key) {
             key.remove_prefix(1);
         }
     }
-    return parts > 1 ? "(" + out + ")" : out;
+    return parts > 1 ? dstd::fmt<"({})">(out) : out;
 }
 
 const dstd::Vector<std::int64_t>* LookupTable::find(
@@ -122,18 +123,18 @@ DuqlError lookup_error(dstd::String message) {
 DuqlError conflict_error(const LookupTable& table, dstd::StringView column,
                          dstd::StringView key) {
     return lookup_error(
-        "View::duql '" + table.name + "' has rows with different values of '" +
-        dstd::String(column) + "' for key " + key_text(key) +
-        "; pick one with a narrower let, or read every row with "
-        "'lookup ... into'");
+        dstd::fmt<"View::duql '{}' has rows with different values of "
+                  "'{}' for key {}; pick one with a narrower let, or "
+                  "read every row with 'lookup ... into'">(table.name, column,
+                                                           key_text(key)));
 }
 
 DuqlError scalar_conflict_error(dstd::StringView name, dstd::StringView key,
                                 std::size_t rows) {
-    return lookup_error("View::duql the sub-query '" + dstd::String(name) +
-                        "' gives " + dstd::int_text(rows) + " rows for key " +
-                        key_text(key) +
-                        "; a sub-query in an expression gives one row");
+    return lookup_error(
+        dstd::fmt<"View::duql the sub-query '{}' gives {} rows for "
+                  "key {}; a sub-query in an expression gives one row">(
+            name, rows, key_text(key)));
 }
 
 dstd::Optional<DuqlError> lookup_failure(const detail::QueryNode& node) {
@@ -219,7 +220,7 @@ dstd::Pair<std::int64_t, std::int64_t> kind_range(const RangeIndex& ix,
 }
 
 void range_fail(const TLookup& l, const dstd::String& why) {
-    l.slot->failure.set(lookup_error("View::duql " + why));
+    l.slot->failure.set(lookup_error(dstd::fmt<"View::duql {}">(why)));
 }
 
 }  // namespace
@@ -282,12 +283,12 @@ RangeAnswer range_answer(const TLookup& l, const LookupTable& table,
     out.rows = hi - lo;
     if (read == RangeRead::Rows) {
         if (l.kind == LookupKind::Scalar && out.rows > 1)
-            range_fail(l, "the sub-query '" + table.name + "' gives " +
-                              dstd::int_text(out.rows) +
-                              " rows in the range of " +
-                              (key.empty() ? dstd::String("a row")
-                                           : "key " + key_text(key)) +
-                              "; a sub-query in an expression gives one row");
+            range_fail(
+                l, dstd::fmt<"the sub-query '{}' gives {} rows in the range of "
+                             "{}; a sub-query in an expression gives one row">(
+                       table.name, out.rows,
+                       (key.empty() ? dstd::String("a row")
+                                    : dstd::fmt<"key {}">(key_text(key)))));
         out.row = ix.rows[static_cast<std::size_t>(lo)];
         return out;
     }
@@ -314,8 +315,9 @@ RangeAnswer range_answer(const TLookup& l, const LookupTable& table,
                 out.number = Number{acc.fsum};
             } else if (acc.isum < std::numeric_limits<std::int64_t>::min() ||
                        acc.isum > std::numeric_limits<std::int64_t>::max()) {
-                range_fail(l, "'sum' of the sub-query '" + table.name +
-                                  "' overflows int64");
+                range_fail(
+                    l, dstd::fmt<"'sum' of the sub-query '{}' overflows int64">(
+                           table.name));
             } else {
                 out.number = Number{static_cast<std::int64_t>(acc.isum)};
             }

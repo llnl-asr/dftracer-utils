@@ -6,6 +6,7 @@
 #include <dftracer/utils/coro/sync_wait.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/time.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -41,7 +42,7 @@ coro::CoroTask<void> spawn_and_join(int n, std::atomic<int>& count) {
 coro::CoroTask<void> spawn_lambdas(int n, std::atomic<int>& count) {
     coro::Scope scope;
     for (int i = 0; i < n; ++i) {
-        dstd::String label = "child-" + dstd::to_string(i);
+        dstd::String label = dstd::fmt<"child-{}">(i);
         scope.spawn([label, &count]() -> coro::CoroTask<void> {
             if (label.rfind("child-", 0) == 0) count.fetch_add(1);
             co_return;

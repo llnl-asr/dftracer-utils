@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
@@ -34,7 +35,7 @@ TEST_SUITE("IndexedFileLineIterator") {
 
             // Create iterator config
             auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, gz_path + ".idx")
+                              .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                               .with_line_range(1, 10);
 
             IndexedFileLineIterator iter(config);
@@ -60,7 +61,7 @@ TEST_SUITE("IndexedFileLineIterator") {
             indexer->build();
 
             auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, gz_path + ".idx")
+                              .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                               .with_line_range(5, 10);
 
             IndexedFileLineIterator iter(config);
@@ -86,7 +87,7 @@ TEST_SUITE("IndexedFileLineIterator") {
             indexer->build();
 
             auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, gz_path + ".idx")
+                              .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                               .with_line_range(7, 7);
 
             IndexedFileLineIterator iter(config);
@@ -111,7 +112,7 @@ TEST_SUITE("IndexedFileLineIterator") {
 
             // When end_line is 0, it should auto-detect the file's total lines
             auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, gz_path + ".idx")
+                              .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                               .with_line_range(10, 0);
 
             IndexedFileLineIterator iter(config);
@@ -139,7 +140,8 @@ TEST_SUITE("IndexedFileLineIterator") {
             indexer->build();
 
             // Create reader first
-            auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
+            auto reader =
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
             REQUIRE(reader != nullptr);
 
             // Configure with existing reader
@@ -175,7 +177,7 @@ TEST_SUITE("IndexedFileLineIterator") {
             indexer->build();
 
             auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, gz_path + ".idx")
+                              .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                               .with_byte_range(0, 200)  // Read first 200 bytes
                               .with_buffer_size(8192);
 
@@ -217,7 +219,7 @@ TEST_SUITE("IndexedFileLineIterator") {
             indexer->build();
 
             auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, gz_path + ".idx")
+                              .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                               .with_line_range(3, 6);
 
             IndexedFileLineIterator iter(config);
@@ -242,7 +244,7 @@ TEST_SUITE("IndexedFileLineIterator") {
             indexer->build();
 
             auto config = IndexedFileLineIteratorConfig().with_file(
-                gz_path, gz_path + ".idx");
+                gz_path, dstd::fmt<"{}.idx">(gz_path));
 
             IndexedFileLineIterator iter(config);
 
@@ -273,7 +275,7 @@ TEST_SUITE("IndexedFileLineIterator") {
             indexer->build();
 
             auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, gz_path + ".idx")
+                              .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                               .with_line_range(3, 7);
 
             IndexedFileLineIterator iter(config);
@@ -303,7 +305,7 @@ TEST_SUITE("IndexedFileLineIterator") {
             indexer->build();
 
             auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, gz_path + ".idx")
+                              .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                               .with_line_range(5, 15);
 
             IndexedFileLineIterator iter(config);
@@ -325,7 +327,7 @@ TEST_SUITE("IndexedFileLineIterator") {
 
             // Start line < 1
             auto config1 = IndexedFileLineIteratorConfig()
-                               .with_file(gz_path, gz_path + ".idx")
+                               .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                                .with_line_range(0, 5);
 
             CHECK_THROWS_AS((IndexedFileLineIterator{config1}),
@@ -333,7 +335,7 @@ TEST_SUITE("IndexedFileLineIterator") {
 
             // End < Start
             auto config2 = IndexedFileLineIteratorConfig()
-                               .with_file(gz_path, gz_path + ".idx")
+                               .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                                .with_line_range(10, 5);
 
             CHECK_THROWS_AS((IndexedFileLineIterator{config2}),
@@ -351,7 +353,7 @@ TEST_SUITE("IndexedFileLineIterator") {
 
             // End < Start for byte range
             auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, gz_path + ".idx")
+                              .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                               .with_byte_range(1000, 500);
 
             CHECK_THROWS_AS((IndexedFileLineIterator{config}),
@@ -376,7 +378,7 @@ TEST_SUITE("IndexedFileLineIterator") {
             indexer->build();
 
             auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, gz_path + ".idx")
+                              .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                               .with_line_range(1, 2);
 
             IndexedFileLineIterator iter(config);
@@ -418,7 +420,7 @@ TEST_SUITE("IndexedFileLineIterator") {
             indexer->build();
 
             auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, gz_path + ".idx")
+                              .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                               .with_line_range(100, 200)
                               .with_buffer_size(16384);
 
@@ -448,10 +450,11 @@ TEST_SUITE("IndexedFileLineIterator") {
 
             // Small buffer
             {
-                auto config = IndexedFileLineIteratorConfig()
-                                  .with_file(gz_path, gz_path + ".idx")
-                                  .with_line_range(1, 10)
-                                  .with_buffer_size(256);
+                auto config =
+                    IndexedFileLineIteratorConfig()
+                        .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
+                        .with_line_range(1, 10)
+                        .with_buffer_size(256);
 
                 IndexedFileLineIterator iter(config);
 
@@ -465,10 +468,11 @@ TEST_SUITE("IndexedFileLineIterator") {
 
             // Large buffer
             {
-                auto config = IndexedFileLineIteratorConfig()
-                                  .with_file(gz_path, gz_path + ".idx")
-                                  .with_line_range(1, 10)
-                                  .with_buffer_size(1024 * 1024);  // 1MB
+                auto config =
+                    IndexedFileLineIteratorConfig()
+                        .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
+                        .with_line_range(1, 10)
+                        .with_buffer_size(1024 * 1024);  // 1MB
 
                 IndexedFileLineIterator iter(config);
 
@@ -493,7 +497,7 @@ TEST_SUITE("IndexedFileLineIterator") {
             indexer->build();
 
             auto config = IndexedFileLineIteratorConfig().with_file(
-                gz_path, gz_path + ".idx");
+                gz_path, dstd::fmt<"{}.idx">(gz_path));
 
             IndexedFileLineIterator iter(config);
 
@@ -551,7 +555,8 @@ TEST_SUITE("IndexedFileLineIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
+            auto reader =
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
             REQUIRE(reader != nullptr);
 
             auto config = IndexedFileLineIteratorConfig().with_reader(reader);

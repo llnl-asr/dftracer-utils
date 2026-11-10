@@ -7,6 +7,7 @@
 #include <dftracer/utils/dataframe/sketch.h>  // DDSketch, sketch_bucket_keys
 #include <dftracer/utils/dstd/base64.h>
 #include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/function_ref.h>
 #include <dftracer/utils/dstd/hash/hash.h>
 #include <dftracer/utils/dstd/hash/xxh3.h>
@@ -272,11 +273,11 @@ AggStatePtr agg_new(dstd::Vector<AggSpec> specs, dstd::Vector<AggDynSpec> dyn) {
                 break;
             default:
                 if (s->init_error.empty())
-                    s->init_error =
+                    s->init_error = dstd::fmt<
                         "group_by: dyn columns support count, sum, min, max, "
-                        "sum_sq, mean, var, std, skew, kurt and pct; op " +
-                        dstd::to_string(static_cast<int>(d.op)) +
-                        " for prefix '" + d.out_prefix + "' is not one of them";
+                        "sum_sq, mean, var, std, skew, kurt and pct; op {} "
+                        "for prefix '{}' is not one of them">(
+                        static_cast<int>(d.op), d.out_prefix);
         }
     }
     s->specs = std::move(specs);
@@ -1238,12 +1239,10 @@ dstd::Result<void> agg_accumulate(AggState& st,
         for (std::size_t k = 0; k < st.nkeys; ++k) {
             const TypeId kt = keys[k]->type();
             if (!is_group_key_type(kt)) {
-                return common::make_error(
-                    common::ErrorCode::InvalidArgument,
-                    dstd::String("group_by: key column type '") +
-                        type_name(kt) +
-                        "' is not supported as a group key (no int64/double "
-                        "domain to hash it in)");
+                return common::make_error<
+                    "group_by: key column type '{}' is not supported "
+                    "as a group key (no int64/double domain to hash it "
+                    "in)">(common::ErrorCode::InvalidArgument, type_name(kt));
             }
             st.key_is_bytes[k] = is_bytes_key_type(kt) ? 1 : 0;
             st.key_domain[k] = col_domain(kt);
@@ -1281,11 +1280,11 @@ dstd::Result<void> agg_accumulate(AggState& st,
             const AggOp op = st.specs[s].op;
             if (op != AggOp::CountValid && op != AggOp::First &&
                 op != AggOp::Last)
-                return common::make_error(
-                    common::ErrorCode::InvalidArgument,
-                    dstd::String("group_by: aggregate '") + st.specs[s].out +
-                        "' reduces a String column numerically; only "
-                        "count_valid, first and last apply to strings");
+                return common::make_error<
+                    "group_by: aggregate '{}' reduces a String column "
+                    "numerically; only count_valid, first and last apply "
+                    "to strings">(common::ErrorCode::InvalidArgument,
+                                  st.specs[s].out);
         }
         for (std::size_t s = 0; s < st.specs.size(); ++s) {
             if (st.specs[s].op != AggOp::SetUnion || st.spec_set[s] < 0)
@@ -1300,35 +1299,31 @@ dstd::Result<void> agg_accumulate(AggState& st,
             }
             if (set_is_list(t) && set_scalar_type(vc->child(0).type())) {
                 if (!vc->is_flat())
-                    return common::make_error(
-                        common::ErrorCode::InvalidArgument,
-                        dstd::String("set_union: aggregate '") +
-                            st.specs[s].out + "' needs a flat list column");
+                    return common::make_error<
+                        "set_union: aggregate '{}' needs a flat list column">(
+                        common::ErrorCode::InvalidArgument, st.specs[s].out);
                 if (set_typed(st.specs[s]))
                     st.specs[s].param =
                         1.0 + static_cast<double>(vc->child(0).type());
                 continue;
             }
-            return common::make_error(
-                common::ErrorCode::InvalidArgument,
-                dstd::String("set_union: aggregate '") + st.specs[s].out +
-                    "' does not support " +
-                    (set_is_list(t)
-                         ? dstd::String("a list of ") +
-                               type_name(vc->child(0).type())
-                         : dstd::String("a column of type ") + type_name(t)) +
-                    "; use a string, bool, number or a list of those");
+            return common::make_error<
+                "set_union: aggregate '{}' does not support {}; use "
+                "a string, bool, number or a list of those">(
+                common::ErrorCode::InvalidArgument, st.specs[s].out,
+                (set_is_list(t)
+                     ? dstd::fmt<"a list of {}">(type_name(vc->child(0).type()))
+                     : dstd::fmt<"a column of type {}">(type_name(t))));
         }
         for (std::size_t s = 0; s < st.specs.size(); ++s) {
             if (st.specs[s].op != AggOp::SketchQuantile) continue;
             const Series* vc =
                 values[static_cast<std::size_t>(st.specs[s].value_col)];
             if (narrow_varwidth_type(vc->type()) != TypeId::String)
-                return common::make_error(
-                    common::ErrorCode::InvalidArgument,
-                    dstd::String("group_by: aggregate '") + st.specs[s].out +
-                        "' reads base64 sketch text, not a " +
-                        type_name(vc->type()) + " column");
+                return common::make_error<
+                    "group_by: aggregate '{}' reads base64 sketch text, "
+                    "not a {} column">(common::ErrorCode::InvalidArgument,
+                                       st.specs[s].out, type_name(vc->type()));
         }
         st.inited = true;
     }
@@ -1667,18 +1662,15 @@ dstd::Result<void> agg_accumulate(AggState& st,
     }
     if (t_has_nested_text) {
         t_has_nested_text = false;
-        return common::make_error(
-            common::ErrorCode::InvalidArgument,
-            dstd::String("agg: a ") + type_name(t_nested_text_type) +
-                " column has no text form for this aggregate");
+        return common::make_error<
+            "agg: a {} column has no text form for this aggregate">(
+            common::ErrorCode::InvalidArgument, type_name(t_nested_text_type));
     }
     if (separator_group != static_cast<std::size_t>(-1))
-        return common::make_error(
-            common::ErrorCode::InvalidArgument,
-            "set_union: a string value in group " +
-                dstd::to_string(separator_group) +
-                " contains the set separator (0x1e), which the joined text "
-                "cannot hold");
+        return common::make_error<
+            "set_union: a string value in group {} contains the "
+            "set separator (0x1e), which the joined text cannot "
+            "hold">(common::ErrorCode::InvalidArgument, separator_group);
     return dstd::Result<void>();
 }
 

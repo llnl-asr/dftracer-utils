@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/intern_table.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -25,7 +26,7 @@ constexpr int HOPS = 8;
 constexpr int TASKS = 64;
 constexpr int STRINGS = 300;
 
-dstd::String name_of(int i) { return "string_" + dstd::to_string(i); }
+dstd::String name_of(int i) { return dstd::fmt<"string_{}">(i); }
 
 coro::CoroTask<void> hop_and_check(common::InternTable* expected,
                                    std::atomic<int>* bad) {

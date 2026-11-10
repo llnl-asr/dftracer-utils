@@ -9,6 +9,7 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
@@ -456,7 +457,8 @@ TEST_CASE("str_pattern runs a compiled duql pattern; a work limit is null") {
     CHECK(as_bools(run(dataframe::expr_str_pattern(c0(), *icontains), {&s})) ==
           Opt<bool>{true, true, false, dstd::nullopt});
 
-    const Series hard = strs({dstd::String(10000, 'a') + "!", "AAA"});
+    const Series hard =
+        strs({dstd::fmt<"{}!">(dstd::String(10000, 'a')), "AAA"});
     auto iregex = duql::compile_regex("^(a|aa)+$", true);
     REQUIRE(iregex);
 #ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
@@ -480,7 +482,7 @@ TEST_CASE("str_extract returns a capture group or null") {
           Opt<dstd::String>{"12-34", dstd::nullopt, dstd::nullopt});
     CHECK(refused(dataframe::expr_str_extract(c0(), *re, 3), {&s}));
 
-    const Series hard = strs({dstd::String(10000, 'a') + "!"});
+    const Series hard = strs({dstd::fmt<"{}!">(dstd::String(10000, 'a'))});
     auto slow = duql::compile_regex("^(a|aa)+$", false);
     REQUIRE(slow);
     CHECK(as_strs(run(dataframe::expr_str_extract(c0(), *slow, 1), {&hard})) ==
@@ -1042,9 +1044,7 @@ TEST_CASE("date_part and format_time: types, CSE and refusals") {
          dftu_utils_test::built(
              dataframe::expr_format_time(c0(), "%H", NS_PER_S))});
     CHECK(as_strs(run(both, {&i})) ==
-          Opt<dstd::String>{"22"
-                            "13" +
-                            *fmt(i, "%H", NS_PER_S)[0]});
+          Opt<dstd::String>{dstd::fmt<"2213{}">(*fmt(i, "%H", NS_PER_S)[0])});
     const Expr sum =
         dataframe::expr_arith(ArithOp::Add,
                               dftu_utils_test::built(dataframe::expr_date_part(

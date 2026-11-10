@@ -5,6 +5,7 @@
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -155,7 +156,7 @@ Series doubles(std::int64_t base, std::int64_t n) {
 Series words(std::int64_t base, std::int64_t n) {
     dstd::Vector<dstd::String> v;
     for (std::int64_t i = 0; i < n; ++i)
-        v.push_back("w" + dstd::to_string(base + i));
+        v.push_back(dstd::fmt<"w{}">(base + i));
     return Series::strings(v);
 }
 
@@ -183,7 +184,7 @@ dstd::Vector<DataFrame> ragged_parts() {
         DataFrame df;
         df.names = {"i"};
         df.columns.push_back(ints(base, n));
-        df.names.push_back("x" + dstd::to_string(k % 3));
+        df.names.push_back(dstd::fmt<"x{}">(k % 3));
         df.columns.push_back(ints(base * 2, n));
         df.names.push_back("v");
         df.columns.push_back(k % 2 ? doubles(base, n) : ints(base, n));

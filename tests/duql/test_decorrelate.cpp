@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -138,7 +139,8 @@ TEST_SUITE("duql decorrelate") {
 
     TEST_CASE("what a range sub-query gives") {
         auto read = [](const dstd::String& agg) {
-            return run("from data | where ts < ^.ts | agg { v = " + agg + " }",
+            return run(dstd::fmt<
+                           "from data | where ts < ^.ts | agg { v = {} }">(agg),
                        true)
                 ->read;
         };

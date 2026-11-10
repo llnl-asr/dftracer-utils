@@ -37,7 +37,7 @@ bool writable_dir(dstd::PathView dir) {
     const auto is_dir = dstd::fs::is_directory(dir);
     if (!is_dir.has_value() || !*is_dir) return false;
     const dstd::Path probe =
-        dir / str_cat(".dftracer_probe_", static_cast<long>(::getpid()));
+        dir / dstd::fmt<".dftracer_probe_{}">(static_cast<long>(::getpid()));
     if (!dstd::fs::create_directory(probe.view()).has_value()) return false;
     dstd::fs::remove(probe.view()).discard();
     return true;
@@ -215,7 +215,7 @@ ScratchSession::ScratchSession(std::uint64_t estimated_bytes) {
     dstd::Path joined = root;
     joined /= current_user();
     joined /= "dftracer-utils";
-    joined /= str_cat(static_cast<long>(::getpid()), "_", id);
+    joined /= dstd::fmt<"{}_{}">(static_cast<long>(::getpid()), id);
     const dstd::Path dir = dstd::normalize(joined.view());
     if (!dstd::fs::create_directories(dir.view()).has_value()) return;
     const auto is_dir = dstd::fs::is_directory(dir.view());

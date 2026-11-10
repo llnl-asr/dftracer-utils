@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
@@ -248,7 +249,7 @@ TEST_SUITE("IndexedFileReader") {
         SUBCASE("Rebuild when file modified after index") {
             TestEnvironment env(5);
             dstd::String gz_path = env.create_test_gzip_file();
-            dstd::String index_path = gz_path + ".idx";
+            dstd::String index_path = dstd::fmt<"{}.idx">(gz_path);
             dstd::String db_root =
                 dstd::String(determine_index_path(gz_path, ""));
 
@@ -281,7 +282,7 @@ TEST_SUITE("IndexedFileReader") {
         SUBCASE("No rebuild when index is up to date") {
             TestEnvironment env(5);
             dstd::String gz_path = env.create_test_gzip_file();
-            dstd::String index_path = gz_path + ".idx";
+            dstd::String index_path = dstd::fmt<"{}.idx">(gz_path);
             dstd::String db_root =
                 dstd::String(determine_index_path(gz_path, ""));
 
@@ -309,8 +310,8 @@ TEST_SUITE("IndexedFileReader") {
 
             IndexedFileReaderUtility reader_utility;
             IndexedReadInput input =
-                IndexedReadInput::from_file(gz_path).with_index(gz_path +
-                                                                ".idx");
+                IndexedReadInput::from_file(gz_path).with_index(
+                    dstd::fmt<"{}.idx">(gz_path));
 
             auto reader = dftu_utils_test::ok(reader_utility(input).get());
             REQUIRE(reader != nullptr);
@@ -341,8 +342,8 @@ TEST_SUITE("IndexedFileReader") {
 
             IndexedFileReaderUtility reader_utility;
             IndexedReadInput input =
-                IndexedReadInput::from_file(gz_path).with_index(gz_path +
-                                                                ".idx");
+                IndexedReadInput::from_file(gz_path).with_index(
+                    dstd::fmt<"{}.idx">(gz_path));
 
             auto reader = dftu_utils_test::ok(reader_utility(input).get());
             REQUIRE(reader != nullptr);

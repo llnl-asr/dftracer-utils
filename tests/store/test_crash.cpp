@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
@@ -184,27 +185,25 @@ struct Namespaces {
 };
 
 dstd::String scope_path(int index) {
-    return "/data/crash-" + dstd::to_string(index) + ".dft";
+    return dstd::fmt<"/data/crash-{}.dft">(index);
 }
 
 dstd::String fail_path(int index) {
-    return "/data/crash-failed-" + dstd::to_string(index) + ".dft";
+    return dstd::fmt<"/data/crash-failed-{}.dft">(index);
 }
 
 dstd::String big_path() { return "/data/crash-big.dft"; }
 
 dstd::String fold_key(int index, std::size_t k) {
-    return "c" + dstd::to_string(index) + "-f" + dstd::to_string(k);
+    return dstd::fmt<"c{}-f{}">(index, k);
 }
 
 dstd::String raw_key(int index, int round, std::size_t k) {
-    return "c" + dstd::to_string(index) + "-r" + dstd::to_string(round) + "-k" +
-           dstd::to_string(k);
+    return dstd::fmt<"c{}-r{}-k{}">(index, round, k);
 }
 
 dstd::String raw_value(int index, int round, std::size_t k) {
-    return "v" + dstd::to_string(index) + "-" + dstd::to_string(round) + "-" +
-           dstd::to_string(k);
+    return dstd::fmt<"v{}-{}-{}">(index, round, k);
 }
 
 coro::CoroTask<dstd::Expected<void, dstd::Error>> commit_retrying(
@@ -257,7 +256,8 @@ coro::CoroTask<void> write_coroutine(store::engine::Writer& writer,
         if (index == 0 && round % DURABLE_EVERY == 0) {
             store::Batch durable = writer.batch(ids.durable, scope, 0);
             for (std::size_t k = 0; k < RAW_KEYS; ++k) {
-                const dstd::String key = "d" + raw_key(index, round, k);
+                const dstd::String key =
+                    dstd::fmt<"d{}">(raw_key(index, round, k));
                 const dstd::String value =
                     padded(raw_value(index, round, k), RAW_VALUE_BYTES);
                 durable.put(view_of(key), view_of(value));
@@ -322,13 +322,13 @@ struct Dump {
         for (const auto& entry : rows) {
             if (blank.count(row_group.at(entry.first)) == 0) ++kept;
         }
-        put(out, "rows=" + dstd::to_string(kept));
+        put(out, dstd::fmt<"rows={}">(kept));
         for (const auto& entry : rows) {
             if (blank.count(row_group.at(entry.first)) != 0) continue;
             put(out, entry.first);
             put(out, entry.second);
         }
-        put(out, "scopes=" + dstd::to_string(scopes.size()));
+        put(out, dstd::fmt<"scopes={}">(scopes.size()));
         for (const auto& entry : scopes) {
             put(out, entry.first);
             if (blank.count(entry.first) == 0) {
@@ -379,7 +379,9 @@ struct Dumped {
     std::size_t skipped = 0;
     Dump dump;
 
-    dstd::String text() const { return ok ? dump.text() : "error:" + error; }
+    dstd::String text() const {
+        return ok ? dump.text() : dstd::fmt<"error:{}">(error);
+    }
 };
 
 Dumped dump_snapshot(const store::engine::Snapshot& snapshot,
@@ -392,10 +394,8 @@ Dumped dump_snapshot(const store::engine::Snapshot& snapshot,
         while (!cursor.at_end()) {
             auto value = cursor.value();
             if (!value.has_value()) {
-                out.error = "scan " +
-                            dstd::to_string(
-                                static_cast<int>(value.error().condition())) +
-                            " of " + space;
+                out.error = dstd::fmt<"scan {} of {}">(
+                    static_cast<int>(value.error().condition()), space);
                 return out;
             }
             dstd::String group = group_text(space, cursor.scope());
@@ -406,18 +406,15 @@ Dumped dump_snapshot(const store::engine::Snapshot& snapshot,
             cursor.next();
         }
         if (cursor.error()) {
-            out.error =
-                "scan_all " +
-                dstd::to_string(static_cast<int>(cursor.error()->condition())) +
-                " of " + space;
+            out.error = dstd::fmt<"scan_all {} of {}">(
+                static_cast<int>(cursor.error()->condition()), space);
             return out;
         }
     }
     auto generations = snapshot.generations();
     if (!generations) {
-        out.error =
-            "generations " +
-            dstd::to_string(static_cast<int>(generations.error().condition()));
+        out.error = dstd::fmt<"generations {}">(
+            static_cast<int>(generations.error().condition()));
         return out;
     }
     for (const store::engine::ScopeGeneration& generation : *generations) {
@@ -536,8 +533,8 @@ dstd::String log_text(const dstd::Vector<engine::io_fault::Event>& log) {
             out += "sync";
         } else {
             out += KINDS[static_cast<std::size_t>(event.kind)];
-            out += " offset=" + dstd::to_string(event.offset);
-            out += " length=" + dstd::to_string(event.length);
+            out += dstd::fmt<" offset={}">(event.offset);
+            out += dstd::fmt<" length={}">(event.length);
         }
         out += '\n';
     }
@@ -831,7 +828,7 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
     // the log always passes 64 records and holds a checkpoint record.
     for (int tail = 0; tail < TAIL_COMMITS; ++tail) {
         Batch batch = writer->batch(ids.raw, file_scope("/crash/tail.pfw"), 0);
-        const dstd::String key = "tail-" + dstd::to_string(tail);
+        const dstd::String key = dstd::fmt<"tail-{}">(tail);
         batch.put(view_of(key), view_of(key));
         REQUIRE(writer->commit(std::move(batch)).has_value());
         REQUIRE(flush_writer(*writer).has_value());
@@ -890,9 +887,9 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
 
     // One directory and one file, truncated before every image: a fresh
     // directory per image would be several thousand directory trees.
-    const dstd::String image_dir = dir.str() + "/images";
+    const dstd::String image_dir = dstd::fmt<"{}/images">(dir.str());
     REQUIRE(dstd::fs::create_directories(image_dir).has_value());
-    const dstd::String image_path = image_dir + "/" + file_name;
+    const dstd::String image_path = dstd::fmt<"{}/{}">(image_dir, file_name);
     const auto dump_of = [&](const dstd::String& bytes) {
         write_bytes(image_path, bytes);
         auto snapshot = store::engine::Snapshot::open(image_dir);
@@ -1043,10 +1040,9 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
                     (dstd::fs::temp_directory() / "dftu_store_crash_failure")
                         .str());
                 REQUIRE(dstd::fs::create_directories(root).has_value());
-                const dstd::String tag =
-                    dstd::String(stat.name) + "-k" + dstd::to_string(kill);
-                write_bytes(root + "/" + tag + ".dfs", image);
-                write_bytes(root + "/" + tag + ".log", log_text(log));
+                const dstd::String tag = dstd::fmt<"{}-k{}">(stat.name, kill);
+                write_bytes(dstd::fmt<"{}/{}.dfs">(root, tag), image);
+                write_bytes(dstd::fmt<"{}/{}.log">(root, tag), log_text(log));
                 std::printf(
                     "crash image failed: variant=%s kill=%zu m_lo=%zu m_hi=%zu "
                     "exact=%zu matched=%d seen=%zu read=%s, image and log in "

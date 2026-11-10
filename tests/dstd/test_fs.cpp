@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/path.h>
@@ -412,7 +413,7 @@ TEST_CASE("absolute and canonical") {
     REQUIRE(::symlink("target.txt", dir.file("link.txt").c_str()) == 0);
 
     const dstd::String expected =
-        dstd::String(dstd::fs::current_path().value().str()) + "/child";
+        dstd::fmt<"{}/child">(dstd::fs::current_path().value().str());
     const auto relative_to_cwd = dstd::fs::absolute(dstd::PathView("child"));
     REQUIRE(relative_to_cwd.has_value());
     CHECK(relative_to_cwd->str() == expected);
@@ -460,7 +461,7 @@ TEST_CASE("a trailing separator never follows a symlinked directory") {
     dir.create_file("victim/sub/deep", "x");
     REQUIRE(::symlink(dir.file("victim").c_str(), dir.file("lnk").c_str()) ==
             0);
-    const dstd::Path link(dir.file("lnk") + "/");
+    const dstd::Path link(dstd::fmt<"{}/">(dir.file("lnk")));
 
     dstd::Vector<dstd::String> visited;
     const auto walked = dstd::fs::walk(
@@ -482,7 +483,8 @@ TEST_CASE("a trailing separator never follows a symlinked directory") {
 
     REQUIRE(::symlink(dir.file("victim").c_str(), dir.file("lnk2").c_str()) ==
             0);
-    dstd::fs::remove(dstd::Path(dir.file("lnk2") + "/").view()).discard();
+    dstd::fs::remove(dstd::Path(dstd::fmt<"{}/">(dir.file("lnk2"))).view())
+        .discard();
     CHECK(::access(dir.file("victim/keep").c_str(), F_OK) == 0);
 }
 
@@ -641,27 +643,26 @@ TEST_CASE(
 
     const auto existing = dstd::fs::weakly_canonical(in(dir, "link").view());
     REQUIRE(existing.has_value());
-    CHECK(existing->str() == base + "/real");
+    CHECK(existing->str() == dstd::fmt<"{}/real">(base));
 
     const auto partial = dstd::fs::weakly_canonical(in(dir, "link/a/b").view());
     REQUIRE(partial.has_value());
-    CHECK(partial->str() == base + "/real/a/b");
+    CHECK(partial->str() == dstd::fmt<"{}/real/a/b">(base));
 
     const auto dotdot =
         dstd::fs::weakly_canonical(in(dir, "link/a/../b").view());
     REQUIRE(dotdot.has_value());
-    CHECK(dotdot->str() == base + "/real/b");
+    CHECK(dotdot->str() == dstd::fmt<"{}/real/b">(base));
 
     const auto trailing = dstd::fs::weakly_canonical(in(dir, "link/a/").view());
     REQUIRE(trailing.has_value());
-    CHECK(trailing->str() == base + "/real/a");
+    CHECK(trailing->str() == dstd::fmt<"{}/real/a">(base));
 
     const auto relative =
         dstd::fs::weakly_canonical(dstd::PathView("no_such_dir/x"));
     REQUIRE(relative.has_value());
-    CHECK(relative->str() ==
-          dstd::String(dstd::fs::canonical(".").value().str()) +
-              "/no_such_dir/x");
+    CHECK(relative->str() == dstd::fmt<"{}/no_such_dir/x">(
+                                 dstd::fs::canonical(".").value().str()));
 
     const auto empty = dstd::fs::weakly_canonical(dstd::PathView());
     REQUIRE(empty.has_value());
@@ -748,11 +749,11 @@ TEST_CASE("absolute only joins the current directory") {
 
     const auto dotted = dstd::fs::absolute(dstd::PathView("a/../b"));
     REQUIRE(dotted.has_value());
-    CHECK(dotted->str() == base + "/a/../b");
+    CHECK(dotted->str() == dstd::fmt<"{}/a/../b">(base));
 
     const auto trailing = dstd::fs::absolute(dstd::PathView("x/"));
     REQUIRE(trailing.has_value());
-    CHECK(trailing->str() == base + "/x/");
+    CHECK(trailing->str() == dstd::fmt<"{}/x/">(base));
 
     const auto kept = dstd::fs::absolute(dstd::PathView("/p/./q/../r"));
     REQUIRE(kept.has_value());

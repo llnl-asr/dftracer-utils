@@ -20,6 +20,7 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -109,8 +110,8 @@ class GenCursor : public Cursor {
                                              static_cast<std::uint64_t>(keys_));
             t[i] = at_ + i;
             v[i] = static_cast<std::int64_t>(h >> 20) % 1000003;
-            s[i] = pad_ ? dstd::String(pad_, 'x') + dstd::to_string(h)
-                        : "s" + dstd::to_string(h % 977);
+            s[i] = pad_ ? dstd::fmt<"{}{}">(dstd::String(pad_, 'x'), h)
+                        : dstd::fmt<"s{}">(h % 977);
             g[i] = static_cast<std::int64_t>((h >> 40) % 64);
         }
         at_ += n;
@@ -174,7 +175,7 @@ Series make_tk(std::int64_t n, std::int64_t at) {
         offsets[static_cast<std::size_t>(i)] = static_cast<std::int32_t>(2 * i);
         for (std::int64_t j = 0; j < 2; ++j) {
             const auto e = static_cast<std::size_t>(2 * i + j);
-            value[e] = "v" + dstd::to_string((at + i + j) % 977);
+            value[e] = dstd::fmt<"v{}">((at + i + j) % 977);
             count[e] = at + i + j;
         }
     }
@@ -361,7 +362,7 @@ const dstd::Map<dstd::String, Recipe>& recipes() {
          [](const LazyFrame& b) {
              LazyFrame w = b.select({"k", "v"});
              for (int i = 0; i < 16; ++i)
-                 w = w.with_column("arg.c" + dstd::to_string(i),
+                 w = w.with_column(dstd::fmt<"arg.c{}">(i),
                                    col(1) + lit(std::int64_t{i}));
              return w.group_by(dstd::Vector<dstd::String>{"k"},
                                {GroupAgg{Agg::Count, "", "n"}},

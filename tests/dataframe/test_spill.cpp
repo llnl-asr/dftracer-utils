@@ -121,7 +121,7 @@ TEST_SUITE("spill") {
             x ^= x >> 7;
             x ^= x << 17;
             a[i] = i < N / 2 ? i % 97 : static_cast<std::int64_t>(x);
-            s[i] = "name" + dstd::to_string(i % 31);
+            s[i] = dstd::fmt<"name{}">(i % 31);
             if (i % 13 == 0)
                 valid[i / 8] =
                     static_cast<std::uint8_t>(valid[i / 8] & ~(1u << (i % 8)));

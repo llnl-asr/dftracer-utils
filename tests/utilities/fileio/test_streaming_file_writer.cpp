@@ -6,6 +6,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
@@ -274,7 +275,7 @@ TEST_CASE("StreamingFileWriterUtility - Round Trip") {
         {
             StreamingFileWriterUtility writer(dstd::PathView(test_file.str()));
             for (int i = 0; i < 100; ++i) {
-                dstd::String line = "Line " + dstd::to_string(i) + "\n";
+                dstd::String line = dstd::fmt<"Line {}\n">(i);
                 dftu_utils_test::ok(writer.process(dstd::ByteView(line)).get());
                 original_data += line;
             }

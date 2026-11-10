@@ -15,6 +15,7 @@
 //   pressure_read_bench --smoke   (5 runs of 100 reads, checks each read is
 //   nonzero)
 
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <memory_probe.h>
@@ -174,8 +175,8 @@ dftracer::utils::dstd::String cgroup_dir() {
         const dftracer::utils::dstd::StringView line =
             text.substr(pos, eol - pos);
         if (line.starts_with("0::"))
-            path = dftracer::utils::dstd::String(CGROUP_ROOT) +
-                   dftracer::utils::dstd::String(line.substr(3));
+            path =
+                dftracer::utils::dstd::fmt<"{}{}">(CGROUP_ROOT, line.substr(3));
         pos = eol + 1;
     }
     return path;
@@ -188,7 +189,7 @@ bool measure_file(const dftracer::utils::dstd::String& label,
     bool ok = true;
     Buffer b;
     ok &= measure(
-        label + ", open/read/close", reads,
+        dftracer::utils::dstd::fmt<"{}, open/read/close">(label), reads,
         [&] { return read_once_file(path, b) ? parse(b) : 0; }, rows);
     const KeptFd fd(path);
     if (!fd.ok()) {
@@ -196,7 +197,7 @@ bool measure_file(const dftracer::utils::dstd::String& label,
         return false;
     }
     ok &= measure(
-        label + ", pread kept fd", reads,
+        dftracer::utils::dstd::fmt<"{}, pread kept fd">(label), reads,
         [&] { return fd.reread(b) ? parse(b) : 0; }, rows);
     return ok;
 }
@@ -214,10 +215,12 @@ bool run_platform(std::size_t reads, dftracer::utils::dstd::Vector<Row>& rows) {
                 return dftu::memory_probe::detail::cgroup_anon_bytes(v) ? v : 0;
             },
             rows);
-        ok &= measure_file("memory.stat anon+shmem", dir + "/memory.stat",
+        ok &= measure_file("memory.stat anon+shmem",
+                           dftracer::utils::dstd::fmt<"{}/memory.stat">(dir),
                            reads, parse_stat, rows);
-        ok &= measure_file("memory.current", dir + "/memory.current", reads,
-                           parse_current, rows);
+        ok &= measure_file("memory.current",
+                           dftracer::utils::dstd::fmt<"{}/memory.current">(dir),
+                           reads, parse_current, rows);
     }
     ok &= measure_file("/proc/self/status RssAnon", "/proc/self/status", reads,
                        parse_status, rows);

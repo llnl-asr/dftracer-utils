@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -346,20 +347,19 @@ TEST_CASE("decoded views stay valid while later strings are decoded") {
     dstd::String line = "{";
     for (int i = 0; i < 400; ++i) {
         if (i) line += ',';
-        line += "\"k" + dstd::to_string(i) + "\":\"v\\n" + dstd::to_string(i) +
-                dstd::String(500, 'x') + "\"";
+        line += dstd::fmt<"\"k{}\":\"v\\n{}{}\"">(i, i, dstd::String(500, 'x'));
     }
     line += "}";
     Value v = root(doc, line);
     dstd::Vector<dstd::StringView> views;
     for (int i = 0; i < 400; ++i) {
-        auto s = field(v, "k" + dstd::to_string(i)).as_string();
+        auto s = field(v, dstd::fmt<"k{}">(i)).as_string();
         REQUIRE(s.has_value());
         views.push_back(*s);
     }
     for (int i = 0; i < 400; ++i) {
         const dstd::String want =
-            "v\n" + dstd::to_string(i) + dstd::String(500, 'x');
+            dstd::fmt<"v\n{}{}">(i, dstd::String(500, 'x'));
         CHECK(views[static_cast<std::size_t>(i)] == want);
     }
 }
@@ -457,15 +457,13 @@ TEST_CASE("a line longer than the first buffer parses") {
 TEST_CASE("reuse across many parses gives independent answers") {
     Document doc;
     for (int i = 0; i < 2000; ++i) {
-        const dstd::String line = R"({"id":)" + dstd::to_string(i) +
-                                  R"(,"name":"n)" + dstd::to_string(i) +
-                                  R"(","args":{"v":)" + dstd::to_string(i * 2) +
-                                  "}}";
+        const dstd::String line =
+            dstd::fmt<R"({"id":{},"name":"n{}","args":{"v":{}}})">(i, i, i * 2);
         Value v = root(doc, line);
         CHECK(field(v, "id").as_int() == i);
         Value args = field(v, "args");
         CHECK(field(args, "v").as_int() == i * 2);
-        CHECK(field(v, "name").as_string() == "n" + dstd::to_string(i));
+        CHECK(field(v, "name").as_string() == dstd::fmt<"n{}">(i));
     }
 }
 
@@ -612,7 +610,7 @@ TEST_CASE("a number with a bad grammar stays a read error") {
     Document doc;
     for (const char* bad : {"tru", "01", "1x", "-", "1.", "+1", ".5", "NaN",
                             "1e", "1e+", "0x1"}) {
-        const dstd::String line = dstd::String(R"({"a":)") + bad + R"(,"b":2})";
+        const dstd::String line = dstd::fmt<R"({"a":{},"b":2})">(bad);
         auto parsed = doc.parse(line);
         if (!parsed) continue;
         CAPTURE(bad);
@@ -699,9 +697,8 @@ TEST_CASE(
     const dstd::String d308(308, '9');
     const dstd::String d309(309, '9');
     const dstd::String line =
-        R"({"a":18446744073709551616,"b":99999999999999999999,)"
-        R"("c":)" +
-        d308 + R"(,"d":)" + d309 + R"(,"e":-)" + d309 + R"(,"f":2})";
+        dstd::fmt<R"({"a":18446744073709551616,"b":99999999999999999999,)"
+                  R"("c":{},"d":{},"e":-{},"f":2})">(d308, d309, d309);
     Value v = root(doc, line);
     CHECK(field(v, "a").as_double() == 18446744073709551616.0);
     CHECK(field(v, "b").as_double() == 1e20);
@@ -717,9 +714,9 @@ TEST_CASE("get_double_or_refused agrees with as_double on wide integers") {
     const dstd::String d309(309, '9');
     for (const dstd::String& token :
          {dstd::String("18446744073709551616"),
-          dstd::String("99999999999999999999"), d309, "-" + d309,
+          dstd::String("99999999999999999999"), d309, dstd::fmt<"-{}">(d309),
           dstd::String("1e400")}) {
-        const dstd::String line = R"({"a":)" + token + "}";
+        const dstd::String line = dstd::fmt<R"({"a":{}})">(token);
         Document doc;
         Value v = root(doc, line);
         const auto expected = field(v, "a").as_double();

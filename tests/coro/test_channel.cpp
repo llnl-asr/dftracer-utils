@@ -4,6 +4,7 @@
 #include <dftracer/utils/coro/generator.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
@@ -1466,7 +1467,7 @@ TEST_CASE("Channel - spawn_transforms() two-stage pipeline") {
 
             // Transform 2: string -> string (prefix)
             auto prefix = [](dstd::String val) -> coro::CoroTask<dstd::String> {
-                co_return "item_" + val;
+                co_return dstd::fmt<"item_{}">(val);
             };
             for (int w = 0; w < 2; ++w) {
                 scope.spawn([&]() -> coro::CoroTask<void> {

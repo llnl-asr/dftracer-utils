@@ -10,6 +10,7 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -239,8 +240,8 @@ TEST_SUITE("expression string methods") {
             for (int i = 0; i < 300; ++i) {
                 auto r = dftracer::utils::dataframe::eval(e, in);
                 if (r.has_value() || dstd::String(r.error().message())
-                                             .find("'" + dstd::String(needle) +
-                                                   "'") == dstd::String::npos)
+                                             .find(dstd::fmt<"'{}'">(needle)) ==
+                                         dstd::String::npos)
                     ++wrong;
             }
         };

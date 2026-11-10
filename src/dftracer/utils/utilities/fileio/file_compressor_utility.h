@@ -6,6 +6,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
@@ -36,7 +37,7 @@ struct FileCompressionUtilityInput {
             common::constants::indexer::DEFAULT_CHECKPOINT_SIZE) {
         return FileCompressionUtilityInput{
             dstd::String(input_path),
-            dstd::String(input_path) + ".gz",  // Auto-generate output path
+            dstd::fmt<"{}.gz">(input_path),  // Auto-generate output path
             compression_level, member_size};
     }
 
@@ -136,9 +137,8 @@ class FileCompressorUtility {
             if (!found.has_value())
                 throw common::DFTUtilsException(found.error());
             if (!*found) {
-                co_return common::make_error(
-                    common::ErrorCode::NotFound,
-                    "Input file does not exist: " + input.input_path);
+                co_return common::make_error<"Input file does not exist: {}">(
+                    common::ErrorCode::NotFound, input.input_path);
             }
 
             // Get original file size
@@ -189,9 +189,8 @@ class FileCompressorUtility {
             // Clean up partial output file on error
             dstd::fs::remove(dstd::PathView(input.output_path)).discard();
 
-            co_return common::make_error(
-                common::ErrorCode::Compression,
-                dstd::String("Compression failed: ") + e.what());
+            co_return common::make_error<"Compression failed: {}">(
+                common::ErrorCode::Compression, e.what());
         }
 
         FileCompressionUtilityOutput payload;

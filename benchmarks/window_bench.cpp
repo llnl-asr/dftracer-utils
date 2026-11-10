@@ -11,6 +11,7 @@
 #include <dftracer/utils/dataframe/frame_ops.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -64,8 +65,7 @@ DataFrame make_frame(std::int64_t n) {
         ts[i] = i / PARTITIONS;
         by[i] = by_dist(rng);
         v[i] = dist(rng);
-        s[i] =
-            "str" + dftracer::utils::dstd::to_string(rng() % DISTINCT_STRINGS);
+        s[i] = dstd::fmt<"str{}">(rng() % DISTINCT_STRINGS);
     }
     DataFrame d;
     d.names = {"key", "ts", "v", "by", "s"};

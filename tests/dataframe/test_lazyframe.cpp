@@ -14,6 +14,7 @@
 #include <dftracer/utils/dataframe/internal/native_transform.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -1321,7 +1322,7 @@ TEST_SUITE("lazyframe") {
                 if (i % 23 == 4) g[z] = std::nan("");
                 u[z] = static_cast<std::int32_t>((i * 3) % 7);
                 w[z] = static_cast<std::uint64_t>((i * 29) % 1000);
-                s[z] = "s" + dstd::to_string((i * 5) % 13);
+                s[z] = dstd::fmt<"s{}">((i * 5) % 13);
                 if (i % 7 != 0)
                     vv[z >> 3] |= static_cast<std::uint8_t>(1u << (z & 7));
                 if (i % 11 != 0)
@@ -1604,7 +1605,7 @@ TEST_SUITE("lazyframe") {
             p[z] = i % 2 == 0 ? 0 : i;
             o[z] = (i * 13) % 977;
             v[z] = (i * 17) % 53 - 20;
-            s[z] = "s" + dstd::to_string(i % 31);
+            s[z] = dstd::fmt<"s{}">(i % 31);
         }
         DataFrame df;
         df.names = {"p", "o", "v", "s"};
@@ -1870,8 +1871,9 @@ TEST_SUITE("lazyframe") {
             const auto z = static_cast<std::size_t>(i);
             k[z] = (i * 5) % 7;
             k2[z] = static_cast<std::int32_t>(i % 3);
-            names[z] = dstd::String(1, static_cast<char>('a' + i % 4)) +
-                       (i % 5 == 0 ? "-long-key-over-the-sso-limit" : "");
+            names[z] = dstd::fmt<"{}{}">(
+                dstd::String(1, static_cast<char>('a' + i % 4)),
+                (i % 5 == 0 ? "-long-key-over-the-sso-limit" : ""));
             if (i % 23 != 0)
                 kv[z >> 3] |= static_cast<std::uint8_t>(1u << (z & 7));
             if (i % 9 != 0)
@@ -2130,7 +2132,7 @@ TEST_SUITE("lazyframe") {
             k[z] = (i * 7) % 37;
             kf[z] = float_keys[(i * 5) % 8];
             v[z] = i % 101 - 50;
-            names[z] = "g" + dstd::to_string(k[z]);
+            names[z] = dstd::fmt<"g{}">(k[z]);
             if (i % 19 != 0)
                 kv[z >> 3] |= static_cast<std::uint8_t>(1u << (z & 7));
         }
@@ -2356,7 +2358,7 @@ TEST_SUITE("lazyframe") {
         dstd::Vector<dstd::String> names;
         for (std::int64_t i = 0; i < 5000; ++i) {
             a.push_back(i * 3);
-            names.push_back("n" + dstd::to_string(i % 17));
+            names.push_back(dstd::fmt<"n{}">(i % 17));
         }
         DataFrame df;
         df.names = {"a", "s"};
@@ -2801,7 +2803,7 @@ TEST_SUITE("lazyframe") {
         dstd::Vector<dstd::String> i(n);
         for (std::int64_t r = 0; r < n; ++r) {
             const std::int64_t h = (r * 2654435761LL) % 1009;
-            i[static_cast<std::size_t>(r)] = "row" + dstd::to_string(h);
+            i[static_cast<std::size_t>(r)] = dstd::fmt<"row{}">(h);
             k[static_cast<std::size_t>(r)] = (r * 7 + h) % 5;
             v[static_cast<std::size_t>(r)] = r;
         }

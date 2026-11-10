@@ -3,6 +3,7 @@
 #include <dftracer/utils/coro/adaptive_gate.h>
 #include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/coro/combinators.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/os.h>
@@ -213,9 +214,8 @@ coro::CoroTask<void> walk_root(dstd::SharedPtr<WalkPlan> plan, dstd::Path root,
         co_return;
     }
     if (found->kind != FileKind::Directory) {
-        dstd::Error error(
-            dstd::Condition::InvalidArgument,
-            common::str_cat("Path is not a directory: ", root.str()));
+        dstd::Error error(dstd::Condition::InvalidArgument,
+                          dstd::fmt<"Path is not a directory: {}">(root.str()));
         auto reported = report(plan, out, std::move(error));
         co_await std::move(reported);
         co_return;
@@ -400,9 +400,9 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> write_owned(
         auto put = co_await std::move(writing);
         if (!put) co_return dstd::Unexpected(put.error());
         if (*put == 0) {
-            co_return dstd::Unexpected(dstd::Error(
-                dstd::Condition::Io,
-                common::str_cat("Cannot write file: ", path.str())));
+            co_return dstd::Unexpected(
+                dstd::Error::from_format<"Cannot write file: {}">(
+                    dstd::Condition::Io, path.str()));
         }
         done += *put;
     }

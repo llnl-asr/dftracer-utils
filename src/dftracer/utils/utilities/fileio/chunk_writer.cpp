@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -38,8 +39,9 @@ coro::CoroTask<dstd::Result<void>> ChunkWriter::open() {
     opts.memory_budget = config_.memory_budget;
     opts.part_size = config_.chunk_size_bytes;
     opts.part_name = [this](std::size_t idx) {
-        return config_.output_dir + "/" + config_.base_name + "_chunk" +
-               dstd::to_string(idx) + ".pfw" + (config_.compress ? ".gz" : "");
+        return dstd::fmt<"{}/{}_chunk{}.pfw{}">(
+            config_.output_dir, config_.base_name, idx,
+            (config_.compress ? ".gz" : ""));
     };
     opts.on_part = [this](std::size_t part, dstd::StringView path,
                           std::uint64_t uc_bytes, std::uint64_t lines) {

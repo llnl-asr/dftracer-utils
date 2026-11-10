@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -398,7 +399,7 @@ TEST_SUITE("index store segment") {
         engine::SegmentBuilder builder;
         const dstd::String value(engine::GRANULE_BYTES / 2 - 32, 'v');
         for (std::size_t i = 0; i < 12; ++i) {
-            const dstd::String key = "key-" + dstd::to_string(i);
+            const dstd::String key = dstd::fmt<"key-{}">(i);
             builder.add(view_of(key), view_of(value));
         }
         const auto sealed = builder.seal(nullptr, nullptr, nullptr);
@@ -458,8 +459,8 @@ TEST_SUITE("index store segment") {
         const dstd::String value(1000, 'v');
         for (std::size_t i = 0; i < 300; ++i) {
             const dstd::String digits = dstd::to_string(i);
-            const dstd::String key =
-                "key-" + dstd::String(4 - digits.size(), '0') + digits;
+            const dstd::String key = dstd::fmt<"key-{}{}">(
+                dstd::String(4 - digits.size(), '0'), digits);
             keys.push_back(key);
             builder.add(view_of(key), view_of(value));
         }
@@ -500,9 +501,9 @@ TEST_SUITE("index store segment") {
         };
 
         for (const dstd::String& key : keys) check(key);
-        check(keys.front() + "x");
+        check(dstd::fmt<"{}x">(keys.front()));
         for (std::size_t i = 0; i + 1 < keys.size(); ++i) {
-            check(keys[i] + "x");
+            check(dstd::fmt<"{}x">(keys[i]));
         }
         check("aaa");
         check("zzz");
@@ -523,8 +524,8 @@ TEST_SUITE("index store segment") {
         const dstd::String value(1000, 'v');
         for (std::size_t i = 0; i < 300; ++i) {
             const dstd::String digits = dstd::to_string(i);
-            const dstd::String key =
-                "key-" + dstd::String(4 - digits.size(), '0') + digits;
+            const dstd::String key = dstd::fmt<"key-{}{}">(
+                dstd::String(4 - digits.size(), '0'), digits);
             keys.push_back(key);
             builder.add(view_of(key), view_of(value));
         }
@@ -537,7 +538,8 @@ TEST_SUITE("index store segment") {
         const dstd::ByteView head{sealed->data(), head_bytes};
 
         // The first key of each granule, so bounds also fall on granule edges.
-        dstd::Vector<dstd::String> bounds = {"aaa", "zzz", keys.back() + "x"};
+        dstd::Vector<dstd::String> bounds = {"aaa", "zzz",
+                                             dstd::fmt<"{}x">(keys.back())};
         std::uint32_t last_offset = 0;
         for (const dstd::String& key : keys) {
             const auto granule =
@@ -549,7 +551,7 @@ TEST_SUITE("index store segment") {
         }
         REQUIRE(bounds.size() > 7);
         for (std::size_t i = 0; i < keys.size(); i += 37) {
-            bounds.push_back(keys[i] + "x");
+            bounds.push_back(dstd::fmt<"{}x">(keys[i]));
         }
 
         const auto range_of = [&](const dstd::String& begin,
@@ -600,7 +602,7 @@ TEST_SUITE("index store segment") {
         engine::SegmentBuilder builder;
         const dstd::String value(engine::GRANULE_BYTES / 2 - 32, 'v');
         for (std::size_t i = 0; i < 6; ++i) {
-            const dstd::String key = "key-" + dstd::to_string(i);
+            const dstd::String key = dstd::fmt<"key-{}">(i);
             builder.add(view_of(key), view_of(value));
         }
         const auto sealed = builder.seal(nullptr, nullptr, nullptr);
@@ -674,7 +676,7 @@ TEST_SUITE("index store segment") {
         engine::SegmentBuilder builder;
         dstd::Vector<dstd::String> keys;
         for (std::size_t i = 0; i < 200; ++i) {
-            const dstd::String key = "key-" + dstd::to_string(i);
+            const dstd::String key = dstd::fmt<"key-{}">(i);
             const dstd::String value(64, static_cast<char>('a' + (i % 26)));
             keys.push_back(key);
             builder.add(view_of(key), view_of(value));

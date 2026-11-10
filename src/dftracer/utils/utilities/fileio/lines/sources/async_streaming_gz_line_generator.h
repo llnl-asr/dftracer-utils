@@ -6,6 +6,7 @@
 #include <dftracer/utils/common/exception_helpers.h>
 #include <dftracer/utils/coro/async_generator.h>
 #include <dftracer/utils/dstd/file.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -35,9 +36,11 @@ inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
             file_path.c_str(), O_RDONLY);
         if (fd_result < 0) {
             throw common::DFTUtilsException(
-                common::ErrorCode::Io,
-                "Cannot open compressed file: " + file_path + " (errno=" +
-                    dstd::to_string(static_cast<int>(-fd_result)) + ")");
+                common::make_error<
+                    "Cannot open compressed file: {} (errno={})">(
+                    common::ErrorCode::Io, file_path,
+                    static_cast<int>(-fd_result))
+                    .error());
         }
         owned = dftracer::utils::dstd::File::from_native_handle(
             static_cast<int>(fd_result));
@@ -47,7 +50,9 @@ inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
     const auto st = fd.stat();
     if (!st) {
         throw common::DFTUtilsException(
-            common::ErrorCode::Io, "Cannot stat compressed file: " + file_path);
+            common::make_error<"Cannot stat compressed file: {}">(
+                common::ErrorCode::Io, file_path)
+                .error());
     }
     const std::uint64_t file_size = st->size;
 

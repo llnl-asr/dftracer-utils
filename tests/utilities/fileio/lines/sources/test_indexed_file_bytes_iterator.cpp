@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -31,7 +32,8 @@ TEST_SUITE("IndexedFileBytesIterator") {
             indexer->build();
 
             // Create reader
-            auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
+            auto reader =
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
             REQUIRE(reader != nullptr);
 
             // Get file size to determine byte range
@@ -59,7 +61,8 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
+            auto reader =
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
             REQUIRE(reader != nullptr);
 
             // Read first 300 bytes
@@ -86,7 +89,8 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
+            auto reader =
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
             REQUIRE(reader != nullptr);
 
             // Read bytes 200-400 (should skip some initial lines)
@@ -111,7 +115,8 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
+            auto reader =
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
             REQUIRE(reader != nullptr);
 
             // Read just 50 bytes
@@ -136,7 +141,8 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
+            auto reader =
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
             REQUIRE(reader != nullptr);
 
             std::size_t file_size = reader->max_bytes();
@@ -162,7 +168,8 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
+            auto reader =
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
             REQUIRE(reader != nullptr);
 
             std::size_t file_size = reader->max_bytes();
@@ -190,7 +197,8 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
+            auto reader =
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
             REQUIRE(reader != nullptr);
 
             std::size_t file_size = reader->max_bytes();
@@ -216,7 +224,8 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
+            auto reader =
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
             REQUIRE(reader != nullptr);
 
             std::size_t file_size = reader->max_bytes();
@@ -247,7 +256,8 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
+            auto reader =
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
             REQUIRE(reader != nullptr);
 
             // Read first 200 bytes
@@ -273,7 +283,8 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
+            auto reader =
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
             REQUIRE(reader != nullptr);
 
             std::size_t file_size = reader->max_bytes();
@@ -304,7 +315,8 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
+            auto reader =
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
             REQUIRE(reader != nullptr);
 
             // Start at byte 200
@@ -331,7 +343,8 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
+            auto reader =
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
             REQUIRE(reader != nullptr);
 
             // start >= end
@@ -350,7 +363,8 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
+            auto reader =
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
             REQUIRE(reader != nullptr);
 
             // Read small byte range that contains only 1-2 lines
@@ -375,7 +389,8 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
+            auto reader =
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
             REQUIRE(reader != nullptr);
 
             std::size_t file_size = reader->max_bytes();
@@ -404,7 +419,8 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
+            auto reader =
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
             REQUIRE(reader != nullptr);
 
             // Read bytes 5000-10000
@@ -430,7 +446,8 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
+            auto reader =
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
             REQUIRE(reader != nullptr);
 
             // Test multiple small ranges
@@ -462,7 +479,8 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
+            auto reader =
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
             REQUIRE(reader != nullptr);
 
             std::size_t file_size = reader->max_bytes();
@@ -496,7 +514,8 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
+            auto reader =
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
             REQUIRE(reader != nullptr);
 
             std::size_t file_size = reader->max_bytes();
@@ -518,7 +537,8 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
+            auto reader =
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
             REQUIRE(reader != nullptr);
 
             // Read just one byte
@@ -540,7 +560,8 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
+            auto reader =
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
             REQUIRE(reader != nullptr);
 
             // Read first 100 bytes (will likely cut mid-line)
@@ -565,7 +586,8 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
+            auto reader =
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
             REQUIRE(reader != nullptr);
 
             std::size_t file_size = reader->max_bytes();
@@ -596,8 +618,10 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader1 = ReaderFactory::create(gz_path, gz_path + ".idx");
-            auto reader2 = ReaderFactory::create(gz_path, gz_path + ".idx");
+            auto reader1 =
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader2 =
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
             REQUIRE(reader1 != nullptr);
             REQUIRE(reader2 != nullptr);
 

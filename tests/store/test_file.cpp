@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -173,8 +174,7 @@ struct TempDir {
         const auto now =
             std::chrono::steady_clock::now().time_since_epoch().count();
         path = dstd::fs::temp_directory() /
-               ("dftu_store_file_" + dstd::to_string(::getpid()) + "_" +
-                dstd::to_string(now));
+               (dstd::fmt<"dftu_store_file_{}_{}">(::getpid(), now));
         REQUIRE(dstd::fs::create_directories(path).has_value());
     }
 
@@ -195,8 +195,7 @@ struct SegmentData {
 SegmentData make_segment(std::uint32_t seed, std::size_t entry_count) {
     engine::SegmentBuilder builder;
     for (std::size_t i = 0; i < entry_count; ++i) {
-        const dstd::String key =
-            "key-" + dstd::to_string(seed) + "-" + dstd::to_string(i);
+        const dstd::String key = dstd::fmt<"key-{}-{}">(seed, i);
         const dstd::String value(
             64, static_cast<char>('a' + static_cast<int>((seed + i) % 26U)));
         builder.add(view_of(key), view_of(value));
@@ -210,7 +209,7 @@ SegmentData make_segment(std::uint32_t seed, std::size_t entry_count) {
 engine::NamespaceItem make_namespace(std::uint32_t local_id) {
     engine::NamespaceItem item;
     item.local_id = local_id;
-    item.name = dstd::String("test.ns." + dstd::to_string(local_id));
+    item.name = dstd::String(dstd::fmt<"test.ns.{}">(local_id));
     item.format_version = 7;
     item.fold_kind = 0;
     item.codec = 0;
@@ -223,7 +222,7 @@ engine::ScopeItem make_scope(std::uint32_t local_id) {
     item.local_id = local_id;
     item.kind = local_id % 2 == 0 ? ScopeKind::File : ScopeKind::Files;
     item.paths.push_back(
-        dstd::String("/traces/run" + dstd::to_string(local_id) + ".pfw"));
+        dstd::String(dstd::fmt<"/traces/run{}.pfw">(local_id)));
     return item;
 }
 
@@ -256,9 +255,8 @@ engine::DropItem make_drop(std::uint32_t namespace_id, std::uint32_t scope_id,
     item.scope_id = scope_id;
     item.generation = generation;
     if (generation % 2 != 0) {
-        item.begin_key =
-            bytes_of_string("begin-" + dstd::to_string(generation));
-        item.end_key = bytes_of_string("end-" + dstd::to_string(generation));
+        item.begin_key = bytes_of_string(dstd::fmt<"begin-{}">(generation));
+        item.end_key = bytes_of_string(dstd::fmt<"end-{}">(generation));
     }
     return item;
 }
@@ -286,7 +284,7 @@ SegmentData make_wide_segment(std::uint32_t seed, std::size_t key_bytes) {
     engine::SegmentBuilder builder;
     dstd::String key = dstd::to_string(seed);
     key.resize(key_bytes, 'k');
-    const dstd::String value = "v" + dstd::to_string(seed);
+    const dstd::String value = dstd::fmt<"v{}">(seed);
     builder.add(view_of(key), view_of(value));
     auto sealed = builder.seal(nullptr, nullptr, nullptr);
     if (!sealed) return {};
@@ -748,8 +746,7 @@ TEST_SUITE("index store file") {
         dstd::Vector<engine::ExtentRef> expected_extents;
         for (std::uint32_t commit_id = 1; commit_id <= 200; ++commit_id) {
             const engine::NamespaceItem ns = make_namespace(commit_id);
-            const dstd::String extent_bytes =
-                "extent-" + dstd::to_string(commit_id);
+            const dstd::String extent_bytes = dstd::fmt<"extent-{}">(commit_id);
             auto extent = writer.append_extent(view_of(extent_bytes));
             REQUIRE(extent.has_value());
             engine::ExtentRefItem ref;
@@ -1125,8 +1122,7 @@ TEST_SUITE("index store file") {
         auto& writer = *created;
         for (std::uint32_t commit_id = 1; commit_id <= 5; ++commit_id) {
             const engine::NamespaceItem ns = make_namespace(commit_id);
-            const dstd::String extent_bytes =
-                "extent-" + dstd::to_string(commit_id);
+            const dstd::String extent_bytes = dstd::fmt<"extent-{}">(commit_id);
             auto extent = writer.append_extent(view_of(extent_bytes));
             REQUIRE(extent.has_value());
             engine::ExtentRefItem ref;
@@ -1165,8 +1161,7 @@ TEST_SUITE("index store file") {
         auto& writer = *created;
         for (std::uint32_t commit_id = 1; commit_id <= 5; ++commit_id) {
             const engine::NamespaceItem ns = make_namespace(commit_id);
-            const dstd::String extent_bytes =
-                "extent-" + dstd::to_string(commit_id);
+            const dstd::String extent_bytes = dstd::fmt<"extent-{}">(commit_id);
             auto extent = writer.append_extent(view_of(extent_bytes));
             REQUIRE(extent.has_value());
             engine::ExtentRefItem ref;

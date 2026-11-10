@@ -5,6 +5,7 @@
 #include <dftracer/utils/coro/async_semaphore.h>
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/hash_map.h>
@@ -34,10 +35,9 @@ namespace dftracer::utils::utilities::fileio {
 dstd::String gzip_part_path(dstd::StringView base, int idx, bool multi) {
     if (!multi) return dstd::String(base);
     const std::size_t pos = base.rfind(".pfw");
-    if (pos == dstd::StringView::npos)
-        return dstd::String(base) + "-" + dstd::to_string(idx);
-    return dstd::String(base.substr(0, pos)) + "-" + dstd::to_string(idx) +
-           dstd::String(base.substr(pos));
+    if (pos == dstd::StringView::npos) return dstd::fmt<"{}-{}">(base, idx);
+    return dstd::fmt<"{}-{}{}">(dstd::String(base.substr(0, pos)), idx,
+                                base.substr(pos));
 }
 
 namespace {
@@ -233,7 +233,8 @@ struct GzipLineWriter::Impl {
         const auto open_rc = co_await writer->open(
             cur_path, unordered() ? workers : 1, opts.compress, &scope);
         if (open_rc != 0) {
-            set_error(common::ErrorCode::Io, "cannot open " + cur_path);
+            set_error(common::ErrorCode::Io,
+                      dstd::fmt<"cannot open {}">(cur_path));
             co_return false;
         }
         for (auto& p : writer->output_paths()) created.push_back(p);
@@ -262,7 +263,7 @@ struct GzipLineWriter::Impl {
                                   : co_await writer->write_footer(chunk);
             if (rc != 0) {
                 set_error(common::ErrorCode::Io,
-                          "write failed for " + cur_path);
+                          dstd::fmt<"write failed for {}">(cur_path));
                 co_return false;
             }
             summary.c_bytes += chunk.size();
@@ -270,7 +271,8 @@ struct GzipLineWriter::Impl {
         }
         const auto write_chunk_rc = co_await writer->write_chunk(0, chunk);
         if (write_chunk_rc != 0) {
-            set_error(common::ErrorCode::Io, "write failed for " + cur_path);
+            set_error(common::ErrorCode::Io,
+                      dstd::fmt<"write failed for {}">(cur_path));
             co_return false;
         }
         auto span = writer->last_member(0);
@@ -291,7 +293,8 @@ struct GzipLineWriter::Impl {
         writer.reset();
         if (!ok) {
             if (!failed())
-                set_error(common::ErrorCode::Io, "cannot finish " + cur_path);
+                set_error(common::ErrorCode::Io,
+                          dstd::fmt<"cannot finish {}">(cur_path));
             co_return false;
         }
         if (opts.on_part) opts.on_part(part, cur_path, part_uc, part_lines);
@@ -310,7 +313,8 @@ struct GzipLineWriter::Impl {
                : dstd::ByteView(d.plain.data(), d.plain.size());
         const auto write_chunk_rc = co_await writer->write_chunk(0, chunk);
         if (write_chunk_rc != 0) {
-            set_error(common::ErrorCode::Io, "write failed for " + cur_path);
+            set_error(common::ErrorCode::Io,
+                      dstd::fmt<"write failed for {}">(cur_path));
             co_return;
         }
         auto span = writer->last_member(0);
@@ -343,7 +347,8 @@ struct GzipLineWriter::Impl {
                           : dstd::ByteView(d.plain.data(), d.plain.size());
         const auto write_chunk_rc = co_await writer->write_chunk(slot, chunk);
         if (write_chunk_rc != 0) {
-            set_error(common::ErrorCode::Io, "write failed for " + cur_path);
+            set_error(common::ErrorCode::Io,
+                      dstd::fmt<"write failed for {}">(cur_path));
             co_return;
         }
         std::lock_guard<std::mutex> lk(mu);

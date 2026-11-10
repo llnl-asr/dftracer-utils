@@ -1492,6 +1492,11 @@ foreach(variant objects shared static)
       target_set_warnings(dftracer_utils_trace_objects)
       target_compile_options(dftracer_utils_trace_objects
                              PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
+      # Calls to header-inline code (simdjson, dstd) stay inside trace and do
+      # not bind through the PLT to another library's copy, which is built
+      # with other flags.
+      set_target_properties(dftracer_utils_trace_objects
+                            PROPERTIES VISIBILITY_INLINES_HIDDEN ON)
     elseif(COVERAGE_LINK_OPTIONS)
       target_link_libraries(${VARIANT_TARGET}
                             PRIVATE ${COVERAGE_LINK_OPTIONS})

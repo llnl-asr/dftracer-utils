@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -42,20 +43,21 @@ bool ComparisonConfig::parse_node(simdjson::dom::element val,
         error = "node missing required string field 'name'";
         return false;
     }
-    node.name = dstd::String(name_result.value_unsafe().get_string().value());
+    node.name =
+        dstd::String(name_result.value_unsafe().get_string().value_unsafe());
 
     auto query_result = val["duql"];
     if (!query_result.error() && query_result.value_unsafe().is_string()) {
-        node.query =
-            dstd::String(query_result.value_unsafe().get_string().value());
+        node.query = dstd::String(
+            query_result.value_unsafe().get_string().value_unsafe());
     }
 
     auto gb_result = val["group_by"];
     if (!gb_result.error() && gb_result.value_unsafe().is_array()) {
-        for (auto elem : gb_result.value_unsafe().get_array()) {
+        for (auto elem : gb_result.value_unsafe().get_array().value_unsafe()) {
             if (elem.is_string()) {
                 node.group_by.push_back(
-                    dstd::String(elem.get_string().value()));
+                    dstd::String(elem.get_string().value_unsafe()));
             }
         }
     }
@@ -63,9 +65,11 @@ bool ComparisonConfig::parse_node(simdjson::dom::element val,
     auto metrics_result = val["metrics"];
     if (!metrics_result.error() && metrics_result.value_unsafe().is_array()) {
         dstd::Vector<dstd::String> metrics;
-        for (auto elem : metrics_result.value_unsafe().get_array()) {
+        for (auto elem :
+             metrics_result.value_unsafe().get_array().value_unsafe()) {
             if (elem.is_string()) {
-                metrics.push_back(dstd::String(elem.get_string().value()));
+                metrics.push_back(
+                    dstd::String(elem.get_string().value_unsafe()));
             }
         }
         node.metrics = std::move(metrics);
@@ -74,9 +78,9 @@ bool ComparisonConfig::parse_node(simdjson::dom::element val,
     auto pct_result = val["percentiles"];
     if (!pct_result.error() && pct_result.value_unsafe().is_array()) {
         dstd::Vector<double> percentiles;
-        for (auto elem : pct_result.value_unsafe().get_array()) {
+        for (auto elem : pct_result.value_unsafe().get_array().value_unsafe()) {
             if (elem.is_double() || elem.is_int64() || elem.is_uint64()) {
-                percentiles.push_back(elem.get_double().value());
+                percentiles.push_back(elem.get_double().value_unsafe());
             }
         }
         node.percentiles = std::move(percentiles);
@@ -86,19 +90,20 @@ bool ComparisonConfig::parse_node(simdjson::dom::element val,
     if (!thr_result.error()) {
         auto thr_val = thr_result.value_unsafe();
         if (thr_val.is_double() || thr_val.is_int64() || thr_val.is_uint64()) {
-            node.threshold_pct = thr_val.get_double().value();
+            node.threshold_pct = thr_val.get_double().value_unsafe();
         }
     }
 
     auto sort_result = val["sort_by"];
     if (!sort_result.error() && sort_result.value_unsafe().is_string()) {
-        node.sort_by =
-            dstd::String(sort_result.value_unsafe().get_string().value());
+        node.sort_by = dstd::String(
+            sort_result.value_unsafe().get_string().value_unsafe());
     }
 
     auto children_result = val["children"];
     if (!children_result.error() && children_result.value_unsafe().is_array()) {
-        for (auto child_elem : children_result.value_unsafe().get_array()) {
+        for (auto child_elem :
+             children_result.value_unsafe().get_array().value_unsafe()) {
             ComparisonNode child;
             if (!parse_node(child_elem, child, error)) return false;
             node.children.push_back(std::move(child));
@@ -113,7 +118,7 @@ dstd::Optional<ComparisonConfig> ComparisonConfig::from_json_file(
     const dstd::String& path, dstd::String& error) {
     auto loaded = dstd::fs::read_file(path);
     if (!loaded) {
-        error = "failed to read or parse JSON file: " + path;
+        error = dstd::fmt<"failed to read or parse JSON file: {}">(path);
         return dstd::nullopt;
     }
     const dstd::String& content = *loaded;
@@ -121,7 +126,7 @@ dstd::Optional<ComparisonConfig> ComparisonConfig::from_json_file(
     simdjson::dom::parser parser;
     auto result = parser.parse(content.data(), content.size());
     if (result.error()) {
-        error = "failed to parse JSON file: " + path;
+        error = dstd::fmt<"failed to parse JSON file: {}">(path);
         return dstd::nullopt;
     }
 
@@ -139,8 +144,8 @@ dstd::Optional<ComparisonConfig> ComparisonConfig::from_json_file(
         error = "missing required string field 'baseline'";
         return dstd::nullopt;
     }
-    cfg.baseline =
-        dstd::String(baseline_result.value_unsafe().get_string().value());
+    cfg.baseline = dstd::String(
+        baseline_result.value_unsafe().get_string().value_unsafe());
 
     auto variant_result = root["variant"];
     if (variant_result.error() || !variant_result.value_unsafe().is_string()) {
@@ -148,7 +153,7 @@ dstd::Optional<ComparisonConfig> ComparisonConfig::from_json_file(
         return dstd::nullopt;
     }
     cfg.variant =
-        dstd::String(variant_result.value_unsafe().get_string().value());
+        dstd::String(variant_result.value_unsafe().get_string().value_unsafe());
 
     auto defaults_result = root["defaults"];
     if (!defaults_result.error() &&
@@ -158,10 +163,11 @@ dstd::Optional<ComparisonConfig> ComparisonConfig::from_json_file(
         auto dm_result = defaults_val["metrics"];
         if (!dm_result.error() && dm_result.value_unsafe().is_array()) {
             cfg.defaults.metrics.clear();
-            for (auto elem : dm_result.value_unsafe().get_array()) {
+            for (auto elem :
+                 dm_result.value_unsafe().get_array().value_unsafe()) {
                 if (elem.is_string()) {
                     cfg.defaults.metrics.push_back(
-                        dstd::String(elem.get_string().value()));
+                        dstd::String(elem.get_string().value_unsafe()));
                 }
             }
         }
@@ -169,10 +175,11 @@ dstd::Optional<ComparisonConfig> ComparisonConfig::from_json_file(
         auto dp_result = defaults_val["percentiles"];
         if (!dp_result.error() && dp_result.value_unsafe().is_array()) {
             cfg.defaults.percentiles.clear();
-            for (auto elem : dp_result.value_unsafe().get_array()) {
+            for (auto elem :
+                 dp_result.value_unsafe().get_array().value_unsafe()) {
                 if (elem.is_double() || elem.is_int64() || elem.is_uint64()) {
                     cfg.defaults.percentiles.push_back(
-                        elem.get_double().value());
+                        elem.get_double().value_unsafe());
                 }
             }
         }
@@ -181,7 +188,7 @@ dstd::Optional<ComparisonConfig> ComparisonConfig::from_json_file(
         if (!dt_result.error()) {
             auto dt_val = dt_result.value_unsafe();
             if (dt_val.is_double() || dt_val.is_int64() || dt_val.is_uint64()) {
-                cfg.defaults.threshold_pct = dt_val.get_double().value();
+                cfg.defaults.threshold_pct = dt_val.get_double().value_unsafe();
             }
         }
 
@@ -189,20 +196,22 @@ dstd::Optional<ComparisonConfig> ComparisonConfig::from_json_file(
         if (!ti_result.error()) {
             auto ti_val = ti_result.value_unsafe();
             if (ti_val.is_double() || ti_val.is_int64() || ti_val.is_uint64()) {
-                cfg.defaults.time_interval_ms = ti_val.get_double().value();
+                cfg.defaults.time_interval_ms =
+                    ti_val.get_double().value_unsafe();
             }
         }
 
         auto ds_result = defaults_val["sort_by"];
         if (!ds_result.error() && ds_result.value_unsafe().is_string()) {
-            cfg.defaults.sort_by =
-                dstd::String(ds_result.value_unsafe().get_string().value());
+            cfg.defaults.sort_by = dstd::String(
+                ds_result.value_unsafe().get_string().value_unsafe());
         }
     }
 
     auto nodes_result = root["nodes"];
     if (!nodes_result.error() && nodes_result.value_unsafe().is_array()) {
-        for (auto node_elem : nodes_result.value_unsafe().get_array()) {
+        for (auto node_elem :
+             nodes_result.value_unsafe().get_array().value_unsafe()) {
             ComparisonNode node;
             if (!parse_node(node_elem, node, error)) {
                 return dstd::nullopt;
@@ -247,7 +256,8 @@ void ComparisonConfig::resolve_node(
     } else if (parent_query.empty()) {
         node.composed_query = node.query;
     } else {
-        node.composed_query = "(" + parent_query + ") AND (" + node.query + ")";
+        node.composed_query =
+            dstd::fmt<"({}) AND ({})">(parent_query, node.query);
     }
 
     node.resolved_metrics = node.metrics.value_or(parent_metrics);

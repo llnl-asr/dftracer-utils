@@ -23,9 +23,11 @@
 // activity, so callers get the graph rather than raw events.
 
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/duql/query.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -157,10 +159,15 @@ struct ProvenanceGraph {
 /// this adds phase(Any) and scans every event, because the dftracer entity
 /// API attaches relation arrays (used/generated/invalidated/updated) to
 /// events of any category; a byte-level prefilter keeps that cheap.
-/// `slot_count` is the worker parallelism (0 -> 1).
-coro::CoroTask<ProvenanceGraph> extract_provenance_graph(
+/// `slot_count` is the worker parallelism (0 -> 1). A failed scan gives the
+/// error of the view's scan.
+coro::CoroTask<dstd::Result<ProvenanceGraph>> extract_provenance_graph(
     const views::View& view, std::size_t slot_count,
     ProvenanceOptions options = {});
+
+/// Parses a query text that is part of the code. A text that does not parse
+/// is a bug of the caller and ends the process. Exposed for tests.
+duql::Query constant_query(const char* text);
 
 /// Split `path` into (mount point, path relative to it) using `table`
 /// (longest prefix wins), then the Rabbit rule (/mnt/nnf/\<id\>), then the

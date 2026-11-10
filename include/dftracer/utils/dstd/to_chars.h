@@ -6,6 +6,7 @@
 #include <dftracer/utils/dstd/string.h>
 
 #include <charconv>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -33,12 +34,24 @@
 
 namespace dftracer::utils::dstd {
 
+/// "nan" (never signed), "inf" or "-inf" into [first, last), the same text on
+/// every platform. Returns past-the-end pointer, nullptr when it does not fit.
+inline char* to_chars_nonfinite(char* first, char* last, double v) noexcept {
+    const char* text = std::isnan(v) ? "nan" : (v < 0 ? "-inf" : "inf");
+    const std::size_t n = std::strlen(text);
+    if (static_cast<std::size_t>(last - first) < n) return nullptr;
+    std::memcpy(first, text, n);
+    return first + n;
+}
+
 /// Format a double into [first, last). Returns past-the-end pointer on
 /// success, nullptr on overflow/error. Uses std::to_chars where available
 /// for shortest round-trip; falls back to snprintf("%.17g", ...) on
 /// platforms where libc++ availability-gates the floating-point overload.
 inline char* to_chars_double(char* first, char* last, double v) noexcept {
     if (last <= first) return nullptr;
+    if (!std::isfinite(v))
+        return to_chars_nonfinite(first, last, static_cast<double>(v));
 #ifdef DFTRACER_UTILS_FP_TO_CHARS_UNAVAILABLE
     // The shortest of %.15g, %.16g and %.17g that reads back as `v`: the
     // same digits std::to_chars gives.
@@ -71,6 +84,8 @@ inline String double_text(double v) {
 /// Falls back to snprintf where libc++ gates the floating-point overload.
 inline char* to_chars_float(char* first, char* last, float v) noexcept {
     if (last <= first) return nullptr;
+    if (!std::isfinite(v))
+        return to_chars_nonfinite(first, last, static_cast<double>(v));
 #ifdef DFTRACER_UTILS_FP_TO_CHARS_UNAVAILABLE
     const std::size_t cap = static_cast<std::size_t>(last - first);
     for (int digits = 6; digits <= 9; ++digits) {
@@ -194,6 +209,8 @@ inline ToCharsResult to_chars(char* first, char* last, T v, int base) noexcept {
 inline char* to_chars_fixed(char* first, char* last, double v,
                             int precision) noexcept {
     if (last <= first) return nullptr;
+    if (!std::isfinite(v))
+        return to_chars_nonfinite(first, last, static_cast<double>(v));
 #ifdef DFTRACER_UTILS_FP_TO_CHARS_UNAVAILABLE
     const std::size_t cap = static_cast<std::size_t>(last - first);
     const int n = std::snprintf(first, cap, "%.*f", precision, v);
@@ -201,6 +218,26 @@ inline char* to_chars_fixed(char* first, char* last, double v,
 #else
     auto [p, ec] =
         std::to_chars(first, last, v, std::chars_format::fixed, precision);
+    return ec == std::errc{} ? p : nullptr;
+#endif
+}
+
+/// `v` with `precision` significant digits, as printf("%.*g") gives it: the
+/// shorter of fixed and scientific notation, trailing zeros removed. Returns
+/// past-the-end pointer on success, nullptr when [first, last) is too short.
+/// Falls back to snprintf where libc++ gates the floating-point overload.
+inline char* to_chars_general(char* first, char* last, double v,
+                              int precision) noexcept {
+    if (last <= first) return nullptr;
+    if (!std::isfinite(v))
+        return to_chars_nonfinite(first, last, static_cast<double>(v));
+#ifdef DFTRACER_UTILS_FP_TO_CHARS_UNAVAILABLE
+    const std::size_t cap = static_cast<std::size_t>(last - first);
+    const int n = std::snprintf(first, cap, "%.*g", precision, v);
+    return n > 0 && static_cast<std::size_t>(n) < cap ? first + n : nullptr;
+#else
+    auto [p, ec] =
+        std::to_chars(first, last, v, std::chars_format::general, precision);
     return ec == std::errc{} ? p : nullptr;
 #endif
 }

@@ -12,7 +12,9 @@
 #include <dftracer/utils/dstd/algorithm.h>
 #include <dftracer/utils/dstd/base64.h>
 #include <dftracer/utils/dstd/deque.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/file.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
@@ -245,9 +247,9 @@ struct GroupMem {
     GroupError budget_error(dstd::StringView what) const {
         return GroupError{
             common::ErrorCode::InvalidArgument, "",
-            common::str_cat("memory budget exceeded by ", what,
-                            " (the share of this run group is ", share,
-                            " bytes); raise --memory-budget"),
+            dstd::fmt<
+                "memory budget exceeded by {} (the share of this run group is "
+                "{} bytes); raise --memory-budget">(what, share),
             true};
     }
 
@@ -488,6 +490,14 @@ dstd::Optional<double> weighted_mean(const SeriesView& s, std::int64_t a,
 
 using simdjson::builder::string_builder;
 
+// A builder that ran out of memory has no text to give.
+dstd::StringView builder_text(const string_builder& b) {
+    dstd::StringView text;
+    if (b.view().get(text) != simdjson::SUCCESS)
+        dstd::fatal("genesis: a JSON builder ran out of memory");
+    return text;
+}
+
 void append_stats(string_builder& sb, const Stats& s, bool with_n,
                   bool with_sum, dstd::Vector<std::uint8_t>& buf) {
     sb.start_object();
@@ -625,7 +635,7 @@ class GroupReader {
                 const auto hh = host_hash.find(dstd::String(cols[1]));
                 if (hh == host_hash.end())
                     return fail(
-                        f, "no HH metadata for host " + dstd::String(cols[1]));
+                        f, dstd::fmt<"no HH metadata for host {}">(cols[1]));
                 const auto parsed = dstd::from_chars<double>(cols[0]);
                 if (!parsed) return fail(f, "stod: no conversion");
                 const auto ts =
@@ -819,8 +829,9 @@ class GroupReader {
                     }
                     return {};
                 }
-                return fail(file, "unknown per-process counter category " +
-                                      dstd::String(cat));
+                return fail(
+                    file,
+                    dstd::fmt<"unknown per-process counter category {}">(cat));
             case RecordPhase::Metadata:
                 if (name == "HH" && has_args)
                     host_hash[dstd::String(get_sv(args, "name"))] =
@@ -840,7 +851,7 @@ class GroupReader {
         const bool gpu = cat == "gpu";
         if (!sys && !net && !io && !gpu)
             return fail(file,
-                        "unknown host counter category " + dstd::String(cat));
+                        dstd::fmt<"unknown host counter category {}">(cat));
         const dstd::String series_name = strip_spaces(name);
         if (sys && is_per_core_cpu(series_name)) return {};
         auto& host = host_series(hhash);
@@ -1083,9 +1094,9 @@ class SetAcc {
         if (!stack_.empty() && end > stack_.back().first) {
             failed_ = GroupError{
                 common::ErrorCode::Parse, spec_->keys.papi_set,
-                common::str_cat("call ", r_->strings[s.name], " at ts ", s.ts,
-                                " ends after its parent ",
-                                recs_[stack_.back().second]->path)};
+                dstd::fmt<"call {} at ts {} ends after its parent {}">(
+                    r_->strings[s.name], s.ts,
+                    recs_[stack_.back().second]->path)};
             return;
         }
         if (const auto id = add(s)) stack_.emplace_back(end, *id);
@@ -1099,14 +1110,15 @@ class SetAcc {
         const auto want = spec_->keys.nodes * spec_->keys.ppn;
         if (static_cast<std::int64_t>(procs.size()) != want)
             return fail(spec_->keys.papi_set,
-                        common::str_cat("expected ", want, " processes, found ",
-                                        procs.size()));
+                        dstd::fmt<"expected {} processes, found {}">(
+                            want, procs.size()));
         for (const auto i : procs) {
             const Proc& p = r_->procs[i];
             if (p.start < 0 || p.end < 0)
-                return fail(spec_->keys.papi_set,
-                            common::str_cat("process ", p.hhash, ":", p.pid,
-                                            " lacks dftracer start or end"));
+                return fail(
+                    spec_->keys.papi_set,
+                    dstd::fmt<"process {}:{} lacks dftracer start or end">(
+                        p.hhash, p.pid));
         }
         return {};
     }
@@ -1153,7 +1165,7 @@ class SetAcc {
         if (found != children_.end()) return found->second;
         auto rec = dstd::make_unique<PathRec>();
         if (parent_plus_one) {
-            rec->path = recs_[parent_plus_one - 1]->path + ";";
+            rec->path = dstd::fmt<"{};">(recs_[parent_plus_one - 1]->path);
             rec->depth = recs_[parent_plus_one - 1]->depth + 1;
         } else {
             rec->depth = 0;
@@ -1363,13 +1375,14 @@ GResult<void> assign_sets(GroupReader& r, const RunGroup& g) {
         for (std::size_t i = 0; i < g.sets.size(); ++i) {
             if (g.sets[i].papi_counters != p.papi_names) continue;
             if (p.set >= 0)
-                return fail("", common::str_cat("process ", p.hhash, ":", p.pid,
-                                                " matches several sets"));
+                return fail("", dstd::fmt<"process {}:{} matches several sets">(
+                                    p.hhash, p.pid));
             p.set = static_cast<int>(i);
         }
         if (p.set < 0)
-            return fail("", common::str_cat("process ", p.hhash, ":", p.pid,
-                                            " PAPI counters match no set"));
+            return fail("",
+                        dstd::fmt<"process {}:{} PAPI counters match no set">(
+                            p.hhash, p.pid));
     }
     return {};
 }
@@ -1383,8 +1396,8 @@ using CallSorter = common::ExternalSorter<SortRec, SortLess>;
 dstd::String group_pool_name(const RunGroup& g) {
     constexpr std::size_t KEEP = 39;
     const dstd::StringView dir = g.dir;
-    return common::str_cat(
-        "genesis/", dir.size() > KEEP ? dir.substr(dir.size() - KEEP) : dir);
+    return dstd::fmt<"genesis/{}">(
+        dir.size() > KEEP ? dir.substr(dir.size() - KEEP) : dir);
 }
 
 struct GroupState {
@@ -1409,8 +1422,8 @@ class SetSource final : public RunOutput::Source {
         head_.clear();
         body_.clear();
         set_->append_item(item, head_, body_, buf_);
-        head.append(dstd::StringView(head_));
-        body.append(dstd::StringView(body_));
+        head.append(builder_text(head_));
+        body.append(builder_text(body_));
     }
 
    private:
@@ -1620,7 +1633,7 @@ coro::CoroTask<GroupResult> process_group(coro::Scope& ctx, RunGroup group,
     auto skip_all = [&](const dstd::String& file, const dstd::String& reason) {
         for (const auto& s : g.sets)
             result.skips.push_back(
-                {g.dir, file, s.keys.papi_set + ": " + reason});
+                {g.dir, file, dstd::fmt<"{}: {}">(s.keys.papi_set, reason)});
     };
     if (!mem.open()) {
         skip_all("", "no memory pool is free for the group");

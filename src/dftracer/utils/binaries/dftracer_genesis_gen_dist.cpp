@@ -611,8 +611,13 @@ coro::CoroTask<int> run_gen_dist(coro::Scope& ctx, const GenDistArgParse* cli,
     // discover takes owned paths
     dstd::Vector<dstd::String> roots;
     for (const auto root : cli->roots) roots.emplace_back(root);
-    trace::genesis::Discovery discovery =
-        co_await trace::genesis::discover(ctx, roots);
+    auto discovered = co_await trace::genesis::discover(ctx, roots);
+    if (!discovered) {
+        DFTRACER_UTILS_LOG_ERROR("Discovery failed: {}",
+                                 dstd::String(discovered.error().message()));
+        co_return 1;
+    }
+    trace::genesis::Discovery discovery = std::move(*discovered);
     if (shard.count > 1) {
         discovery.groups = take_shard(std::move(discovery.groups), shard);
         // Every part sees the same discovery, so only the first reports it.

@@ -148,9 +148,10 @@ struct GroupProgress {
 
 /// Walk `roots` for `nodes_<N>/ppn_<M>` run directories and describe their
 /// run groups, sorted by directory then set. Problems found without reading
-/// traces are reported as skips.
-coro::CoroTask<Discovery> discover(coro::Scope& ctx,
-                                   dstd::Vector<dstd::String> roots);
+/// traces are reported as skips. A root or run directory that cannot be
+/// resolved, or a failed walk, gives the error of that call.
+coro::CoroTask<dstd::Result<Discovery>> discover(
+    coro::Scope& ctx, dstd::Vector<dstd::String> roots);
 
 /// 16-digit lowercase hex XXH3-64 of `app|system|unique_input|nodes|ppn|
 /// papi_set`.

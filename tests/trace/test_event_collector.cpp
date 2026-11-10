@@ -94,4 +94,21 @@ TEST_SUITE("EventCollector") {
             CHECK(e.tid == 3);
         }
     }
+
+    TEST_CASE("EventCollector - an unreadable file gives an error result") {
+        TestEnvironment env(100);
+        MetadataCollectorUtilityOutput meta;
+        meta.file_path = env.dir() + "/missing.pfw.gz";
+        meta.success = true;
+        meta.start_line = 1;
+        meta.end_line = 5;
+        dstd::Vector<MetadataCollectorUtilityOutput> metadata_vec = {meta};
+        auto result =
+            EventCollectorFromMetadataUtility()(
+                EventCollectorFromMetadataCollectorUtilityInput::from_metadata(
+                    metadata_vec))
+                .get();
+        REQUIRE(!result.has_value());
+        CHECK(!result.error().message().empty());
+    }
 }

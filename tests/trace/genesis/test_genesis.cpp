@@ -95,7 +95,9 @@ coro::CoroTask<void> process_into(coro::Scope& ctx, RunGroup g,
 coro::CoroTask<void> discover_into(coro::Scope& ctx, dstd::String root,
                                    Discovery* out) {
     dstd::Vector<dstd::String> roots{std::move(root)};
-    *out = co_await discover(ctx, std::move(roots));
+    auto found = co_await discover(ctx, std::move(roots));
+    CHECK(found.has_value());
+    if (found) *out = std::move(*found);
 }
 
 GroupResult process(RunGroup g, std::uint64_t share = TEST_SHARE,

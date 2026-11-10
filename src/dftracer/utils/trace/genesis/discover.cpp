@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/hex64.h>
 #include <dftracer/utils/dstd/hash/xxh3.h>
@@ -110,13 +111,13 @@ bool slices_complete(RunGroup& base, const DirFiles& files, Discovery& out) {
         if (i > expect) {
             if (!missing.empty()) missing += ',';
             missing += dstd::to_string(expect);
-            if (i - 1 > expect) missing += "-" + dstd::to_string(i - 1);
+            if (i - 1 > expect) missing += dstd::fmt<"-{}">(i - 1);
         }
         expect = i + 1;
     }
     if (!missing.empty()) {
         out.skips.push_back(
-            {base.dir, "compacted", "missing slices " + missing});
+            {base.dir, "compacted", dstd::fmt<"missing slices {}">(missing)});
         return false;
     }
     return true;
@@ -239,24 +240,26 @@ void discover_path_only(dstd::PathView dir, const DirFiles& files,
     out.groups.push_back(std::move(base));
 }
 
-void discover_dir(dstd::PathView root, dstd::PathView dir,
-                  const DirFiles& files, Discovery& out) {
+dstd::Result<void> discover_dir(dstd::PathView root, dstd::PathView dir,
+                                const DirFiles& files, Discovery& out) {
     const auto ppn = suffix_number(dir.filename(), "ppn_");
     const auto nodes = suffix_number(dir.parent().filename(), "nodes_");
-    if (!ppn || !nodes) return;
+    if (!ppn || !nodes) return {};
 
     RunGroup base;
     base.dir = dstd::String(dir.str());
     // Relative to the resolved root, as std::filesystem::relative was.
-    base.rel_dir = dstd::String(
-        dstd::relative(common::unwrap(dstd::fs::weakly_canonical(dir)).view(),
-                       common::unwrap(dstd::fs::weakly_canonical(root)).view())
-            .str());
+    const auto dir_real = dstd::fs::weakly_canonical(dir);
+    if (!dir_real) return dir_real.error();
+    const auto root_real = dstd::fs::weakly_canonical(root);
+    if (!root_real) return root_real.error();
+    base.rel_dir =
+        dstd::String(dstd::relative(dir_real->view(), root_real->view()).str());
 
     const dstd::Path summary = dir / "summary.json";
     if (!files.summary) {
         discover_path_only(dir, files, *nodes, *ppn, std::move(base), out);
-        return;
+        return {};
     }
     simdjson::dom::parser parser;
     simdjson::padded_string text;
@@ -265,7 +268,7 @@ void discover_dir(dstd::PathView root, dstd::PathView dir,
             simdjson::SUCCESS ||
         parser.parse(text).get(s) != simdjson::SUCCESS) {
         out.skips.push_back({base.dir, "summary.json", "unparsable JSON"});
-        return;
+        return {};
     }
     base.summary_json = dstd::String(simdjson::minify(s));
     simdjson::dom::object runs;
@@ -278,6 +281,7 @@ void discover_dir(dstd::PathView root, dstd::PathView dir,
         out.skips.push_back(
             {base.dir, "summary.json", "neither sets nor runs key"});
     }
+    return {};
 }
 
 // Orders paths component by component, as std::filesystem::path does, so a
@@ -307,20 +311,20 @@ DirFiles& files_of(DirMap& dirs, dstd::PathView dir) {
 }  // namespace
 
 dstd::String run_id(const RunKeys& k) {
-    const dstd::String key = k.app + "|" + k.system + "|" + k.unique_input +
-                             "|" + dstd::to_string(k.nodes) + "|" +
-                             dstd::to_string(k.ppn) + "|" + k.papi_set;
+    const dstd::String key = dstd::fmt<"{}|{}|{}|{}|{}|{}">(
+        k.app, k.system, k.unique_input, k.nodes, k.ppn, k.papi_set);
     dstd::String id(16, '\0');
     dstd::hash::format_hex64(dstd::hash::xxh3_64(key), id.data());
     return id;
 }
 
-coro::CoroTask<Discovery> discover(coro::Scope& ctx,
-                                   dstd::Vector<dstd::String> roots) {
+coro::CoroTask<dstd::Result<Discovery>> discover(
+    coro::Scope& ctx, dstd::Vector<dstd::String> roots) {
     Discovery out;
     for (const auto& r : roots) {
-        const dstd::Path root =
-            common::unwrap(dstd::fs::absolute(dstd::PathView(r)));
+        auto absolute = dstd::fs::absolute(dstd::PathView(r));
+        if (!absolute) co_return absolute.error();
+        const dstd::Path root = std::move(*absolute);
         runtime::fs::FindOptions options;
         options.patterns = {"*.pfw.gz", "summary.json", "*.csv"};
         options.skip_dirs =
@@ -328,7 +332,7 @@ coro::CoroTask<Discovery> discover(coro::Scope& ctx,
         options.skip_unreadable = true;
         auto found = co_await runtime::fs::find_all(ctx, root.view(),
                                                     std::move(options));
-        if (!found) throw common::DFTUtilsException(found.error());
+        if (!found) co_return found.error();
         const auto& entries = *found;
         DirMap dirs;
         for (const auto& e : entries) {
@@ -367,7 +371,9 @@ coro::CoroTask<Discovery> discover(coro::Scope& ctx,
             for (auto& [_, raw] : files.raw) std::sort(raw.begin(), raw.end());
             for (auto& [_, csvs] : files.gpu_csvs)
                 std::sort(csvs.begin(), csvs.end());
-            discover_dir(root.view(), dstd::PathView(dir), files, out);
+            auto done =
+                discover_dir(root.view(), dstd::PathView(dir), files, out);
+            if (!done) co_return done.error();
         }
     }
     co_return out;

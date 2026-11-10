@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -93,7 +94,7 @@ double safe_quantile(const QuantileStore& store, double p) {
 }
 
 dstd::String percentile_label(const dstd::String& prefix, double p) {
-    return prefix + "_p" + dstd::to_string(static_cast<int>(p * 100.0));
+    return dstd::fmt<"{}_p{}">(prefix, static_cast<int>(p * 100.0));
 }
 
 }  // anonymous namespace
@@ -253,8 +254,9 @@ namespace {
 
 void flatten_node(RecordBatchBuilder& builder, const NodeResult& node,
                   const dstd::String& parent_path) {
-    dstd::String path =
-        parent_path.empty() ? node.name : parent_path + "/" + node.name;
+    dstd::String path = parent_path.empty()
+                            ? node.name
+                            : dstd::fmt<"{}/{}">(parent_path, node.name);
 
     auto emit = [&](const dstd::String& sub_path,
                     const dstd::Vector<MetricComparison>& metrics) {
@@ -276,10 +278,10 @@ void flatten_node(RecordBatchBuilder& builder, const NodeResult& node,
         }
     };
 
-    emit(path + "/SUMMARY", node.summary.metrics);
+    emit(dstd::fmt<"{}/SUMMARY">(path), node.summary.metrics);
 
     for (const auto& g : node.groups) {
-        emit(path + "/" + g.label, g.metrics);
+        emit(dstd::fmt<"{}/{}">(path, g.label), g.metrics);
     }
 
     for (const auto& child : node.children) {
@@ -289,7 +291,7 @@ void flatten_node(RecordBatchBuilder& builder, const NodeResult& node,
 
 }  // anonymous namespace
 
-ArrowExportResult ComparisonOutput::to_arrow() const {
+dstd::Result<ArrowExportResult> ComparisonOutput::to_arrow() const {
     RecordBatchBuilder builder;
     builder.declare_schema({
         {"node_path", ColumnType::String},
@@ -310,7 +312,7 @@ ArrowExportResult ComparisonOutput::to_arrow() const {
         flatten_node(builder, node, "");
     }
 
-    return common::unwrap(builder.finish());
+    return builder.finish();
 }
 #endif  // DFTRACER_UTILS_ENABLE_ARROW
 

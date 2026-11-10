@@ -156,13 +156,13 @@ inline dftracer::utils::coro::CoroTask<void> genesis_run(
     dftracer::utils::coro::Scope& ctx, dftracer::utils::dstd::String root) {
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> roots{
         std::move(root)};
-    auto discovery = co_await dftracer::utils::trace::genesis::discover(
+    auto found = co_await dftracer::utils::trace::genesis::discover(
         ctx, std::move(roots));
-    if (discovery.groups.empty()) {
+    if (!found || found->groups.empty()) {
         std::fprintf(stderr, "genesis found no run group\n");
         std::exit(1);
     }
-    for (auto& group : discovery.groups) {
+    for (auto& group : found->groups) {
         auto result = co_await dftracer::utils::trace::genesis::process_group(
             ctx, std::move(group), GENESIS_SHARE);
         std::size_t lines = 0;

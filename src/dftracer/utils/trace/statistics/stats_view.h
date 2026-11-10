@@ -6,6 +6,7 @@
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/internal/column_read.h>
 #include <dftracer/utils/dstd/deque.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
@@ -79,32 +80,39 @@ class StatsView {
                       : views::View::from_file(file_, index_);
     }
 
-    coro::CoroTask<dstd::Vector<StatCount>> category_counts() const {
+    /// The counting and collecting members give the error of the scan that
+    /// failed.
+    coro::CoroTask<dstd::Result<dstd::Vector<StatCount>>> category_counts()
+        const {
         return group_counts(cat_agg());
     }
-    coro::CoroTask<dstd::Vector<StatCount>> name_counts() const {
+    coro::CoroTask<dstd::Result<dstd::Vector<StatCount>>> name_counts() const {
         return group_counts(name_agg());
     }
 
-    coro::CoroTask<dstd::Vector<StatCount>> pid_tid_counts() const {
+    coro::CoroTask<dstd::Result<dstd::Vector<StatCount>>> pid_tid_counts()
+        const {
         const views::View agg = pid_agg();
-        dataframe::DataFrame b = common::unwrap(co_await agg.collect());
+        auto collected = co_await agg.collect();
+        if (!collected) co_return collected.error();
+        dataframe::DataFrame b = std::move(*collected);
         const dataframe::Series& n = b.columns[col(b, "n")];
         const dataframe::Series& pid = b.columns[0];
         const dataframe::Series& tid = b.columns[1];
         dstd::Vector<StatCount> out;
         out.reserve(static_cast<std::size_t>(b.num_rows()));
         for (std::int64_t i = 0; i < b.num_rows(); ++i)
-            out.emplace_back(dstd::String(pid.string_at(i)) + ":" +
-                                 dstd::String(tid.string_at(i)),
-                             static_cast<std::uint64_t>(i64_at(n, i)));
+            out.emplace_back(
+                dstd::fmt<"{}:{}">(pid.string_at(i), tid.string_at(i)),
+                static_cast<std::uint64_t>(i64_at(n, i)));
         co_return out;
     }
 
     /// Collect the requested breakdowns over one execute(): each aggregate is
     /// served from its rollup when materialized, and any that are not share the
     /// single scan.
-    coro::CoroTask<ViewStats> collect(StatNeeds needs = {}) const {
+    coro::CoroTask<dstd::Result<ViewStats>> collect(
+        StatNeeds needs = {}) const {
         ViewStats st;
         st.min_timestamp_us = std::numeric_limits<std::uint64_t>::max();
         st.duration_min_us = std::numeric_limits<std::uint64_t>::max();
@@ -116,8 +124,9 @@ class StatsView {
         dstd::Vector<dataframe::LazyFrame> plans{
             (needs.pid_tids ? cat_pid_agg() : cat_agg()).lazy()};
         if (needs.names) plans.push_back(name_agg().lazy());
-        dstd::Vector<dataframe::DataFrame> frames =
-            common::unwrap(co_await dataframe::collect_all(std::move(plans)));
+        auto collected = co_await dataframe::collect_all(std::move(plans));
+        if (!collected) co_return collected.error();
+        dstd::Vector<dataframe::DataFrame> frames = std::move(*collected);
 
         // The category pass also carries the global duration/timestamp
         // aggregates needed to combine into the summary.
@@ -191,8 +200,8 @@ class StatsView {
             const dataframe::Series& tid_col = c.columns[2];
             dstd::HashMap<dstd::String, std::size_t> pid_tid_at;
             for (std::int64_t i = 0; i < c.num_rows(); ++i) {
-                dstd::String key = dstd::String(pid_col.string_at(i)) + ":" +
-                                   dstd::String(tid_col.string_at(i));
+                dstd::String key = dstd::fmt<"{}:{}">(pid_col.string_at(i),
+                                                      tid_col.string_at(i));
                 const auto n = static_cast<std::uint64_t>(i64_at(cn, i));
                 const auto it = pid_tid_at.find(dstd::StringView(key));
                 if (it == pid_tid_at.end()) {
@@ -210,18 +219,23 @@ class StatsView {
     /// Persist the rollups so a later collect() reads them instead of scanning.
     /// Idempotent: only the selected groups whose rollup does not already exist
     /// are (re)built, and if all are present it is a no-op with no scan.
-    coro::CoroTask<void> materialize(StatNeeds needs = {}) const {
+    coro::CoroTask<dstd::Result<void>> materialize(StatNeeds needs = {}) const {
         const views::View cat = needs.pid_tids ? cat_pid_agg() : cat_agg();
         const bool want_cat = !cat.reconstruct_if_cached().has_value();
         const bool want_name =
             needs.names && !name_agg().reconstruct_if_cached().has_value();
-        if (!want_cat && !want_name) co_return;
+        if (!want_cat && !want_name) co_return dstd::Result<void>();
 
-        if (want_cat) common::unwrap(co_await cat.materialize());
+        if (want_cat) {
+            auto done = co_await cat.materialize();
+            if (!done) co_return done.error();
+        }
         if (want_name) {
             const views::View agg = name_agg();
-            common::unwrap(co_await agg.materialize());
+            auto done = co_await agg.materialize();
+            if (!done) co_return done.error();
         }
+        co_return dstd::Result<void>();
     }
 
    private:
@@ -284,8 +298,11 @@ class StatsView {
         return view().group_by(pid_keys()).agg(count_specs());
     }
 
-    coro::CoroTask<dstd::Vector<StatCount>> group_counts(views::View v) const {
-        dataframe::DataFrame b = common::unwrap(co_await v.collect());
+    coro::CoroTask<dstd::Result<dstd::Vector<StatCount>>> group_counts(
+        views::View v) const {
+        auto collected = co_await v.collect();
+        if (!collected) co_return collected.error();
+        dataframe::DataFrame b = std::move(*collected);
         const dataframe::Series& n = b.columns[col(b, "n")];
         dstd::Vector<StatCount> out;
         out.reserve(static_cast<std::size_t>(b.num_rows()));

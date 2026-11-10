@@ -202,6 +202,33 @@ TEST_SUITE("DFTracerStats") {
         CHECK(output.find("total_events") != dstd::String::npos);
     }
 
+    TEST_CASE("detailed report on an unreadable input exits 1") {
+        auto binary = find_stats_binary();
+        if (binary.empty()) {
+            MESSAGE("dftracer_stats binary not found, skipping.");
+            return;
+        }
+
+        dftu_utils_test::TestEnvironment env(100);
+        REQUIRE(env.is_valid());
+
+        auto good = create_pfw_gz(env, 30, 0);
+        REQUIRE(!good.empty());
+        const dstd::String bad = env.dir() + "/trace_1.pfw.gz";
+        {
+            std::FILE* out = std::fopen(bad.c_str(), "wb");
+            REQUIRE(out != nullptr);
+            std::fputs("this is not a gzip stream", out);
+            std::fclose(out);
+        }
+
+        int rc = 0;
+        auto output =
+            run_stats_capture(binary, {env.dir(), "--report", "detailed"}, &rc);
+        CHECK(rc == 1);
+        CHECK(output.find("Error: ") != dstd::String::npos);
+    }
+
     TEST_CASE("multiple files") {
         auto binary = find_stats_binary();
         if (binary.empty()) {

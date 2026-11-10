@@ -30,7 +30,9 @@ static statistics::DetailedStatistics run_detail(
         "detail", dftracer::utils::coro::with_scope(
                       [&](dftracer::utils::coro::Scope&)
                           -> dftracer::utils::coro::CoroTask<void> {
-                          result = co_await sv.collect(needs);
+                          auto collected = co_await sv.collect(needs);
+                          REQUIRE(collected.has_value());
+                          result = std::move(*collected);
                       }))));
     return result;
 }

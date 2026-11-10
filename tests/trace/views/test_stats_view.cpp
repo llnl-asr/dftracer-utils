@@ -30,7 +30,9 @@ static statistics::ViewStats run_stats(const statistics::StatsView& sv,
     dftu_utils_test::ok(rt.block_on(coro::named(
         "stats", coro::with_scope([&](coro::Scope&)
                                       -> dftracer::utils::coro::CoroTask<void> {
-            result = co_await sv.collect(needs);
+            auto collected = co_await sv.collect(needs);
+            REQUIRE(collected.has_value());
+            result = std::move(*collected);
         }))));
     return result;
 }
@@ -167,9 +169,10 @@ TEST_SUITE("stats via View") {
             "materialize",
             coro::with_scope(
                 [&](coro::Scope&) -> dftracer::utils::coro::CoroTask<void> {
-                    co_await statistics::StatsView::from_file(dstd::String(gz),
-                                                              dstd::String(idx))
-                        .materialize();
+                    auto done = co_await statistics::StatsView::from_file(
+                                    dstd::String(gz), dstd::String(idx))
+                                    .materialize();
+                    REQUIRE(done.has_value());
                 }))));
         statistics::ViewStats warm = run_stats(statistics::StatsView::from_file(
             dstd::String(gz), dstd::String(idx)));

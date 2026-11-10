@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/json/line.h>
@@ -70,16 +71,7 @@ void ExtractionAdmission::leave() {
 coro::CoroTask<ChunkExtractorUtilityOutput> ChunkExtractorUtility::operator()(
     const ChunkExtractorUtilityInput& input) {
     DFTRACER_UTILS_TRACE_SCOPE("extract chunks");
-    ChunkExtractorUtilityOutput result;
-    result.chunk_index = input.chunk_index;
-
-    try {
-        co_return co_await extract_and_write(input);
-    } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_ERROR("Failed to extract chunks of group {}: {}",
-                                 input.chunk_index, e.what());
-        co_return result;
-    }
+    co_return co_await extract_and_write(input);
 }
 
 coro::CoroTask<ChunkExtractorUtilityOutput>
@@ -91,7 +83,7 @@ ChunkExtractorUtility::extract_and_write(
     ChunkWriterConfig writer_config;
     writer_config.output_dir = input.output_dir;
     writer_config.base_name =
-        input.app_name + "-" + dstd::to_string(input.chunk_index);
+        dstd::fmt<"{}-{}">(input.app_name, input.chunk_index);
     writer_config.chunk_size_bytes = input.chunk_size_bytes;
     writer_config.member_size_bytes = input.member_size_bytes;
     writer_config.compress = input.compress;

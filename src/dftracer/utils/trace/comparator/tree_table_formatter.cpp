@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
@@ -89,36 +90,22 @@ dstd::String fmt_with_commas(double v) {
 }
 
 dstd::String fmt_duration(double us) {
-    char buf[32];
-    if (us < 1.0) {
-        std::snprintf(buf, sizeof(buf), "%.0f ns", us * 1000.0);
-    } else if (us < 1000.0) {
-        std::snprintf(buf, sizeof(buf), "%.1f us", us);
-    } else if (us < 1000000.0) {
-        std::snprintf(buf, sizeof(buf), "%.2f ms", us / 1000.0);
-    } else {
-        std::snprintf(buf, sizeof(buf), "%.3f s", us / 1000000.0);
-    }
-    return buf;
+    if (us < 1.0) return dstd::fmt<"{:.0f} ns">(us * 1000.0);
+    if (us < 1000.0) return dstd::fmt<"{:.1f} us">(us);
+    if (us < 1000000.0) return dstd::fmt<"{:.2f} ms">(us / 1000.0);
+    return dstd::fmt<"{:.3f} s">(us / 1000000.0);
 }
 
 // Format a byte-scaled quantity with a binary (1024) ladder. `suffix` is
 // appended to the unit ("" for sizes, "/s" for bandwidth).
 dstd::String fmt_bytes_scaled(double value, const char* suffix) {
-    char buf[32];
     constexpr double KB = 1024.0;
     constexpr double MB = 1024.0 * 1024.0;
     constexpr double GB = 1024.0 * 1024.0 * 1024.0;
-    if (value < KB) {
-        std::snprintf(buf, sizeof(buf), "%.0f B%s", value, suffix);
-    } else if (value < MB) {
-        std::snprintf(buf, sizeof(buf), "%.1f KB%s", value / KB, suffix);
-    } else if (value < GB) {
-        std::snprintf(buf, sizeof(buf), "%.2f MB%s", value / MB, suffix);
-    } else {
-        std::snprintf(buf, sizeof(buf), "%.3f GB%s", value / GB, suffix);
-    }
-    return buf;
+    if (value < KB) return dstd::fmt<"{:.0f} B{}">(value, suffix);
+    if (value < MB) return dstd::fmt<"{:.1f} KB{}">(value / KB, suffix);
+    if (value < GB) return dstd::fmt<"{:.2f} MB{}">(value / MB, suffix);
+    return dstd::fmt<"{:.3f} GB{}">(value / GB, suffix);
 }
 
 dstd::String fmt_size(double bytes) { return fmt_bytes_scaled(bytes, ""); }
@@ -266,7 +253,8 @@ struct RegressionEntry {
 static void collect_regressions(const NodeResult& node,
                                 const dstd::String& prefix,
                                 dstd::Vector<RegressionEntry>& out) {
-    dstd::String here = prefix.empty() ? node.name : prefix + " > " + node.name;
+    dstd::String here =
+        prefix.empty() ? node.name : dstd::fmt<"{} > {}">(prefix, node.name);
 
     auto push_regressions = [&](const dstd::Vector<MetricComparison>& metrics,
                                 const dstd::String& path) {
@@ -282,7 +270,7 @@ static void collect_regressions(const NodeResult& node,
 
     push_regressions(node.summary.metrics, here);
     for (const auto& g : node.groups) {
-        push_regressions(g.metrics, here + " [" + g.label + "]");
+        push_regressions(g.metrics, dstd::fmt<"{} [{}]">(here, g.label));
     }
     for (const auto& child : node.children) {
         collect_regressions(child, here, out);
@@ -291,11 +279,7 @@ static void collect_regressions(const NodeResult& node,
 
 dstd::String fmt_bandwidth(double bps) { return fmt_bytes_scaled(bps, "/s"); }
 
-dstd::String fmt_generic(double v) {
-    char buf[32];
-    std::snprintf(buf, sizeof(buf), "%.2f", v);
-    return buf;
-}
+dstd::String fmt_generic(double v) { return dstd::fmt<"{:.2f}">(v); }
 
 // Display width of a UTF-8 string (characters, not bytes).
 // Counts one display column per Unicode code point by skipping
@@ -353,19 +337,17 @@ dstd::String TreeTableFormatter::format_delta(double d,
     } else {
         base = fmt_generic(std::abs(d));
     }
-    return (d >= 0.0 ? "+" : "-") + base;
+    return dstd::fmt<"{}{}">(d >= 0.0 ? "+" : "-", base);
 }
 
 dstd::String TreeTableFormatter::format_pct(double pct) const {
-    char buf[24];
-    std::snprintf(buf, sizeof(buf), "%+.1f%%", pct);
-    return buf;
+    return dstd::fmt<"{}{:.1f}%">(std::signbit(pct) ? "" : "+", pct);
 }
 
 dstd::String TreeTableFormatter::format_significance(Significance sig) const {
     switch (sig) {
         case Significance::Negligible:
-            return dstd::String(color_dim()) + "~" + color_reset();
+            return dstd::fmt<"{}~{}">(color_dim(), color_reset());
         case Significance::Small:
             return "*";
         case Significance::Medium:
@@ -382,7 +364,7 @@ dstd::String TreeTableFormatter::format_val_str(const MetricComparison& mc,
     double sd = is_base ? mc.baseline_stdev : mc.variant_stdev;
     dstd::String s = format_value(val, mc.metric_name);
     if (sd > 0.0) {
-        s += " (\xc2\xb1" + format_value(sd, mc.metric_name) + ")";
+        s += dstd::fmt<" (\xc2\xb1{})">(format_value(sd, mc.metric_name));
     }
     return s;
 }
@@ -765,8 +747,8 @@ namespace {
 dstd::String double_to_json(double v) {
     if (!std::isfinite(v)) return "0";
     char buf[32];
-    std::snprintf(buf, sizeof(buf), "%.15g", v);
-    return buf;
+    char* end = dstd::to_chars_general(buf, buf + sizeof(buf), v, 15);
+    return end ? dstd::String(buf, end) : dstd::String();
 }
 
 void build_metric_json(dstd::String& out, const MetricComparison& mc) {

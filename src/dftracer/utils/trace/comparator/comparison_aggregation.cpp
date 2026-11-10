@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -137,7 +138,7 @@ dstd::String fold_category(const duql::detail::QueryNode& n) {
     if (const auto* o = std::get_if<duql::detail::OrNode>(&n.data))
         return join(fold_category(*o->left), "or", fold_category(*o->right));
     if (const auto* nt = std::get_if<duql::detail::NotNode>(&n.data))
-        return dstd::String("not (") + fold_category(*nt->operand) + ")";
+        return dstd::fmt<"not ({})">(fold_category(*nt->operand));
     return dstd::String(duql::detail::to_string(n));
 }
 
@@ -407,10 +408,10 @@ dstd::Result<ComparisonFilter> filter_from_query(const duql::Query& query) {
     // The folded text is the query's own with `cat` wrapped in lower(), so a
     // parse failure is a bug of the rewrite.
     if (!folded)
-        return common::make_error(common::ErrorCode::Internal,
-                                  "comparator: cannot fold the categories of " +
-                                      query.source() + ": " +
-                                      folded.error().format());
+        return common::make_error<
+            "comparator: cannot fold the categories of {}: {}">(
+            common::ErrorCode::Internal, query.source(),
+            folded.error().format());
     out.expr = std::move(*folded);
     return out;
 }

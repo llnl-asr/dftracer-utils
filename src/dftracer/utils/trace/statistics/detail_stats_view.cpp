@@ -116,7 +116,7 @@ static void update_event(DetailedStatistics& acc, const DFTracerEvent& ev,
     acc.events_scanned++;
 }
 
-coro::CoroTask<DetailedStatistics> DetailStatsView::collect(
+coro::CoroTask<dstd::Result<DetailedStatistics>> DetailStatsView::collect(
     const DetailNeeds& needs) const {
     dstd::HashSet<dstd::StringView> name_filter;
     dstd::HashSet<dstd::StringView> cat_filter;
@@ -155,11 +155,12 @@ coro::CoroTask<DetailedStatistics> DetailStatsView::collect(
 
     views::View v = view();
     if (needs.query) v = v.filter(*needs.query);
-    auto res = common::unwrap(co_await v.map_batches<DetailedStatistics>(
-        std::move(fold), std::move(combine), slots));
-    res.value.chunks_scanned = res.stats.chunks_scanned;
-    res.value.chunks_skipped = res.stats.chunks_skipped;
-    co_return std::move(res.value);
+    auto scanned = co_await v.map_batches<DetailedStatistics>(
+        std::move(fold), std::move(combine), slots);
+    if (!scanned) co_return scanned.error();
+    scanned->value.chunks_scanned = scanned->stats.chunks_scanned;
+    scanned->value.chunks_skipped = scanned->stats.chunks_skipped;
+    co_return std::move(scanned->value);
 }
 
 }  // namespace dftracer::utils::trace::statistics

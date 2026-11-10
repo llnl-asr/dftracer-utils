@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_TRACE_STATISTICS_DETAIL_STATS_VIEW_H
 
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/statistics/detailed_statistics.h>
@@ -56,7 +57,8 @@ class DetailStatsView {
     /// Fold the scan into a @ref DetailedStatistics, honoring the group-by and
     /// name/category filters. chunks_scanned/chunks_skipped/events_scanned are
     /// filled from the scan stats.
-    coro::CoroTask<DetailedStatistics> collect(const DetailNeeds& needs) const;
+    coro::CoroTask<dstd::Result<DetailedStatistics>> collect(
+        const DetailNeeds& needs) const;
 
    private:
     dstd::String file_, index_;

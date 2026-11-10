@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_TRACE_EVENT_COLLECTOR_H
 
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/event_id.h>
 #include <dftracer/utils/trace/metadata_collector_utility.h>
@@ -38,10 +39,11 @@ using EventCollectorUtilityOutput = dstd::Vector<EventId>;
  * @brief Workflow for collecting event IDs from DFTracer metadata files.
  *
  * Reads files specified in metadata and extracts @ref EventId (id, pid, tid)
- * from each valid JSON event.
+ * from each valid JSON event. A file that cannot be opened or read gives the
+ * error of that read.
  */
 struct EventCollectorFromMetadataUtility {
-    coro::CoroTask<EventCollectorUtilityOutput> operator()(
+    coro::CoroTask<dstd::Result<EventCollectorUtilityOutput>> operator()(
         const EventCollectorFromMetadataCollectorUtilityInput& input) const;
 };
 

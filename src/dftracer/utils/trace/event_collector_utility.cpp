@@ -68,7 +68,7 @@ class EventIdCollector : public utilities::reader::internal::LineProcessor {
     }
 };
 
-coro::CoroTask<EventCollectorUtilityOutput>
+coro::CoroTask<dstd::Result<EventCollectorUtilityOutput>>
 EventCollectorFromMetadataUtility::operator()(
     const EventCollectorFromMetadataCollectorUtilityInput& input) const {
     dstd::Vector<EventId> events;
@@ -91,12 +91,13 @@ EventCollectorFromMetadataUtility::operator()(
         EventIdCollector collector(events, input.trim_commas);
 
         if (!file.index_path.empty()) {
-            auto reader = common::unwrap(
-                utilities::reader::internal::ReaderFactory::create(
-                    file.file_path, file.index_path));
-            auto processed = co_await reader->read_lines_with_processor_async(
-                file.start_line, file.end_line, collector);
-            common::unwrap(std::move(processed));
+            auto reader = utilities::reader::internal::ReaderFactory::create(
+                file.file_path, file.index_path);
+            if (!reader) co_return reader.error();
+            auto processed =
+                co_await (*reader)->read_lines_with_processor_async(
+                    file.start_line, file.end_line, collector);
+            if (!processed) co_return processed.error();
         } else {
             auto line_gen =
                 utilities::fileio::lines::sources::async_streaming_gz_lines(
@@ -105,7 +106,7 @@ EventCollectorFromMetadataUtility::operator()(
             for (;;) {
                 auto line_opt = co_await line_gen.next();
                 if (!line_opt) break;
-                if (!*line_opt) common::throw_error(line_opt->error());
+                if (!*line_opt) co_return line_opt->error();
                 const auto& line = **line_opt;
                 co_await collector.process(line.content.data(),
                                            line.content.length());

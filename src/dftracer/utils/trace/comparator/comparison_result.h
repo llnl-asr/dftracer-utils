@@ -123,8 +123,9 @@ struct ComparisonOutput {
     /// Columns: node_path, metric_group, metric_name, baseline,
     /// variant, baseline_stdev, variant_stdev, delta, pct_change,
     /// cohens_d, significance, is_regression.
-    /// Rows with all-zero values are skipped.
-    utilities::arrow::ArrowExportResult to_arrow() const;
+    /// Rows with all-zero values are skipped. Gives the error of the Arrow
+    /// export when it cannot build the batch.
+    dstd::Result<utilities::arrow::ArrowExportResult> to_arrow() const;
 #endif
 };
 

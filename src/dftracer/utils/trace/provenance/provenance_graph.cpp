@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -217,9 +219,8 @@ void ingest(Acc& a, dstd::StringView line) {
         }
         if (any) {
             ++a.stats.prov_events;
-            dstd::String aid = dstd::to_string(pid) + ":" +
-                               dstd::to_string(int_field(root, "id", 0)) + ":" +
-                               dstd::to_string(int_field(root, "ts", 0));
+            dstd::String aid = dstd::fmt<"{}:{}:{}">(
+                pid, int_field(root, "id", 0), int_field(root, "ts", 0));
             auto& act = a.activities[aid];
             act.aid = aid;
             act.has_main = true;
@@ -517,9 +518,9 @@ void ingest_io(IoAcc& a, const SpanIndex& spans, dstd::StringView line) {
         } else if (text.front() == '/') {
             a.fh.emplace(dstd::String(hash), dstd::String(text));
         } else {
-            a.rel_fh.emplace(dstd::to_string(int_field(root, "pid", 0)) + ":" +
-                                 dstd::String(hash),
-                             dstd::String(text));
+            a.rel_fh.emplace(
+                dstd::fmt<"{}:{}">(int_field(root, "pid", 0), hash),
+                dstd::String(text));
         }
         return;
     }
@@ -889,10 +890,20 @@ dstd::String ProvenanceGraph::to_json() const {
     b.append_key_value("files_excluded", stats.files_excluded);
     b.end_object();
     b.end_object();
-    return dstd::String(b);
+    dstd::StringView text;
+    if (b.view().get(text) != simdjson::SUCCESS)
+        dstd::fatal("provenance: a JSON builder ran out of memory");
+    return dstd::String(text);
 }
 
-coro::CoroTask<ProvenanceGraph> extract_provenance_graph(
+duql::Query constant_query(const char* text) {
+    auto query = duql::Query::from_string(text);
+    if (!query)
+        dstd::fatal("provenance: a constant query does not parse", text);
+    return std::move(*query);
+}
+
+coro::CoroTask<dstd::Result<ProvenanceGraph>> extract_provenance_graph(
     const views::View& view, std::size_t slot_count,
     ProvenanceOptions options) {
     if (slot_count == 0) slot_count = 1;
@@ -900,32 +911,33 @@ coro::CoroTask<ProvenanceGraph> extract_provenance_graph(
     // them to whatever event the app relates), so scan everything and let a
     // byte-level prefilter skip lines that cannot hold provenance.
     views::View v = view.phase(views::Phase::Any);
-    auto scan = common::unwrap(co_await v.map_batches<Acc>(
+    auto scanned = co_await v.map_batches<Acc>(
         [](Acc& a, const dstd::Vector<dstd::StringView>& events) {
             for (auto ev : events)
                 if (maybe_provenance(ev)) ingest(a, ev);
         },
         [](Acc&& x, Acc&& y) { return merge(std::move(x), std::move(y)); },
-        slot_count, 0));
-    ProvenanceGraph g = finish(std::move(scan.value));
+        slot_count, 0);
+    if (!scanned) co_return scanned.error();
+    ProvenanceGraph g = finish(std::move(scanned->value));
     if (!options.include_io || g.activities.empty()) co_return g;
 
     // Second pass: POSIX/STDIO calls inside provenance activities.
     const SpanIndex spans = index_spans(g.activities);
-    auto io_query = duql::Query::from_string(
+    duql::Query io_query = constant_query(
         "cat == \"POSIX\" or cat == \"STDIO\" or name == \"FH\" or "
         "name == \"SH\" or name == \"start\"");
-    if (!io_query) throw duql::DuqlParseError(io_query.error());
-    views::View io = view.phase(views::Phase::Any).filter(std::move(*io_query));
-    auto ios = common::unwrap(co_await io.map_batches<IoAcc>(
+    views::View io = view.phase(views::Phase::Any).filter(std::move(io_query));
+    auto scanned_io = co_await io.map_batches<IoAcc>(
         [&spans](IoAcc& a, const dstd::Vector<dstd::StringView>& events) {
             for (auto ev : events) ingest_io(a, spans, ev);
         },
         [](IoAcc&& x, IoAcc&& y) {
             return merge_io(std::move(x), std::move(y));
         },
-        slot_count, 0));
-    IoAcc& io_acc = ios.value;
+        slot_count, 0);
+    if (!scanned_io) co_return scanned_io.error();
+    IoAcc& io_acc = scanned_io->value;
     g.stats.io_events = io_acc.events;
     g.stats.io_attributed = io_acc.attributed;
 
@@ -940,7 +952,7 @@ coro::CoroTask<ProvenanceGraph> extract_provenance_graph(
                        std::int64_t pid) -> dstd::String {
         if (auto it = io_acc.fh.find(fhash); it != io_acc.fh.end())
             return it->second;
-        auto rt = io_acc.rel_fh.find(dstd::to_string(pid) + ":" + fhash);
+        auto rt = io_acc.rel_fh.find(dstd::fmt<"{}:{}">(pid, fhash));
         if (rt == io_acc.rel_fh.end()) return {};
         auto ch = io_acc.cwd_hash.find(pid);
         if (ch == io_acc.cwd_hash.end()) return {};
@@ -949,7 +961,8 @@ coro::CoroTask<ProvenanceGraph> extract_provenance_graph(
         dstd::String rel = rt->second;
         while (rel.rfind("./", 0) == 0) rel.erase(0, 2);
         if (rel.empty() || rel == ".") return cwd->second;
-        return cwd->second + (cwd->second.back() == '/' ? "" : "/") + rel;
+        return dstd::fmt<"{}{}{}">(cwd->second,
+                                   cwd->second.back() == '/' ? "" : "/", rel);
     };
     dstd::HashMap<dstd::String, ProvenanceFile> files;  // by abs path
     dstd::HashSet<dstd::String> dropped;

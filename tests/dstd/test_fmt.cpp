@@ -3,11 +3,13 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <doctest/doctest.h>
 
 #include <cfloat>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <string>
@@ -286,4 +288,88 @@ TEST_CASE("fmt_join_to writes the joined text and reports a cut") {
     CHECK(cut.size == 5);
     CHECK(cut.truncated);
     CHECK(dstd::StringView(buf, cut.size) == "abc, ");
+}
+
+namespace {
+
+std::string general_text(double v, int precision) {
+    char buf[64];
+    char* end = dstd::to_chars_general(buf, buf + sizeof(buf), v, precision);
+    REQUIRE(end != nullptr);
+    return std::string(buf, end);
+}
+
+std::string printf_general(double v, int precision) {
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%.*g", precision, v);
+    return buf;
+}
+
+}  // namespace
+
+TEST_CASE("to_chars_general matches printf %.*g for finite values") {
+    const double values[] = {0.0,
+                             -0.0,
+                             1.0,
+                             0.1,
+                             1.0 / 3.0,
+                             -2.5,
+                             123456789.123456789,
+                             1e15,
+                             1e16,
+                             1e-5,
+                             1e300,
+                             -1e300,
+                             5e-324,
+                             std::numeric_limits<double>::min(),
+                             std::numeric_limits<double>::max()};
+    for (const double v : values)
+        for (const int precision : {6, 15, 17})
+            CHECK(general_text(v, precision) == printf_general(v, precision));
+}
+
+TEST_CASE(
+    "floating point text for -0.0, infinities and NaN is the same everywhere") {
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const double snan = std::numeric_limits<double>::signaling_NaN();
+    const double inf = std::numeric_limits<double>::infinity();
+    const double neg_nan = std::copysign(nan, -1.0);
+
+    CHECK(general_text(inf, 15) == "inf");
+    CHECK(general_text(-inf, 15) == "-inf");
+    CHECK(general_text(nan, 15) == "nan");
+    CHECK(general_text(neg_nan, 15) == "nan");
+    CHECK(general_text(snan, 15) == "nan");
+    CHECK(general_text(-0.0, 15) == "-0");
+
+    check_text<"{}">("nan", nan);
+    check_text<"{}">("nan", neg_nan);
+    check_text<"{}">("nan", snan);
+    check_text<"{}">("inf", inf);
+    check_text<"{}">("-inf", -inf);
+    check_text<"{}">("-0", -0.0);
+    check_text<"{:.2f}">("nan", nan);
+    check_text<"{:.2f}">("nan", neg_nan);
+    check_text<"{:.2f}">("inf", inf);
+    check_text<"{:.2f}">("-inf", -inf);
+    check_text<"{:.2f}">("-0.00", -0.0);
+    check_text<"{}">("nan", std::numeric_limits<float>::quiet_NaN());
+    check_text<"{}">("-inf", -std::numeric_limits<float>::infinity());
+    check_text<"{}">("5e-324", 5e-324);
+    char big[400];
+    std::snprintf(big, sizeof(big), "%.1f", 1e300);
+    check_text<"{:.1f}">(big, 1e300);
+}
+
+TEST_CASE("the percent sign pattern of the comparator table") {
+    const auto pct = [](double v) {
+        return dstd::fmt<"{}{:.1f}%">(std::signbit(v) ? "" : "+", v);
+    };
+    CHECK(pct(12.34) == "+12.3%");
+    CHECK(pct(-12.34) == "-12.3%");
+    CHECK(pct(0.0) == "+0.0%");
+    CHECK(pct(-0.0) == "-0.0%");
+    CHECK(pct(std::numeric_limits<double>::quiet_NaN()) == "+nan%");
+    CHECK(pct(std::numeric_limits<double>::infinity()) == "+inf%");
+    CHECK(pct(-std::numeric_limits<double>::infinity()) == "-inf%");
 }

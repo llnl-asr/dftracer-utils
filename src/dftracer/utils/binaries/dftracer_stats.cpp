@@ -650,10 +650,24 @@ static void print_text_detailed(
     std::printf("\n");
 }
 
+// The first failure of any worker; the others stop taking files once it is set.
+struct DetailedFailure {
+    std::mutex mutex;
+    dstd::String message;
+    std::atomic<bool> failed{false};
+
+    void set(dstd::String text) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (failed.load(std::memory_order_relaxed)) return;
+        message = std::move(text);
+        failed.store(true, std::memory_order_release);
+    }
+};
+
 // Per-file detailed stats coroutine. Folds the file's events into a
 // DetailedStatistics over a View's index-pruned parallel scan, then resolves
 // hashes and produces output.
-static coro::CoroTask<void> process_file_detailed(
+static coro::CoroTask<dstd::Result<void>> process_file_detailed(
     dstd::String file_path, std::size_t fi, dstd::String index_dir,
     bool needs_hash_resolution, bool json_output, std::uint64_t top_n,
     const duql::Query* query_ptr,
@@ -673,9 +687,10 @@ static coro::CoroTask<void> process_file_detailed(
     detail_needs.filter_categories = filter_cats_ptr;
     detail_needs.query = query_ptr;
 
-    DetailedStatistics file_detailed =
-        co_await DetailStatsView::from_file(file_path, index_path)
-            .collect(detail_needs);
+    auto collected = co_await DetailStatsView::from_file(file_path, index_path)
+                         .collect(detail_needs);
+    if (!collected) co_return collected.error();
+    DetailedStatistics file_detailed = std::move(*collected);
 
     // Hash resolution (sequential, all chunks done)
     dstd::HashMap<dstd::String, dstd::String> hash_resolutions;
@@ -738,7 +753,7 @@ static coro::CoroTask<void> process_file_detailed(
         aggregate_detailed_ptr->merge(file_detailed);
     }
 
-    co_return;
+    co_return dstd::Result<void>();
 }
 
 static void run_detailed_query_workers(
@@ -748,7 +763,8 @@ static void run_detailed_query_workers(
     const duql::Query* qp, const dstd::Vector<dstd::String>* fn,
     const dstd::Vector<dstd::String>* fc, const dstd::Vector<dstd::String>* gb,
     DetailedStatistics* ad, std::mutex* am, std::mutex* om,
-    dstd::Vector<dstd::Pair<std::size_t, dstd::String>>* jr) {
+    dstd::Vector<dstd::Pair<std::size_t, dstd::String>>* jr,
+    DetailedFailure* failure) {
     auto file_chan = coro::make_channel<std::size_t>(executor_threads * 2);
 
     scope.spawn([ch = file_chan->producer(),
@@ -766,16 +782,21 @@ static void run_detailed_query_workers(
     for (std::size_t w = 0; w < executor_threads; ++w) {
         scope.spawn([ch = file_chan->consumer(), files_ptr, index_dir_ptr,
                      needs_hash_resolution, json_output, top_n, qp, fn, fc, gb,
-                     ad, am, om, jr]() -> coro::CoroTask<void> {
+                     ad, am, om, jr, failure]() -> coro::CoroTask<void> {
             for (;;) {
+                if (failure->failed.load(std::memory_order_acquire)) break;
                 auto fi_opt = co_await ch.receive();
                 if (!fi_opt) break;
                 std::size_t fi = *fi_opt;
                 dstd::String file_path = (*files_ptr)[fi];
-                co_await process_file_detailed(
+                auto done = co_await process_file_detailed(
                     std::move(file_path), fi, *index_dir_ptr,
                     needs_hash_resolution, json_output, top_n, qp, fn, fc, gb,
                     ad, am, om, jr);
+                if (!done) {
+                    failure->set(done.error().format());
+                    break;
+                }
             }
             co_return;
         });
@@ -1071,6 +1092,7 @@ static coro::CoroTask<int> run_detailed_stats(
     auto aggregate_detailed = dstd::make_unique<DetailedStatistics>();
     std::mutex aggregate_mutex;
     std::mutex output_mutex;
+    DetailedFailure failure;
     auto json_results = dstd::make_unique<
         dstd::Vector<dstd::Pair<std::size_t, dstd::String>>>();
 
@@ -1093,18 +1115,22 @@ static coro::CoroTask<int> run_detailed_stats(
          needs_hash_resolution_for_detailed, json_output_for_detailed,
          top_n_for_detailed, query_ptr, filter_names_ptr, filter_cats_ptr,
          group_by_ptr, aggregate_detailed_ptr, aggregate_mutex_ptr,
-         output_mutex_ptr,
-         json_results_ptr](coro::Scope& scope) -> coro::CoroTask<void> {
+         output_mutex_ptr, json_results_ptr,
+         failure_ptr = &failure](coro::Scope& scope) -> coro::CoroTask<void> {
         run_detailed_query_workers(
             scope, files_ptr, executor_threads_for_detailed,
             index_dir_for_detailed_ptr, needs_hash_resolution_for_detailed,
             json_output_for_detailed, top_n_for_detailed, query_ptr,
             filter_names_ptr, filter_cats_ptr, group_by_ptr,
             aggregate_detailed_ptr, aggregate_mutex_ptr, output_mutex_ptr,
-            json_results_ptr);
+            json_results_ptr, failure_ptr);
         co_return;
     };
     co_await coro::with_scope(detailed_scope);
+    if (failure.failed.load(std::memory_order_acquire)) {
+        DFTRACER_UTILS_LOG_ERROR("Error: {}", failure.message);
+        co_return 1;
+    }
 
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> duration = end_time - start_time;
@@ -1290,8 +1316,9 @@ static coro::CoroTask<void> process_index_group(
                 trace::statistics::StatsView::from_files(std::move(view_files));
             // Persist the rollups once so later runs read them instead of
             // rescanning; idempotent, so a warm index skips to collect.
-            co_await sv.materialize(needs);
-            trace::statistics::ViewStats vs = co_await sv.collect(needs);
+            common::unwrap(co_await sv.materialize(needs));
+            trace::statistics::ViewStats vs =
+                common::unwrap(co_await sv.collect(needs));
             TraceStatistics stats;
             stats.index_path.assign(index_path_ptr->data(),
                                     index_path_ptr->size());
@@ -1313,8 +1340,9 @@ static coro::CoroTask<void> process_index_group(
             stats.chunk_count = chunk_count_of(rf->file_index);
             auto sv = trace::statistics::StatsView::from_file(
                 dstd::String(rf->file_path), dstd::String(*index_path_ptr));
-            co_await sv.materialize(needs);
-            trace::statistics::ViewStats vs = co_await sv.collect(needs);
+            common::unwrap(co_await sv.materialize(needs));
+            trace::statistics::ViewStats vs =
+                common::unwrap(co_await sv.collect(needs));
             trace::statistics::fill_chunk_statistics(stats.merged, vs);
             stats.success = true;
             std::lock_guard<std::mutex> lock(*stats_mutex_ptr);

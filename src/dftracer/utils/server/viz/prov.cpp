@@ -3,6 +3,7 @@
 // trace::provenance::extract_provenance_graph over the server's indexed
 // file set (bloom-cache chunk skipping, max_concurrent worker slots).
 // Honors the same file-scoping parameters as the viz endpoints (?file=, ?pid=).
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/server/http_request.h>
 #include <dftracer/utils/server/http_response.h>
@@ -40,7 +41,14 @@ coro::CoroTask<HttpResponse> handle_prov_graph(const HttpRequest& req,
     }
     auto graph = co_await trace::provenance::extract_provenance_graph(
         v, slots, std::move(opts));
-    co_return HttpResponse::ok(graph.to_json());
+    if (!graph) {
+        const dstd::String message(graph.error().message());
+        co_return common::errorcode_of(graph.error()) ==
+                common::ErrorCode::InvalidArgument
+            ? HttpResponse::bad_request(message)
+            : HttpResponse::internal_error(message);
+    }
+    co_return HttpResponse::ok(graph->to_json());
 }
 
 }  // namespace dftracer::utils::server

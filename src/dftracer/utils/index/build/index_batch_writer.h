@@ -6,6 +6,7 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/build/file_admission.h>
@@ -20,7 +21,6 @@
 
 #include <atomic>
 #include <cstddef>
-#include <exception>
 
 namespace dftracer::utils::index::build {
 
@@ -57,7 +57,8 @@ struct BatchWriterMetrics {
 };
 
 /// Puts every fold of `job` into `build`, the one it spilled into.
-inline void fill_file_build(index::FileBuild& build, ParsedIndexJob& job) {
+inline dstd::Result<void> fill_file_build(index::FileBuild& build,
+                                          ParsedIndexJob& job) {
     if (!job.tier_only) {
         index::gzip::persist_gzip_index_artifacts(build, job.artifacts);
         if (job.schema) {
@@ -66,22 +67,32 @@ inline void fill_file_build(index::FileBuild& build, ParsedIndexJob& job) {
                          job.schema->params_hash());
         }
     }
-    if (job.bloom_fold) job.bloom_fold->write(build);
+    if (job.bloom_fold) {
+        auto written = job.bloom_fold->write(build);
+        if (!written) return written.error();
+    }
     if (job.plugin_builders) job.plugin_builders->write(build);
-    if (job.rowset_fold) job.rowset_fold->write(build);
-    if (job.agg_fold) job.agg_fold->write(build);
+    if (job.rowset_fold) {
+        auto written = job.rowset_fold->write(build);
+        if (!written) return written.error();
+    }
+    if (job.agg_fold) {
+        auto written = job.agg_fold->write(build);
+        if (!written) return written.error();
+    }
     if (job.appended) {
         // A row set frame holds the whole file, and these members are not in
         // it. Queries scan until a rebuild writes it again.
         build.keep_older_copies();
         build.clear(index::store::IndexExtension::Rowset);
-        return;
+        return {};
     }
     // A fresh file has no older copies. A rebuild renumbers the chunks, so a
     // copy it does not write would describe old ones.
     if (job.fresh) build.keep_older_copies();
-    if (job.tier_only || job.fresh) return;
+    if (job.tier_only || job.fresh) return {};
     index::clear_unwritten(build);
+    return {};
 }
 
 /// Writes `job` into `build`, the one its folds spilled into, for the caller
@@ -91,11 +102,8 @@ inline void fill_file_build(index::FileBuild& build, ParsedIndexJob& job) {
 inline bool fill_index_job(index::FileBuild& build, ParsedIndexJob& job,
                            FileAdmission::Ticket& ticket) {
     dstd::String failure;
-    try {
-        fill_file_build(build, job);
-    } catch (const std::exception& e) {
-        failure = e.what();
-    }
+    auto filled = fill_file_build(build, job);
+    if (!filled) failure = dstd::String(filled.error().message());
     job.artifacts = {};
     job.bloom_fold.reset();
     job.rowset_fold.reset();

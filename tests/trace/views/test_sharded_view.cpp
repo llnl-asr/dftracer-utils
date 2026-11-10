@@ -65,9 +65,10 @@ void build_shard_index(
     dftracer::utils::index::IndexerOptions options;
     options.aggregation = config;
     options.index_dir = index_dir;
-    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))},
-                                          options)
-        .build();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+                                {dstd::String(dstd::StringView(gz))}, options))
+            .build());
 }
 
 // The trace files the root's store holds a current index for.
@@ -78,9 +79,10 @@ dstd::Vector<dstd::String> indexed_files(
     options.aggregation = index::schemas::dft::agg::AggregationConfig{};
     dstd::Vector<dstd::String> paths;
     for (const auto& file : files) paths.emplace_back(file);
-    auto status =
-        dftracer::utils::index::Indexer::open(std::move(paths), options)
-            .status();
+    auto status = dftu_utils_test::ok(
+        dftu_utils_test::ok(
+            dftracer::utils::index::Indexer::open(std::move(paths), options))
+            .status());
     REQUIRE(status.needs_work.empty());
     dstd::Vector<dstd::String> ready;
     for (const auto& file : status.ready) ready.emplace_back(file);

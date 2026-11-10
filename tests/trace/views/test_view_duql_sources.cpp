@@ -10,6 +10,7 @@
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -33,7 +34,9 @@ dstd::String write_records(TestEnvironment& env, const dstd::String& name,
     const dstd::String gz = plain + ".gz";
     dftu_utils_test::compress_file_to_gzip(plain, gz);
     dstd::fs::remove(plain).discard();
-    index::Indexer::open({dstd::String(dstd::StringView(gz))}).build();
+    dftu_utils_test::ok(dftu_utils_test::ok(index::Indexer::open({dstd::String(
+                                                dstd::StringView(gz))}))
+                            .build());
     return gz;
 }
 

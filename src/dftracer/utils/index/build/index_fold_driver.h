@@ -6,11 +6,13 @@
 #include <dftracer/utils/coro/async_semaphore.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/deque.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/hasher.h>
 #include <dftracer/utils/dstd/intern_cache.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
@@ -37,7 +39,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <exception>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -218,12 +219,14 @@ class IndexFoldDriver : public index::build::IndexVisitor {
 
     void begin(std::size_t /*checkpoint_count*/) override {}
     void bind_scope(coro::Scope* scope) override { scope_ = scope; }
-    coro::CoroTask<void> on_checkpoint(std::size_t /*cp*/) override {
-        co_return;
+    coro::CoroTask<dstd::Result<void>> on_checkpoint(
+        std::size_t /*cp*/) override {
+        co_return dstd::Result<void>{};
     }
 
-    coro::CoroTask<void> on_chunk(const char* data, std::size_t len,
-                                  std::size_t checkpoint_idx) override {
+    coro::CoroTask<dstd::Result<void>> on_chunk(
+        const char* data, std::size_t len,
+        std::size_t checkpoint_idx) override {
         const std::size_t chunk_begin = plain_offset_;
         plain_offset_ += len;
         // A line straddling this chunk's end is carried into the next chunk, so
@@ -231,12 +234,16 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         const std::size_t cut = dstd::StringView(data, len).rfind('\n');
         if (cut == dstd::StringView::npos) {
             partial_.append(data, len);
-            co_return;
+            co_return dstd::Result<void>{};
         }
         const std::size_t whole = cut + 1;
         const bool dynamic = scope_ && gate_;
         std::size_t off = 0;
         while (off < whole) {
+            if (error_) {
+                co_await drain_all();
+                co_return *error_;
+            }
             const std::size_t end = piece_end(data, off, whole);
             Admit admit;
             if (dynamic)
@@ -264,9 +271,13 @@ class IndexFoldDriver : public index::build::IndexVisitor {
                 if (chained_) {
                     co_await step_ahead(std::move(piece));
                 } else {
-                    step(*piece);
+                    auto stepped = step(*piece);
                     buffers_->give(std::move(piece->batch));
-                    co_await stage_agg();
+                    if (!stepped) {
+                        error_ = stepped.error();
+                    } else {
+                        co_await stage_agg();
+                    }
                 }
                 continue;
             }
@@ -279,14 +290,20 @@ class IndexFoldDriver : public index::build::IndexVisitor {
                 }));
         }
         partial_.assign(data + whole, len - whole);
+        if (error_) {
+            co_await drain_all();
+            co_return *error_;
+        }
+        co_return dstd::Result<void>{};
     }
 
     /// Steps the folds with every chunk still being parsed, in chunk order.
-    coro::CoroTask<void> flush() override {
-        while (!in_flight_.empty()) co_await step_oldest();
-        while (!bloom_steps_.empty()) co_await await_bloom_front();
-        co_await await_tails();
+    /// The first error a fold step gave, once every task in flight is done.
+    coro::CoroTask<dstd::Result<void>> flush() override {
+        co_await drain_all();
+        if (error_) co_return *error_;
         if (bloom_ && bloom_->spills()) co_await bloom_->write_run();
+        co_return dstd::Result<void>{};
     }
 
     /// Publish accumulated fold state once the file's members are all parsed.
@@ -363,7 +380,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         bool inline_ = true;
     };
 
-    // A throwing parse gives the slot back.
+    // A parse that ends early gives the slot back.
     struct SlotGuard {
         ParseGate* gate;
         void release() noexcept {
@@ -417,8 +434,8 @@ class IndexFoldDriver : public index::build::IndexVisitor {
             if (parser.capacity() >= bytes) return;
             std::size_t want = 1u << 16;
             while (want < bytes) want <<= 1;
-            if (const auto err = parser.allocate(want))
-                throw simdjson::simdjson_error(err);
+            if (parser.allocate(want))
+                dstd::fatal("the record parser could not allocate its buffers");
             record();
         }
 
@@ -604,12 +621,16 @@ class IndexFoldDriver : public index::build::IndexVisitor {
 
     static constexpr std::size_t MAX_PIECES_HELD = 64;
 
-    void step(Parsed& c) {
+    dstd::Result<void> step(Parsed& c) {
         dropped_lines_ += c.dropped;
         const auto unit = unit_of(c);
         trace::views::detail::FoldBatch fb{c.batch->events(), unit};
-        for (auto* f : folds_) f->step(fb);
+        for (auto* f : folds_) {
+            auto stepped = f->step(fb);
+            if (!stepped) return stepped;
+        }
         if (builders_) builders_->step(c.checkpoint_idx, c.lines);
+        return {};
     }
 
     // The rows and runs the folds put into the build after an in-order step(),
@@ -644,7 +665,8 @@ class IndexFoldDriver : public index::build::IndexVisitor {
             done.release(), PieceRelease{permits_.get(), buffers_});
         for (std::size_t i = 0; i < folds_.size(); ++i) {
             if (folds_[i] == bloom_) continue;
-            dstd::Optional<coro::SpawnFuture<void>> prev = std::move(tails_[i]);
+            dstd::Optional<coro::SpawnFuture<dstd::Result<void>>> prev =
+                std::move(tails_[i]);
             tails_[i].reset();
             tails_[i].emplace(scope_->spawn_future(
                 [fold = folds_[i], agg = folds_[i] == agg_ ? agg_ : nullptr,
@@ -662,21 +684,23 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     // drops its piece itself: the last owner returns the permit to the driver.
     // `agg` is the fold when it is the aggregation fold, whose rows are
     // staged here so no worker blocks on the store.
-    static coro::CoroTask<void> fold_task(
+    static coro::CoroTask<dstd::Result<void>> fold_task(
         trace::views::detail::Fold* fold,
         index::schemas::dft::agg::AggregationFold* agg,
         dstd::SharedPtr<const Parsed> c, trace::views::detail::ScanUnit unit,
-        dstd::Optional<coro::SpawnFuture<void>> prev) {
-        std::exception_ptr error;
-        try {
-            if (prev) co_await std::move(*prev);
-            fold->step({c->batch->events(), unit});
-        } catch (...) {
-            error = std::current_exception();
+        dstd::Optional<coro::SpawnFuture<dstd::Result<void>>> prev) {
+        if (prev) {
+            auto before = co_await std::move(*prev);
+            if (!before) {
+                c.reset();
+                co_return before;
+            }
         }
+        auto stepped = fold->step({c->batch->events(), unit});
         c.reset();
-        if (error) std::rethrow_exception(error);
+        if (!stepped) co_return stepped;
         if (agg && agg->drain_due()) co_await agg->drain();
+        co_return dstd::Result<void>{};
     }
 
     // The bloom fold's state is per checkpoint, so batches of different
@@ -712,80 +736,36 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         index::extensions::BloomFold::Lane lane,
         dstd::SharedPtr<const Parsed> c,
         dstd::Optional<coro::SpawnFuture<void>> prev) {
-        std::exception_ptr error;
-        try {
-            if (prev) co_await std::move(*prev);
-            trace::views::detail::ScanUnit unit;
-            unit.checkpoint_idx = c->checkpoint_idx;
-            bloom->observe(lane, {c->batch->events(), unit});
-        } catch (...) {
-            error = std::current_exception();
-        }
+        if (prev) co_await std::move(*prev);
+        trace::views::detail::ScanUnit unit;
+        unit.checkpoint_idx = c->checkpoint_idx;
+        bloom->observe(lane, {c->batch->events(), unit});
         c.reset();
-        if (error) std::rethrow_exception(error);
     }
 
-    // A failed step rethrows here, after every task in flight is awaited, so
-    // no task outlives the driver.
     coro::CoroTask<void> await_bloom_front() {
         auto done = std::move(bloom_steps_.front().done);
         bloom_steps_.pop_front();
-        std::exception_ptr error;
-        try {
-            co_await std::move(done);
-        } catch (...) {
-            error = std::current_exception();
-        }
-        if (error) {
-            co_await drain();
-            std::rethrow_exception(error);
-        }
+        co_await std::move(done);
     }
 
+    // Awaits every chain, keeping the first error a fold step gave.
     coro::CoroTask<void> await_tails() {
-        std::exception_ptr error;
         for (auto& tail : tails_) {
             if (!tail) continue;
             auto done = std::move(*tail);
             tail.reset();
-            try {
-                co_await std::move(done);
-            } catch (...) {
-                if (!error) error = std::current_exception();
-            }
-        }
-        if (error) {
-            co_await drain();
-            std::rethrow_exception(error);
+            auto finished = co_await std::move(done);
+            if (!finished && !error_) error_ = finished.error();
         }
     }
 
-    coro::CoroTask<void> drain() {
-        while (!in_flight_.empty()) {
-            auto rest = std::move(in_flight_.front());
-            in_flight_.pop_front();
-            try {
-                co_await std::move(rest);
-            } catch (...) {
-            }
-        }
-        while (!bloom_steps_.empty()) {
-            auto rest = std::move(bloom_steps_.front().done);
-            bloom_steps_.pop_front();
-            try {
-                co_await std::move(rest);
-            } catch (...) {
-            }
-        }
-        for (auto& tail : tails_) {
-            if (!tail) continue;
-            auto rest = std::move(*tail);
-            tail.reset();
-            try {
-                co_await std::move(rest);
-            } catch (...) {
-            }
-        }
+    // Awaits every task in flight, so none outlives the driver. A step after
+    // the first error is skipped.
+    coro::CoroTask<void> drain_all() {
+        while (!in_flight_.empty()) co_await step_oldest();
+        while (!bloom_steps_.empty()) co_await await_bloom_front();
+        co_await await_tails();
     }
 
     // Pieces come here in order, so a string gets the id of its first piece
@@ -837,37 +817,27 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         }
     }
 
-    // Steps the folds with the oldest chunk in flight. A parse or a step that
-    // threw rethrows here, after every task in flight is awaited, so no task
-    // outlives the driver.
+    // Steps the folds with the oldest chunk in flight.
     coro::CoroTask<void> step_oldest() {
         auto future = std::move(in_flight_.front());
         in_flight_.pop_front();
-        dstd::UniquePtr<Parsed> done;
-        std::exception_ptr error;
-        try {
-            done = co_await std::move(future);
-        } catch (...) {
-            error = std::current_exception();
+        dstd::UniquePtr<Parsed> done = co_await std::move(future);
+        if (error_) {
+            buffers_->give(std::move(done->batch));
+            co_return;
         }
-        if (!error) {
-            try {
-                if (done->local) commit_ids(*done);
-                if (ahead()) {
-                    chained_ = true;
-                    co_await step_ahead(std::move(done));
-                } else {
-                    step(*done);
-                    buffers_->give(std::move(done->batch));
-                    co_await stage_agg();
-                }
-            } catch (...) {
-                error = std::current_exception();
+        if (done->local) commit_ids(*done);
+        if (ahead()) {
+            chained_ = true;
+            co_await step_ahead(std::move(done));
+        } else {
+            auto stepped = step(*done);
+            buffers_->give(std::move(done->batch));
+            if (!stepped) {
+                error_ = stepped.error();
+            } else {
+                co_await stage_agg();
             }
-        }
-        if (error) {
-            co_await drain();
-            std::rethrow_exception(error);
         }
     }
 
@@ -888,7 +858,8 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     index::extensions::BloomFold* bloom_ = nullptr;
     index::schemas::dft::agg::AggregationFold* agg_ = nullptr;
     dstd::UniquePtr<coro::AsyncSemaphore> permits_;
-    dstd::Vector<dstd::Optional<coro::SpawnFuture<void>>> tails_;
+    dstd::Vector<dstd::Optional<coro::SpawnFuture<dstd::Result<void>>>> tails_;
+    dstd::Optional<dstd::Error> error_;
     // Shared by every file of a build, so a slot keeps its capacity from file
     // to file.
     dstd::Optional<FoldBufferPool> own_buffers_{std::in_place};

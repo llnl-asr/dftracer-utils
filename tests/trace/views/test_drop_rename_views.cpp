@@ -84,8 +84,10 @@ View query_indexed(const dstd::String& gz, const dstd::String& schema) {
 }
 
 View full_index(const dstd::String& gz, const dstd::String& schema) {
-    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
-        .build();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+                                {dstd::String(dstd::StringView(gz))}))
+            .build());
     return View::from_file(
                dstd::String(gz),
                dstd::String(dstd::String(determine_index_path(gz, ""))))

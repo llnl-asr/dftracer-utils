@@ -59,9 +59,10 @@ struct CountFold : dftracer::utils::trace::views::detail::Fold {
         const override {
         return dstd::make_unique<CountFold>(total);
     }
-    void step(
+    dstd::Result<void> step(
         const dftracer::utils::trace::views::detail::FoldBatch& b) override {
         local += b.events.size();
+        return {};
     }
     void seal_unit(
         const dftracer::utils::trace::views::detail::ScanUnit&) override {}
@@ -136,9 +137,10 @@ dataframe::DataFrame scan_only(const views::detail::scan::ScanPlan& v) {
 // answer without a scan.
 void build_tier_index(const dstd::String& gz) {
     dftracer::utils::index::IndexerOptions options;
-    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))},
-                                          options)
-        .build();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+                                {dstd::String(dstd::StringView(gz))}, options))
+            .build());
 }
 
 // A trace with a numeric arg ("level") and overlapping durations, so one trace

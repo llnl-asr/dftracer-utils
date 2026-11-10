@@ -43,8 +43,10 @@ dstd::String write_ndjson(TestEnvironment& env, const dstd::String& name) {
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
     dstd::fs::remove(plain).discard();
-    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
-        .build();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+                                {dstd::String(dstd::StringView(gz))}))
+            .build());
     return gz;
 }
 
@@ -172,9 +174,10 @@ TEST_SUITE("GenericView") {
         TestEnvironment env(10);
         const auto gz = write_ndjson(env, "m");
         const auto dft = create_mixed_trace(env, 5, 5);
-        dftracer::utils::index::Indexer::open(
-            {dstd::String(dstd::StringView(dft))})
-            .build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+                                    {dstd::String(dstd::StringView(dft))}))
+                .build());
         View v = View::from_files(
             {{dstd::String(gz),
               dstd::String(dstd::String(determine_index_path(gz, "")))},
@@ -218,9 +221,11 @@ TEST_SUITE("GenericView") {
                 .num_rows();
         };
         CHECK(rows() == 10);
-        dftracer::utils::index::Indexer::open(
-            {dstd::String(dstd::StringView(dstd::String(dir.str())))})
-            .build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(
+                dftracer::utils::index::Indexer::open(
+                    {dstd::String(dstd::StringView(dstd::String(dir.str())))}))
+                .build());
         CHECK(rows() == 10);
 
         TestEnvironment empty_env(10);

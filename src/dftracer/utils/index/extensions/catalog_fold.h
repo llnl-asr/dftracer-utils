@@ -52,7 +52,8 @@ class CatalogFold : public trace::views::detail::Fold {
                                               should_write_);
     }
 
-    void step(const trace::views::detail::FoldBatch& batch) override;
+    dstd::Result<void> step(
+        const trace::views::detail::FoldBatch& batch) override;
     void seal_unit(const trace::views::detail::ScanUnit&) override {}
     void drop_unit(const trace::views::detail::ScanUnit&) override {}
     void merge(trace::views::detail::Fold& slice) override;

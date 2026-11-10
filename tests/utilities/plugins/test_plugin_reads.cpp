@@ -15,6 +15,7 @@
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <utilities/plugins/test_plugin_common.h>
 
@@ -135,8 +136,10 @@ TEST_CASE("a path-decoded file hands the plugin its own columns") {
     const dstd::String gz = plain + ".gz";
     dftu_utils_test::compress_file_to_gzip(plain, gz);
     dstd::fs::remove(plain).discard();
-    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
-        .build();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+                                {dstd::String(dstd::StringView(gz))}))
+            .build());
     View view = View::from_files(
         {ViewFile{dstd::String(gz),
                   dstd::String(dstd::String(

@@ -35,7 +35,7 @@ class IndexRuleFold : public Fold {
 
     dstd::UniquePtr<Fold> slice() const override;
 
-    void step(const FoldBatch& batch) override;
+    dstd::Result<void> step(const FoldBatch& batch) override;
     void seal_unit(const ScanUnit&) override {}
     void drop_unit(const ScanUnit&) override {}
 

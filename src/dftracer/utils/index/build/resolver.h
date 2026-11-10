@@ -5,6 +5,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
@@ -114,11 +115,11 @@ dstd::Vector<runtime::fs::FoundFile> scanned_entries(
 
 class Resolver {
    public:
-    coro::CoroTask<ResolverResult> operator()(coro::Scope& ctx,
-                                              const ResolverInput& input) const;
+    coro::CoroTask<dstd::Result<ResolverResult>> operator()(
+        coro::Scope& ctx, const ResolverInput& input) const;
 
     /// Scope-less overload: opens its own scope on the current executor.
-    coro::CoroTask<ResolverResult> operator()(
+    coro::CoroTask<dstd::Result<ResolverResult>> operator()(
         const ResolverInput& input) const {
         return coro::with_scope(
             [this, input](coro::Scope& s) { return (*this)(s, input); });

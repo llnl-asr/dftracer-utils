@@ -227,8 +227,9 @@ dstd::UniquePtr<trace::views::detail::Fold> RowSetFold::slice() const {
     return dstd::make_unique<RowSetFold>(*intern_, rowsets_, budget_);
 }
 
-void RowSetFold::step(const trace::views::detail::FoldBatch& batch) {
-    if (abandoned_ || rowsets_.empty()) return;
+dstd::Result<void> RowSetFold::step(
+    const trace::views::detail::FoldBatch& batch) {
+    if (abandoned_ || rowsets_.empty()) return {};
     for (const auto& e : batch.events) {
         const trace::views::detail::PodSource src(e, *intern_);
         for (std::size_t r = 0; r < rowsets_.size(); ++r) {
@@ -258,9 +259,10 @@ void RowSetFold::step(const trace::views::detail::FoldBatch& batch) {
                 for (auto& c : p.columns) c = {};
             for (auto& s : sealed_)
                 for (auto& c : s.columns) c = {};
-            return;
+            return {};
         }
     }
+    return {};
 }
 
 void RowSetFold::absorb(std::size_t r, Rows& from) {
@@ -311,8 +313,8 @@ void RowSetFold::merge(trace::views::detail::Fold& slice) {
         absorb(r, other.sealed_[r]);
 }
 
-void RowSetFold::write(index::FileBuild& build) const {
-    if (abandoned_ || rowsets_.empty()) return;
+dstd::Result<void> RowSetFold::write(index::FileBuild& build) const {
+    if (abandoned_ || rowsets_.empty()) return {};
     for (std::size_t r = 0; r < rowsets_.size(); ++r) {
         dataframe::DataFrame f;
         for (std::size_t c = 0; c < rowsets_[r].columns.size(); ++c) {
@@ -320,10 +322,12 @@ void RowSetFold::write(index::FileBuild& build) const {
             f.names.emplace_back(name.data(), name.size());
             f.columns.push_back(series_of(sealed_[r].columns[c]));
         }
-        index::put_rowset(build, rowsets_[r].name,
-                          common::unwrap(dataframe::frame_to_native(f)));
+        auto native = dataframe::frame_to_native(f);
+        if (!native) return native.error();
+        index::put_rowset(build, rowsets_[r].name, std::move(*native));
     }
     build.finish(index::store::IndexExtension::Rowset, 0);
+    return {};
 }
 
 }  // namespace dftracer::utils::index::extensions

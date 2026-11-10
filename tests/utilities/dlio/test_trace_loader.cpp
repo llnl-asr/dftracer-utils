@@ -11,6 +11,7 @@
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/utilities/dlio/trace_loader.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <cstdint>
@@ -91,9 +92,9 @@ TEST_SUITE("dlio trace loader") {
         o.aggregation = config;
         dstd::Vector<dstd::String> paths;
         for (const auto& f : files) paths.emplace_back(f);
-        auto ix = index::Indexer::open(
-            dstd::Vector<dstd::String>(paths.begin(), paths.end()), o);
-        ix.build();
+        auto ix = dftu_utils_test::ok(index::Indexer::open(
+            dstd::Vector<dstd::String>(paths.begin(), paths.end()), o));
+        dftu_utils_test::ok(ix.build());
         const dstd::String index_path = dstd::String(
             trace::internal::determine_index_path(paths[0], o.index_dir));
 

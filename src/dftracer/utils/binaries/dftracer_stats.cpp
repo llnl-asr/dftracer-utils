@@ -947,7 +947,7 @@ static coro::CoroTask<IndexPartition> resolve_index_state(
     input.files = std::move(files);
     input.index_dir = std::move(index_dir);
     input.require_bloom = report_type == StatisticsQueryType::Detailed;
-    auto result = co_await resolver(input);
+    auto result = common::unwrap(co_await resolver(input));
     co_return build_partition(std::move(result));
 }
 
@@ -1018,7 +1018,7 @@ static coro::CoroTask<void> auto_index_files(IndexPartition& partition,
     refresh_input.index_dir = index_dir;
     refresh_input.require_checkpoints = true;
 
-    auto refresh_result = co_await resolver(refresh_input);
+    auto refresh_result = common::unwrap(co_await resolver(refresh_input));
 
     // Add successfully indexed files
     dstd::Optional<dftracer::utils::index::Snapshot> refreshed;
@@ -1496,14 +1496,14 @@ static coro::CoroTask<int> run_stats(coro::Scope& ctx,
             dstd::String index_dir_arg{dstd::StringView(config.index_dir)};
             if (!config.directory.empty()) {
                 dstd::String directory_arg{dstd::StringView(config.directory)};
-                co_await ensure_index_fresh(std::move(directory_arg), "",
-                                            std::move(index_dir_arg));
+                common::unwrap(co_await ensure_index_fresh(
+                    std::move(directory_arg), "", std::move(index_dir_arg)));
             } else {
                 dstd::Vector<dstd::String> to_check;
                 for (const auto& f : config.files)
                     to_check.emplace_back(dstd::StringView(f));
-                co_await ensure_indexes_fresh("", std::move(to_check),
-                                              std::move(index_dir_arg));
+                common::unwrap(co_await ensure_indexes_fresh(
+                    "", std::move(to_check), std::move(index_dir_arg)));
             }
         }
         if (!config.directory.empty() &&

@@ -62,12 +62,13 @@ plugins::Plugins load(const dstd::String& config = "") {
 index::Indexer open(const dstd::String& gz) {
     index::IndexerOptions o;
     o.extensions = {};
-    return index::Indexer::open({dstd::String(dstd::StringView(gz))}, o);
+    return dftu_utils_test::ok(
+        index::Indexer::open({dstd::String(dstd::StringView(gz))}, o));
 }
 
 dstd::Optional<dftracer::utils::index::ExtensionEntry> entry(
     const index::Indexer& ix) {
-    const auto manifest = ix.manifest();
+    const auto manifest = dftu_utils_test::ok(ix.manifest());
     for (const auto& e : manifest.at(0).extensions)
         if (e.name == EXT) return e;
     return dstd::nullopt;
@@ -101,20 +102,21 @@ TEST_CASE("a plugin extension builds, prunes and survives being absent") {
     {
         plugins::Plugins set = load();
         auto ix = open(gz);
-        ix.build();
+        dftu_utils_test::ok(ix.build());
         const auto e = entry(ix);
         REQUIRE(e);
         CHECK(e->ready);
         CHECK(e->current);
 
-        const auto ex = ix.explain(q).at(0);
+        const auto ex = dftu_utils_test::ok(ix.explain(q)).at(0);
         chunks = ex.chunks;
         REQUIRE(chunks > 2);
         const auto* p = pruned(ex);
         REQUIRE(p);
         CHECK(p->removed.size() == chunks - 1);
         CHECK(ex.read.size() == 1);
-        CHECK_FALSE(ix.explain("v > 5000").at(0).may_match);
+        CHECK_FALSE(
+            dftu_utils_test::ok(ix.explain("v > 5000")).at(0).may_match);
 
         NullSink sink;
         const auto stats =
@@ -124,23 +126,23 @@ TEST_CASE("a plugin extension builds, prunes and survives being absent") {
     }
     // The set is gone, so the extension is no longer registered.
     auto ix = open(gz);
-    const auto ex = ix.explain(q).at(0);
+    const auto ex = dftu_utils_test::ok(ix.explain(q)).at(0);
     CHECK(pruned(ex) == nullptr);
     CHECK(ex.read.size() == chunks);
     CHECK(dftu_utils_test::ok(view_of(gz).duql(q).collect().get()).num_rows() ==
           9);
-    CHECK(ix.status().needs_work.empty());
+    CHECK(dftu_utils_test::ok(ix.status()).needs_work.empty());
 }
 
 TEST_CASE("a file indexed without the plugin needs work once it is loaded") {
     dftu_utils_test::TestEnvironment env(10);
     const auto gz = write_records(env, "b");
-    open(gz).build();
+    dftu_utils_test::ok(open(gz).build());
     plugins::Plugins set = load();
     auto ix = open(gz);
-    CHECK(ix.status().needs_work.size() == 1);
-    ix.build();
-    CHECK(ix.status().needs_work.empty());
+    CHECK(dftu_utils_test::ok(ix.status()).needs_work.size() == 1);
+    dftu_utils_test::ok(ix.build());
+    CHECK(dftu_utils_test::ok(ix.status()).needs_work.empty());
     REQUIRE(entry(ix));
     CHECK(entry(ix)->current);
 }
@@ -150,14 +152,14 @@ TEST_CASE("another extension version makes the data stale") {
     const auto gz = write_records(env, "c");
     {
         plugins::Plugins set = load();
-        open(gz).build();
+        dftu_utils_test::ok(open(gz).build());
     }
     plugins::Plugins set = load(R"({"version": 2})");
     auto ix = open(gz);
     REQUIRE(entry(ix));
     CHECK_FALSE(entry(ix)->current);
-    CHECK(pruned(ix.explain("v > 2990").at(0)) == nullptr);
-    CHECK(ix.status().needs_work.size() == 1);
+    CHECK(pruned(dftu_utils_test::ok(ix.explain("v > 2990")).at(0)) == nullptr);
+    CHECK(dftu_utils_test::ok(ix.status()).needs_work.size() == 1);
 }
 
 TEST_CASE("drop and rebuild a plugin extension by name") {
@@ -165,13 +167,14 @@ TEST_CASE("drop and rebuild a plugin extension by name") {
     const auto gz = write_records(env, "d");
     plugins::Plugins set = load();
     auto ix = open(gz);
-    ix.build();
-    ix.drop_extension(dstd::String(EXT));
+    dftu_utils_test::ok(ix.build());
+    dftu_utils_test::ok(ix.drop_extension(dstd::String(EXT)));
     CHECK_FALSE(entry(ix));
-    ix.rebuild_extension(dstd::String(EXT));
+    dftu_utils_test::ok(ix.rebuild_extension(dstd::String(EXT)));
     REQUIRE(entry(ix));
     CHECK(entry(ix)->current);
-    CHECK_THROWS(ix.rebuild_extension("index_minmax.absent"));
+    dftu_utils_test::expect_error(ix.rebuild_extension("index_minmax.absent"),
+                                  common::ErrorCode::InvalidArgument);
 }
 
 TEST_CASE("a second registration of the same name fails to load") {

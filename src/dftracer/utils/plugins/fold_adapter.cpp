@@ -1297,12 +1297,12 @@ bool PluginFold::passes_query(const FoldEvent& ev) {
 // native DataFrame and hand it across the ABI as a dftu_dataframe, so the
 // plugin runs SIMD column ops instead of a per-event loop. build_row_frame is
 // the same columnar materializer NativeRowFold uses.
-void PluginFold::step(const FoldBatch& batch) {
+dstd::Result<void> PluginFold::step(const FoldBatch& batch) {
     // A transform steps by rewriting the batch; on_batch is not called
     // beside it (the transform accumulates inside its own call).
     const bool has_transform = slice_ && plugin_->transform;
     const bool has_on_batch = slice_ && plugin_->on_batch && !has_transform;
-    if (!has_on_batch && !has_transform && state_accums_.empty()) return;
+    if (!has_on_batch && !has_transform && state_accums_.empty()) return {};
 
     // The previous step's tasks were awaited by the fuse worker before this
     // call, so freeing them now is safe.
@@ -1325,14 +1325,14 @@ void PluginFold::step(const FoldBatch& batch) {
             if (query_ && !passes_query(fe)) continue;
             col_scratch_.push_back(fe);
         }
-        if (col_scratch_.empty()) return;
+        if (col_scratch_.empty()) return {};
         // An empty projection is build_row_frame's "every column", which for
         // a batch with many arg keys is a Series per key.
         df = trace::views::detail::build_row_frame(
             col_scratch_, *intern_, projection, 1.0,
             col_scratch_.front().by_path);
     }
-    if (df.num_rows() == 0) return;
+    if (df.num_rows() == 0) return {};
 
     // dftu_dataframe_new takes ownership of the column handles, so pass shared
     // copies (a refcount bump, no data copy); df keeps its own.
@@ -1371,6 +1371,7 @@ void PluginFold::step(const FoldBatch& batch) {
             plugin_name().empty() ? "plugin" : plugin_name());
     pending_ = nullptr;
     reclaim_slice();
+    return {};
 }
 
 // The batch a transform earlier in this step rewrote, cut down to this

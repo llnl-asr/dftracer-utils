@@ -10,9 +10,11 @@
 
 namespace dftracer::utils::index::gzip {
 
-dstd::SharedPtr<CheckpointIndexer> CheckpointIndexerFactory::create(
-    dstd::CStringView archive_path, dstd::CStringView index_path,
-    std::uint64_t checkpoint_size, bool force) {
+dstd::Result<dstd::SharedPtr<CheckpointIndexer>>
+CheckpointIndexerFactory::try_create(dstd::CStringView archive_path,
+                                     dstd::CStringView index_path,
+                                     std::uint64_t checkpoint_size,
+                                     bool force) {
     common::ArchiveFormat format =
         common::FormatDetector::detect(archive_path.view());
     dstd::String final_idx_path =
@@ -20,17 +22,21 @@ dstd::SharedPtr<CheckpointIndexer> CheckpointIndexerFactory::create(
                            : dstd::String(index_path.view());
 
     switch (format) {
-        case common::ArchiveFormat::Gzip:
-            return dstd::make_shared<index::gzip::GzipIndexer>(
-                dstd::String(archive_path.view()), final_idx_path,
-                checkpoint_size, force);
+        case common::ArchiveFormat::Gzip: {
+            const dstd::String path(archive_path.view());
+            auto checked = GzipIndexer::check_arguments(path, checkpoint_size);
+            if (!checked) return checked.error();
+            return dstd::SharedPtr<CheckpointIndexer>(
+                dstd::make_shared<index::gzip::GzipIndexer>(
+                    path, final_idx_path, checkpoint_size, force));
+        }
 
         case common::ArchiveFormat::Unknown:
         default:
             DFTRACER_UTILS_LOG_ERROR(
                 "Unsupported or unrecognized archive format for file: {}",
                 archive_path);
-            return nullptr;
+            return dstd::SharedPtr<CheckpointIndexer>();
     }
 }
 

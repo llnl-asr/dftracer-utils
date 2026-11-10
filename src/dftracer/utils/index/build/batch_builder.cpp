@@ -7,8 +7,10 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/file.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
@@ -58,9 +60,6 @@ bool covers_every_byte(
     }
     return at == to;
 }
-
-/// Leaves the parse of a file with no new whole member.
-struct NothingNew {};
 
 struct PreparedFile {
     std::size_t index;
@@ -209,9 +208,14 @@ static coro::CoroTask<void> parse_and_write_worker(
             struct stat input_stat{};
             FileAdmission::Ticket ticket;
             bool admitted = false;
+            dstd::String admit_error;
             if (!costs_ptr->empty()) {
-                ticket = co_await admission->files.admit(
+                auto got = co_await admission->files.admit(
                     FileAdmission::plaintext_estimate(0, (*costs_ptr)[idx]));
+                if (got)
+                    ticket = std::move(*got);
+                else
+                    admit_error = dstd::String(got.error().message());
                 admitted = true;
             }
             if (!input_fd) {
@@ -232,9 +236,14 @@ static coro::CoroTask<void> parse_and_write_worker(
                 pf.file_mtime = static_cast<std::uint64_t>(input_stat.st_mtime);
                 pf.file_mtime_ns = common::stat_mtime_ns(input_stat);
             }
-            if (!admitted)
-                ticket = co_await admission->files.admit(
+            if (!admitted) {
+                auto got = co_await admission->files.admit(
                     FileAdmission::plaintext_estimate(0, pf.file_size));
+                if (got)
+                    ticket = std::move(*got);
+                else
+                    admit_error = dstd::String(got.error().message());
+            }
             IndexBuildResult result;
             result.file_path = pf.file_path;
             result.index_path = pf.index_path;
@@ -249,18 +258,29 @@ static coro::CoroTask<void> parse_and_write_worker(
             dstd::Optional<index::FileRef> appended_file;
             const bool fresh =
                 !writer->snapshot->file(pf.logical_path).has_value();
-            try {
-                if (fd < 0)
-                    throw common::DFTUtilsException::cat(
-                        common::ErrorCode::Io, "cannot open ", pf.file_path);
+            do {
+                if (!admit_error.empty()) {
+                    result.error_message = admit_error;
+                    break;
+                }
+                if (fd < 0) {
+                    result.error_message =
+                        dstd::fmt<"cannot open {}">(pf.file_path);
+                    break;
+                }
                 // A file that grew by whole members adds only those members.
                 const auto known = writer->snapshot->file(pf.logical_path);
                 dstd::Optional<index::store::FileMetadataResult> stored;
                 if (known && !tier_only && !admission->force_rebuild &&
                     pf.file_size > known->stat().size &&
                     index::extensions::plugin_extensions().empty()) {
-                    stored = common::unwrap(
-                        index::file_metadata(*writer->snapshot, *known));
+                    auto meta = index::file_metadata(*writer->snapshot, *known);
+                    if (!meta) {
+                        result.error_message =
+                            dstd::String(meta.error().message());
+                        break;
+                    }
+                    stored = std::move(*meta);
                     if (stored && !stored->truncated &&
                         !stored->has_open_line &&
                         (checkpoint_size == 0 ||
@@ -278,11 +298,17 @@ static coro::CoroTask<void> parse_and_write_worker(
                         is_appending ? known->stat().size : 0;
                     auto finding = find_new_members(fd, from, pf.file_size,
                                                     admission->walk_members);
-                    new_members = co_await std::move(finding);
+                    auto found = co_await std::move(finding);
+                    if (!found) {
+                        result.error_message =
+                            dstd::String(found.error().message());
+                        break;
+                    }
+                    new_members = std::move(*found);
                     if (new_members.members.empty()) {
                         result.success = true;
                         result.was_skipped = true;
-                        throw NothingNew{};
+                        break;
                     }
                     member_slice.members = &new_members.members;
                     member_slice.member_end = new_members.members.size();
@@ -382,19 +408,26 @@ static coro::CoroTask<void> parse_and_write_worker(
                             visitors, scope,
                             whole_only ? &member_slice : nullptr,
                             admission->files.inflate_ways());
-                    if (whole_only && (!arts || arts->truncated ||
-                                       !covers_every_byte(
-                                           arts->members,
-                                           new_members.members.front().c_offset,
-                                           new_members.c_end))) {
-                        // A false header or a hole in the new bytes. The walk
-                        // finds the part that is whole.
+                    // A false header or a hole in the new bytes is a
+                    // Compression error or a truncated build. The walk finds
+                    // the part that is whole.
+                    const bool not_whole =
+                        whole_only &&
+                        (arts.has_value()
+                             ? (arts->truncated ||
+                                !covers_every_byte(
+                                    arts->members,
+                                    new_members.members.front().c_offset,
+                                    new_members.c_end))
+                             : arts.error().is_code(
+                                   common::ErrorCode::Compression));
+                    if (not_whole) {
                         result.needs_member_walk = !admission->walk_members;
                         result.error_message =
                             "a new gzip member of the file is not whole";
                     } else if (!arts) {
                         result.error_message =
-                            "Failed to build gzip index artifacts";
+                            dstd::String(arts.error().message());
                     } else {
                         if (is_appending) {
                             for (auto& m : arts->members) {
@@ -462,10 +495,7 @@ static coro::CoroTask<void> parse_and_write_worker(
                         parse_ok = true;
                     }
                 }
-            } catch (const NothingNew&) {
-            } catch (const std::exception& e) {
-                result.error_message = e.what();
-            }
+            } while (false);
             input_fd.reset();
 
             auto t1 = std::chrono::steady_clock::now();

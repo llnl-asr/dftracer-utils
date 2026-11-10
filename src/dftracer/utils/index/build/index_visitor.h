@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_INDEX_BUILD_INDEX_VISITOR_H
 
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/result.h>
 
 #include <cstddef>
 
@@ -23,16 +24,20 @@ class IndexVisitor {
     /// outlives the file's chunks. Default: ignored.
     virtual void bind_scope(coro::Scope* /*scope*/) {}
 
-    virtual coro::CoroTask<void> on_checkpoint(std::size_t checkpoint_idx) = 0;
+    /// A visitor's failure ends the pass with its error.
+    virtual coro::CoroTask<dstd::Result<void>> on_checkpoint(
+        std::size_t checkpoint_idx) = 0;
 
     /// Process one decompressed chunk of a member's plaintext. A chunk is a
     /// batch of lines; the consumer splits or parses as it needs. A line may
     /// straddle a chunk boundary, so a consumer that needs whole lines carries
     /// the partial tail across calls.
-    virtual coro::CoroTask<void> on_chunk(const char* data, std::size_t len,
-                                          std::size_t checkpoint_idx) = 0;
+    virtual coro::CoroTask<dstd::Result<void>> on_chunk(
+        const char* data, std::size_t len, std::size_t checkpoint_idx) = 0;
 
-    virtual coro::CoroTask<void> flush() { co_return; }
+    virtual coro::CoroTask<dstd::Result<void>> flush() {
+        co_return dstd::Result<void>{};
+    }
 
     /// Cheap hint that drain_pending() should be called to apply
     /// backpressure. Default false. Polled after each on_chunk call.
@@ -41,7 +46,9 @@ class IndexVisitor {
     /// Drain accumulated work via async ops (e.g. channel send). Suspends
     /// the calling coroutine when downstream is full -- real backpressure
     /// without blocking an executor thread.
-    virtual coro::CoroTask<void> drain_pending() { co_return; }
+    virtual coro::CoroTask<dstd::Result<void>> drain_pending() {
+        co_return dstd::Result<void>{};
+    }
 };
 
 }  // namespace dftracer::utils::index::build

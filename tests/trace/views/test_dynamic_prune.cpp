@@ -61,8 +61,9 @@ struct NameCollectorFold : Fold {
     dstd::UniquePtr<Fold> slice() const override {
         return dstd::make_unique<NameCollectorFold>();
     }
-    void step(const FoldBatch& b) override {
+    dstd::Result<void> step(const FoldBatch& b) override {
         for (const auto& e : b.events) name_ids.push_back(e.name_id);
+        return {};
     }
     void seal_unit(const ScanUnit&) override { ++sealed_units; }
     void drop_unit(const ScanUnit&) override {}

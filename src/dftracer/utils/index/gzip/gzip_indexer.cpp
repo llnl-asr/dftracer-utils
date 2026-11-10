@@ -678,7 +678,7 @@ static dftracer::utils::coro::CoroTask<void> range_worker(InflatePlan* plan) {
     }
 }
 
-static dftracer::utils::coro::CoroTask<bool> parallel_dispatcher(
+static dftracer::utils::coro::CoroTask<dstd::Result<bool>> parallel_dispatcher(
     coro::Scope* scope, InflatePlan* plan, std::uint64_t member_idx_base,
     std::uint64_t& total_lines, std::uint64_t& total_uc_size,
     dstd::Vector<GzipMemberRecord>& members,
@@ -699,8 +699,8 @@ static dftracer::utils::coro::CoroTask<bool> parallel_dispatcher(
 
     std::uint64_t total_chunks_received = 0;
 
-    auto process_msg =
-        [&](ParallelInflateMsg& msg) -> dftracer::utils::coro::CoroTask<void> {
+    auto process_msg = [&](ParallelInflateMsg& msg)
+        -> dftracer::utils::coro::CoroTask<dstd::Result<void>> {
         const std::size_t data_size = static_cast<std::size_t>(msg.data_size);
         ++total_chunks_received;
         if (msg.truncated) {
@@ -730,7 +730,9 @@ static dftracer::utils::coro::CoroTask<bool> parallel_dispatcher(
         if (has_visitors && data_size > 0) {
             const char* data = reinterpret_cast<const char*>(msg.data->data());
             for (auto& v : visitors) {
-                co_await v.get().on_chunk(data, data_size, member_idx);
+                auto seen =
+                    co_await v.get().on_chunk(data, data_size, member_idx);
+                if (!seen) co_return seen;
             }
         }
 
@@ -776,32 +778,39 @@ static dftracer::utils::coro::CoroTask<bool> parallel_dispatcher(
 
             if (has_visitors) {
                 for (auto& v : visitors) {
-                    co_await v.get().on_checkpoint(member_idx);
+                    auto seen = co_await v.get().on_checkpoint(member_idx);
+                    if (!seen) co_return seen;
                 }
             }
             ++member_idx;
         }
 
-        co_return;
+        co_return dstd::Result<void>{};
     };
 
-    auto drain_visitors = [&]() -> dftracer::utils::coro::CoroTask<void> {
+    auto drain_visitors =
+        [&]() -> dftracer::utils::coro::CoroTask<dstd::Result<void>> {
         for (auto& v : visitors) {
             if (v.get().wants_drain()) {
-                co_await v.get().drain_pending();
+                auto drained = co_await v.get().drain_pending();
+                if (!drained) co_return drained;
             }
         }
+        co_return dstd::Result<void>{};
     };
 
-    auto consume =
-        [&](ParallelChan& chan) -> dftracer::utils::coro::CoroTask<void> {
+    auto consume = [&](ParallelChan& chan)
+        -> dftracer::utils::coro::CoroTask<dstd::Result<void>> {
         for (;;) {
             auto msg_opt = co_await chan.receive();
             if (!msg_opt) break;
-            co_await process_msg(*msg_opt);
+            auto processed = co_await process_msg(*msg_opt);
+            if (!processed) co_return processed;
             plan->buffers.give(std::move(msg_opt->data));
-            co_await drain_visitors();
+            auto drained = co_await drain_visitors();
+            if (!drained) co_return drained;
         }
+        co_return dstd::Result<void>{};
     };
     auto discard =
         [&](ParallelChan& chan) -> dftracer::utils::coro::CoroTask<void> {
@@ -813,8 +822,8 @@ static dftracer::utils::coro::CoroTask<bool> parallel_dispatcher(
     };
 
     dstd::SharedPtr<ParallelChan> redo;
-    std::exception_ptr error;
-    try {
+    auto run_ranges =
+        [&]() -> dftracer::utils::coro::CoroTask<dstd::Result<void>> {
         for (std::size_t r = 0; r < plan->ranges.size(); ++r) {
             const InflateRange& range = plan->ranges[r];
             auto chan = plan->ring[r % plan->ring.size()].chan;
@@ -835,51 +844,51 @@ static dftracer::utils::coro::CoroTask<bool> parallel_dispatcher(
                                 plan->extend(r), plan->ship_bytes,
                                 plan->buffers, std::move(producer));
                         });
-                    co_await consume(*redo);
+                    auto consumed = co_await consume(*redo);
+                    if (!consumed) co_return consumed;
                     redo.reset();
                 }
             } else {
                 // A range after one that stopped at a bad member starts at its
                 // own first member.
                 member_c_start = range.c_start;
-                co_await consume(*chan);
+                auto consumed = co_await consume(*chan);
+                if (!consumed) co_return consumed;
             }
             if (r + plan->ring.size() < plan->ranges.size())
                 plan->open(r + plan->ring.size());
             plan->permits.release(1);
         }
-    } catch (...) {
+        co_return dstd::Result<void>{};
+    };
+    auto ran = co_await run_ranges();
+    if (!ran) {
         plan->abandon(redo.get());
-        error = std::current_exception();
-    }
-    if (error) {
         // Visitors finish their own tasks, which may hold their state.
         for (auto& v : visitors) {
-            try {
-                co_await v.get().flush();
-            } catch (const std::exception& e) {
-                // The first error is the one rethrown below.
+            auto flushed = co_await v.get().flush();
+            // The first error is the one returned below.
+            if (!flushed)
                 DFTRACER_UTILS_LOG_WARN(
                     "Indexer: a visitor flush failed after an earlier error: "
                     "{}",
-                    e.what());
-            } catch (...) {
-                DFTRACER_UTILS_LOG_WARN(
-                    "Indexer: a visitor flush failed after an earlier error "
-                    "with a non-standard exception");
-            }
+                    flushed.error().format());
         }
-        std::rethrow_exception(error);
+        co_return ran.error();
     }
 
     if (has_visitors) {
-        for (auto& v : visitors) co_await v.get().flush();
+        for (auto& v : visitors) {
+            auto flushed = co_await v.get().flush();
+            if (!flushed) co_return flushed.error();
+        }
     }
     total_uc_size = global_uc;
     co_return true;
 }
 
-static dftracer::utils::coro::CoroTask<bool> process_chunks_parallel(
+static dftracer::utils::coro::CoroTask<dstd::Result<bool>>
+process_chunks_parallel(
     int fd, std::uint64_t slice_c_end, std::uint64_t file_size,
     std::uint64_t ckpt_size, std::size_t ways,
     dstd::Vector<GzipMember> scanned_members, std::uint64_t member_idx_base,
@@ -917,7 +926,7 @@ static dftracer::utils::coro::CoroTask<bool> process_chunks_parallel(
     plan.ranges = std::move(ranges);
     for (std::size_t r = 0; r < plan.ring.size(); ++r) plan.open(r);
 
-    bool dispatcher_ok = true;
+    dstd::Result<bool> dispatched = true;
     InflatePlan* plan_ptr = &plan;
     co_await coro::with_scope(
         [&](coro::Scope& child) -> dftracer::utils::coro::CoroTask<void> {
@@ -925,16 +934,16 @@ static dftracer::utils::coro::CoroTask<bool> process_chunks_parallel(
                 child.spawn([plan_ptr]() { return range_worker(plan_ptr); });
             // In the body, not spawned, so its error leaves the scope after the
             // workers are joined.
-            dispatcher_ok = co_await parallel_dispatcher(
+            dispatched = co_await parallel_dispatcher(
                 &child, plan_ptr, member_idx_base, total_lines, total_uc_size,
                 members, restart_windows, visitors, truncated, recovered_bytes,
                 has_open_line);
         });
 
-    co_return dispatcher_ok;
+    co_return dispatched;
 }
 
-static dftracer::utils::coro::CoroTask<bool> process_chunks(
+static dftracer::utils::coro::CoroTask<dstd::Result<bool>> process_chunks(
     int fd, const GzipMemberSlice* slice, std::uint64_t ckpt_size,
     std::size_t ways, std::uint64_t& total_lines, std::uint64_t& total_uc_size,
     dstd::Vector<GzipMemberRecord>& members,
@@ -991,7 +1000,7 @@ static dftracer::utils::coro::CoroTask<bool> process_chunks(
 
 }  // namespace
 
-dftracer::utils::coro::CoroTask<dstd::Optional<GzipBuildArtifacts>>
+dftracer::utils::coro::CoroTask<dstd::Result<GzipBuildArtifacts>>
 build_gzip_index_artifacts(dstd::CStringView gz_path, std::uint64_t ckpt_size,
                            const CheckpointIndexer::VisitorList& visitors,
                            coro::Scope* scope, const GzipMemberSlice* slice,
@@ -1001,14 +1010,16 @@ build_gzip_index_artifacts(dstd::CStringView gz_path, std::uint64_t ckpt_size,
         runtime::io::open_file(dstd::PathView(gz_path), open_options);
     auto file = co_await std::move(opening);
     if (!file) {
-        co_return dstd::nullopt;
+        co_return index::store::indexer_error(
+            index::store::IndexerErrorKind::BuildError,
+            dstd::fmt<"Failed to build index for {}">(gz_path));
     }
     co_return co_await build_gzip_index_artifacts(file->native_handle(),
                                                   gz_path, ckpt_size, visitors,
                                                   scope, slice, ways);
 }
 
-dftracer::utils::coro::CoroTask<dstd::Optional<GzipBuildArtifacts>>
+dftracer::utils::coro::CoroTask<dstd::Result<GzipBuildArtifacts>>
 build_gzip_index_artifacts(int fd, dstd::CStringView gz_path,
                            std::uint64_t ckpt_size,
                            const CheckpointIndexer::VisitorList& visitors,
@@ -1035,12 +1046,16 @@ build_gzip_index_artifacts(int fd, dstd::CStringView gz_path,
     bool truncated = false;
     std::uint64_t recovered_bytes = 0;
     bool has_open_line = false;
-    const bool success = co_await process_chunks(
+    const auto processed = co_await process_chunks(
         fd, slice, ckpt_size, ways, total_lines, total_uc_size, members,
         restart_windows, visitors, truncated, recovered_bytes, has_open_line);
+    if (!processed.has_value()) co_return processed.error();
 
-    if (!success) {
-        co_return dstd::nullopt;
+    if (!*processed) {
+        co_return index::store::indexer_error(
+            index::store::IndexerErrorKind::BuildError,
+            dstd::fmt<"Failed to build index for {}">(gz_path),
+            common::ErrorCode::Compression);
     }
 
     if (truncated) {
@@ -1058,10 +1073,9 @@ build_gzip_index_artifacts(int fd, dstd::CStringView gz_path,
                 "corrupt, so the index will be empty.",
                 gz_path);
         } else {
-            throw common::DFTUtilsException::cat(
-                common::ErrorCode::InvalidArgument, "Indexer: ", gz_path,
-                " is not gzip; an index reads gzip traces only. Gzip it "
-                "first");
+            co_return common::make_error<
+                "Indexer: {} is not gzip; an index reads gzip traces only. "
+                "Gzip it first">(common::ErrorCode::InvalidArgument, gz_path);
         }
     }
 
@@ -1097,6 +1111,26 @@ void persist_gzip_index_artifacts(index::FileBuild& build,
     build.finish(index::store::IndexExtension::Members, 0);
 }
 
+dstd::Result<void> GzipIndexer::check_arguments(const dstd::String& gz_path,
+                                                std::uint64_t ckpt_size) {
+    if (gz_path.empty()) {
+        return index::store::indexer_error(
+            index::store::IndexerErrorKind::InvalidArgument,
+            "gz_path must not be empty");
+    }
+    if (!common::input_exists(gz_path)) {
+        return index::store::indexer_error(
+            index::store::IndexerErrorKind::FileError,
+            dstd::fmt<"gz_path does not exist: {}">(gz_path));
+    }
+    if (ckpt_size == 0) {
+        return index::store::indexer_error(
+            index::store::IndexerErrorKind::InvalidArgument,
+            "ckpt_size must be greater than 0");
+    }
+    return {};
+}
+
 GzipIndexer::GzipIndexer(const dstd::String& gz_path,
                          const dstd::String& idx_path, std::uint64_t ckpt_size,
                          bool force_rebuild)
@@ -1112,24 +1146,8 @@ GzipIndexer::GzipIndexer(const dstd::String& gz_path,
       cached_line_count_ready_(false),
       cached_checkpoint_size_(0),
       cached_checkpoint_size_ready_(false) {
-    if (gz_path_.empty()) {
-        common::throw_error(index::store::indexer_error(
-            index::store::IndexerErrorKind::InvalidArgument,
-            "gz_path must not be empty"));
-    }
-
-    if (!common::input_exists(gz_path_)) {
-        common::throw_error(index::store::indexer_error(
-            index::store::IndexerErrorKind::FileError,
-            "gz_path does not exist: " + gz_path_));
-    }
-
-    if (ckpt_size_ == 0) {
-        common::throw_error(index::store::indexer_error(
-            index::store::IndexerErrorKind::InvalidArgument,
-            "ckpt_size must be greater than 0"));
-    }
-
+    if (!check_arguments(gz_path_, ckpt_size_))
+        dstd::fatal("GzipIndexer: the arguments were not checked");
     open();
 }
 
@@ -1186,9 +1204,10 @@ void GzipIndexer::open() {}
 
 void GzipIndexer::close() {}
 
-dftracer::utils::coro::CoroTask<void> GzipIndexer::build_async() const {
+dftracer::utils::coro::CoroTask<dstd::Result<void>>
+GzipIndexer::try_build_async() const {
     if (!force_rebuild_ && !need_rebuild()) {
-        co_return;
+        co_return dstd::Result<void>{};
     }
 
     const std::time_t mtime =
@@ -1200,17 +1219,13 @@ dftracer::utils::coro::CoroTask<void> GzipIndexer::build_async() const {
         determine_checkpoint_size(ckpt_size_, gz_path_);
     const dstd::String logical = gz_path_logical_path_;
 
-    dstd::Optional<GzipBuildArtifacts> artifacts;
+    dstd::Result<GzipBuildArtifacts> artifacts = GzipBuildArtifacts{};
     co_await coro::with_scope(
         [&](coro::Scope& scope) -> dftracer::utils::coro::CoroTask<void> {
             artifacts = co_await build_gzip_index_artifacts(
                 gz_path_, final_ckpt_size, visitors_, &scope);
         });
-    if (!artifacts) {
-        common::throw_error(index::store::indexer_error(
-            index::store::IndexerErrorKind::BuildError,
-            "Failed to build index for " + gz_path_));
-    }
+    if (!artifacts) co_return artifacts.error();
 
     dstd::Optional<index::Snapshot> snapshot;
     {
@@ -1238,12 +1253,14 @@ dftracer::utils::coro::CoroTask<void> GzipIndexer::build_async() const {
             committed = dstd::Unexpected<dstd::Error>(build.error());
         }
         if (!committed) {
-            common::throw_error(index::store::indexer_error(
+            co_return index::store::indexer_error(
                 index::store::IndexerErrorKind::BuildError,
-                "Failed to write the index of " + gz_path_ + ": " +
-                    dstd::String(committed.error().message())));
+                dstd::fmt<"Failed to write the index of {}: {}">(
+                    gz_path_, committed.error().message()));
         }
-        snapshot.emplace(common::unwrap(opened->snapshot()));
+        auto taken = opened->snapshot();
+        if (!taken) co_return taken.error();
+        snapshot.emplace(std::move(*taken));
     }
 
     cached_is_valid_ = true;
@@ -1252,9 +1269,9 @@ dftracer::utils::coro::CoroTask<void> GzipIndexer::build_async() const {
     const auto file = snapshot->file(logical);
     store::FileMetadataResult metadata;
     if (file) {
-        if (auto stored =
-                common::unwrap(index::file_metadata(*snapshot, *file)))
-            metadata = *stored;
+        auto stored = index::file_metadata(*snapshot, *file);
+        if (!stored) co_return stored.error();
+        if (*stored) metadata = **stored;
     }
     cached_line_count_ = metadata.line_count;
     cached_line_count_ready_ = true;
@@ -1262,22 +1279,24 @@ dftracer::utils::coro::CoroTask<void> GzipIndexer::build_async() const {
     cached_max_bytes_ready_ = true;
     std::lock_guard<std::mutex> lock(cached_members_mutex_);
     if (file) {
-        auto members = common::unwrap(index::members(*snapshot, *file));
-        cached_members_.assign(members.begin(), members.end());
+        auto members = index::members(*snapshot, *file);
+        if (!members) co_return members.error();
+        cached_members_.assign(members->begin(), members->end());
     } else {
         cached_members_.clear();
     }
     file_ref_ = file;
     snapshot_ = std::move(snapshot);
     cached_loaded_.store(true, std::memory_order_release);
-    co_return;
+    co_return dstd::Result<void>{};
 }
 
 bool GzipIndexer::is_valid() const { return cached_is_valid_; }
 
 bool GzipIndexer::exists() const {
-    return common::unwrap(
-        dstd::fs::is_directory(dstd::PathView(index::store_dir(index_path_))));
+    const auto found =
+        dstd::fs::is_directory(dstd::PathView(index::store_dir(index_path_)));
+    return found.has_value() && *found;
 }
 
 bool GzipIndexer::need_rebuild() const {
@@ -1288,10 +1307,12 @@ bool GzipIndexer::need_rebuild() const {
         return true;
     }
 
-    try {
-        auto opened = common::unwrap(index::Index::open(index_path_));
-        auto snapshot = common::unwrap(opened.snapshot());
-        const auto file = snapshot.file(gz_path_logical_path_);
+    const auto stale = [&]() -> dstd::Result<bool> {
+        auto opened = index::Index::open(index_path_);
+        if (!opened) return opened.error();
+        auto snapshot = opened->snapshot();
+        if (!snapshot) return snapshot.error();
+        const auto file = snapshot->file(gz_path_logical_path_);
         if (!file) {
             return true;
         }
@@ -1301,28 +1322,30 @@ bool GzipIndexer::need_rebuild() const {
             now.mtime = static_cast<std::uint64_t>(st.mtime);
             now.size = st.size;
         }
-        if (snapshot.freshness(gz_path_logical_path_, now) !=
+        if (snapshot->freshness(gz_path_logical_path_, now) !=
             index::Freshness::Current) {
             return true;
         }
         // The stat check misses a same-size rewrite within one mtime second.
-        const auto stored_hash = index::file_hash(snapshot, *file);
+        const auto stored_hash = index::file_hash(*snapshot, *file);
         if (!stored_hash) {
             return true;
         }
-        const auto metadata =
-            common::unwrap(index::file_metadata(snapshot, *file));
-        if (!metadata || metadata->checkpoint_size == 0) {
+        const auto metadata = index::file_metadata(*snapshot, *file);
+        if (!metadata) return metadata.error();
+        if (!*metadata || (*metadata)->checkpoint_size == 0) {
             return true;
         }
         return index::store::internal::calculate_file_hash(gz_path_) !=
                *stored_hash;
-    } catch (const std::exception& e) {
+    }();
+    if (!stale.has_value()) {
         // An unreadable index is stale because the rebuild rewrites it.
         DFTRACER_UTILS_LOG_WARN("Indexer: index {} is unreadable ({}); rebuild",
-                                index_path_, e.what());
+                                index_path_, stale.error().format());
         return true;
     }
+    return *stale;
 }
 
 const dstd::String& GzipIndexer::index_path() const { return index_path_; }
@@ -1331,21 +1354,26 @@ const dstd::String& GzipIndexer::archive_path() const { return gz_path_; }
 
 const dstd::String& GzipIndexer::gz_path() const { return gz_path_; }
 
-void GzipIndexer::ensure_loaded() const {
+dstd::Result<void> GzipIndexer::load() const {
     if (cached_loaded_.load(std::memory_order_acquire)) {
-        return;
+        return {};
     }
     std::lock_guard<std::mutex> lock(cached_members_mutex_);
     if (cached_loaded_.load(std::memory_order_relaxed)) {
-        return;
+        return {};
     }
-    auto opened = common::unwrap(index::Index::open(index_path_));
-    auto snapshot = common::unwrap(opened.snapshot());
-    const auto file = snapshot.file(gz_path_logical_path_);
+    auto opened = index::Index::open(index_path_);
+    if (!opened) return opened.error();
+    auto snapshot = opened->snapshot();
+    if (!snapshot) return snapshot.error();
+    const auto file = snapshot->file(gz_path_logical_path_);
     if (file) {
         store::FileMetadataResult metadata;
-        if (auto stored = common::unwrap(index::file_metadata(snapshot, *file)))
-            metadata = *stored;
+        auto stored = index::file_metadata(*snapshot, *file);
+        if (!stored) return stored.error();
+        if (*stored) metadata = **stored;
+        auto members = index::members(*snapshot, *file);
+        if (!members) return members.error();
         cached_line_count_.store(metadata.line_count,
                                  std::memory_order_relaxed);
         cached_line_count_ready_.store(true, std::memory_order_relaxed);
@@ -1354,15 +1382,24 @@ void GzipIndexer::ensure_loaded() const {
         cached_checkpoint_size_.store(metadata.checkpoint_size,
                                       std::memory_order_relaxed);
         cached_checkpoint_size_ready_.store(true, std::memory_order_relaxed);
-        auto members = common::unwrap(index::members(snapshot, *file));
-        cached_members_.assign(members.begin(), members.end());
+        cached_members_.assign(members->begin(), members->end());
         for (const auto& m : cached_members_)
             if (m.kind == GzipRecordKind::Head)
                 cached_heads_.push_back(m.c_offset);
     }
     file_ref_ = file;
-    snapshot_ = std::move(snapshot);
+    snapshot_ = std::move(*snapshot);
     cached_loaded_.store(true, std::memory_order_release);
+    return {};
+}
+
+void GzipIndexer::ensure_loaded() const {
+    const auto loaded = load();
+    if (!loaded)
+        dstd::fatal(dstd::fmt<"Indexer: the index {} was read without a "
+                              "successful load: {}">(index_path_,
+                                                     loaded.error().format())
+                        .c_str());
 }
 
 std::uint64_t GzipIndexer::max_bytes() const {
@@ -1411,10 +1448,14 @@ std::uint64_t GzipIndexer::compressed_end() const {
 dstd::String GzipIndexer::restart_window(std::uint64_t member_idx) const {
     ensure_loaded();
     if (!file_ref_) return {};
-    auto window = common::unwrap(
-        index::restart_window(*snapshot_, *file_ref_, member_idx));
-    if (!window) return {};
-    return dstd::String(window->data(), window->size());
+    auto window = index::restart_window(*snapshot_, *file_ref_, member_idx);
+    if (!window) {
+        DFTRACER_UTILS_LOG_ERROR("Indexer: cannot read a restart window: {}",
+                                 window.error().format());
+        return {};
+    }
+    if (!*window) return {};
+    return dstd::String((*window)->data(), (*window)->size());
 }
 
 }  // namespace dftracer::utils::index::gzip

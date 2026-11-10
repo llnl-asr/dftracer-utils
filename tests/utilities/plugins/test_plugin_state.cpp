@@ -249,11 +249,11 @@ RunResult run_state(bool spillable, std::uint64_t budget, int n_slices) {
         trace::views::detail::ScanUnit unit{};
         for (std::size_t at = 0; at < evs.size(); at += BATCH) {
             const std::size_t n = std::min<std::size_t>(BATCH, evs.size() - at);
-            pf->step(trace::views::detail::FoldBatch{
+            dftu_utils_test::ok(pf->step(trace::views::detail::FoldBatch{
                 dstd::Span<const trace::views::detail::FoldEvent>(
                     evs.data() + at, n),
                 unit,
-                {}});
+                {}}));
         }
         master.merge(*pf);
     }
@@ -346,11 +346,11 @@ SliceRun run_slice(bool reclaimable, std::uint64_t budget, int n_slices) {
         trace::views::detail::ScanUnit unit{};
         for (std::size_t at = 0; at < evs.size(); at += BATCH) {
             const std::size_t n = std::min<std::size_t>(BATCH, evs.size() - at);
-            pf->step(trace::views::detail::FoldBatch{
+            dftu_utils_test::ok(pf->step(trace::views::detail::FoldBatch{
                 dstd::Span<const trace::views::detail::FoldEvent>(
                     evs.data() + at, n),
                 unit,
-                {}});
+                {}}));
         }
         master.merge(*pf);
     }

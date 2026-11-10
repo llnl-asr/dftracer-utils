@@ -5,6 +5,7 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -64,7 +65,7 @@ struct ResolveAndBuildInput {
 ///   - index_path: path to shared index
 ///   - cached: fully resolved files ready for use
 ///   - needs_checkpoint: files that failed to index (for direct scan fallback)
-coro::CoroTask<ResolverResult> resolve_and_build_index(
+coro::CoroTask<dstd::Result<ResolverResult>> resolve_and_build_index(
     ResolveAndBuildInput input);
 
 /// The files of `input` that need a whole-file build: not indexed, changed
@@ -77,22 +78,21 @@ struct IndexWork {
     /// clears each before it aggregates into it.
     dstd::Vector<dstd::String> stale_aggregation_roots;
 };
-coro::CoroTask<IndexWork> files_needing_index(ResolverInput input);
+coro::CoroTask<dstd::Result<IndexWork>> files_needing_index(
+    ResolverInput input);
 
 /// Rebuilds any index root for `directory`/`files` that is missing or stale, so
 /// read-before-use entry points never see a changed source. Named coroutines
 /// with by-value params (CP.53) so callers, especially coroutine lambdas, hold
 /// no vector on their own frame (GCC 12/13 frame bug).
-coro::CoroTask<void> ensure_indexes_fresh(dstd::String directory,
-                                          dstd::Vector<dstd::String> files,
-                                          dstd::String index_dir,
-                                          bool force_rebuild = false);
+coro::CoroTask<dstd::Result<void>> ensure_indexes_fresh(
+    dstd::String directory, dstd::Vector<dstd::String> files,
+    dstd::String index_dir, bool force_rebuild = false);
 
 /// Single directory-or-file convenience; builds the vector inside this frame.
-coro::CoroTask<void> ensure_index_fresh(dstd::String directory,
-                                        dstd::String file,
-                                        dstd::String index_dir,
-                                        bool force_rebuild = false);
+coro::CoroTask<dstd::Result<void>> ensure_index_fresh(
+    dstd::String directory, dstd::String file, dstd::String index_dir,
+    bool force_rebuild = false);
 
 }  // namespace dftracer::utils::index::build
 

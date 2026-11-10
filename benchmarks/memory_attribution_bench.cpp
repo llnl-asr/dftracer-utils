@@ -20,6 +20,7 @@
 
 #define DFTRACER_UTILS_MEMORY_PROBE_DEFINE_NEW
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
@@ -268,10 +269,10 @@ void index_build(const Paths& p) {
     index::IndexerOptions options;
     options.index_dir = p.index_dir;
     options.bloom->required = false;
-    auto indexer = index::Indexer::open(
-        {dstd::String(p.trace.data(), p.trace.size())}, options);
+    auto indexer = dftracer::utils::common::unwrap(index::Indexer::open(
+        {dstd::String(p.trace.data(), p.trace.size())}, options));
     run_scoped([&](coro::Scope& scope) -> coro::CoroTask<void> {
-        co_await indexer.rebuild(scope);
+        dftracer::utils::common::unwrap(co_await indexer.rebuild(scope));
     });
 }
 

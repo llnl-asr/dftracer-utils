@@ -145,8 +145,9 @@ coro::CoroTask<void> run_host_scan(
             to_check.emplace_back(dftracer::utils::dstd::StringView(file));
         dftracer::utils::dstd::String index_dir_arg{
             dftracer::utils::dstd::StringView(index_dir)};
-        co_await dftracer::utils::index::build::ensure_indexes_fresh(
-            "", std::move(to_check), std::move(index_dir_arg));
+        dftracer::utils::common::unwrap(
+            co_await dftracer::utils::index::build::ensure_indexes_fresh(
+                "", std::move(to_check), std::move(index_dir_arg)));
     }
 
     dftracer::utils::dstd::Vector<trace::views::ViewFile> view_files;

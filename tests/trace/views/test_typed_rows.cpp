@@ -61,8 +61,10 @@ dstd::String write_access(TestEnvironment& env, const dstd::String& extra) {
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
     dstd::fs::remove(plain).discard();
-    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
-        .build();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+                                {dstd::String(dstd::StringView(gz))}))
+            .build());
     return gz;
 }
 
@@ -188,9 +190,10 @@ TEST_SUITE("TypedRows") {
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                    1 << 20));
         dstd::fs::remove(plain).discard();
-        dftracer::utils::index::Indexer::open(
-            {dstd::String(dstd::StringView(gz))})
-            .build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+                                    {dstd::String(dstd::StringView(gz))}))
+                .build());
         auto got = run(rows<Wide>(view_of(gz)));
         REQUIRE(got.size() == 7);
         std::sort(got.begin(), got.end(),

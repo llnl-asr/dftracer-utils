@@ -148,7 +148,8 @@ TEST_SUITE("SpillPublish") {
 
         schemas::dft::agg::AggregationConfig config;
         config.time_interval_us = 100'000;
-        auto run = index::build::start_aggregation(path, config);
+        auto run =
+            dftu_utils_test::ok(index::build::start_aggregation(path, config));
         const auto run_bytes = schemas::dft::agg::g_agg_run_bytes.exchange(1);
 #if DFTRACER_UTILS_TEST_PROBES
         const auto staged = schemas::dft::agg::g_agg_runs_staged.load();

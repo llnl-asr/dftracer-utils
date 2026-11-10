@@ -211,13 +211,14 @@ class NativeRowFold : public Fold {
                                                 keep_metadata_, by_path_);
     }
 
-    void step(const FoldBatch& batch) override {
+    dstd::Result<void> step(const FoldBatch& batch) override {
         for (const FoldEvent& ev : batch.events) {
             if (ev.phase == RecordPhase::Unknown ||
                 (!keep_metadata_ && ev.phase == RecordPhase::Metadata))
                 continue;
             events_.push_back(ev);
         }
+        return {};
     }
 
     void seal_unit(const ScanUnit&) override {}

@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/index/extensions/bloom_filter.h>
 #include <doctest/doctest.h>
+#include <memory/fresh_process.h>
+#include <task_result.h>
 
 #include <cstdint>
 
@@ -79,7 +82,8 @@ TEST_SUITE("BloomFilter") {
         auto blob = bf.serialize();
         CHECK(blob.size() > 12);  // At least header (12 bytes) + some bits
 
-        auto bf2 = BloomFilter::from_blob(blob.data(), blob.size());
+        auto bf2 = dftu_utils_test::ok(
+            BloomFilter::from_blob(blob.data(), blob.size()));
 
         CHECK(bf2.possibly_contains("alpha"));
         CHECK(bf2.possibly_contains("beta"));
@@ -129,7 +133,9 @@ TEST_SUITE("BloomFilter") {
     TEST_CASE("BloomFilter - from_blob error handling") {
         SUBCASE("Too small data") {
             unsigned char data[4] = {0};
-            CHECK_THROWS(BloomFilter::from_blob(data, 4));
+            const auto blob = BloomFilter::from_blob(data, 4);
+            REQUIRE_FALSE(blob.has_value());
+            CHECK(blob.error().is_code(common::ErrorCode::Parse));
         }
     }
 
@@ -138,9 +144,17 @@ TEST_SUITE("BloomFilter") {
         BloomFilter b(200,
                       0.01);  // Different expected entries = different size
 
-        // Should throw since bit arrays have different sizes
-        if (a.size_bytes() != b.size_bytes()) {
-            CHECK_THROWS(a.merge_from(b));
-        }
+        REQUIRE(a.size_bytes() != b.size_bytes());
+        auto result = fresh_process::run(
+            "merging incompatible bloom filters ends the process");
+        CHECK(result.aborted_with("incompatible filter parameters"));
+    }
+
+    TEST_CASE("merging incompatible bloom filters ends the process" *
+              doctest::skip()) {
+        fresh_process::announce_abort();
+        BloomFilter a(100, 0.01);
+        BloomFilter b(200, 0.01);
+        a.merge_from(b);
     }
 }

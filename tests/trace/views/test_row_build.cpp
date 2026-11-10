@@ -69,7 +69,7 @@ coro::CoroTask<Built> run_step(dstd::StringIntern& intern_ref,
     views::detail::ScanUnit unit;
     views::detail::FoldBatch batch{
         dstd::Span<const views::detail::FoldEvent>(events), unit};
-    fold.step(batch);
+    dftu_utils_test::ok(fold.step(batch));
     if (auto* t = fold.take_pending())
         co_await *reinterpret_cast<coro::CoroTask<void>*>(t);
     dataframe::Morsel m;

@@ -76,7 +76,9 @@ struct GzipMemberSlice {
 /// processed. The caller is responsible for ensuring `slice->members`
 /// outlives this coroutine.
 
-coro::CoroTask<dstd::Optional<GzipBuildArtifacts>> build_gzip_index_artifacts(
+/// An InvalidArgument error when the file is not gzip, a Build error when the
+/// pass fails, or the error a visitor returned.
+coro::CoroTask<dstd::Result<GzipBuildArtifacts>> build_gzip_index_artifacts(
     dstd::CStringView gz_path, std::uint64_t ckpt_size,
     const CheckpointIndexer::VisitorList &visitors,
     coro::Scope *scope = nullptr, const GzipMemberSlice *slice = nullptr,
@@ -84,7 +86,7 @@ coro::CoroTask<dstd::Optional<GzipBuildArtifacts>> build_gzip_index_artifacts(
 
 /// The same over an open file. `fd` stays open and owned by the caller.
 /// `gz_path` only names the file in messages.
-coro::CoroTask<dstd::Optional<GzipBuildArtifacts>> build_gzip_index_artifacts(
+coro::CoroTask<dstd::Result<GzipBuildArtifacts>> build_gzip_index_artifacts(
     int fd, dstd::CStringView gz_path, std::uint64_t ckpt_size,
     const CheckpointIndexer::VisitorList &visitors,
     coro::Scope *scope = nullptr, const GzipMemberSlice *slice = nullptr,
@@ -100,6 +102,12 @@ class GzipIndexer : public CheckpointIndexer {
     static constexpr std::uint64_t DEFAULT_CHECKPOINT_SIZE =
         common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
 
+    /// Checks what the constructor requires: a non-empty existing `gz_path` and
+    /// a non-zero `ckpt_size`. The constructor ends the process on arguments
+    /// that fail it.
+    static dstd::Result<void> check_arguments(const dstd::String &gz_path,
+                                              std::uint64_t ckpt_size);
+
     GzipIndexer(const dstd::String &gz_path, const dstd::String &index_path,
                 std::uint64_t checkpoint_size = DEFAULT_CHECKPOINT_SIZE,
                 bool force = false);
@@ -109,7 +117,9 @@ class GzipIndexer : public CheckpointIndexer {
     GzipIndexer(GzipIndexer &&other) noexcept;
     GzipIndexer &operator=(GzipIndexer &&other) noexcept;
 
-    dftracer::utils::coro::CoroTask<void> build_async() const override;
+    dftracer::utils::coro::CoroTask<dstd::Result<void>> try_build_async()
+        const override;
+    dstd::Result<void> load() const override;
     bool need_rebuild() const override;
     bool exists() const override;
 
@@ -171,6 +181,7 @@ class GzipIndexer : public CheckpointIndexer {
     // Open the index once and populate every read-path cache (file id, line
     // count, byte count, checkpoint size, members). The per-getter opens it
     // replaces were the dominant cost of streaming a file.
+    // load(), ending the process when it fails; see CheckpointIndexer::load.
     void ensure_loaded() const;
 };
 

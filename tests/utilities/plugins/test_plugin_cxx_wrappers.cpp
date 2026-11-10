@@ -106,8 +106,8 @@ void run_wrappers(dstd::StringIntern& intern,
         auto slice = master.slice();
         auto* pf = static_cast<plugins::PluginFold*>(slice.get());
         trace::views::detail::ScanUnit unit;
-        pf->step(trace::views::detail::FoldBatch{
-            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}});
+        dftu_utils_test::ok(pf->step(trace::views::detail::FoldBatch{
+            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}}));
         master.merge(*pf);
     }
     Runtime rt(1);
@@ -434,8 +434,8 @@ TEST_SUITE("PluginCxxPorts") {
         g_count = 0;
         g_sum = 0;
         bus.clear();
-        prod.fold->step(fb);
-        cons.fold->step(fb);
+        dftu_utils_test::ok(prod.fold->step(fb));
+        dftu_utils_test::ok(cons.fold->step(fb));
         CHECK(g_present);
         CHECK(g_count == 3);
         CHECK(g_sum == doctest::Approx(60.0));
@@ -443,7 +443,7 @@ TEST_SUITE("PluginCxxPorts") {
         // Consumer before producer sees nothing (the ordering rule).
         bus.clear();
         g_present = true;
-        cons.fold->step(fb);
+        dftu_utils_test::ok(cons.fold->step(fb));
         CHECK_FALSE(g_present);
     }
 }

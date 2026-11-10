@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_partial_update.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
@@ -8,7 +9,6 @@
 #include <dftracer/utils/trace/internal/utils.h>
 
 #include <algorithm>
-#include <stdexcept>
 #include <utility>
 
 namespace dftracer::utils::index::schemas::dft::agg {
@@ -311,14 +311,15 @@ void AggregationFold::merge(trace::views::detail::Fold& other) {
     o.referenced_.clear();
 }
 
-void AggregationFold::write(index::FileBuild& build) {
+dstd::Result<void> AggregationFold::write(index::FileBuild& build) {
     if (!has_file_) {
-        throw std::logic_error(
+        dstd::fatal(
             "an aggregation fold writes the data of one file, and has none");
     }
-    if (error_) throw common::DFTUtilsException(*error_);
+    if (error_) return *error_;
     close_chunk();
     finish_rows(build);
+    return {};
 }
 
 void AggregationFold::write_through(index::FileBuild& build) {

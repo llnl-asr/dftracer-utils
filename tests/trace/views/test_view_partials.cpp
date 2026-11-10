@@ -115,7 +115,10 @@ struct Fixture {
         o.index_dir = env.dir() + "/idx";
         o.checkpoint_size = MEMBER_BYTES;
         o.aggregation = aggregation;
-        index::Indexer::open(dftu_utils_test::dstd_paths(gz), o).build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(
+                index::Indexer::open(dftu_utils_test::dstd_paths(gz), o))
+                .build());
         index_path =
             dstd::String(determine_index_path(gz.front(), o.index_dir));
     }

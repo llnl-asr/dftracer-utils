@@ -283,8 +283,8 @@ void run_slices(
         auto slice = master.slice();
         auto* pf = static_cast<plugins::PluginFold*>(slice.get());
         trace::views::detail::ScanUnit unit{};
-        pf->step(trace::views::detail::FoldBatch{
-            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}});
+        dftu_utils_test::ok(pf->step(trace::views::detail::FoldBatch{
+            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}}));
         master.merge(*pf);
     }
 }
@@ -387,8 +387,8 @@ TEST_CASE("DFTU_SVC_AGG: cross-batch grouped aggregation, engine-backed") {
         auto slice = master.slice();
         auto* pf = static_cast<plugins::PluginFold*>(slice.get());
         trace::views::detail::ScanUnit unit{};
-        pf->step(trace::views::detail::FoldBatch{
-            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}});
+        dftu_utils_test::ok(pf->step(trace::views::detail::FoldBatch{
+            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}}));
         master.merge(*pf);
     }
     finalize_now(master);
@@ -527,8 +527,8 @@ TEST_CASE(
         auto slice = master.slice();
         auto* pf = static_cast<plugins::PluginFold*>(slice.get());
         trace::views::detail::ScanUnit unit{};
-        pf->step(trace::views::detail::FoldBatch{
-            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}});
+        dftu_utils_test::ok(pf->step(trace::views::detail::FoldBatch{
+            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}}));
         master.merge(*pf);
     }
     finalize_now(master);

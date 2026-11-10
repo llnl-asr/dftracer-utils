@@ -4,7 +4,9 @@
 
 #include <dftracer/utils/common/archive_format.h>
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -29,9 +31,19 @@ class CheckpointIndexer {
     virtual ~CheckpointIndexer() = default;
 
     // Core indexer operations
-    virtual coro::CoroTask<void> build_async() const = 0;
+    /// Builds the index. An error result when the index cannot be built or
+    /// written.
+    virtual coro::CoroTask<dstd::Result<void>> try_build_async() const = 0;
 
-    void build() const { common::unwrap(build_async().get()); }
+    dstd::Result<void> try_build() const { return try_build_async().get(); }
+
+    /// The same, throwing the error. Kept for callers that still throw.
+    coro::CoroTask<void> build_async() const {
+        auto built = co_await try_build_async();
+        common::unwrap(std::move(built));
+    }
+
+    void build() const { common::unwrap(try_build()); }
     virtual bool need_rebuild() const = 0;
     virtual bool exists() const = 0;
 
@@ -39,6 +51,12 @@ class CheckpointIndexer {
         dstd::Vector<std::reference_wrapper<index::build::IndexVisitor>>;
 
     virtual void set_visitors(VisitorList) {}
+
+    /// Reads the index once. An error when the index exists and cannot be
+    /// read. The accessors below read the loaded index: calling one when this
+    /// fails ends the process, so a caller loads first and passes the error
+    /// on. A file with no index loads as empty. Thread safe.
+    virtual dstd::Result<void> load() const = 0;
 
     // Metadata accessors
     virtual const dstd::String &index_path() const = 0;

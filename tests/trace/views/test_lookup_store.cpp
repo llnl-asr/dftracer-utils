@@ -31,8 +31,10 @@ using namespace dftracer::utils::trace;
 
 dstd::String indexed_trace(TestEnvironment& env, int posix_n) {
     const dstd::String gz = create_mixed_trace(env, posix_n, 20);
-    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
-        .build();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+                                {dstd::String(dstd::StringView(gz))}))
+            .build());
     return gz;
 }
 
@@ -62,8 +64,10 @@ dstd::String lookup_trace(TestEnvironment& env) {
     const dstd::String gz = plain + ".gz";
     dftu_utils_test::compress_file_to_gzip(plain, gz);
     dstd::fs::remove(plain).discard();
-    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
-        .build();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+                                {dstd::String(dstd::StringView(gz))}))
+            .build());
     return gz;
 }
 

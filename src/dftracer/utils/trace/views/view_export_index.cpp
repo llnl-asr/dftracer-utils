@@ -171,7 +171,7 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
         unit.index_path = index_path;
         unit.checkpoint_idx = ref.part_index;
         FoldBatch fb{sl->events.events(), unit};
-        sl->bloom->step(fb);
+        common::unwrap(sl->bloom->step(fb));
         sl->bloom->seal_unit(unit);
         std::lock_guard<std::mutex> lk(pool_mu);
         pool.push_back(std::move(sl));

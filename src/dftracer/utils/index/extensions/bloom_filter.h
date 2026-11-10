@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_INDEX_EXTENSIONS_BLOOM_FILTER_H
 #define DFTRACER_UTILS_INDEX_EXTENSIONS_BLOOM_FILTER_H
 
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
@@ -43,7 +44,9 @@ class BloomFilter {
     explicit BloomFilter(std::size_t expected_entries = 1024,
                          double false_positive_rate = 0.01);
 
-    static BloomFilter from_blob(const unsigned char* data, std::size_t size);
+    /// A Parse error when `size` is shorter than the header.
+    static dstd::Result<BloomFilter> from_blob(const unsigned char* data,
+                                               std::size_t size);
 
     /// Depend on the value alone, so a caller that probes and then inserts
     /// computes them once.

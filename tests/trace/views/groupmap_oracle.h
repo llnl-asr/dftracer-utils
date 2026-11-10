@@ -868,7 +868,8 @@ class OracleAggFold : public dftracer::utils::trace::views::detail::Fold {
         return dftracer::utils::dstd::make_unique<OracleAggFold>(*plan_,
                                                                  *intern_);
     }
-    void step(const dftracer::utils::trace::views::detail::FoldBatch& batch)
+    dftracer::utils::dstd::Result<void> step(
+        const dftracer::utils::trace::views::detail::FoldBatch& batch)
         override {
         for (const auto& ev : batch.events) {
             if (ev.phase == dftracer::utils::trace::RecordPhase::Metadata) {
@@ -884,6 +885,7 @@ class OracleAggFold : public dftracer::utils::trace::views::detail::Fold {
             dftracer::utils::trace::views::detail::PodSource src(ev, *intern_);
             fold_event_over(map_, src, *plan_, keybuf_);
         }
+        return {};
     }
     void seal_unit(
         const dftracer::utils::trace::views::detail::ScanUnit&) override {}

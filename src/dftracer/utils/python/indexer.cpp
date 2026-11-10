@@ -266,6 +266,7 @@ static PyObject *CheckpointIndexer_get_max_bytes(CheckpointIndexerObject *self,
     }
 
     try {
+        dftracer::utils::common::unwrap((*self->handle)->load());
         return PyLong_FromUnsignedLongLong((*self->handle)->max_bytes());
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_RuntimeError, e.what());
@@ -281,6 +282,7 @@ static PyObject *CheckpointIndexer_get_num_lines(CheckpointIndexerObject *self,
     }
 
     try {
+        dftracer::utils::common::unwrap((*self->handle)->load());
         return PyLong_FromUnsignedLongLong((*self->handle)->line_count());
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_RuntimeError, e.what());

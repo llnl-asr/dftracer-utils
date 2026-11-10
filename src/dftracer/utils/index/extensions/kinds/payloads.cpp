@@ -81,13 +81,11 @@ dstd::String encode_bloom(dstd::Span<const unsigned char> bloom,
 
 dstd::Optional<ScalableBloomFilter> decode_bloom(dstd::StringView bytes) {
     if (bytes.size() <= 8) return dstd::nullopt;
-    try {
-        return ScalableBloomFilter::from_blob(
-            reinterpret_cast<const unsigned char*>(bytes.data() + 8),
-            bytes.size() - 8);
-    } catch (const std::exception&) {
-        return dstd::nullopt;
-    }
+    auto filter = ScalableBloomFilter::from_blob(
+        reinterpret_cast<const unsigned char*>(bytes.data() + 8),
+        bytes.size() - 8);
+    if (!filter) return dstd::nullopt;
+    return std::move(*filter);
 }
 
 std::uint64_t value_hash(dstd::StringView value) {

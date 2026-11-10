@@ -226,7 +226,10 @@ struct Corpus {
             traces.push_back(write_trace(env.dir(), seed, 6000));
         index::IndexerOptions opts;
         opts.index_dir = index_dir;
-        index::Indexer::open(dftu_utils_test::dstd_paths(traces), opts).build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(
+                index::Indexer::open(dftu_utils_test::dstd_paths(traces), opts))
+                .build());
     }
     dstd::String index_of(const dstd::String& trace) const {
         return dstd::String(
@@ -456,7 +459,7 @@ using Manifest = dstd::Map<dstd::String, index::ExtensionEntry>;
 
 Manifest manifest_of(const index::Indexer& ix, const dstd::String& trace) {
     Manifest out;
-    for (const auto& f : ix.manifest())
+    for (const auto& f : dftu_utils_test::ok(ix.manifest()))
         if (dstd::StringView(f.path) == dstd::StringView(trace))
             for (const auto& e : f.extensions) out[e.name] = e;
     return out;
@@ -485,11 +488,11 @@ index::IndexerOptions corpus_options(const Corpus& c) {
 
 TEST_CASE("explain reads the chunks a View scan reads") {
     Corpus corpus;
-    auto ix = index::Indexer::open(dftu_utils_test::dstd_paths(corpus.traces),
-                                   corpus_options(corpus));
+    auto ix = dftu_utils_test::ok(index::Indexer::open(
+        dftu_utils_test::dstd_paths(corpus.traces), corpus_options(corpus)));
     bool postings_removed = false;
     for (const auto& text : QUERIES) {
-        const auto explained = ix.explain(text);
+        const auto explained = dftu_utils_test::ok(ix.explain(text));
         REQUIRE(explained.size() == corpus.traces.size());
         for (const auto& f : explained) {
             CAPTURE(f.path);
@@ -507,15 +510,16 @@ TEST_CASE("explain reads the chunks a View scan reads") {
         }
     }
     CHECK(postings_removed);
-    CHECK_THROWS_AS(ix.explain("name =="), common::DFTUtilsException);
+    dftu_utils_test::expect_error(ix.explain("name =="),
+                                  common::ErrorCode::InvalidArgument);
 }
 
 TEST_CASE("one extension is rebuilt or dropped without the others") {
     Corpus corpus;
     const auto trace = corpus.traces.front();
     const auto expected_rows = rows(corpus);
-    auto ix = index::Indexer::open(dftu_utils_test::dstd_paths(corpus.traces),
-                                   corpus_options(corpus));
+    auto ix = dftu_utils_test::ok(index::Indexer::open(
+        dftu_utils_test::dstd_paths(corpus.traces), corpus_options(corpus)));
     const auto before = manifest_of(ix, trace);
     for (const char* name : {"core.members", "core.rowset", "zonemap", "bloom",
                              "counts", "postings", "dft.stats"}) {
@@ -524,33 +528,35 @@ TEST_CASE("one extension is rebuilt or dropped without the others") {
         CHECK(before.at(name).current);
     }
 
-    ix.drop_extension("counts");
+    dftu_utils_test::ok(ix.drop_extension("counts"));
     auto dropped = manifest_of(ix, trace);
     CHECK_FALSE(dropped.count("counts"));
     CHECK(dropped.size() == before.size() - 1);
     CHECK(rows(corpus) == expected_rows);
-    CHECK(ix.status().needs_work.size() == corpus.traces.size());
-    CHECK(ix.build().indexed == corpus.traces.size());
+    CHECK(dftu_utils_test::ok(ix.status()).needs_work.size() ==
+          corpus.traces.size());
+    CHECK(dftu_utils_test::ok(ix.build()).indexed == corpus.traces.size());
     CHECK(manifest_of(ix, trace).count("counts"));
     CHECK(rows(corpus) == expected_rows);
 
     auto without = corpus_options(corpus);
     without.extensions = {"zonemap", "bloom", "postings"};
-    auto subset = index::Indexer::open(
-        dftu_utils_test::dstd_paths(corpus.traces), without);
-    subset.drop_extension("counts");
-    CHECK(subset.status().needs_work.empty());
-    CHECK(subset.build().indexed == 0);
-    subset.rebuild_extension("bloom");
+    auto subset = dftu_utils_test::ok(index::Indexer::open(
+        dftu_utils_test::dstd_paths(corpus.traces), without));
+    dftu_utils_test::ok(subset.drop_extension("counts"));
+    CHECK(dftu_utils_test::ok(subset.status()).needs_work.empty());
+    CHECK(dftu_utils_test::ok(subset.build()).indexed == 0);
+    dftu_utils_test::ok(subset.rebuild_extension("bloom"));
     CHECK_FALSE(manifest_of(subset, trace).count("counts"));
     CHECK(rows(corpus) == expected_rows);
 
     auto other_rate = without;
     other_rate.bloom->false_positive_rate = 0.05;
-    auto rate = index::Indexer::open(dftu_utils_test::dstd_paths(corpus.traces),
-                                     other_rate);
-    CHECK(rate.status().needs_work.size() == corpus.traces.size());
-    rate.build();
+    auto rate = dftu_utils_test::ok(index::Indexer::open(
+        dftu_utils_test::dstd_paths(corpus.traces), other_rate));
+    CHECK(dftu_utils_test::ok(rate.status()).needs_work.size() ==
+          corpus.traces.size());
+    dftu_utils_test::ok(rate.build());
     const auto after = manifest_of(rate, trace);
     CHECK(after.at("bloom").params_hash != before.at("bloom").params_hash);
     CHECK(after.at("bloom").current);
@@ -561,20 +567,17 @@ TEST_CASE("one extension is rebuilt or dropped without the others") {
 
     for (const char* bad : {"core.members", "core.rowset", "nope"}) {
         CAPTURE(bad);
-        try {
-            ix.drop_extension(bad);
-            FAIL("expected an error");
-        } catch (const common::DFTUtilsException& e) {
-            CHECK(e.error().is_code(common::ErrorCode::InvalidArgument));
-        }
-        CHECK_THROWS_AS(ix.rebuild_extension(bad), common::DFTUtilsException);
+        dftu_utils_test::expect_error(ix.drop_extension(bad),
+                                      common::ErrorCode::InvalidArgument);
+        dftu_utils_test::expect_error(ix.rebuild_extension(bad),
+                                      common::ErrorCode::InvalidArgument);
     }
     auto bad_options = corpus_options(corpus);
     bad_options.extensions = {"dft.stats"};
-    CHECK_THROWS_AS(
+    dftu_utils_test::expect_error(
         index::Indexer::open(dftu_utils_test::dstd_paths(corpus.traces),
                              bad_options),
-        common::DFTUtilsException);
+        common::ErrorCode::InvalidArgument);
 }
 
 TEST_CASE("a spilled build indexes the corpus as an unbounded one") {
@@ -582,8 +585,11 @@ TEST_CASE("a spilled build indexes the corpus as an unbounded one") {
     auto spill = corpus_options(corpus);
     spill.index_dir = dstd::String(corpus.env.dir()) + "/idx_spill";
     spill.memory_budget = 64 * 1024;
-    index::Indexer::open(dftu_utils_test::dstd_paths(corpus.traces), spill)
-        .build();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(
+            index::Indexer::open(dftu_utils_test::dstd_paths(corpus.traces),
+                                 spill))
+            .build());
     // The aggregation tier keys its rows by interned string ids that follow the
     // build's file order, and a memory budget changes that order. Its bytes may
     // differ, its answers may not.
@@ -679,7 +685,10 @@ TEST_CASE("a name two traces hash differently is an arrow to both hashes") {
     }
     index::IndexerOptions opts;
     opts.index_dir = index_dir;
-    index::Indexer::open(dftu_utils_test::dstd_paths(traces), opts).build();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(
+            index::Indexer::open(dftu_utils_test::dstd_paths(traces), opts))
+            .build());
     const auto index_path = dstd::String(
         trace::internal::determine_index_path(traces[0], index_dir));
     const auto rows = index::plan::stored_rowset(

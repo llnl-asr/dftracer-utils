@@ -404,10 +404,11 @@ Result measure(const Options& opt, const dstd::String& input,
             if (opt.aggregation_interval_us > 0)
                 options.aggregation.time_interval_us =
                     opt.aggregation_interval_us;
-            auto indexer =
-                dftracer::utils::index::Indexer::open(files, options);
+            auto indexer = dftracer::utils::common::unwrap(
+                dftracer::utils::index::Indexer::open(files, options));
             run_scoped([&](coro::Scope& scope) -> coro::CoroTask<void> {
-                co_await indexer.rebuild(scope);
+                dftracer::utils::common::unwrap(
+                    co_await indexer.rebuild(scope));
             });
         }));
     }

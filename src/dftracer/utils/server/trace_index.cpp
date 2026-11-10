@@ -58,14 +58,16 @@ dftracer::utils::index::gzip::TimeBounds timeline_bounds(
         index::gzip::TimeBounds bounds;
         const auto& roles = schema.roles;
         if (roles.time.empty()) return bounds;
-        const auto time = index::extensions::kinds::file_value_range(
-            snapshot, file, roles.time);
+        const auto time =
+            common::unwrap(index::extensions::kinds::file_value_range(
+                snapshot, file, roles.time));
         if (!time) return bounds;
         const double time_us = index::micros_per(roles.time_unit);
         double end = time->second * time_us;
         if (!roles.duration.empty())
-            if (const auto dur = index::extensions::kinds::file_value_range(
-                    snapshot, file, roles.duration);
+            if (const auto dur =
+                    common::unwrap(index::extensions::kinds::file_value_range(
+                        snapshot, file, roles.duration));
                 dur && dur->second > 0)
                 end += dur->second * index::micros_per(roles.duration_unit);
         bounds.valid = true;
@@ -75,8 +77,9 @@ dftracer::utils::index::gzip::TimeBounds timeline_bounds(
             static_cast<std::uint64_t>(std::llround(std::max(0.0, end)));
         return bounds;
     }
-    auto bounds = dftracer::utils::index::extensions::kinds::file_time_bounds(
-        snapshot, file);
+    auto bounds = common::unwrap(
+        dftracer::utils::index::extensions::kinds::file_time_bounds(snapshot,
+                                                                    file));
     if (!bounds.valid || bounds.min_timestamp_us != 0) return bounds;
     const auto stats = common::unwrap(index::scalar_stats(snapshot, file));
     if (stats &&
@@ -644,14 +647,19 @@ coro::CoroTask<void> TraceIndex::initialize() {
                     opts.index_dir = index_dir;
                     opts.checkpoint_size = checkpoint_size;
                     opts.parallelism = max_concurrent;
-                    try {
-                        auto ix = dftracer::utils::index::Indexer::open(
-                            std::move(paths), std::move(opts));
-                        co_await coro::with_scope([&](coro::Scope& scope) {
-                            return ix.build(scope);
-                        });
-                    } catch (const std::exception& e) {
-                        DFTRACER_UTILS_LOG_WARN("TraceIndex: {}", e.what());
+                    auto ix = dftracer::utils::index::Indexer::open(
+                        std::move(paths), std::move(opts));
+                    if (!ix) {
+                        DFTRACER_UTILS_LOG_WARN("TraceIndex: {}",
+                                                ix.error().message());
+                    } else {
+                        auto built =
+                            co_await coro::with_scope([&](coro::Scope& scope) {
+                                return ix->build(scope);
+                            });
+                        if (!built)
+                            DFTRACER_UTILS_LOG_WARN("TraceIndex: {}",
+                                                    built.error().message());
                     }
 
                     dstd::Optional<index::Snapshot> snapshot;

@@ -186,8 +186,8 @@ TEST_SUITE("RawGzipFuse") {
             REQUIRE(build);
             dftracer::utils::index::gzip::persist_gzip_index_artifacts(*build,
                                                                        arts);
-            bloom.write(*build);
-            dict.write(*build);
+            dftu_utils_test::ok(bloom.write(*build));
+            dftu_utils_test::ok(dict.write(*build));
             REQUIRE(build->commit().get());
         }
 
@@ -460,6 +460,28 @@ namespace {
 
 // Logs every step as "checkpoint:name:ts" per event, by name so the log does
 // not depend on the order the intern assigned ids in.
+class FailingFold final : public Fold {
+   public:
+    bool accepts(const ScanShape&) const override { return true; }
+    dstd::UniquePtr<Fold> slice() const override {
+        return dstd::make_unique<FailingFold>();
+    }
+    dstd::Result<void> step(const FoldBatch&) override {
+        if (++batches == 12)
+            return dftracer::utils::common::make_error<"bad batch">(
+                dftracer::utils::common::ErrorCode::Aggregation);
+        return {};
+    }
+    void seal_unit(const ScanUnit&) override {}
+    void drop_unit(const ScanUnit&) override {}
+    void merge(Fold&) override {}
+    dftracer::utils::coro::CoroTask<bool> finalize(
+        const CoverageSet&) override {
+        co_return false;
+    }
+    int batches = 0;
+};
+
 class RecordingFold final : public Fold {
    public:
     explicit RecordingFold(const dstd::StringIntern& intern)
@@ -468,11 +490,12 @@ class RecordingFold final : public Fold {
     dstd::UniquePtr<Fold> slice() const override {
         return dstd::make_unique<RecordingFold>(*intern_);
     }
-    void step(const FoldBatch& batch) override {
+    dstd::Result<void> step(const FoldBatch& batch) override {
         for (const auto& e : batch.events)
             log.push_back(dstd::to_string(batch.unit.checkpoint_idx) + ":" +
                           dstd::String(intern_->resolve(e.name_id)) + ":" +
                           dstd::to_string(e.ts));
+        return {};
     }
     void seal_unit(const ScanUnit&) override {}
     void drop_unit(const ScanUnit&) override {}
@@ -551,25 +574,6 @@ dstd::Vector<dstd::String> record_index_pass(const dstd::String& gz,
 
 }  // namespace
 
-class ThrowingFold final : public Fold {
-   public:
-    bool accepts(const ScanShape&) const override { return true; }
-    dstd::UniquePtr<Fold> slice() const override {
-        return dstd::make_unique<ThrowingFold>();
-    }
-    void step(const FoldBatch&) override {
-        if (++batches == 12) throw std::runtime_error("bad batch");
-    }
-    void seal_unit(const ScanUnit&) override {}
-    void drop_unit(const ScanUnit&) override {}
-    void merge(Fold&) override {}
-    dftracer::utils::coro::CoroTask<bool> finalize(
-        const CoverageSet&) override {
-        co_return false;
-    }
-    int batches = 0;
-};
-
 // Every live record of every family of an index, in order.
 static dstd::Vector<dftu_utils_test::IndexRecord> index_contents(
     const dstd::String& index_path) {
@@ -609,36 +613,34 @@ TEST_CASE("a first-touch query under a small budget spills the same index") {
     CHECK(expected == index_contents(runs));
 }
 
-TEST_CASE("a fold that throws while parsing ahead ends the index pass") {
+TEST_CASE("a fold whose step fails ends the index pass with its error") {
     TestEnvironment env(10);
     REQUIRE(env.is_valid());
     const dstd::String gz = write_multi_member(env.dir());
     dstd::StringIntern intern;
     dftracer::utils::index::extensions::BloomFold bloom(intern);
-    ThrowingFold thrower;
-    std::array<Fold*, 2> folds{&bloom, &thrower};
+    FailingFold failing;
+    std::array<Fold*, 2> folds{&bloom, &failing};
     IndexFoldDriver driver(intern, folds, dstd::String(dstd::StringView(gz)),
                            dstd::String(dstd::StringView(env.dir() + "/idx")));
     dftracer::utils::index::build::ParseGate gate(nullptr, 8);
     driver.set_parse_gate(gate);
-    bool threw = false;
+    bool failed = false;
     dftu_utils_test::run_coro(
         [&](coro::Scope& scope) -> dftracer::utils::coro::CoroTask<void> {
             dftracer::utils::index::gzip::CheckpointIndexer::VisitorList vl;
             vl.emplace_back(driver);
-            try {
-                co_await index::gzip::build_gzip_index_artifacts(
-                    gz,
-                    dftracer::utils::index::gzip::CheckpointIndexer::
-                        DEFAULT_CHECKPOINT_SIZE,
-                    vl, &scope);
-            } catch (const std::runtime_error& e) {
-                threw = dstd::String(e.what()) == "bad batch";
-            }
+            auto built = co_await index::gzip::build_gzip_index_artifacts(
+                gz,
+                dftracer::utils::index::gzip::CheckpointIndexer::
+                    DEFAULT_CHECKPOINT_SIZE,
+                vl, &scope);
+            failed =
+                !built.has_value() && built.error().message() == "bad batch";
         },
-        "fold-throws");
-    CHECK(threw);
-    CHECK(thrower.batches == 12);
+        "fold-fails");
+    CHECK(failed);
+    CHECK(failing.batches == 12);
 }
 
 TEST_CASE("parsing ahead steps the folds with the same events in order") {

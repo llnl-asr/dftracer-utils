@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -70,14 +71,12 @@ void ChunkStatistics::update_from_event(NameSlots& names, PidSlots& pids,
         char pt_buf[pid_tid_buf_size];
         auto [pp, ec1] = dstd::to_chars(pt_buf, pt_buf + sizeof(pt_buf), pid);
         if (ec1 != std::errc{} || pp == pt_buf + sizeof(pt_buf)) {
-            throw common::DFTUtilsException(common::ErrorCode::Internal,
-                                            "failed to format pid");
+            dstd::fatal("chunk statistics: failed to format pid");
         }
         *pp++ = ':';
         auto [tp, ec2] = dstd::to_chars(pp, pt_buf + sizeof(pt_buf), tid);
         if (ec2 != std::errc{}) {
-            throw common::DFTUtilsException(common::ErrorCode::Internal,
-                                            "failed to format tid");
+            dstd::fatal("chunk statistics: failed to format tid");
         }
         pids.pid_tid_count =
             slot_of(pid_tid_counts, dstd::StringView(pt_buf, tp - pt_buf));

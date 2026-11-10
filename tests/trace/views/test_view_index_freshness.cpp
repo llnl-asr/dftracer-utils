@@ -67,8 +67,9 @@ coro::CoroTask<void> build_tier(dstd::String gz, dstd::String index_dir = "") {
     in.index_dir = std::move(index_dir);
     in.require_checkpoints = true;
     co_await coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-        co_await dftracer::utils::index::build::resolve_and_build_index(
-            std::move(in));
+        dftracer::utils::common::unwrap(
+            co_await dftracer::utils::index::build::resolve_and_build_index(
+                std::move(in)));
     });
 }
 
@@ -77,8 +78,9 @@ coro::CoroTask<void> build_files(dstd::Vector<dstd::String> files) {
     for (const auto& file : files) in.files.emplace_back(file);
     in.require_checkpoints = true;
     co_await coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-        co_await dftracer::utils::index::build::resolve_and_build_index(
-            std::move(in));
+        dftracer::utils::common::unwrap(
+            co_await dftracer::utils::index::build::resolve_and_build_index(
+                std::move(in)));
     });
 }
 
@@ -89,7 +91,8 @@ coro::CoroTask<dftracer::utils::index::build::ResolverResult> resolve_files(
     in.require_checkpoints = true;
     dftracer::utils::index::build::ResolverResult result;
     co_await coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
-        result = co_await dftracer::utils::index::build::Resolver{}(scope, in);
+        result = dftracer::utils::common::unwrap(
+            co_await dftracer::utils::index::build::Resolver{}(scope, in));
     });
     co_return result;
 }

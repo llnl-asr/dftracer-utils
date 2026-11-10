@@ -258,9 +258,11 @@ TEST_SUITE("CountersColumns") {
         dftu_utils_test::TestEnvironment env(10);
         const auto gz = write_trace(env.dir());
         const dstd::String idx = env.dir() + "/idx";
-        Indexer::open({dstd::String(dstd::StringView(gz))},
-                      with_aggregation(idx))
-            .build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(
+                Indexer::open({dstd::String(dstd::StringView(gz))},
+                              with_aggregation(idx)))
+                .build());
         const auto typed =
             dftu_utils_test::ok(trace::views::View::from_files(
                                     {{dstd::String(gz), dstd::String(idx)}})
@@ -280,9 +282,11 @@ TEST_SUITE("CountersColumns") {
         dftu_utils_test::TestEnvironment env(10);
         const auto gz = write_trace(env.dir());
         const dstd::String idx = env.dir() + "/idx";
-        Indexer::open({dstd::String(dstd::StringView(gz))},
-                      with_aggregation(idx))
-            .build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(
+                Indexer::open({dstd::String(dstd::StringView(gz))},
+                              with_aggregation(idx)))
+                .build());
         const auto whole =
             dftu_utils_test::ok(trace::views::View::from_files(
                                     {{dstd::String(gz), dstd::String(idx)}})

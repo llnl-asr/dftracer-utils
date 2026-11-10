@@ -12,6 +12,7 @@
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -129,7 +130,10 @@ void build_full(const dstd::String& gz, const dstd::String& schema = "") {
     index::IndexerOptions o;
     o.checkpoint_size = 2048;
     o.schema = schema;
-    index::Indexer::open({dstd::String(dstd::StringView(gz))}, o).build();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(
+            index::Indexer::open({dstd::String(dstd::StringView(gz))}, o))
+            .build());
 }
 
 void expect_scan_catalog_equals_build(const dstd::Vector<dstd::String>& lines,

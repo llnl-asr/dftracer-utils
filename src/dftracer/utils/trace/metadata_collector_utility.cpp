@@ -136,6 +136,7 @@ MetadataCollectorUtility::process_compressed(
         using dftracer::utils::index::gzip::CheckpointIndexer;
         using dftracer::utils::index::gzip::CheckpointIndexerFactory;
         auto take = [&](const CheckpointIndexer& indexer) {
+            common::unwrap(indexer.load());
             meta.has_index = true;
             const internal::IndexedFile seen{
                 stamp, indexer.line_count(), indexer.max_bytes(),

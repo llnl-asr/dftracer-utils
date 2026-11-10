@@ -10,6 +10,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/ptr_hash.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
@@ -156,8 +157,9 @@ class AggregationFold : public trace::views::detail::Fold {
         return made;
     }
 
-    void step(const trace::views::detail::FoldBatch& batch) override {
-        if (error_) return;
+    dstd::Result<void> step(
+        const trace::views::detail::FoldBatch& batch) override {
+        if (error_) return {};
         for (const auto& ev : batch.events) {
             PodAccessor acc(ev, *build_intern_, metric_ids_);
             if (!partial_holds(acc)) continue;
@@ -171,6 +173,7 @@ class AggregationFold : public trace::views::detail::Fold {
                 if (acc.is_system()) add_to_columns(ev);
             }
         }
+        return {};
     }
 
     void seal_unit(const trace::views::detail::ScanUnit&) override {}
@@ -186,10 +189,9 @@ class AggregationFold : public trace::views::detail::Fold {
     /// entries into `build`. A column block holds only the system counter rows
     /// (phase Counter, category sys) of its chunk, and a chunk with none has no
     /// block. Finishes the Agg extension. The commit replaces the file's copy
-    /// of it. Throws std::logic_error on a fold with no file and
-    /// @ref common::DFTUtilsException with the error a string id collision
-    /// left.
-    void write(index::FileBuild& build);
+    /// of it. Ends the process on a fold with no file. Returns the error a
+    /// string id collision left.
+    dstd::Result<void> write(index::FileBuild& build);
 
     /// Lets the fold put its closed rows into `build` once they pass a run's
     /// size, so a large file does not hold them all until write(), which must

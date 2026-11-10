@@ -72,7 +72,7 @@ TEST_SUITE("hash_table_aggregation") {
         dstd::String index_path;
         dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             auto res = co_await index::build::resolve_and_build_index(input);
-            index_path = res.index_path;
+            if (res) index_path = res->index_path;
             co_return;
         });
         REQUIRE_FALSE(index_path.empty());

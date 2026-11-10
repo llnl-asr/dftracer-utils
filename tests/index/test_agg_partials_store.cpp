@@ -27,6 +27,7 @@
 #include <dftracer/utils/trace/internal/utils.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
+#include <task_result.h>
 #include <testing_runtime.h>
 #include <testing_utilities.h>
 #include <unistd.h>
@@ -106,9 +107,9 @@ IndexerOptions options(dstd::StringView index_dir) {
 
 double build_seconds(const dstd::Vector<dstd::String>& files,
                      dstd::StringView index_dir) {
-    auto ix = Indexer::open(files, options(index_dir));
+    auto ix = dftu_utils_test::ok(Indexer::open(files, options(index_dir)));
     const auto t0 = std::chrono::steady_clock::now();
-    ix.build();
+    dftu_utils_test::ok(ix.build());
     return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0)
         .count();
 }
@@ -427,7 +428,8 @@ TEST_SUITE("AggPartialsStore") {
             REQUIRE(config);
             auto old = *config;
             old.params_hash ^= 1;
-            schemas::dft::agg::tier::write_config(target, old);
+            dftu_utils_test::ok(
+                schemas::dft::agg::tier::write_config(target, old));
 
             const auto snapshot = open_index(index_path);
             dstd::Vector<dstd::String> logical;
@@ -735,5 +737,26 @@ TEST_SUITE("AggPartialsStore") {
                !done.load())
             std::this_thread::yield();
         ::_exit(done.load() ? 1 : 0);
+    }
+
+    TEST_CASE("an aggregation fold with no file aborts when written") {
+        auto result = fresh_process::run(
+            "an aggregation fold with no file ends the process");
+        CHECK(result.aborted_with("writes the data of one file"));
+    }
+
+    TEST_CASE("an aggregation fold with no file ends the process" *
+              doctest::skip()) {
+        fresh_process::announce_abort();
+        dftu_utils_test::TestEnvironment env(10);
+        const dstd::String index_path = dstd::String(env.dir()) + "/idx";
+        auto target = dftu_utils_test::ok(index::Index::open(index_path));
+        auto build = dftu_utils_test::ok(
+            target.build("unused.pfw.gz", index::SourceStat{1, 1, 1}));
+        dstd::StringIntern intern;
+        schemas::dft::agg::AggregationFold fold(
+            intern, schemas::dft::agg::intern_for_index(index_path),
+            schemas::dft::agg::standard_aggregation_config());
+        dftu_utils_test::ok(fold.write(build));
     }
 }

@@ -104,17 +104,18 @@ coro::CoroTask<dstd::Result<PruneResult>> prune_data(
         const auto file =
             snapshot.file(store::internal::get_logical_path(request.file_path));
         if (!file) co_return result;
-        bounds =
+        bounds = common::unwrap(
             request.by_start
                 ? index::extensions::kinds::chunk_start_bounds(snapshot, *file)
-                : index::extensions::kinds::chunk_time_bounds(snapshot, *file);
+                : index::extensions::kinds::chunk_time_bounds(snapshot, *file));
         // Whole bins round the window outward, so a zero is exact.
         if (request.by_start)
-            no_starts = index::extensions::kinds::chunks_without_starts(
-                snapshot, *file,
-                static_cast<std::uint64_t>(std::max(0.0, begin)),
-                end > 0 ? static_cast<std::uint64_t>(std::ceil(end))
-                        : std::numeric_limits<std::uint64_t>::max());
+            no_starts =
+                common::unwrap(index::extensions::kinds::chunks_without_starts(
+                    snapshot, *file,
+                    static_cast<std::uint64_t>(std::max(0.0, begin)),
+                    end > 0 ? static_cast<std::uint64_t>(std::ceil(end))
+                            : std::numeric_limits<std::uint64_t>::max()));
     } catch (const std::exception& e) {
         co_return common::make_error(common::ErrorCode::Indexer,
                                      "prune_file: index read failed for " +

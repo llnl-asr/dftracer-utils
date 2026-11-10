@@ -336,8 +336,9 @@ std::size_t merge_shard_set(const dstd::String& root,
                 if (shard_config) {
                     if (!config) {
                         config = shard_config;
-                        index::schemas::dft::agg::tier::write_config(out,
-                                                                     *config);
+                        common::unwrap(
+                            index::schemas::dft::agg::tier::write_config(
+                                out, *config));
                     } else if (config->params_hash !=
                                shard_config->params_hash) {
                         throw common::DFTUtilsException(

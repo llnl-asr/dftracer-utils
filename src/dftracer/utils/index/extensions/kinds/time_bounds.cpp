@@ -23,15 +23,18 @@ bool parse(const dstd::String& text, std::uint64_t& out) {
 }
 
 // Per chunk, the [min, max] of the zonemap of `path`.
-dstd::HashMap<std::uint64_t, dstd::Pair<std::uint64_t, std::uint64_t>>
+dstd::Result<
+    dstd::HashMap<std::uint64_t, dstd::Pair<std::uint64_t, std::uint64_t>>>
 chunk_bounds(const index::Snapshot& snapshot, const index::FileRef& file,
              dstd::StringView path) {
     dstd::HashMap<std::uint64_t, dstd::Pair<std::uint64_t, std::uint64_t>> out;
     if (!index::extension_current(snapshot, file,
                                   index::store::IndexExtension::Zonemap))
         return out;
-    for (const auto& [granule, bytes] : common::unwrap(index::granules(
-             snapshot, file, index::store::IndexExtension::Zonemap, path))) {
+    const auto stored = index::granules(
+        snapshot, file, index::store::IndexExtension::Zonemap, path);
+    if (!stored) return stored.error();
+    for (const auto& [granule, bytes] : *stored) {
         auto zone = decode_zone(bytes);
         std::uint64_t lo = 0;
         std::uint64_t hi = 0;
@@ -44,26 +47,30 @@ chunk_bounds(const index::Snapshot& snapshot, const index::FileRef& file,
 
 }  // namespace
 
-dstd::HashMap<std::uint64_t, dstd::Pair<std::uint64_t, std::uint64_t>>
+dstd::Result<
+    dstd::HashMap<std::uint64_t, dstd::Pair<std::uint64_t, std::uint64_t>>>
 chunk_time_bounds(const index::Snapshot& snapshot, const index::FileRef& file) {
     return chunk_bounds(snapshot, file, "te");
 }
 
-dstd::HashMap<std::uint64_t, dstd::Pair<std::uint64_t, std::uint64_t>>
+dstd::Result<
+    dstd::HashMap<std::uint64_t, dstd::Pair<std::uint64_t, std::uint64_t>>>
 chunk_start_bounds(const index::Snapshot& snapshot,
                    const index::FileRef& file) {
     return chunk_bounds(snapshot, file, "ts");
 }
 
-dstd::HashSet<std::uint64_t> chunks_without_starts(
+dstd::Result<dstd::HashSet<std::uint64_t>> chunks_without_starts(
     const index::Snapshot& snapshot, const index::FileRef& file,
     std::uint64_t begin, std::uint64_t end) {
     dstd::HashSet<std::uint64_t> out;
     if (!index::extension_current(snapshot, file,
                                   index::store::IndexExtension::Zonemap))
         return out;
-    for (const auto& [granule, bytes] : common::unwrap(index::granules(
-             snapshot, file, index::store::IndexExtension::Zonemap, "ts"))) {
+    const auto stored = index::granules(
+        snapshot, file, index::store::IndexExtension::Zonemap, "ts");
+    if (!stored) return stored.error();
+    for (const auto& [granule, bytes] : *stored) {
         auto zone = decode_zone(bytes);
         if (zone && zone->histogram && !zone->histogram->empty() &&
             zone->histogram->count_in_range(begin, end) == 0)
@@ -72,10 +79,12 @@ dstd::HashSet<std::uint64_t> chunks_without_starts(
     return out;
 }
 
-index::gzip::TimeBounds file_time_bounds(const index::Snapshot& snapshot,
-                                         const index::FileRef& file) {
+dstd::Result<index::gzip::TimeBounds> file_time_bounds(
+    const index::Snapshot& snapshot, const index::FileRef& file) {
     index::gzip::TimeBounds bounds;
-    for (const auto& [granule, range] : chunk_time_bounds(snapshot, file)) {
+    const auto chunks = chunk_time_bounds(snapshot, file);
+    if (!chunks) return chunks.error();
+    for (const auto& [granule, range] : *chunks) {
         if (range.first > range.second) continue;
         bounds.valid = true;
         bounds.min_timestamp_us =
@@ -86,9 +95,9 @@ index::gzip::TimeBounds file_time_bounds(const index::Snapshot& snapshot,
     return bounds;
 }
 
-dstd::HashMap<std::uint64_t, dstd::Pair<double, double>> chunk_value_ranges(
-    const index::Snapshot& snapshot, const index::FileRef& file,
-    dstd::StringView path) {
+dstd::Result<dstd::HashMap<std::uint64_t, dstd::Pair<double, double>>>
+chunk_value_ranges(const index::Snapshot& snapshot, const index::FileRef& file,
+                   dstd::StringView path) {
     dstd::HashMap<std::uint64_t, dstd::Pair<double, double>> out;
     if (!index::extension_current(snapshot, file,
                                   index::store::IndexExtension::Zonemap))
@@ -98,8 +107,10 @@ dstd::HashMap<std::uint64_t, dstd::Pair<double, double>> chunk_value_ranges(
         v = std::strtod(text.c_str(), &end);
         return !text.empty() && end == text.c_str() + text.size();
     };
-    for (const auto& [granule, bytes] : common::unwrap(index::granules(
-             snapshot, file, index::store::IndexExtension::Zonemap, path))) {
+    const auto stored = index::granules(
+        snapshot, file, index::store::IndexExtension::Zonemap, path);
+    if (!stored) return stored.error();
+    for (const auto& [granule, bytes] : *stored) {
         auto zone = decode_zone(bytes);
         double lo = 0;
         double hi = 0;
@@ -111,12 +122,13 @@ dstd::HashMap<std::uint64_t, dstd::Pair<double, double>> chunk_value_ranges(
     return out;
 }
 
-dstd::Optional<dstd::Pair<double, double>> file_value_range(
+dstd::Result<dstd::Optional<dstd::Pair<double, double>>> file_value_range(
     const index::Snapshot& snapshot, const index::FileRef& file,
     dstd::StringView path) {
     dstd::Optional<dstd::Pair<double, double>> out;
-    for (const auto& [granule, range] :
-         chunk_value_ranges(snapshot, file, path)) {
+    const auto ranges = chunk_value_ranges(snapshot, file, path);
+    if (!ranges) return ranges.error();
+    for (const auto& [granule, range] : *ranges) {
         out =
             out ? dstd::Pair<double, double>{std::min(out->first, range.first),
                                              std::max(out->second,

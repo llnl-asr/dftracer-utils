@@ -4,9 +4,11 @@
 
 #include <dftracer/utils/common/archive_format.h>
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/format_detector.h>
 #include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 
@@ -26,13 +28,24 @@ class CheckpointIndexerFactory {
      * @param checkpoint_size Checkpoint size in bytes
      * @param force Force rebuilding the index even if it exists
      * @return Shared pointer to the appropriate indexer, or nullptr if format
-     * not supported
+     * not supported; an Indexer error when the path is empty or missing or
+     * `checkpoint_size` is 0
      */
-    static dstd::SharedPtr<CheckpointIndexer> create(
+    static dstd::Result<dstd::SharedPtr<CheckpointIndexer>> try_create(
         dstd::CStringView archive_path, dstd::CStringView index_path = "",
         std::uint64_t checkpoint_size =
             common::constants::indexer::DEFAULT_CHECKPOINT_SIZE,
         bool force = false);
+
+    /// The same, throwing the error. Kept for callers that still throw.
+    static dstd::SharedPtr<CheckpointIndexer> create(
+        dstd::CStringView archive_path, dstd::CStringView index_path = "",
+        std::uint64_t checkpoint_size =
+            common::constants::indexer::DEFAULT_CHECKPOINT_SIZE,
+        bool force = false) {
+        return common::unwrap(
+            try_create(archive_path, index_path, checkpoint_size, force));
+    }
 
     /**
      * Detect the format of an archive file

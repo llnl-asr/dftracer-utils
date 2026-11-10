@@ -6,6 +6,8 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/reserve_async.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/index/build/index_fold_driver.h>
 #include <dftracer/utils/index/build/parse_gate.h>
 #include <dftracer/utils/memory/budget.h>
@@ -128,8 +130,9 @@ class FileAdmission {
                                       PLAINTEXT_PER_COMPRESSED_BYTE;
     }
 
-    /// Stops the task when the executor shuts down first.
-    coro::CoroTask<Ticket> admit(std::uint64_t plaintext) {
+    /// Stops the task when the executor shuts down first. Returns a
+    /// MemoryBudgetExceeded error when the file does not fit the budget.
+    coro::CoroTask<dstd::Result<Ticket>> admit(std::uint64_t plaintext) {
         Ticket ticket;
         if (!pool_) {
             enter();
@@ -147,9 +150,9 @@ class FileAdmission {
             if (got.error() == memory::Status::Cancelled) {
                 co_await coro::stop_here();
             }
-            throw common::DFTUtilsException(
-                common::ErrorCode::MemoryBudgetExceeded,
-                "a file does not fit the memory budget");
+            co_return common::make_error<
+                "a file does not fit the memory budget">(
+                common::ErrorCode::MemoryBudgetExceeded);
         }
         ticket.res_ = std::move(*got);
         const std::uint64_t base = est.total - est.elastic;
@@ -202,10 +205,7 @@ class FileAdmission {
         handle_ = memory::detail::current_pool().child(
             "index files", memory::PoolKind::Scratch,
             memory::Limits{static_cast<std::size_t>(pool_bytes)});
-        if (!handle_)
-            throw common::DFTUtilsException(
-                common::ErrorCode::MemoryBudgetExceeded,
-                "no pool for the files in flight");
+        if (!handle_) dstd::fatal("no pool for the files in flight");
         pool_ = handle_.get();
         return pool_;
     }

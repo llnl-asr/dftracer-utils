@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/gzip_member_scanner.h>
 
@@ -22,16 +23,17 @@ struct NewMembers {
 /// `file_size`. The fast form scans for headers and proves only the last
 /// member whole, since the inflate pass checks the others. With `walk` it
 /// inflates each member in turn and stops at the first one that is short or
-/// bad, so `c_end` is proven, at the price of a second inflate. Throws on a
-/// read error.
-coro::CoroTask<NewMembers> find_new_members(int fd, std::uint64_t from,
-                                            std::uint64_t file_size, bool walk);
+/// bad, so `c_end` is proven, at the price of a second inflate. An Io error on
+/// a read failure.
+coro::CoroTask<dstd::Result<NewMembers>> find_new_members(
+    int fd, std::uint64_t from, std::uint64_t file_size, bool walk);
 
 /// When the bytes at `from` do not open a gzip member, the offset of the first
 /// whole member after them. Nullopt when `from` opens a member, which is then
-/// short or bad, or when no whole member follows.
-coro::CoroTask<dstd::Optional<std::uint64_t>> find_member_after_hole(
-    int fd, std::uint64_t from, std::uint64_t file_size);
+/// short or bad, or when no whole member follows. An Io error on a read
+/// failure.
+coro::CoroTask<dstd::Result<dstd::Optional<std::uint64_t>>>
+find_member_after_hole(int fd, std::uint64_t from, std::uint64_t file_size);
 
 }  // namespace dftracer::utils::index::build
 

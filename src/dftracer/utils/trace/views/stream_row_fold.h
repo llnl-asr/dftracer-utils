@@ -93,7 +93,7 @@ class StreamRowFold : public Fold {
             emit_dyn_, branch_, dropped_, by_path_, ordered_, json_);
     }
 
-    void step(const FoldBatch& batch) override;
+    dstd::Result<void> step(const FoldBatch& batch) override;
 
     void seal_unit(const ScanUnit& unit) override { end_unit(unit); }
     void drop_unit(const ScanUnit& unit) override { end_unit(unit); }

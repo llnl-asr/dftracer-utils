@@ -486,26 +486,27 @@ TEST_SUITE("SchemaRegistry") {
             .discard();
         index::IndexerOptions o;
         o.index_dir = index_dir;
-        auto indexer =
-            index::Indexer::open({dstd::String(dstd::StringView(gz))}, o);
-        indexer.build();
-        const auto files = indexer.files();
+        auto indexer = dftu_utils_test::ok(
+            index::Indexer::open({dstd::String(dstd::StringView(gz))}, o));
+        dftu_utils_test::ok(indexer.build());
+        const auto files = dftu_utils_test::ok(indexer.files());
         REQUIRE(files.size() == 1);
         CHECK(files[0].schema == "idx_nginx");
 
-        const auto e = indexer.explain(R"(upstream == "u3")");
+        const auto e =
+            dftu_utils_test::ok(indexer.explain(R"(upstream == "u3")"));
         REQUIRE(e.size() == 1);
         CHECK(e[0].read.size() < e[0].chunks);
         const dstd::String q = R"(upstream == "u3")";
         CHECK(count_rows(gz, index_dir, q, false) == 300);
         CHECK(count_rows(gz, index_dir, q, true) == 300);
         // Not always indexed and past the budget: correct but not pruned.
-        const auto s = indexer.explain("status == 404");
+        const auto s = dftu_utils_test::ok(indexer.explain("status == 404"));
         CHECK(s[0].read.size() == s[0].chunks);
         CHECK(count_rows(gz, index_dir, "status == 404", false) ==
               count_rows(gz, index_dir, "status == 404", true));
         // A second build finds the file current.
-        CHECK(indexer.build().indexed == 0);
+        CHECK(dftu_utils_test::ok(indexer.build()).indexed == 0);
     }
 }
 

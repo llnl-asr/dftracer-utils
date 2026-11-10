@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
@@ -226,7 +227,7 @@ class BloomCore {
     /// chunks add to them. Returns the extra dimensions the file is indexed on
     /// besides config.extra_dimensions. A dimension without a file bloom keeps
     /// none, since a filter of the new values alone would miss the old ones.
-    static dstd::Vector<dstd::String> seed_accumulator(
+    static dstd::Result<dstd::Vector<dstd::String>> seed_accumulator(
         const index::Snapshot& snapshot, const index::FileRef& file,
         const ChunkIndexerConfig& config, FileAccumulator& acc);
 

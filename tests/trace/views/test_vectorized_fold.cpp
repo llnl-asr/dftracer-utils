@@ -11,6 +11,7 @@
 #include <dftracer/utils/trace/views/vectorized_fold.h>
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 #include <span>
@@ -75,8 +76,8 @@ TEST_SUITE("VectorizedFold") {
         dstd::Vector<views::detail::FoldEvent> evs = {
             ev(in, 1, 100, 5), ev(in, 1, 110, 5), ev(in, 2, 120, 5)};
         views::detail::ScanUnit unit{};
-        fold.step(views::detail::FoldBatch{
-            dstd::Span<const views::detail::FoldEvent>(evs), unit, {}});
+        dftu_utils_test::ok(fold.step(views::detail::FoldBatch{
+            dstd::Span<const views::detail::FoldEvent>(evs), unit, {}}));
         CHECK(fold.result().rows == 3);
         CHECK(fold.result().dur_sum == 15);  // SIMD reduce of the dur column
     }
@@ -90,10 +91,10 @@ TEST_SUITE("VectorizedFold") {
                                                      ev(in, 1, 2, 10)};
         dstd::Vector<views::detail::FoldEvent> eb = {ev(in, 2, 3, 7)};
         views::detail::ScanUnit unit{};
-        a->step(views::detail::FoldBatch{
-            dstd::Span<const views::detail::FoldEvent>(ea), unit, {}});
-        b->step(views::detail::FoldBatch{
-            dstd::Span<const views::detail::FoldEvent>(eb), unit, {}});
+        dftu_utils_test::ok(a->step(views::detail::FoldBatch{
+            dstd::Span<const views::detail::FoldEvent>(ea), unit, {}}));
+        dftu_utils_test::ok(b->step(views::detail::FoldBatch{
+            dstd::Span<const views::detail::FoldEvent>(eb), unit, {}}));
         a->merge(*b);
 
         const auto* av =
@@ -109,8 +110,8 @@ TEST_SUITE("VectorizedFold") {
         m.phase = RecordPhase::Metadata;
         dstd::Vector<views::detail::FoldEvent> evs = {m};
         views::detail::ScanUnit unit{};
-        fold.step(views::detail::FoldBatch{
-            dstd::Span<const views::detail::FoldEvent>(evs), unit, {}});
+        dftu_utils_test::ok(fold.step(views::detail::FoldBatch{
+            dstd::Span<const views::detail::FoldEvent>(evs), unit, {}}));
         CHECK(fold.result().rows == 0);
         CHECK(fold.result().dur_sum == 0);
     }

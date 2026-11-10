@@ -8,6 +8,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
@@ -62,7 +63,8 @@ class BloomFold : public trace::views::detail::Fold {
         return dstd::make_unique<BloomFold>(*intern_, config_);
     }
 
-    void step(const trace::views::detail::FoldBatch& batch) override;
+    dstd::Result<void> step(
+        const trace::views::detail::FoldBatch& batch) override;
 
     /// step() in two parts, so batches of different checkpoints can be
     /// observed at once. open() runs on one thread in checkpoint order and may
@@ -87,7 +89,7 @@ class BloomFold : public trace::views::detail::Fold {
     /// Writes the single harvested file's tier into `build`, which gets each
     /// tier extension finished. Assumes one file; no coverage gate. Consumes
     /// the chunks.
-    void write(index::FileBuild& build);
+    dstd::Result<void> write(index::FileBuild& build);
 
     /// Total data events harvested across this fold's files. Call before
     /// write, which consumes the chunks.
@@ -255,8 +257,8 @@ class BloomFold : public trace::views::detail::Fold {
 
     /// Writes the tier of `file` into `build`, one chunk at a time. Consumes
     /// `fs`.
-    void write_file(index::FileBuild& build, dstd::CStringView file,
-                    FileState& fs);
+    dstd::Result<void> write_file(index::FileBuild& build,
+                                  dstd::CStringView file, FileState& fs);
     /// Writes the chunks spill() queued into `build` and frees them.
     void write_pending(index::FileBuild& build, FileState& fs);
     // Nested extra dimensions come from a capture under "args."; records whose

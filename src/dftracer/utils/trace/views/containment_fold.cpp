@@ -228,10 +228,11 @@ dstd::UniquePtr<Fold> ContainmentFold::slice() const {
     return s;
 }
 
-void ContainmentFold::step(const FoldBatch& batch) {
+dstd::Result<void> ContainmentFold::step(const FoldBatch& batch) {
     ContainmentRow r;
     for (const FoldEvent& ev : batch.events)
         if (containment_row(ev, spec_, *intern_, r)) rows_.push_back(r);
+    return {};
 }
 
 void ContainmentFold::merge(Fold& other) {

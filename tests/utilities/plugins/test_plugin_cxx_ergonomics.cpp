@@ -282,8 +282,8 @@ TEST_CASE("plugin cxx: Batch view iterates typed Events") {
             evs[i].has_dur = true;
         }
         trace::views::detail::ScanUnit unit{};
-        fold.step(trace::views::detail::FoldBatch{
-            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}});
+        dftu_utils_test::ok(fold.step(trace::views::detail::FoldBatch{
+            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}}));
     }
 
     if (p->destroy) p->destroy(p->self);
@@ -328,8 +328,8 @@ TEST_CASE("plugin cxx: Event args expose typed values and dotted lookup") {
                              intern.get_or_insert("/tmp/a"));
         dstd::Vector<trace::views::detail::FoldEvent> evs = {fe};
         trace::views::detail::ScanUnit unit{};
-        fold.step(trace::views::detail::FoldBatch{
-            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}});
+        dftu_utils_test::ok(fold.step(trace::views::detail::FoldBatch{
+            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}}));
     }
 
     if (p->destroy) p->destroy(p->self);
@@ -485,8 +485,8 @@ TEST_CASE("plugin cxx: Host::agg merges a count and an argmax across slices") {
         auto slice = master.slice();
         auto* pf = static_cast<plugins::PluginFold*>(slice.get());
         trace::views::detail::ScanUnit unit;
-        pf->step(trace::views::detail::FoldBatch{
-            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}});
+        dftu_utils_test::ok(pf->step(trace::views::detail::FoldBatch{
+            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}}));
         master.merge(*pf);
     }
     Runtime rt(1);

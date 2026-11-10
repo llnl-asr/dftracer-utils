@@ -153,13 +153,13 @@ dstd::Map<std::uint64_t, index::extensions::kinds::Zone> zones_of(
 
 dstd::Set<std::uint64_t> read_chunks(const index::Indexer& ix,
                                      const dstd::String& query) {
-    const auto e = ix.explain(query);
+    const auto e = dftu_utils_test::ok(ix.explain(query));
     REQUIRE(e.size() == 1);
     return {e[0].read.begin(), e[0].read.end()};
 }
 
 std::uint64_t chunk_count(const index::Indexer& ix) {
-    return ix.explain(R"(name == "read")")[0].chunks;
+    return dftu_utils_test::ok(ix.explain(R"(name == "read")"))[0].chunks;
 }
 
 void check_full_scan(const Indexed& t, const dstd::String& index_dir,
@@ -237,9 +237,9 @@ TEST_SUITE("PathCatalog") {
         dftu_utils_test::TestEnvironment env(10);
         const auto trace = write_fixture(env.dir());
         const auto idx = env.dir() + "/idx";
-        auto ix = index::Indexer::open({dstd::String(dstd::StringView(trace))},
-                                       options(idx));
-        const auto st = ix.build();
+        auto ix = dftu_utils_test::ok(index::Indexer::open(
+            {dstd::String(dstd::StringView(trace))}, options(idx)));
+        const auto st = dftu_utils_test::ok(ix.build());
         const auto cat = catalog_of(trace, st.index_path);
 
         auto type_of = [&](const dstd::String& p) {
@@ -266,7 +266,7 @@ TEST_SUITE("PathCatalog") {
             CHECK_FALSE(cat.count(axis));
 
         bool listed = false;
-        for (const auto& f : ix.manifest())
+        for (const auto& f : dftu_utils_test::ok(ix.manifest()))
             for (const auto& e : f.extensions)
                 if (e.name == "core.catalog") listed = e.current;
         CHECK(listed);
@@ -280,10 +280,11 @@ TEST_SUITE("PathCatalog") {
         const auto trace =
             dftu_utils_test::write_gz_trace(env.dir() + "/empty.pfw.gz", body);
         const auto idx = env.dir() + "/idx";
-        const auto st =
-            index::Indexer::open({dstd::String(dstd::StringView(trace))},
-                                 options(idx))
-                .build();
+        const auto st = dftu_utils_test::ok(
+            dftu_utils_test::ok(
+                index::Indexer::open({dstd::String(dstd::StringView(trace))},
+                                     options(idx)))
+                .build());
         const auto cat = catalog_of(trace, st.index_path);
         REQUIRE(cat.count("args.tags"));
         REQUIRE(cat.count("args.opts"));
@@ -301,10 +302,11 @@ TEST_SUITE("PathCatalog") {
         dftu_utils_test::TestEnvironment env(10);
         const auto trace = write_fixture(env.dir());
         const auto idx = env.dir() + "/idx";
-        const auto st =
-            index::Indexer::open({dstd::String(dstd::StringView(trace))},
-                                 options(idx))
-                .build();
+        const auto st = dftu_utils_test::ok(
+            dftu_utils_test::ok(
+                index::Indexer::open({dstd::String(dstd::StringView(trace))},
+                                     options(idx)))
+                .build());
         const auto cols = column_types(trace, st.index_path);
         CHECK(cols.at("size") == index::store::ColumnType::Int64);
         CHECK(cols.at("flag") == index::store::ColumnType::Int64);
@@ -322,10 +324,11 @@ TEST_SUITE("PathCatalog") {
         dftu_utils_test::TestEnvironment env(10);
         const auto trace = write_budget_trace(env.dir());
         const auto idx = env.dir() + "/idx";
-        const auto st =
-            index::Indexer::open({dstd::String(dstd::StringView(trace))},
-                                 options(idx, 1))
-                .build();
+        const auto st = dftu_utils_test::ok(
+            dftu_utils_test::ok(
+                index::Indexer::open({dstd::String(dstd::StringView(trace))},
+                                     options(idx, 1)))
+                .build());
         {
             const Indexed built{trace, st.index_path};
             const auto zones = zonemap_paths(built);
@@ -344,33 +347,33 @@ TEST_SUITE("PathCatalog") {
         dftu_utils_test::TestEnvironment env(10);
         const auto trace = write_budget_trace(env.dir());
         const auto idx = env.dir() + "/idx";
-        auto before_ix = index::Indexer::open(
-            {dstd::String(dstd::StringView(trace))}, options(idx, 1));
-        before_ix.build();
+        auto before_ix = dftu_utils_test::ok(index::Indexer::open(
+            {dstd::String(dstd::StringView(trace))}, options(idx, 1)));
+        dftu_utils_test::ok(before_ix.build());
         auto hashes = [&](const index::Indexer& ix) {
             dstd::Map<dstd::String, std::uint64_t> out;
-            for (const auto& f : ix.manifest())
+            for (const auto& f : dftu_utils_test::ok(ix.manifest()))
                 for (const auto& e : f.extensions) out[e.name] = e.params_hash;
             return out;
         };
         const auto before = hashes(before_ix);
-        auto after_ix = index::Indexer::open(
-            {dstd::String(dstd::StringView(trace))}, options(idx, 2));
-        CHECK(after_ix.status().needs_work.size() == 1);
-        CHECK(after_ix.build().indexed == 1);
+        auto after_ix = dftu_utils_test::ok(index::Indexer::open(
+            {dstd::String(dstd::StringView(trace))}, options(idx, 2)));
+        CHECK(dftu_utils_test::ok(after_ix.status()).needs_work.size() == 1);
+        CHECK(dftu_utils_test::ok(after_ix.build()).indexed == 1);
         const auto after = hashes(after_ix);
         for (const char* changed : {"zonemap", "bloom", "counts"})
             CHECK(after.at(changed) != before.at(changed));
         for (const char* same : {"postings", "dft.stats", "core.catalog"})
             CHECK(after.at(same) == before.at(same));
-        CHECK(after_ix.status().needs_work.empty());
+        CHECK(dftu_utils_test::ok(after_ix.status()).needs_work.empty());
 
         auto share = options(idx, 2);
         share.bloom->stats_share = 0.5;
-        auto share_ix = index::Indexer::open(
-            {dstd::String(dstd::StringView(trace))}, share);
-        CHECK(share_ix.status().needs_work.size() == 1);
-        CHECK(share_ix.build().indexed == 1);
+        auto share_ix = dftu_utils_test::ok(index::Indexer::open(
+            {dstd::String(dstd::StringView(trace))}, share));
+        CHECK(dftu_utils_test::ok(share_ix.status()).needs_work.size() == 1);
+        CHECK(dftu_utils_test::ok(share_ix.build()).indexed == 1);
         const auto shared = hashes(share_ix);
         for (const char* changed : {"zonemap", "bloom", "counts"})
             CHECK(shared.at(changed) != after.at(changed));
@@ -385,15 +388,12 @@ TEST_SUITE("PathCatalog") {
             CAPTURE(bad);
             auto o = options(env.dir() + "/idx");
             o.bloom->stats_share = bad;
-            try {
-                index::Indexer::open({dstd::String(dstd::StringView(trace))},
-                                     o);
-                FAIL("expected an error");
-            } catch (const common::DFTUtilsException& e) {
-                CHECK(e.error().is_code(common::ErrorCode::InvalidArgument));
-                CHECK(dstd::String(e.what()).find("stats_share") !=
-                      dstd::String::npos);
-            }
+            const auto opened = index::Indexer::open(
+                {dstd::String(dstd::StringView(trace))}, o);
+            dftu_utils_test::expect_error(opened,
+                                          common::ErrorCode::InvalidArgument);
+            CHECK(dstd::String(opened.error().message()).find("stats_share") !=
+                  dstd::String::npos);
         }
     }
 
@@ -414,9 +414,9 @@ TEST_SUITE("PathCatalog") {
         body += "]\n";
         const auto trace = write_members(env.dir(), "wide", body);
         const auto idx = env.dir() + "/idx";
-        auto ix = index::Indexer::open({dstd::String(dstd::StringView(trace))},
-                                       options(idx));
-        const Indexed t{trace, ix.build().index_path};
+        auto ix = dftu_utils_test::ok(index::Indexer::open(
+            {dstd::String(dstd::StringView(trace))}, options(idx)));
+        const Indexed t{trace, dftu_utils_test::ok(ix.build()).index_path};
         const auto zones = zonemap_paths(t);
         for (int j = 0; j < 400; ++j)
             CHECK_MESSAGE(has(zones, "p" + dstd::to_string(1000 + j)), j);
@@ -444,9 +444,9 @@ TEST_SUITE("PathCatalog") {
             const auto idx = env.dir() + "/idx" + dstd::to_string(budget);
             auto o = options(idx, budget);
             o.bloom->auto_max_distinct = 0;
-            auto ix = index::Indexer::open(
-                {dstd::String(dstd::StringView(trace))}, o);
-            const Indexed t{trace, ix.build().index_path};
+            auto ix = dftu_utils_test::ok(index::Indexer::open(
+                {dstd::String(dstd::StringView(trace))}, o));
+            const Indexed t{trace, dftu_utils_test::ok(ix.build()).index_path};
             const auto zones = zonemap_paths(t);
             CHECK_FALSE(has(zones, "c"));
             CHECK_FALSE(has(zones, "u"));
@@ -490,9 +490,9 @@ TEST_SUITE("PathCatalog") {
         body += "]\n";
         const auto trace = write_members(env.dir(), "capped", body, 4096);
         auto build = [&](const dstd::String& idx) {
-            auto ix = index::Indexer::open(
-                {dstd::String(dstd::StringView(trace))}, options(idx));
-            return Indexed{trace, ix.build().index_path};
+            auto ix = dftu_utils_test::ok(index::Indexer::open(
+                {dstd::String(dstd::StringView(trace))}, options(idx)));
+            return Indexed{trace, dftu_utils_test::ok(ix.build()).index_path};
         };
         const auto t = build(env.dir() + "/idx");
         const auto zones = zonemap_paths(t);
@@ -541,9 +541,9 @@ TEST_SUITE("Absence") {
         body += "]\n";
         const auto trace = write_members(env.dir(), "absent", body);
         const auto idx = env.dir() + "/idx";
-        auto ix = index::Indexer::open({dstd::String(dstd::StringView(trace))},
-                                       options(idx));
-        const Indexed t{trace, ix.build().index_path};
+        auto ix = dftu_utils_test::ok(index::Indexer::open(
+            {dstd::String(dstd::StringView(trace))}, options(idx)));
+        const Indexed t{trace, dftu_utils_test::ok(ix.build()).index_path};
         const auto all = chunk_count(ix);
         dstd::Set<std::uint64_t> with_x;
         for (const auto& [chunk, zone] : zones_of(t, "x")) {
@@ -581,10 +581,13 @@ TEST_SUITE("Absence") {
         const auto trace = write_members(env.dir(), "small", body);
         const auto idx = env.dir() + "/idx";
         const Indexed t{
-            trace, index::Indexer::open({dstd::String(dstd::StringView(trace))},
-                                        options(idx))
-                       .build()
-                       .index_path};
+            trace,
+            dftu_utils_test::ok(
+                dftu_utils_test::ok(
+                    index::Indexer::open(
+                        {dstd::String(dstd::StringView(trace))}, options(idx)))
+                    .build())
+                .index_path};
         const auto snapshot = dftu_utils_test::index_snapshot(t.index_path);
         const auto file =
             dftu_utils_test::require_indexed_file(snapshot, trace);
@@ -634,10 +637,13 @@ TEST_SUITE("Absence") {
         const auto trace = write_members(env.dir(), "random", body);
         const auto idx = env.dir() + "/idx";
         const Indexed t{
-            trace, index::Indexer::open({dstd::String(dstd::StringView(trace))},
-                                        options(idx))
-                       .build()
-                       .index_path};
+            trace,
+            dftu_utils_test::ok(
+                dftu_utils_test::ok(
+                    index::Indexer::open(
+                        {dstd::String(dstd::StringView(trace))}, options(idx)))
+                    .build())
+                .index_path};
         dstd::Vector<dstd::String> queries;
         for (const char* p : {"x", "s", "n", "o", "e", "missing"}) {
             const dstd::String f(p);
@@ -681,9 +687,9 @@ TEST_SUITE("TopLevelShadow") {
         body += "]\n";
         const auto trace = write_members(env.dir(), "shadow", body);
         const auto idx = env.dir() + "/idx";
-        auto ix = index::Indexer::open({dstd::String(dstd::StringView(trace))},
-                                       options(idx));
-        const Indexed t{trace, ix.build().index_path};
+        auto ix = dftu_utils_test::ok(index::Indexer::open(
+            {dstd::String(dstd::StringView(trace))}, options(idx)));
+        const Indexed t{trace, dftu_utils_test::ok(ix.build()).index_path};
         check_full_scan(
             t, idx,
             {R"(cat == "POSIX")", "id == 5", "id > 150", "id < 50",

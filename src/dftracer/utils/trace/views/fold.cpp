@@ -3125,7 +3125,7 @@ coro::CoroTask<void> fuse_worker(FuseWorkerCtx ctx, std::size_t w) {
                          dstd::Span<const dstd::StringView>(b->events)};
             bus.clear();
             for (auto& s : slices) {
-                s->step(fb);
+                common::unwrap(s->step(fb));
                 // Await an async plugin fold's task before the next step
                 // recycles the batch; null for sync folds.
                 if (auto* t = s->take_pending())

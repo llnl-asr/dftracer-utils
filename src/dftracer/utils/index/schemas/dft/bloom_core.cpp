@@ -278,33 +278,45 @@ BloomCore::ChunkStatistics finish_file_to(
 
 }  // namespace
 
-dstd::Vector<dstd::String> BloomCore::seed_accumulator(
+dstd::Result<dstd::Vector<dstd::String>> BloomCore::seed_accumulator(
     const index::Snapshot& snapshot, const index::FileRef& file,
     const ChunkIndexerConfig& config, FileAccumulator& acc) {
-    auto stats = common::unwrap(index::scalar_stats(snapshot, file));
+    auto stats_read = index::scalar_stats(snapshot, file);
+    if (!stats_read) return stats_read.error();
+    auto stats = std::move(*stats_read);
     if (stats) {
         acc.statistics = std::move(stats->stats);
         acc.chunks = stats->chunk_count;
     }
-    auto pid_tid = common::unwrap(index::pid_tid_counts(snapshot, file));
+    auto pid_tid_read = index::pid_tid_counts(snapshot, file);
+    if (!pid_tid_read) return pid_tid_read.error();
+    auto pid_tid = std::move(*pid_tid_read);
     if (pid_tid) acc.statistics.pid_tid_counts = std::move(*pid_tid);
+    dstd::Optional<dstd::Error> failed;
     const auto file_bloom = [&](dstd::StringView dim)
         -> dstd::Optional<index::extensions::ScalableBloomFilter> {
-        auto payload = common::unwrap(
-            index::path_file(snapshot, file, IndexExtension::Bloom, dim));
+        auto read =
+            index::path_file(snapshot, file, IndexExtension::Bloom, dim);
+        if (!read) {
+            if (!failed) failed = read.error();
+            return dstd::nullopt;
+        }
+        auto payload = std::move(*read);
         if (!payload) return dstd::nullopt;
         return index::extensions::kinds::decode_bloom(*payload);
     };
     for (std::size_t b = 0; config.fixed_dimensions && b < BfCount; ++b) {
         auto bloom = file_bloom(FIXED_BLOOM_NAMES[b]);
+        if (failed) return *failed;
         if (bloom) acc.fixed_blooms[b] = std::move(*bloom);
     }
     dstd::Set<dstd::String> dims;
     for (auto ext : {IndexExtension::Zonemap, IndexExtension::Bloom,
                      IndexExtension::Counts}) {
         if (!config.extensions.has(ext)) continue;
-        for (auto& path : common::unwrap(index::paths(snapshot, file, ext)))
-            dims.insert(std::move(path));
+        auto listed = index::paths(snapshot, file, ext);
+        if (!listed) return listed.error();
+        for (auto& path : *listed) dims.insert(std::move(path));
     }
     dstd::Vector<dstd::String> extras;
     for (const dstd::String& dim : dims) {
@@ -316,6 +328,7 @@ dstd::Vector<dstd::String> BloomCore::seed_accumulator(
         if (is_fixed) continue;
         auto& extra = acc.extra(name);
         auto bloom = file_bloom(name);
+        if (failed) return *failed;
         if (bloom) {
             extra.bloom = std::move(*bloom);
         } else {

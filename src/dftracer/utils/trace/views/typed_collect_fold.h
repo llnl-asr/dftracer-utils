@@ -36,7 +36,7 @@ class TypedCollectFold : public Fold {
         return dstd::make_unique<TypedCollectFold>(*intern_);
     }
 
-    void step(const FoldBatch& batch) override {
+    dstd::Result<void> step(const FoldBatch& batch) override {
         for (const auto& ev : batch.events) {
             switch (ev.phase) {
                 case RecordPhase::Complete:
@@ -53,6 +53,7 @@ class TypedCollectFold : public Fold {
                     break;
             }
         }
+        return {};
     }
 
     void seal_unit(const ScanUnit&) override {}

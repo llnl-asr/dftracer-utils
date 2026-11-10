@@ -23,6 +23,7 @@
 #include <dftracer/utils/trace/views/sharded_view.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <algorithm>
@@ -404,7 +405,9 @@ void build(const dstd::Vector<dstd::String>& files,
            const dstd::String& index_dir) {
     dstd::Vector<dstd::String> paths;
     for (const auto& file : files) paths.emplace_back(file);
-    Indexer::open(std::move(paths), options(index_dir)).build();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(Indexer::open(std::move(paths), options(index_dir)))
+            .build());
 }
 
 void check_row_core(const schemas::dft::agg::ChunkColumns& block, std::size_t r,

@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_INDEX_EXTENSIONS_SCALABLE_BLOOM_FILTER_H
 #define DFTRACER_UTILS_INDEX_EXTENSIONS_SCALABLE_BLOOM_FILTER_H
 
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/extensions/bloom_filter.h>
@@ -40,7 +41,7 @@ namespace dftracer::utils::index::extensions {
  * (uint32_t LE), then a @ref BloomFilter blob]
  *
  * A loaded chain takes more values and merges as the one it was saved from.
- * @ref from_blob throws on any other bytes.
+ * @ref from_blob returns a Parse error on any other bytes.
  */
 class ScalableBloomFilter {
    public:
@@ -50,8 +51,9 @@ class ScalableBloomFilter {
     explicit ScalableBloomFilter(std::size_t initial_capacity = 1024,
                                  double false_positive_rate = 0.01);
 
-    static ScalableBloomFilter from_blob(const unsigned char* data,
-                                         std::size_t size);
+    /// A Parse error when the bytes are not a saved chain.
+    static dstd::Result<ScalableBloomFilter> from_blob(
+        const unsigned char* data, std::size_t size);
 
     void add(dstd::StringView value);
     bool possibly_contains(dstd::StringView value) const;

@@ -209,4 +209,21 @@ TEST_SUITE("ChunkIndexer") {
 
         dstd::fs::remove_all(test_dir).discard();
     }
+
+    TEST_CASE("ChunkIndexerConfig - stats_share outside (0, 1] is an error") {
+        ChunkIndexerConfig config;
+        CHECK(config.validate().has_value());
+        for (double bad : {0.0, -0.1, 1.5}) {
+            CAPTURE(bad);
+            config.stats_share = bad;
+            const auto rejected = config.validate();
+            dftu_utils_test::expect_error(rejected,
+                                          common::ErrorCode::InvalidArgument);
+            CHECK(
+                dstd::String(rejected.error().message()).find("stats_share") !=
+                dstd::String::npos);
+        }
+        config.stats_share = 1.0;
+        CHECK(config.validate().has_value());
+    }
 }

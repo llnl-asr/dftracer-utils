@@ -151,7 +151,7 @@ bool has_sentinel(const dstd::String& trace) {
 
 dstd::Optional<index::ExtensionEntry> agg_entry(const Indexer& ix,
                                                 const dstd::String& trace) {
-    const auto manifest = ix.manifest();
+    const auto manifest = dftu_utils_test::ok(ix.manifest());
     for (const auto& f : manifest)
         if (dstd::StringView(f.path) == dstd::StringView(trace))
             for (const auto& e : f.extensions)
@@ -190,25 +190,29 @@ TEST_SUITE("AggExtension") {
     TEST_CASE("an aggregated file lists a current dftracer.agg entry") {
         dftu_utils_test::TestEnvironment env(10);
         const auto gz = write_trace(env.dir(), "a", 50, 1000);
-        auto ix = Indexer::open({dstd::String(dstd::StringView(gz))},
-                                with_aggregation(1'000'000));
-        ix.build();
+        auto ix = dftu_utils_test::ok(Indexer::open(
+            {dstd::String(dstd::StringView(gz))}, with_aggregation(1'000'000)));
+        dftu_utils_test::ok(ix.build());
         const auto e = agg_entry(ix, gz);
         REQUIRE(e);
         CHECK(e->ready);
         CHECK(e->current);
-        CHECK(Indexer::open({dstd::String(dstd::StringView(gz))},
-                            with_aggregation(1'000'000))
-                  .status()
+        CHECK(dftu_utils_test::ok(
+                  dftu_utils_test::ok(
+                      Indexer::open({dstd::String(dstd::StringView(gz))},
+                                    with_aggregation(1'000'000)))
+                      .status())
                   .needs_work.empty());
     }
 
     TEST_CASE("an unreadable aggregation config is built again") {
         dftu_utils_test::TestEnvironment env(10);
         const auto gz = write_trace(env.dir(), "fix", 50, 1000);
-        Indexer::open({dstd::String(dstd::StringView(gz))},
-                      with_aggregation(1'000'000))
-            .build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(
+                Indexer::open({dstd::String(dstd::StringView(gz))},
+                              with_aggregation(1'000'000)))
+                .build());
         CHECK(count_reads({gz}) == 50);
         {
             // A value that does not decode as a config reads as absent.
@@ -249,9 +253,9 @@ TEST_SUITE("AggExtension") {
             CHECK_FALSE(common::unwrap(
                 index::schemas::dft::agg::tier::read_config(snapshot)));
         }
-        auto ix = Indexer::open({dstd::String(dstd::StringView(gz))},
-                                with_aggregation(1'000'000));
-        ix.build();
+        auto ix = dftu_utils_test::ok(Indexer::open(
+            {dstd::String(dstd::StringView(gz))}, with_aggregation(1'000'000)));
+        dftu_utils_test::ok(ix.build());
         const auto entry = agg_entry(ix, gz);
         REQUIRE(entry);
         CHECK(entry->current);
@@ -278,17 +282,19 @@ TEST_SUITE("AggExtension") {
     TEST_CASE("an interval change rebuilds only the tier") {
         dftu_utils_test::TestEnvironment env(10);
         const auto gz = write_trace(env.dir(), "a", 50, 1000);
-        Indexer::open({dstd::String(dstd::StringView(gz))},
-                      with_aggregation(1'000'000))
-            .build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(
+                Indexer::open({dstd::String(dstd::StringView(gz))},
+                              with_aggregation(1'000'000)))
+                .build());
         plant_sentinel(gz);
 
-        auto ix = Indexer::open({dstd::String(dstd::StringView(gz))},
-                                with_aggregation(100'000));
-        const auto before = ix.status();
+        auto ix = dftu_utils_test::ok(Indexer::open(
+            {dstd::String(dstd::StringView(gz))}, with_aggregation(100'000)));
+        const auto before = dftu_utils_test::ok(ix.status());
         CHECK(before.aggregation_needs_rebuild);
         CHECK(before.aggregation_interval_us == 1'000'000);
-        const auto after = ix.build();
+        const auto after = dftu_utils_test::ok(ix.build());
         CHECK_FALSE(after.aggregation_needs_rebuild);
         CHECK(after.aggregation_interval_us == 100'000);
         CHECK(after.needs_work.empty());
@@ -302,10 +308,12 @@ TEST_SUITE("AggExtension") {
         dftu_utils_test::TestEnvironment env(10);
         const auto a = write_trace(env.dir(), "a", 30, 1000, true);
         const auto b = write_trace(env.dir(), "b", 20, 500'000, true);
-        Indexer::open({dstd::String(dstd::StringView(a)),
-                       dstd::String(dstd::StringView(b))},
-                      with_aggregation(1'000'000))
-            .build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(
+                Indexer::open({dstd::String(dstd::StringView(a)),
+                               dstd::String(dstd::StringView(b))},
+                              with_aggregation(1'000'000)))
+                .build());
         CHECK(count_reads({a, b}) == 50);
         plant_sentinel(a);
 
@@ -314,13 +322,14 @@ TEST_SUITE("AggExtension") {
                     b, dstd::fs::mtime_ns(b).value() + 10'000'000'000ULL)
                     .has_value());
 
-        auto ix = Indexer::open({dstd::String(dstd::StringView(a)),
-                                 dstd::String(dstd::StringView(b))},
-                                with_aggregation(1'000'000));
+        auto ix = dftu_utils_test::ok(
+            Indexer::open({dstd::String(dstd::StringView(a)),
+                           dstd::String(dstd::StringView(b))},
+                          with_aggregation(1'000'000)));
         // Rebuilding `b` replaces its own partials and column blocks, so no
         // whole-tier rebuild is due.
-        CHECK_FALSE(ix.status().aggregation_needs_rebuild);
-        ix.build();
+        CHECK_FALSE(dftu_utils_test::ok(ix.status()).aggregation_needs_rebuild);
+        dftu_utils_test::ok(ix.build());
         CHECK(has_sentinel(a));
         CHECK(count_reads({a, b}) == 75);
         for (const auto& t : {a, b}) {
@@ -336,10 +345,12 @@ TEST_SUITE("AggExtension") {
                     .has_value());
         REQUIRE(dstd::fs::copy_file(b, fb, dstd::fs::CopyMode::FailIfExists)
                     .has_value());
-        Indexer::open({dstd::String(dstd::StringView(fa)),
-                       dstd::String(dstd::StringView(fb))},
-                      with_aggregation(1'000'000))
-            .build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(
+                Indexer::open({dstd::String(dstd::StringView(fa)),
+                               dstd::String(dstd::StringView(fb))},
+                              with_aggregation(1'000'000)))
+                .build());
         CHECK(count_reads({fa, fb}) == 75);
         const auto rebuilt = counters_of({a, b});
         CHECK(rebuilt.num_rows() > 0);
@@ -349,17 +360,20 @@ TEST_SUITE("AggExtension") {
     TEST_CASE("a file without a current entry makes readers scan") {
         dftu_utils_test::TestEnvironment env(10);
         const auto a = write_trace(env.dir(), "a", 30, 1000);
-        Indexer::open({dstd::String(dstd::StringView(a))},
-                      with_aggregation(1'000'000))
-            .build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(
+                Indexer::open({dstd::String(dstd::StringView(a))},
+                              with_aggregation(1'000'000)))
+                .build());
         // The tier answers this, and its cache keeps the index open, which a
         // later build must still be able to open for writing.
         CHECK(count_reads({a}) == 30);
         const auto b = write_trace(env.dir(), "b", 20, 500'000);
-        auto ix = Indexer::open({dstd::String(dstd::StringView(a)),
-                                 dstd::String(dstd::StringView(b))},
-                                with_aggregation(1'000'000));
-        ix.build();
+        auto ix = dftu_utils_test::ok(
+            Indexer::open({dstd::String(dstd::StringView(a)),
+                           dstd::String(dstd::StringView(b))},
+                          with_aggregation(1'000'000)));
+        dftu_utils_test::ok(ix.build());
         {
             const auto opened = dftu_utils_test::open_test_index(index_of(b));
             const auto key = dftu_utils_test::index_key(b);

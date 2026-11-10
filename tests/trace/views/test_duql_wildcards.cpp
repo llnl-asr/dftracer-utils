@@ -49,9 +49,10 @@ dstd::String write_counters(TestEnvironment& env, const dstd::String& dir = "",
                                                                16 * 1024));
     dstd::fs::remove(plain).discard();
     if (build)
-        dftracer::utils::index::Indexer::open(
-            {dstd::String(dstd::StringView(gz))})
-            .build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+                                    {dstd::String(dstd::StringView(gz))}))
+                .build());
     return gz;
 }
 
@@ -273,9 +274,11 @@ TEST_SUITE("DuqlWildcards") {
                 plain, gz, 2048));
             dstd::fs::remove(plain).discard();
             if (build)
-                dftracer::utils::index::Indexer::open(
-                    {dstd::String(dstd::StringView(gz))})
-                    .build();
+                dftu_utils_test::ok(
+                    dftu_utils_test::ok(
+                        dftracer::utils::index::Indexer::open(
+                            {dstd::String(dstd::StringView(gz))}))
+                        .build());
             return view_of(gz);
         };
         const auto full = mk("full", true);

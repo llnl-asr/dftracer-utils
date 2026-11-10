@@ -67,7 +67,7 @@ class VectorizedFold : public Fold {
                                                  merge_, select_, time_scale_);
     }
 
-    void step(const FoldBatch& batch) override {
+    dstd::Result<void> step(const FoldBatch& batch) override {
         scratch_.clear();
         for (const FoldEvent& ev : batch.events) {
             if (ev.phase == RecordPhase::Metadata ||
@@ -75,9 +75,10 @@ class VectorizedFold : public Fold {
                 continue;
             scratch_.push_back(ev);
         }
-        if (scratch_.empty()) return;
+        if (scratch_.empty()) return {};
         (*on_batch_)(state_,
                      build_row_frame(scratch_, *intern_, select_, time_scale_));
+        return {};
     }
 
     void seal_unit(const ScanUnit&) override {}

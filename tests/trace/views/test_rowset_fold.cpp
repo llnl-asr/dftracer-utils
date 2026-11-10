@@ -83,7 +83,10 @@ dstd::String write_trace(TestEnvironment& env,
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
     dstd::fs::remove(pfw).discard();
     if (build)
-        index::Indexer::open({dstd::String(dstd::StringView(gz))}).build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(
+                index::Indexer::open({dstd::String(dstd::StringView(gz))}))
+                .build());
     return gz;
 }
 
@@ -155,23 +158,24 @@ TEST_SUITE("RowSetFold") {
     TEST_CASE("each stored row set equals the pipeline over every record") {
         TestEnvironment env(10);
         const dstd::String gz = write_trace(env, trace_lines());
-        const auto ixr =
-            index::Indexer::open({dstd::String(dstd::StringView(gz))});
+        const auto ixr = dftu_utils_test::ok(
+            index::Indexer::open({dstd::String(dstd::StringView(gz))}));
         const View v = View::from_file(
             dstd::String(gz),
             dstd::String(dstd::String(determine_index_path(gz, ""))));
         for (const char* name : {"files", "hosts", "strings", "ranks"}) {
             CAPTURE(name);
-            const dataframe::DataFrame stored = ixr.rowset(name);
+            const dataframe::DataFrame stored =
+                dftu_utils_test::ok(ixr.rowset(name));
             const dataframe::DataFrame scanned =
                 run(v.duql(dstd::String("from ") + name + " | where true")
                         .collect());
             CHECK(rows_of(stored) == rows_of(scanned));
         }
-        CHECK(rows_of(ixr.rowset("files")) ==
+        CHECK(rows_of(dftu_utils_test::ok(ixr.rowset("files"))) ==
               dstd::Vector<dstd::String>{"fhash=fh1;path=/data/a.bin;",
                                          "fhash=fh2;path=/data/b.bin;"});
-        CHECK(rows_of(ixr.rowset("ranks")) ==
+        CHECK(rows_of(dftu_utils_test::ok(ixr.rowset("ranks"))) ==
               dstd::Vector<dstd::String>{"pid=7;rank=3;"});
     }
 
@@ -184,12 +188,13 @@ TEST_SUITE("RowSetFold") {
             lines.push_back(
                 R"({"gtype":"func","run":"ab","path":"main;f","ts":1,"depth":1,"count":2})");
         const dstd::String gz = write_trace(env, lines);
-        const auto ixr =
-            index::Indexer::open({dstd::String(dstd::StringView(gz))});
+        const auto ixr = dftu_utils_test::ok(
+            index::Indexer::open({dstd::String(dstd::StringView(gz))}));
         const View v = View::from_file(
             dstd::String(gz),
             dstd::String(dstd::String(determine_index_path(gz, ""))));
-        const dataframe::DataFrame stored = ixr.rowset("runs");
+        const dataframe::DataFrame stored =
+            dftu_utils_test::ok(ixr.rowset("runs"));
         CHECK(rows_of(stored) ==
               rows_of(run(v.duql("from runs | where true").collect())));
         REQUIRE(stored.num_rows() == 2);
@@ -228,7 +233,8 @@ TEST_SUITE("RowSetFold") {
         ScanUnit unit;
         unit.file_path = "x";
         for (int i = 0; i < 2; ++i) {
-            fold.step(FoldBatch{dstd::Span<const FoldEvent>(events), unit});
+            dftu_utils_test::ok(fold.step(
+                FoldBatch{dstd::Span<const FoldEvent>(events), unit}));
             fold.seal_unit(unit);
         }
         CHECK(fold.entry_count() == 5);
@@ -241,7 +247,8 @@ TEST_SUITE("RowSetFold") {
             intern, index::indexed_rowsets(index::get_schema("dftracer")), 16);
         ScanUnit unit;
         unit.file_path = "x";
-        fold.step(FoldBatch{dstd::Span<const FoldEvent>(events), unit});
+        dftu_utils_test::ok(
+            fold.step(FoldBatch{dstd::Span<const FoldEvent>(events), unit}));
         fold.seal_unit(unit);
         CHECK(fold.abandoned());
         CHECK(fold.entry_count() == 0);
@@ -254,10 +261,12 @@ TEST_SUITE("RowSetFold") {
                         index::indexed_rowsets(index::get_schema("dftracer")));
         ScanUnit unit;
         unit.file_path = "x";
-        fold.step(FoldBatch{dstd::Span<const FoldEvent>(events), unit});
+        dftu_utils_test::ok(
+            fold.step(FoldBatch{dstd::Span<const FoldEvent>(events), unit}));
         fold.drop_unit(unit);
         CHECK(fold.entry_count() == 0);
-        fold.step(FoldBatch{dstd::Span<const FoldEvent>(events), unit});
+        dftu_utils_test::ok(
+            fold.step(FoldBatch{dstd::Span<const FoldEvent>(events), unit}));
         fold.seal_unit(unit);
         CHECK(fold.entry_count() == 5);
     }
@@ -299,8 +308,8 @@ TEST_SUITE("RowSetFold") {
                 R"({"gtype":"func","run":"ab","path":"main;f","ts":1,"dur":{"sketch":"SK)" +
                 dstd::to_string(i) + R"(","count":2}})");
         const dstd::String gz = write_trace(env, lines);
-        const auto ixr =
-            index::Indexer::open({dstd::String(dstd::StringView(gz))});
+        const auto ixr = dftu_utils_test::ok(
+            index::Indexer::open({dstd::String(dstd::StringView(gz))}));
         const View v = View::from_file(
             dstd::String(gz),
             dstd::String(dstd::String(determine_index_path(gz, ""))));

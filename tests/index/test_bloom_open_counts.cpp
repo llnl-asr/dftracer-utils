@@ -8,6 +8,7 @@
 #include <dftracer/utils/index/extensions/bloom_fold.h>
 #include <dftracer/utils/index/extensions/catalog_fold.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 #include <utility>
@@ -75,7 +76,8 @@ struct Fixture {
 void feed(extensions::BloomFold& fold,
           const dstd::Vector<trace::views::detail::FoldEvent>& events,
           const trace::views::detail::ScanUnit& unit) {
-    fold.step(trace::views::detail::FoldBatch{events, unit});
+    dftu_utils_test::ok(
+        fold.step(trace::views::detail::FoldBatch{events, unit}));
 }
 
 dstd::Map<dstd::String, index::store::PathStat> catalog_of(

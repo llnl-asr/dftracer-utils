@@ -120,7 +120,7 @@ class IndexArgParse : public binaries::ArgParse {
 // GCC 12/13.
 static coro::CoroTask<int> select_stale_task(ResolverInput input,
                                              IndexWork* stale) {
-    *stale = co_await files_needing_index(std::move(input));
+    *stale = common::unwrap(co_await files_needing_index(std::move(input)));
     co_return 0;
 }
 
@@ -318,7 +318,8 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     if (force_rebuild &&
         common::unwrap(dstd::fs::exists(dstd::PathView(agg_index))))
         stale_tiers.insert(agg_index);
-    for (const auto& root : stale_tiers) clear_aggregation(root);
+    for (const auto& root : stale_tiers)
+        common::unwrap(clear_aggregation(root));
 
     auto batch_config = dstd::make_shared<IndexBuildBatchConfig>();
     batch_config->file_paths = std::move(input_files);
@@ -332,8 +333,8 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     batch_config->memory_budget = cli->memory_budget;
     batch_config->schema = dstd::String(cli->record_schema);
 
-    AggRun agg_run = start_aggregation(
-        agg_index, index::schemas::dft::agg::standard_aggregation_config());
+    AggRun agg_run = common::unwrap(start_aggregation(
+        agg_index, index::schemas::dft::agg::standard_aggregation_config()));
     batch_config->agg_fold_factory = std::move(agg_run.factory);
 
     IndexBuildBatchResult batch_result;
@@ -344,7 +345,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
                 co_await BatchBuilder::process(std::move(batch_config));
         });
     log_stage("build");
-    finish_aggregation(agg_run, batch_result);
+    common::unwrap(finish_aggregation(agg_run, batch_result));
     log_stage("aggregate");
     DFTRACER_UTILS_LOG_DEBUG(
         "dftracer_index: thread_ms parse={:.2f} schema={:.2f} "

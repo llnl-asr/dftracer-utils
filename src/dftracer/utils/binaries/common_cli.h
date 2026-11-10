@@ -701,12 +701,16 @@ inline coro::CoroTask<int> ensure_indexes_fresh_task(
     options.bloom->required = false;
     options.aggregation = std::move(aggregation);
     if (checkpoint_size != 0) options.checkpoint_size = checkpoint_size;
-    auto indexer = dftracer::utils::index::detail::open_scanned(
-        *entries, std::move(options));
-    if (force_rebuild)
-        co_await indexer.rebuild(ctx);
-    else
-        co_await indexer.build(ctx);
+    auto indexer = dftracer::utils::common::unwrap(
+        dftracer::utils::index::detail::open_scanned(*entries,
+                                                     std::move(options)));
+    if (force_rebuild) {
+        auto rebuilt = co_await indexer.rebuild(ctx);
+        dftracer::utils::common::unwrap(std::move(rebuilt));
+    } else {
+        auto built = co_await indexer.build(ctx);
+        dftracer::utils::common::unwrap(std::move(built));
+    }
     co_return 0;
 }
 

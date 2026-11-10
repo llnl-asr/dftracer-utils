@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
@@ -43,7 +44,8 @@ class RowSetFold : public trace::views::detail::Fold {
     // The schema refuses a row set that reads a never_index path.
     bool reads_never_indexed() const override { return false; }
     dstd::UniquePtr<trace::views::detail::Fold> slice() const override;
-    void step(const trace::views::detail::FoldBatch& batch) override;
+    dstd::Result<void> step(
+        const trace::views::detail::FoldBatch& batch) override;
     void seal_unit(const trace::views::detail::ScanUnit& unit) override;
     void drop_unit(const trace::views::detail::ScanUnit& unit) override;
     void merge(trace::views::detail::Fold& slice) override;
@@ -54,8 +56,8 @@ class RowSetFold : public trace::views::detail::Fold {
 
     /// Writes each row set's sealed rows into `build` and finishes the
     /// extension. The source is part of the schema's hash, which the profile
-    /// records.
-    void write(index::FileBuild& build) const;
+    /// records. An error when a row set cannot be encoded.
+    dstd::Result<void> write(index::FileBuild& build) const;
 
     bool abandoned() const noexcept { return abandoned_; }
     /// Sealed rows over every row set.

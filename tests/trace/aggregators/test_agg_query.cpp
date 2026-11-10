@@ -477,9 +477,9 @@ dstd::UniquePtr<Fixture> build(std::uint64_t interval_us,
     o.checkpoint_size = CHECKPOINT_SIZE;
     o.parallelism = 4;
     o.aggregation = make_config(interval_us);
-    auto ix = index::Indexer::open(
-        dstd::Vector<dstd::String>(fx->files.begin(), fx->files.end()), o);
-    ix.build();
+    auto ix = dftu_utils_test::ok(index::Indexer::open(
+        dstd::Vector<dstd::String>(fx->files.begin(), fx->files.end()), o));
+    dftu_utils_test::ok(ix.build());
     fx->index_path = dstd::String(
         trace::internal::determine_index_path(fx->files[0], fx->index_dir));
     return fx;
@@ -773,9 +773,9 @@ TEST_SUITE("AggQuery") {
         o.index_dir = index_dir;
         o.checkpoint_size = CHECKPOINT_SIZE;
         o.parallelism = 2;
-        auto ix = index::Indexer::open(
-            dstd::Vector<dstd::String>(files.begin(), files.end()), o);
-        ix.build();
+        auto ix = dftu_utils_test::ok(index::Indexer::open(
+            dstd::Vector<dstd::String>(files.begin(), files.end()), o));
+        dftu_utils_test::ok(ix.build());
 
         dstd::Vector<trace::comparator::ComparisonFilter> filters;
         filters.emplace_back();
@@ -1042,9 +1042,12 @@ TEST_SUITE("AggQuery") {
         o.index_dir = fx->index_dir;
         o.checkpoint_size = CHECKPOINT_SIZE;
         o.aggregation = make_config(FIVE_SECONDS_US);
-        index::Indexer::open(
-            dstd::Vector<dstd::String>(fx->files.begin(), fx->files.end()), o)
-            .build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(
+                index::Indexer::open(dstd::Vector<dstd::String>(
+                                         fx->files.begin(), fx->files.end()),
+                                     o))
+                .build());
         fx->index_path = dstd::String(
             trace::internal::determine_index_path(gz, fx->index_dir));
 
@@ -1190,9 +1193,12 @@ TEST_SUITE("AggQuery") {
         o.index_dir = fx->index_dir;
         o.checkpoint_size = std::size_t{64} << 10;
         o.aggregation = make_config(FIVE_SECONDS_US);
-        index::Indexer::open(
-            dstd::Vector<dstd::String>(fx->files.begin(), fx->files.end()), o)
-            .build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(
+                index::Indexer::open(dstd::Vector<dstd::String>(
+                                         fx->files.begin(), fx->files.end()),
+                                     o))
+                .build());
         fx->index_path = dstd::String(
             trace::internal::determine_index_path(fx->files[0], fx->index_dir));
 
@@ -1230,9 +1236,12 @@ TEST_SUITE("AggQuery") {
         o.index_dir = fx->index_dir;
         o.checkpoint_size = ONE_CHUNK;
         o.aggregation = make_config(FIVE_SECONDS_US);
-        index::Indexer::open(
-            dstd::Vector<dstd::String>(fx->files.begin(), fx->files.end()), o)
-            .build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(
+                index::Indexer::open(dstd::Vector<dstd::String>(
+                                         fx->files.begin(), fx->files.end()),
+                                     o))
+                .build());
         fx->index_path = dstd::String(
             trace::internal::determine_index_path(fx->files[0], fx->index_dir));
 
@@ -1283,9 +1292,12 @@ TEST_SUITE("AggQuery") {
         o.index_dir = fx->index_dir;
         o.checkpoint_size = std::size_t{64} << 20;
         o.aggregation = make_config(FIVE_SECONDS_US);
-        index::Indexer::open(
-            dstd::Vector<dstd::String>(fx->files.begin(), fx->files.end()), o)
-            .build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(
+                index::Indexer::open(dstd::Vector<dstd::String>(
+                                         fx->files.begin(), fx->files.end()),
+                                     o))
+                .build());
         fx->index_path = dstd::String(
             trace::internal::determine_index_path(fx->files[0], fx->index_dir));
 

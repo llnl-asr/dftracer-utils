@@ -5,6 +5,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
@@ -108,14 +109,13 @@ struct ChunkIndexerConfig {
         return hasher.hash().value;
     }
 
-    /// Throws INVALID_ARGUMENT naming the setting when stats_share is not in
+    /// An InvalidArgument error naming the setting when stats_share is not in
     /// (0, 1].
-    void validate() const {
+    dstd::Result<void> validate() const {
         if (!(stats_share > 0.0 && stats_share <= 1.0))
-            throw common::DFTUtilsException(
-                common::ErrorCode::InvalidArgument,
-                "stats_share must be in (0, 1], got " +
-                    dstd::to_string(stats_share));
+            return common::make_error<"stats_share must be in (0, 1], got {}">(
+                common::ErrorCode::InvalidArgument, stats_share);
+        return {};
     }
 };
 

@@ -97,8 +97,10 @@ dstd::String write_trace(TestEnvironment& env) {
     const dstd::String gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, gz));
     dstd::fs::remove(plain).discard();
-    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
-        .build();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+                                {dstd::String(dstd::StringView(gz))}))
+            .build());
     return gz;
 }
 
@@ -279,9 +281,10 @@ TEST_SUITE("duql paths") {
         const dstd::String gz = plain + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, gz));
         dstd::fs::remove(plain).discard();
-        dftracer::utils::index::Indexer::open(
-            {dstd::String(dstd::StringView(gz))})
-            .build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+                                    {dstd::String(dstd::StringView(gz))}))
+                .build());
         utilities::reader::TraceReader tr(
             {.file_path = dstd::String(gz),
              .index_dir = dstd::String(env.dir())});
@@ -336,9 +339,10 @@ TEST_SUITE("duql paths") {
         const dstd::String gz = plain + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, gz));
         dstd::fs::remove(plain).discard();
-        dftracer::utils::index::Indexer::open(
-            {dstd::String(dstd::StringView(gz))})
-            .build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+                                    {dstd::String(dstd::StringView(gz))}))
+                .build());
         CHECK(names_of(run(view_of(gz, "exists(tags)").collect())) ==
               Names{"e"});
         CHECK(run(view_of(gz, "exists(nothing_here)").collect()).num_rows() ==

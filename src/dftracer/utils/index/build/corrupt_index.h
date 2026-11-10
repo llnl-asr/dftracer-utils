@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_INDEX_BUILD_CORRUPT_INDEX_H
 #define DFTRACER_UTILS_INDEX_BUILD_CORRUPT_INDEX_H
 
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/string.h>
 
@@ -19,11 +20,13 @@ inline dstd::String corrupt_index_message(const dstd::Set<dstd::String>& roots,
         if (!dirs.empty()) dirs += ", ";
         dirs += root;
     }
-    return "the index at " + dirs + " is corrupt" +
-           (tier_cleared
-                ? " and clearing its aggregation tier did not repair it"
-                : "") +
-           " (" + cause + "); delete that directory and build the index again";
+    return dstd::fmt<
+        "the index at {} is corrupt{} ({}); delete that directory and build "
+        "the index again">(
+        dirs,
+        tier_cleared ? " and clearing its aggregation tier did not repair it"
+                     : "",
+        cause);
 }
 
 }  // namespace dftracer::utils::index::build

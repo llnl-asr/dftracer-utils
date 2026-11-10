@@ -218,9 +218,10 @@ dstd::String build_aggregated_shard(dftu_utils_test::TestEnvironment& env,
 
     dftracer::utils::index::IndexerOptions options;
     options.index_dir = index_dir;
-    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))},
-                                          options)
-        .build();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+                                {dstd::String(dstd::StringView(gz))}, options))
+            .build());
     if (index_dir.empty())
         return dstd::String(trace::internal::determine_index_path(gz, ""));
     return dstd::String(trace::internal::determine_index_path("x", index_dir));

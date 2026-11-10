@@ -181,8 +181,10 @@ dstd::String create_threaded_trace(TestEnvironment& env) {
     REQUIRE(
         dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, 4 * 1024));
     dstd::fs::remove(pfw).discard();
-    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
-        .build();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+                                {dstd::String(dstd::StringView(gz))}))
+            .build());
     return gz;
 }
 
@@ -266,9 +268,10 @@ TEST_SUITE("View - metadata under pruning") {
         const dstd::String gz = pfw + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz,
                                                                    4 * 1024));
-        dftracer::utils::index::Indexer::open(
-            {dstd::String(dstd::StringView(gz))})
-            .build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+                                    {dstd::String(dstd::StringView(gz))}))
+                .build());
         StringSink sink;
         const auto stats =
             run(View::from_file(
@@ -284,9 +287,10 @@ TEST_SUITE("View - metadata under pruning") {
         TestEnvironment env(200);
         const dstd::String gz = create_threaded_trace(env);
         const dstd::String idx = dstd::String(determine_index_path(gz, ""));
-        dftracer::utils::index::Indexer::open(
-            {dstd::String(dstd::StringView(gz))})
-            .drop_extension("dft.metadata");
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+                                    {dstd::String(dstd::StringView(gz))}))
+                .drop_extension("dft.metadata"));
         {
             const auto snapshot = dftu_utils_test::index_snapshot(idx);
             CHECK_FALSE(dftu_utils_test::index_take(

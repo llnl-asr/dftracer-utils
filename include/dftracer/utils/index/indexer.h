@@ -8,6 +8,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
@@ -150,86 +151,90 @@ class Indexer;
 namespace detail {
 /// Opens trace files a caller already scanned, with the size and mtime that
 /// scan read. The first status(), build() or rebuild() of the @ref Indexer
-/// uses them without stat'ing. Later calls stat the files. Throws
-/// INVALID_ARGUMENT when `files` is empty.
-Indexer open_scanned(dstd::Vector<runtime::fs::FoundFile> files,
-                     IndexerOptions options);
+/// uses them without stat'ing. Later calls stat the files. An INVALID_ARGUMENT
+/// error when `files` is empty or an option is invalid.
+dstd::Result<Indexer> open_scanned(dstd::Vector<runtime::fs::FoundFile> files,
+                                   IndexerOptions options);
 }  // namespace detail
 
 /// Builds and inspects the index of a fixed set of traces.
 ///
 /// Copies share one state. Use an Indexer from one thread at a time; separate
 /// Indexers over the same index root are serialized by the index write lock.
-/// Failures throw @ref dftracer::utils::common::DFTUtilsException
-/// "DFTUtilsException": INVALID_ARGUMENT or NOT_FOUND from open, and the
-/// engine's I/O or compression error, naming the trace, from build.
+/// Every call that can fail returns a @ref dftracer::utils::dstd::Result:
+/// INVALID_ARGUMENT or NOT_FOUND from open, and the engine's I/O or
+/// compression error, naming the trace, from build.
 class Indexer {
    public:
     /// `paths` holds trace files and directories; a directory contributes the
     /// trace files (.pfw, .jsonl and .ndjson, plain or gzip) directly
     /// inside it. Reads nothing else and writes nothing.
-    static Indexer open(dstd::Vector<dstd::String> paths,
-                        IndexerOptions options = {});
+    /// An INVALID_ARGUMENT error for no paths or an invalid option, and
+    /// NOT_FOUND for a path that does not exist.
+    static dstd::Result<Indexer> open(dstd::Vector<dstd::String> paths,
+                                      IndexerOptions options = {});
 
     /// Which files are ready for the requested tiers. Writes nothing.
-    coro::CoroTask<IndexStatus> status(coro::Scope& scope) const;
+    coro::CoroTask<dstd::Result<IndexStatus>> status(coro::Scope& scope) const;
     /// Builds the requested tiers for files that lack them or changed since
     /// they were indexed; fresh files are left alone.
-    coro::CoroTask<IndexStatus> build(coro::Scope& scope);
+    coro::CoroTask<dstd::Result<IndexStatus>> build(coro::Scope& scope);
     /// Rebuilds the requested tiers for every file.
-    coro::CoroTask<IndexStatus> rebuild(coro::Scope& scope);
+    coro::CoroTask<dstd::Result<IndexStatus>> rebuild(coro::Scope& scope);
     /// The indexed files; files not yet indexed are omitted.
-    coro::CoroTask<dstd::Vector<IndexedFile>> files(coro::Scope& scope) const;
+    coro::CoroTask<dstd::Result<dstd::Vector<IndexedFile>>> files(
+        coro::Scope& scope) const;
     /// The manifest of every indexed file. Writes nothing.
-    coro::CoroTask<dstd::Vector<FileManifest>> manifest(
+    coro::CoroTask<dstd::Result<dstd::Vector<FileManifest>>> manifest(
         coro::Scope& scope) const;
     /// Per file, the chunks `query` reads and what each pruning extension
-    /// rules out alone. Writes nothing. Throws INVALID_ARGUMENT when the
+    /// rules out alone. Writes nothing. An INVALID_ARGUMENT error when the
     /// query does not parse.
-    coro::CoroTask<dstd::Vector<FileExplain>> explain(coro::Scope& scope,
-                                                      dstd::String query) const;
+    coro::CoroTask<dstd::Result<dstd::Vector<FileExplain>>> explain(
+        coro::Scope& scope, dstd::String query) const;
     /// Rewrites one tier extension ("zonemap", "bloom", "counts", "postings",
     /// "dft.stats", "dft.metadata" or a registered plugin extension's name)
     /// of every file, and builds files not yet indexed. Other extensions are
-    /// left as they are. Throws INVALID_ARGUMENT for another name.
-    coro::CoroTask<IndexStatus> rebuild_extension(coro::Scope& scope,
-                                                  dstd::String extension);
+    /// left as they are. An INVALID_ARGUMENT error for another name.
+    coro::CoroTask<dstd::Result<IndexStatus>> rebuild_extension(
+        coro::Scope& scope, dstd::String extension);
     /// Removes one tier extension's data and manifest entries from every
     /// indexed file; the next build makes it again only when
     /// IndexerOptions::extensions names it, or for a plugin extension while
-    /// it is registered. Throws INVALID_ARGUMENT as rebuild_extension does.
-    coro::CoroTask<IndexStatus> drop_extension(coro::Scope& scope,
-                                               dstd::String extension);
+    /// it is registered. An INVALID_ARGUMENT error as @ref rebuild_extension
+    /// gives.
+    coro::CoroTask<dstd::Result<IndexStatus>> drop_extension(
+        coro::Scope& scope, dstd::String extension);
 
     /// Blocking forms, run on IndexerOptions::runtime.
-    IndexStatus status() const;
-    IndexStatus build();
-    IndexStatus rebuild();
-    dstd::Vector<IndexedFile> files() const;
-    dstd::Vector<FileManifest> manifest() const;
-    dstd::Vector<FileExplain> explain(dstd::StringView query) const;
-    IndexStatus rebuild_extension(dstd::StringView extension);
-    IndexStatus drop_extension(dstd::StringView extension);
+    dstd::Result<IndexStatus> status() const;
+    dstd::Result<IndexStatus> build();
+    dstd::Result<IndexStatus> rebuild();
+    dstd::Result<dstd::Vector<IndexedFile>> files() const;
+    dstd::Result<dstd::Vector<FileManifest>> manifest() const;
+    dstd::Result<dstd::Vector<FileExplain>> explain(
+        dstd::StringView query) const;
+    dstd::Result<IndexStatus> rebuild_extension(dstd::StringView extension);
+    dstd::Result<IndexStatus> drop_extension(dstd::StringView extension);
     /// The rows the build stored for row set `name` of the files' source,
-    /// every indexed file's in open order. Throws @ref
-    /// dftracer::utils::common::DFTUtilsException "DFTUtilsException"
-    /// INVALID_ARGUMENT when a file's index holds no rows for it (a row set
-    /// the build does not evaluate, or an index built before it); read such
-    /// a row set with View::duql("from <name>").
-    dataframe::DataFrame rowset(dstd::String name) const;
+    /// every indexed file's in open order. An INVALID_ARGUMENT error when a
+    /// file's index holds no rows for it (a row set the build does not
+    /// evaluate, or an index built before it); read such a row set with
+    /// View::duql("from <name>").
+    dstd::Result<dataframe::DataFrame> rowset(dstd::String name) const;
 
     /// The expanded trace list, in open order.
     const dstd::Vector<dstd::String>& paths() const;
     const IndexerOptions& options() const;
 
    private:
-    friend Indexer detail::open_scanned(
+    friend dstd::Result<Indexer> detail::open_scanned(
         dstd::Vector<runtime::fs::FoundFile> files, IndexerOptions options);
     struct Impl;
     explicit Indexer(dstd::SharedPtr<Impl> impl);
-    static void validate_options(Impl& impl);
-    static Indexer finish_open(dstd::SharedPtr<Impl> impl);
-    coro::CoroTask<IndexStatus> status_of(
+    static dstd::Result<void> validate_options(Impl& impl);
+    static dstd::Result<Indexer> finish_open(dstd::SharedPtr<Impl> impl);
+    coro::CoroTask<dstd::Result<IndexStatus>> status_of(
         coro::Scope& scope, dstd::Vector<runtime::fs::FoundFile> entries) const;
     dstd::SharedPtr<Impl> impl_;
 };

@@ -128,7 +128,8 @@ coro::CoroTask<std::size_t> build_tier(dstd::String gz) {
     in.require_checkpoints = true;
     index::build::ResolverResult result;
     co_await coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-        result = co_await index::build::resolve_and_build_index(std::move(in));
+        result = common::unwrap(
+            co_await index::build::resolve_and_build_index(std::move(in)));
     });
     REQUIRE(result.failures.empty());
     co_return result.appended_count;
@@ -138,7 +139,7 @@ coro::CoroTask<index::build::ResolverResult> resolve_entries(
     index::build::ResolverInput in) {
     index::build::ResolverResult result;
     co_await coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
-        result = co_await index::build::Resolver{}(scope, in);
+        result = common::unwrap(co_await index::build::Resolver{}(scope, in));
     });
     co_return result;
 }

@@ -19,14 +19,14 @@ constexpr std::size_t CHUNK = std::size_t{1} << 20;
 constexpr std::size_t MAX_PADDING = 32;
 
 /// The end of the whole member at `offset`, its CRC checked. Nullopt when it
-/// is short or bad.
-coro::CoroTask<dstd::Optional<std::uint64_t>> whole_member_end(
+/// is short or bad. An error on a read failure.
+coro::CoroTask<dstd::Result<dstd::Optional<std::uint64_t>>> whole_member_end(
     int fd, std::uint64_t offset, std::uint64_t file_size) {
     zng_stream zs{};
     // 31: a gzip wrapper, whose trailer inflate checks.
     if (utilities::fileio::compress::open_inflate_stream(zs, 31) != Z_OK) {
-        throw common::DFTUtilsException(common::ErrorCode::Compression,
-                                        "failed to allocate inflate state");
+        co_return common::make_error(common::ErrorCode::Compression,
+                                     "failed to allocate inflate state");
     }
     struct End {
         zng_stream* zs;
@@ -41,10 +41,10 @@ coro::CoroTask<dstd::Optional<std::uint64_t>> whole_member_end(
         const ssize_t got =
             co_await runtime::io::pread(fd, in.get(), want, pos);
         if (got < 0) {
-            throw common::DFTUtilsException(common::ErrorCode::Io,
-                                            "cannot read a trace member");
+            co_return common::make_error(common::ErrorCode::Io,
+                                         "cannot read a trace member");
         }
-        if (got == 0) co_return dstd::nullopt;
+        if (got == 0) co_return dstd::Optional<std::uint64_t>{};
         pos += static_cast<std::uint64_t>(got);
         zs.next_in = in.get();
         zs.avail_in = static_cast<std::uint32_t>(got);
@@ -52,20 +52,23 @@ coro::CoroTask<dstd::Optional<std::uint64_t>> whole_member_end(
             zs.next_out = out.get();
             zs.avail_out = static_cast<std::uint32_t>(CHUNK);
             const int rc = zng_inflate(&zs, Z_NO_FLUSH);
-            if (rc == Z_STREAM_END) co_return pos - zs.avail_in;
-            if (rc != Z_OK && rc != Z_BUF_ERROR) co_return dstd::nullopt;
+            if (rc == Z_STREAM_END)
+                co_return dstd::Optional<std::uint64_t>(pos - zs.avail_in);
+            if (rc != Z_OK && rc != Z_BUF_ERROR)
+                co_return dstd::Optional<std::uint64_t>{};
         } while (zs.avail_in > 0 || zs.avail_out == 0);
     }
-    co_return dstd::nullopt;
+    co_return dstd::Optional<std::uint64_t>{};
 }
 
-coro::CoroTask<std::uint32_t> read_isize(int fd, std::uint64_t member_end) {
+coro::CoroTask<dstd::Result<std::uint32_t>> read_isize(
+    int fd, std::uint64_t member_end) {
     unsigned char tail[4] = {0, 0, 0, 0};
     const ssize_t got =
         co_await runtime::io::pread(fd, tail, sizeof tail, member_end - 4);
     if (got != 4) {
-        throw common::DFTUtilsException(common::ErrorCode::Io,
-                                        "cannot read a member trailer");
+        co_return common::make_error(common::ErrorCode::Io,
+                                     "cannot read a member trailer");
     }
     co_return dstd::read_u32_le(tail);
 }
@@ -87,16 +90,20 @@ coro::CoroTask<std::uint64_t> skip_padding(int fd, std::uint64_t offset,
         : offset + zeros;
 }
 
-coro::CoroTask<NewMembers> walk_members(int fd, std::uint64_t from,
-                                        std::uint64_t file_size) {
+coro::CoroTask<dstd::Result<NewMembers>> walk_members(int fd,
+                                                      std::uint64_t from,
+                                                      std::uint64_t file_size) {
     NewMembers found;
     found.c_end = from;
     std::uint64_t at = from;
     while (at < file_size) {
-        const dstd::Optional<std::uint64_t> end =
-            co_await whole_member_end(fd, at, file_size);
+        const auto walked = co_await whole_member_end(fd, at, file_size);
+        if (!walked) co_return walked.error();
+        const dstd::Optional<std::uint64_t> end = *walked;
         if (!end) break;
-        const std::uint32_t isize = co_await read_isize(fd, *end);
+        const auto size = co_await read_isize(fd, *end);
+        if (!size) co_return size.error();
+        const std::uint32_t isize = *size;
         found.members.push_back({at, *end - at, isize});
         found.c_end = *end;
         at = co_await skip_padding(fd, *end, file_size);
@@ -106,9 +113,8 @@ coro::CoroTask<NewMembers> walk_members(int fd, std::uint64_t from,
 
 }  // namespace
 
-coro::CoroTask<NewMembers> find_new_members(int fd, std::uint64_t from,
-                                            std::uint64_t file_size,
-                                            bool walk) {
+coro::CoroTask<dstd::Result<NewMembers>> find_new_members(
+    int fd, std::uint64_t from, std::uint64_t file_size, bool walk) {
     if (walk) co_return co_await walk_members(fd, from, file_size);
 
     NewMembers found;
@@ -120,11 +126,15 @@ coro::CoroTask<NewMembers> find_new_members(int fd, std::uint64_t from,
     }
     while (!found.members.empty()) {
         gzip::GzipMember& last = found.members.back();
-        const dstd::Optional<std::uint64_t> end =
+        const auto proven =
             co_await whole_member_end(fd, last.c_offset, file_size);
+        if (!proven) co_return proven.error();
+        const dstd::Optional<std::uint64_t> end = *proven;
         if (end) {
             last.c_size = *end - last.c_offset;
-            last.isize = co_await read_isize(fd, *end);
+            const auto size = co_await read_isize(fd, *end);
+            if (!size) co_return size.error();
+            last.isize = *size;
             found.c_end = *end;
             co_return found;
         }
@@ -137,19 +147,21 @@ coro::CoroTask<NewMembers> find_new_members(int fd, std::uint64_t from,
     co_return found;
 }
 
-coro::CoroTask<dstd::Optional<std::uint64_t>> find_member_after_hole(
-    int fd, std::uint64_t from, std::uint64_t file_size) {
+coro::CoroTask<dstd::Result<dstd::Optional<std::uint64_t>>>
+find_member_after_hole(int fd, std::uint64_t from, std::uint64_t file_size) {
     dstd::Vector<gzip::GzipMember> candidates;
     const bool scanned = co_await gzip::enumerate_gzip_member_candidates(
         fd, file_size, candidates, from);
     if (!scanned || candidates.empty() || candidates.front().c_offset == from)
-        co_return dstd::nullopt;
+        co_return dstd::Optional<std::uint64_t>{};
     for (const gzip::GzipMember& candidate : candidates) {
-        const dstd::Optional<std::uint64_t> end =
+        const auto proven =
             co_await whole_member_end(fd, candidate.c_offset, file_size);
-        if (end) co_return candidate.c_offset;
+        if (!proven) co_return proven.error();
+        if (*proven)
+            co_return dstd::Optional<std::uint64_t>(candidate.c_offset);
     }
-    co_return dstd::nullopt;
+    co_return dstd::Optional<std::uint64_t>{};
 }
 
 }  // namespace dftracer::utils::index::build

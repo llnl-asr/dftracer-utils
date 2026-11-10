@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/aggregation_run.h>
@@ -27,7 +28,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <stdexcept>
 #include <system_error>
 
 namespace dftracer::utils::index::build {
@@ -38,7 +38,7 @@ namespace {
 // members, hash tables and aggregation as they are. `tier` holds the union of
 // the files' stale extensions; rewriting a current one is correct, only
 // slower.
-coro::CoroTask<dstd::Vector<ResolverResult::Failure>> build_tier(
+coro::CoroTask<dstd::Result<dstd::Vector<ResolverResult::Failure>>> build_tier(
     dstd::Vector<dstd::String> files, const ResolveAndBuildInput& input,
     index::store::ExtensionMask tier, const dstd::String& schema,
     std::size_t parallelism) {
@@ -63,11 +63,14 @@ coro::CoroTask<dstd::Vector<ResolverResult::Failure>> build_tier(
 }
 
 // Aggregates files whose members are current, leaving every other extension.
-coro::CoroTask<dstd::Vector<ResolverResult::Failure>> build_aggregation(
-    dstd::Vector<dstd::String> files, const ResolveAndBuildInput& input,
-    const dstd::String& index_path, const dstd::String& schema,
-    std::size_t parallelism) {
-    AggRun run = start_aggregation(index_path, input.aggregation_config);
+coro::CoroTask<dstd::Result<dstd::Vector<ResolverResult::Failure>>>
+build_aggregation(dstd::Vector<dstd::String> files,
+                  const ResolveAndBuildInput& input,
+                  const dstd::String& index_path, const dstd::String& schema,
+                  std::size_t parallelism) {
+    auto started = start_aggregation(index_path, input.aggregation_config);
+    if (!started) co_return started.error();
+    AggRun run = std::move(*started);
     auto config = dstd::make_shared<IndexBuildBatchConfig>();
     config->file_paths = std::move(files);
     config->index_dir = input.index_dir;
@@ -80,7 +83,8 @@ coro::CoroTask<dstd::Vector<ResolverResult::Failure>> build_aggregation(
     config->agg_fold_factory = std::move(run.factory);
     DFTRACER_UTILS_LOG_INFO("Aggregating {} files", config->file_paths.size());
     auto batch = co_await BatchBuilder::process(std::move(config));
-    finish_aggregation(run, batch);
+    auto finished = finish_aggregation(run, batch);
+    if (!finished) co_return finished.error();
     dstd::Vector<ResolverResult::Failure> failures;
     for (const auto& r : batch.results)
         if (!r.success && !r.was_skipped)
@@ -88,7 +92,7 @@ coro::CoroTask<dstd::Vector<ResolverResult::Failure>> build_aggregation(
     co_return failures;
 }
 
-coro::CoroTask<ResolverResult> resolve_and_build_once(
+coro::CoroTask<dstd::Result<ResolverResult>> resolve_and_build_once(
     ResolveAndBuildInput input) {
     std::size_t parallelism = input.parallelism;
     if (parallelism == 0) parallelism = default_runtime().threads();
@@ -108,7 +112,9 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
         field = extra_dimension_name(field);
     if (input.build_bloom) resolve_input.bloom_config = input.bloom_config;
 
-    auto result = co_await resolver(std::move(resolve_input));
+    auto resolved = co_await resolver(std::move(resolve_input));
+    if (!resolved) co_return resolved.error();
+    ResolverResult result = std::move(*resolved);
     if (result.all_files.empty()) {
         co_return result;
     }
@@ -123,10 +129,14 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
                 trace::internal::determine_index_path(file, input.index_dir);
             const dstd::String store_path = index::store_dir(root);
             auto checking = runtime::fs::exists(dstd::PathView(store_path));
-            const bool has_store = common::unwrap(co_await std::move(checking));
-            if (has_store) stale_tiers.insert(std::move(root));
+            auto has_store = co_await std::move(checking);
+            if (!has_store.has_value()) co_return has_store.error();
+            if (*has_store) stale_tiers.insert(std::move(root));
         }
-    for (const auto& root : stale_tiers) clear_aggregation(root);
+    for (const auto& root : stale_tiers) {
+        auto cleared = clear_aggregation(root);
+        if (!cleared) co_return cleared.error();
+    }
 
     dstd::Vector<dstd::String> files_needing_work;
     if (input.force_rebuild) {
@@ -159,7 +169,8 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
             auto failures =
                 co_await build_tier(std::move(group.first), input, group.second,
                                     schema, parallelism);
-            for (auto& f : failures) result.failures.push_back(std::move(f));
+            if (!failures) co_return failures.error();
+            for (auto& f : *failures) result.failures.push_back(std::move(f));
         }
 
         dstd::Map<dstd::String, dstd::Vector<dstd::String>> agg_by_schema;
@@ -169,7 +180,8 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
             auto failures = co_await build_aggregation(std::move(files), input,
                                                        result.index_path,
                                                        schema, parallelism);
-            for (auto& f : failures) result.failures.push_back(std::move(f));
+            if (!failures) co_return failures.error();
+            for (auto& f : *failures) result.failures.push_back(std::move(f));
         }
     }
 
@@ -193,8 +205,10 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
             index::store_dir(result.index_path);
         auto checking_store =
             runtime::fs::exists(dstd::PathView(result_store_path));
-        const bool has_result_store =
-            common::unwrap(co_await std::move(checking_store));
+        auto has_result_store_checked = co_await std::move(checking_store);
+        if (!has_result_store_checked.has_value())
+            co_return has_result_store_checked.error();
+        const bool has_result_store = *has_result_store_checked;
         if (!has_result_store && common::should_stage(result.index_path)) {
             dstd::HashSet<dstd::String> roots;
             for (const auto& f : files_needing_work)
@@ -216,8 +230,10 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
         }
         const bool staging = scratch && scratch->valid();
 
-        dstd::Optional<AggRun> agg_run{
-            start_aggregation(build_index_path, input.aggregation_config)};
+        auto started =
+            start_aggregation(build_index_path, input.aggregation_config);
+        if (!started) co_return started.error();
+        dstd::Optional<AggRun> agg_run{std::move(*started)};
 
         auto agg_factory = std::move(agg_run->factory);
         const auto make_batch_config = [&]() {
@@ -287,7 +303,8 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
             if (r.was_appended) ++result.appended_count;
         }
 
-        finish_aggregation(*agg_run, batch_result);
+        auto finished = finish_aggregation(*agg_run, batch_result);
+        if (!finished) co_return finished.error();
 
         // Publish once every handle to the staged store is closed, so the
         // re-resolve below reads the destination.
@@ -295,9 +312,10 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
             agg_run.reset();
             index::release_root(build_index_path);
             index::release_root(staged_final_path);
-            common::unwrap(common::publish_path(
+            auto published = common::publish_path(
                 dstd::PathView(index::store_dir(build_index_path)),
-                dstd::PathView(index::store_dir(staged_final_path))));
+                dstd::PathView(index::store_dir(staged_final_path)));
+            if (!published) co_return published.error();
         }
 
         // Refresh_input queries the index for the files just indexed.
@@ -309,14 +327,14 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
         refresh_input.tail_is_current = true;
 
         if (!refresh_input.entries.empty()) {
-            auto refresh_result = co_await resolver(refresh_input);
+            auto refreshed = co_await resolver(refresh_input);
+            if (!refreshed) co_return refreshed.error();
 
-            for (auto& entry : refresh_result.cached) {
+            for (auto& entry : refreshed->cached) {
                 result.cached.push_back(std::move(entry));
             }
 
-            result.needs_checkpoint =
-                std::move(refresh_result.needs_checkpoint);
+            result.needs_checkpoint = std::move(refreshed->needs_checkpoint);
         }
 
         result.needs_aggregation.clear();
@@ -332,9 +350,12 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
 
 }  // namespace
 
-coro::CoroTask<IndexWork> files_needing_index(ResolverInput input) {
+coro::CoroTask<dstd::Result<IndexWork>> files_needing_index(
+    ResolverInput input) {
     Resolver resolver;
-    auto result = co_await resolver(std::move(input));
+    auto resolved = co_await resolver(std::move(input));
+    if (!resolved) co_return resolved.error();
+    auto& result = *resolved;
     dstd::Vector<FileWorkItem> items;
     dstd::HashSet<std::size_t> seen;
     for (const auto* group : {&result.needs_checkpoint, &result.needs_bloom,
@@ -347,27 +368,30 @@ coro::CoroTask<IndexWork> files_needing_index(ResolverInput input) {
     co_return work;
 }
 
-coro::CoroTask<void> ensure_indexes_fresh(dstd::String directory,
-                                          dstd::Vector<dstd::String> files,
-                                          dstd::String index_dir,
-                                          bool force_rebuild) {
+coro::CoroTask<dstd::Result<void>> ensure_indexes_fresh(
+    dstd::String directory, dstd::Vector<dstd::String> files,
+    dstd::String index_dir, bool force_rebuild) {
     ResolveAndBuildInput in;
     in.directory = std::move(directory);
     in.files = std::move(files);
     in.index_dir = std::move(index_dir);
     in.require_checkpoints = true;
     in.force_rebuild = force_rebuild;
-    co_await resolve_and_build_index(std::move(in));
+    auto built = co_await resolve_and_build_index(std::move(in));
+    if (!built) co_return built.error();
+    co_return dstd::Result<void>{};
 }
 
-coro::CoroTask<void> ensure_index_fresh(dstd::String directory,
-                                        dstd::String file,
-                                        dstd::String index_dir,
-                                        bool force_rebuild) {
+coro::CoroTask<dstd::Result<void>> ensure_index_fresh(dstd::String directory,
+                                                      dstd::String file,
+                                                      dstd::String index_dir,
+                                                      bool force_rebuild) {
     dstd::Vector<dstd::String> files;
     if (!file.empty()) files.push_back(std::move(file));
-    co_await ensure_indexes_fresh(std::move(directory), std::move(files),
-                                  std::move(index_dir), force_rebuild);
+    auto fresh =
+        co_await ensure_indexes_fresh(std::move(directory), std::move(files),
+                                      std::move(index_dir), force_rebuild);
+    co_return fresh;
 }
 
 namespace {
@@ -376,19 +400,12 @@ bool mentions_corruption(dstd::StringView text) {
     return text.find("is corrupt") != dstd::StringView::npos;
 }
 
-[[noreturn]] void throw_corrupt(const dstd::Set<dstd::String>& roots,
-                                const dstd::String& cause, bool tier_cleared,
-                                common::ErrorCode code) {
-    throw common::DFTUtilsException(
-        code, corrupt_index_message(roots, cause, tier_cleared));
-}
-
 }  // namespace
 
 // A corrupt aggregation tier holds only data derived from the traces, so the
 // build clears it and aggregates again, once. Corruption that persists reaches
 // the caller with the index directories named. Any other error is passed on.
-coro::CoroTask<ResolverResult> resolve_and_build_index(
+coro::CoroTask<dstd::Result<ResolverResult>> resolve_and_build_index(
     ResolveAndBuildInput input) {
     dstd::Set<dstd::String> roots;
     for (const auto& file : input.files)
@@ -397,36 +414,33 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
     for (const auto& entry : input.entries)
         roots.insert(
             trace::internal::determine_index_path(entry.path, input.index_dir));
-    dstd::String failure;
-    try {
-        co_return co_await resolve_and_build_once(input);
-    } catch (const std::exception& e) {
-        if (!mentions_corruption(e.what())) throw;
-        failure = e.what();
-    }
+    auto first = co_await resolve_and_build_once(input);
+    if (first) co_return std::move(first);
+    if (!mentions_corruption(first.error().message())) co_return first.error();
     DFTRACER_UTILS_LOG_WARN(
         "the aggregation tier of {} index(es) is corrupt ({}); clearing it and "
         "aggregating again",
-        roots.size(), failure);
+        roots.size(), first.error().message());
     for (const auto& root : roots) {
         const dstd::String store_path = index::store_dir(root);
         auto checking = runtime::fs::exists(dstd::PathView(store_path));
-        const bool has_store = common::unwrap(co_await std::move(checking));
-        if (has_store) {
+        auto has_store = co_await std::move(checking);
+        if (!has_store.has_value()) co_return has_store.error();
+        if (*has_store) {
             index::release_root(root);
-            auto target = common::unwrap(
-                index::Index::open(index::normalize_index_root(root)));
-            index::schemas::dft::agg::tier::clear(target);
+            auto target = index::Index::open(index::normalize_index_root(root));
+            if (!target) co_return target.error();
+            auto cleared = index::schemas::dft::agg::tier::clear(*target);
+            if (!cleared) co_return cleared.error();
         }
     }
-    dstd::String retry_failure;
-    try {
-        co_return co_await resolve_and_build_once(std::move(input));
-    } catch (const std::exception& e) {
-        if (!mentions_corruption(e.what())) throw;
-        retry_failure = e.what();
-    }
-    throw_corrupt(roots, retry_failure, true, common::ErrorCode::Aggregation);
+    auto retry = co_await resolve_and_build_once(std::move(input));
+    if (retry) co_return std::move(retry);
+    if (!mentions_corruption(retry.error().message())) co_return retry.error();
+    co_return common::make_error(
+        common::ErrorCode::Aggregation,
+        corrupt_index_message(roots, dstd::String(retry.error().message()),
+                              true));
 }
 
 }  // namespace dftracer::utils::index::build

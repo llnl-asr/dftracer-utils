@@ -105,8 +105,9 @@ dstd::Vector<index::gzip::GzipMemberRecord> index_of(const dstd::String& path) {
     dstd::Optional<index::gzip::GzipBuildArtifacts> arts;
     dftu_utils_test::run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
         index::gzip::CheckpointIndexer::VisitorList none;
-        arts = co_await index::gzip::build_gzip_index_artifacts(
+        auto built = co_await index::gzip::build_gzip_index_artifacts(
             path_std, 32u << 20, none, &scope);
+        if (built) arts = std::move(*built);
     });
     REQUIRE(arts.has_value());
     return dstd::Vector<index::gzip::GzipMemberRecord>(arts->members.begin(),

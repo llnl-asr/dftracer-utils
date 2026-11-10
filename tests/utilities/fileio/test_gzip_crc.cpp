@@ -197,9 +197,10 @@ PathResult indexer_stream(const dstd::String& path) {
     dstd::Optional<index::gzip::GzipBuildArtifacts> art;
     dftu_utils_test::run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
         CrcWindow window;
-        art = co_await index::gzip::build_gzip_index_artifacts(
+        auto built = co_await index::gzip::build_gzip_index_artifacts(
             dstd::String(path), CKPT,
             index::gzip::CheckpointIndexer::VisitorList{}, &scope);
+        if (built) art = std::move(*built);
     });
     // A corrupt member ends the build at that member, short of the full text.
     if (!art || art->total_uc_size != FULL_TEXT_SIZE) return dstd::nullopt;

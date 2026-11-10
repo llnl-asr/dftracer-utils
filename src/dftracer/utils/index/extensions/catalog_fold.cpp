@@ -30,7 +30,8 @@ void add_path_stat(dstd::HashMap<dstd::String, index::store::PathStat>& paths,
     pos->second.count += stat.count;
 }
 
-void CatalogFold::step(const trace::views::detail::FoldBatch& batch) {
+dstd::Result<void> CatalogFold::step(
+    const trace::views::detail::FoldBatch& batch) {
     const dstd::StringView file = batch.unit.file_path;
     auto it = files_.find(file);
     if (it == files_.end()) it = files_.try_emplace(dstd::String(file)).first;
@@ -42,6 +43,7 @@ void CatalogFold::step(const trace::views::detail::FoldBatch& batch) {
         for (const auto& [leaf_id, tag] : e.schema_leaves)
             observe_catalog_path(fs.paths[leaf_id], tag);
     }
+    return {};
 }
 
 void CatalogFold::merge(trace::views::detail::Fold& slice) {
@@ -79,26 +81,31 @@ coro::CoroTask<bool> CatalogFold::finalize(
 
         const dstd::String logical =
             index::store::internal::get_logical_path(file);
-        try {
-            auto at = snapshots.find(dstd::StringView(fs.index_path));
-            if (at == snapshots.end()) {
-                const auto opened = common::unwrap(index::Index::open(
-                    index::normalize_index_root(fs.index_path)));
-                at = snapshots
-                         .emplace(dstd::String(fs.index_path),
-                                  common::unwrap(opened.snapshot()))
-                         .first;
-            }
-            const index::Snapshot& snapshot = at->second;
-            const auto ref = snapshot.file(logical);
-            if (!ref || index::extension_current(snapshot, *ref,
-                                                 IndexExtension::Catalog))
+        auto at = snapshots.find(dstd::StringView(fs.index_path));
+        if (at == snapshots.end()) {
+            const auto checked =
+                index::Index::open(index::normalize_index_root(fs.index_path));
+            if (!checked) {
+                DFTRACER_UTILS_LOG_WARN("catalog check failed for {}: {}",
+                                        fs.index_path,
+                                        checked.error().format());
                 continue;
-        } catch (const std::exception& e) {
-            DFTRACER_UTILS_LOG_WARN("catalog check failed for {}: {}",
-                                    fs.index_path, e.what());
-            continue;
+            }
+            auto taken = checked->snapshot();
+            if (!taken) {
+                DFTRACER_UTILS_LOG_WARN("catalog check failed for {}: {}",
+                                        fs.index_path, taken.error().format());
+                continue;
+            }
+            at = snapshots
+                     .emplace(dstd::String(fs.index_path), std::move(*taken))
+                     .first;
         }
+        const index::Snapshot& snapshot = at->second;
+        const auto ref = snapshot.file(logical);
+        if (!ref ||
+            index::extension_current(snapshot, *ref, IndexExtension::Catalog))
+            continue;
 
         auto opened =
             index::Index::open(index::normalize_index_root(fs.index_path));

@@ -127,10 +127,10 @@ TEST_SUITE("Schemas") {
         dftu_utils_test::TestEnvironment env(10);
         const auto trace = write_ndjson(env.dir(), 4000);
         const auto dir = env.dir() + "/idx";
-        auto ix = index::Indexer::open({dstd::String(dstd::StringView(trace))},
-                                       options(dir));
-        CHECK(ix.build().indexed == 1);
-        const auto files = ix.files();
+        auto ix = dftu_utils_test::ok(index::Indexer::open(
+            {dstd::String(dstd::StringView(trace))}, options(dir)));
+        CHECK(dftu_utils_test::ok(ix.build()).indexed == 1);
+        const auto files = dftu_utils_test::ok(ix.files());
         REQUIRE(files.size() == 1);
         CHECK(files[0].schema == "generic");
 
@@ -174,7 +174,8 @@ TEST_SUITE("Schemas") {
             CHECK(full > 0);
             CHECK(count_rows(trace, dir, q, false) == full);
         }
-        const auto explained = ix.explain(R"(op == "read")");
+        const auto explained =
+            dftu_utils_test::ok(ix.explain(R"(op == "read")"));
         REQUIRE(explained.size() == 1);
         CHECK(explained[0].read.size() < explained[0].chunks);
     }
@@ -183,26 +184,34 @@ TEST_SUITE("Schemas") {
         dftu_utils_test::TestEnvironment env(10);
         const auto trace = env.create_dft_test_gzip_file(200);
         const auto dir = env.dir() + "/idx";
-        index::Indexer::open({dstd::String(dstd::StringView(trace))},
-                             options(dir))
-            .build();
-        CHECK(index::Indexer::open({dstd::String(dstd::StringView(trace))},
-                                   options(dir))
-                  .files()[0]
-                  .schema == "dftracer");
-        auto forced = index::Indexer::open(
-            {dstd::String(dstd::StringView(trace))}, options(dir, "generic"));
-        CHECK(forced.status().needs_work.size() == 1);
-        CHECK(forced.build().indexed == 1);
-        CHECK(forced.files()[0].schema == "generic");
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(
+                index::Indexer::open({dstd::String(dstd::StringView(trace))},
+                                     options(dir)))
+                .build());
+        CHECK(
+            dftu_utils_test::ok(
+                dftu_utils_test::ok(
+                    index::Indexer::open(
+                        {dstd::String(dstd::StringView(trace))}, options(dir)))
+                    .files())[0]
+                .schema == "dftracer");
+        auto forced = dftu_utils_test::ok(index::Indexer::open(
+            {dstd::String(dstd::StringView(trace))}, options(dir, "generic")));
+        CHECK(dftu_utils_test::ok(forced.status()).needs_work.size() == 1);
+        CHECK(dftu_utils_test::ok(forced.build()).indexed == 1);
+        CHECK(dftu_utils_test::ok(forced.files())[0].schema == "generic");
         // Detection accepts the recorded schema rather than rebuilding.
-        CHECK(index::Indexer::open({dstd::String(dstd::StringView(trace))},
-                                   options(dir))
-                  .status()
-                  .needs_work.empty());
-        CHECK_THROWS_AS(
+        CHECK(
+            dftu_utils_test::ok(
+                dftu_utils_test::ok(
+                    index::Indexer::open(
+                        {dstd::String(dstd::StringView(trace))}, options(dir)))
+                    .status())
+                .needs_work.empty());
+        dftu_utils_test::expect_error(
             index::Indexer::open({dstd::String(dstd::StringView(trace))},
                                  options(dir, "nope")),
-            common::DFTUtilsException);
+            common::ErrorCode::InvalidArgument);
     }
 }

@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
@@ -58,7 +59,8 @@ dstd::String capture_path(const dstd::String& dim) { return "args." + dim; }
 BloomFold::BloomFold(dftracer::utils::dstd::StringIntern& intern,
                      index::schemas::dft::BloomCore::ChunkIndexerConfig config)
     : intern_(&intern), config_(std::move(config)) {
-    config_.validate();
+    if (!config_.validate())
+        dstd::fatal("BloomFold: the config was not validated");
     extra_keys_.reserve(config_.extra_dimensions.size());
     for (const dstd::String& dim : config_.extra_dimensions)
         extra_keys_.push_back(intern_->get_or_insert(
@@ -336,16 +338,19 @@ void BloomFold::write_pending(index::FileBuild& build, FileState& fs) {
     sp.pending.clear();
 }
 
-void BloomFold::write_file(index::FileBuild& build, dstd::CStringView file,
-                           FileState& fs) {
+dstd::Result<void> BloomFold::write_file(index::FileBuild& build,
+                                         dstd::CStringView file,
+                                         FileState& fs) {
     auto& sp = fs.spill;
     AutoKeys continued;
     if (continue_snapshot_ != nullptr) {
         sp.next = std::max(sp.next, continue_next_);
         if (!sp.acc) sp.acc.emplace(config_);
         // Before write_pending: a run's chunks merge into the seeded records.
-        for (const dstd::String& dim : BV::seed_accumulator(
-                 *continue_snapshot_, *continue_file_, config_, *sp.acc))
+        const auto seeded = BV::seed_accumulator(
+            *continue_snapshot_, *continue_file_, config_, *sp.acc);
+        if (!seeded) return seeded.error();
+        for (const dstd::String& dim : *seeded)
             continued.push_back({dim, intern_->get_or_insert(dim), false});
     }
     write_pending(build, fs);
@@ -388,8 +393,10 @@ void BloomFold::write_file(index::FileBuild& build, dstd::CStringView file,
     fs.auto_chunks.clear();
     auto merged = catalog(fs);
     if (continue_snapshot_ != nullptr) {
-        const auto old = common::unwrap(
-            index::catalog(*continue_snapshot_, *continue_file_));
+        const auto stored =
+            index::catalog(*continue_snapshot_, *continue_file_);
+        if (!stored) return stored.error();
+        const auto& old = *stored;
         for (auto& [path, stat] : merged) {
             const auto known = std::lower_bound(
                 old.begin(), old.end(), path,
@@ -404,6 +411,7 @@ void BloomFold::write_file(index::FileBuild& build, dstd::CStringView file,
         }
     }
     BV::finish_file(build, *sp.acc, config_, dims, merged);
+    return {};
 }
 
 std::uint64_t BloomFold::resident_bytes(const FileState& fs,
@@ -530,8 +538,10 @@ dstd::Vector<dstd::String> BloomFold::extra_captures() const {
     return out;
 }
 
-void BloomFold::step(const trace::views::detail::FoldBatch& batch) {
+dstd::Result<void> BloomFold::step(
+    const trace::views::detail::FoldBatch& batch) {
     observe(open(batch), batch);
+    return {};
 }
 
 BloomFold::Lane BloomFold::open(const trace::views::detail::FoldBatch& batch) {
@@ -709,27 +719,31 @@ coro::CoroTask<bool> BloomFold::finalize(
 
         const dstd::String logical =
             index::store::internal::get_logical_path(file);
-        try {
-            auto at = snapshots.find(dstd::StringView(fs.index_path));
-            if (at == snapshots.end()) {
-                const auto opened = common::unwrap(index::Index::open(
-                    index::normalize_index_root(fs.index_path)));
-                at = snapshots
-                         .emplace(dstd::String(fs.index_path),
-                                  common::unwrap(opened.snapshot()))
-                         .first;
-            }
-            const index::Snapshot& snapshot = at->second;
-            const auto ref = snapshot.file(logical);
-            if (!ref ||
-                index::extension_current(snapshot, *ref,
-                                         index::store::IndexExtension::Stats))
+        auto at = snapshots.find(dstd::StringView(fs.index_path));
+        if (at == snapshots.end()) {
+            const auto checked =
+                index::Index::open(index::normalize_index_root(fs.index_path));
+            if (!checked) {
+                DFTRACER_UTILS_LOG_WARN("bloom delta check failed for {}: {}",
+                                        fs.index_path,
+                                        checked.error().format());
                 continue;
-        } catch (const std::exception& e) {
-            DFTRACER_UTILS_LOG_WARN("bloom delta check failed for {}: {}",
-                                    fs.index_path, e.what());
-            continue;
+            }
+            auto taken = checked->snapshot();
+            if (!taken) {
+                DFTRACER_UTILS_LOG_WARN("bloom delta check failed for {}: {}",
+                                        fs.index_path, taken.error().format());
+                continue;
+            }
+            at = snapshots
+                     .emplace(dstd::String(fs.index_path), std::move(*taken))
+                     .first;
         }
+        const index::Snapshot& snapshot = at->second;
+        const auto ref = snapshot.file(logical);
+        if (!ref || index::extension_current(
+                        snapshot, *ref, index::store::IndexExtension::Stats))
+            continue;
 
         // A locked or read-only index persists nothing rather than failing the
         // query.
@@ -741,11 +755,8 @@ coro::CoroTask<bool> BloomFold::finalize(
                                dstd::Unexpected<dstd::Error>(opened.error()));
         dstd::String failure;
         if (build) {
-            try {
-                write_file(*build, file, fs);
-            } catch (const std::exception& e) {
-                failure = e.what();
-            }
+            const auto written = write_file(*build, file, fs);
+            if (!written) failure = dstd::String(written.error().message());
         } else {
             failure = dstd::String(build.error().message());
         }
@@ -764,11 +775,11 @@ coro::CoroTask<bool> BloomFold::finalize(
     co_return wrote;
 }
 
-void BloomFold::write(index::FileBuild& build) {
-    if (files_.empty()) return;
+dstd::Result<void> BloomFold::write(index::FileBuild& build) {
+    if (files_.empty()) return {};
     FileState& fs = files_.begin()->second;
-    if (fs.chunks.empty() && fs.spill.next == 0) return;
-    write_file(build, files_.begin()->first, fs);
+    if (fs.chunks.empty() && fs.spill.next == 0) return {};
+    return write_file(build, files_.begin()->first, fs);
 }
 
 }  // namespace dftracer::utils::index::extensions

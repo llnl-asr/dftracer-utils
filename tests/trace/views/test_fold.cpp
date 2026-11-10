@@ -54,11 +54,12 @@ struct CountingFold : Fold {
     dstd::UniquePtr<Fold> slice() const override {
         return dstd::make_unique<CountingFold>();
     }
-    void step(const FoldBatch& b) override {
+    dstd::Result<void> step(const FoldBatch& b) override {
         for (const auto& e : b.events) {
             ++count;
             ts_sum += e.ts;
         }
+        return {};
     }
     void seal_unit(const ScanUnit&) override { ++sealed_units; }
     void drop_unit(const ScanUnit&) override {}
@@ -252,7 +253,7 @@ TEST_SUITE("Fold") {
             dstd::UniquePtr<Fold> slice() const override {
                 return dstd::make_unique<DictProbe>(*in);
             }
-            void step(const FoldBatch& b) override {
+            dstd::Result<void> step(const FoldBatch& b) override {
                 for (const auto& e : b.events) {
                     if (e.phase !=
                         dftracer::utils::trace::RecordPhase::Metadata)
@@ -270,6 +271,7 @@ TEST_SUITE("Fold") {
                     }
                     if (!name.empty()) got[type] = {name, value};
                 }
+                return {};
             }
             void seal_unit(const ScanUnit&) override {}
             void drop_unit(const ScanUnit&) override {}

@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/index/extensions/bloom_filter.h>
 #include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 using namespace dftracer::utils;
 
@@ -78,8 +80,8 @@ TEST_SUITE("ScalableBloomFilter") {
         }
 
         auto blob = bf.serialize();
-        auto restored =
-            ScalableBloomFilter::from_blob(blob.data(), blob.size());
+        auto restored = dftu_utils_test::ok(
+            ScalableBloomFilter::from_blob(blob.data(), blob.size()));
 
         CHECK(restored.level_count() == bf.level_count());
         CHECK(restored.entry_count() == bf.entry_count());
@@ -92,7 +94,10 @@ TEST_SUITE("ScalableBloomFilter") {
         BloomFilter bare(128, 0.01);
         bare.add("alpha");
         const auto blob = bare.serialize();
-        CHECK_THROWS(ScalableBloomFilter::from_blob(blob.data(), blob.size()));
+        const auto loaded =
+            ScalableBloomFilter::from_blob(blob.data(), blob.size());
+        REQUIRE_FALSE(loaded.has_value());
+        CHECK(loaded.error().is_code(common::ErrorCode::Parse));
     }
 
     TEST_CASE("A chain grows the same after a reload") {
@@ -104,7 +109,8 @@ TEST_SUITE("ScalableBloomFilter") {
         const std::size_t bytes = file.size_bytes();
         for (int round = 0; round < 50; ++round) {
             const auto blob = file.serialize();
-            file = ScalableBloomFilter::from_blob(blob.data(), blob.size());
+            file = dftu_utils_test::ok(
+                ScalableBloomFilter::from_blob(blob.data(), blob.size()));
             file.merge_from(chunk);
         }
         CHECK(file.level_count() == levels);
@@ -112,7 +118,8 @@ TEST_SUITE("ScalableBloomFilter") {
         CHECK(file.possibly_contains("seed"));
 
         const auto blob = file.serialize();
-        auto loaded = ScalableBloomFilter::from_blob(blob.data(), blob.size());
+        auto loaded = dftu_utils_test::ok(
+            ScalableBloomFilter::from_blob(blob.data(), blob.size()));
         ScalableBloomFilter direct(1024, 0.01);
         direct.add("seed");
         for (std::size_t i = 0; i < 5000; ++i) {

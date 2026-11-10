@@ -211,9 +211,10 @@ TEST_SUITE("View") {
         const int n = 60;  // ~10 members at 512 bytes
         dstd::String gz = create_multimember_trace(env, n, 512);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
-        dftracer::utils::index::Indexer::open(
-            {dstd::String(dstd::StringView(gz))})
-            .build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+                                    {dstd::String(dstd::StringView(gz))}))
+                .build());
 
         StringSink sink;
         auto stats = dftu_utils_test::ok(
@@ -935,8 +936,10 @@ View dict_trace(TestEnvironment& env) {
     const dstd::String gz = pfw + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
     dstd::fs::remove(pfw).has_value();
-    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
-        .build();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+                                {dstd::String(dstd::StringView(gz))}))
+            .build());
     return View::from_file(
         dstd::String(gz),
         dstd::String(dstd::String(determine_index_path(gz, ""))));

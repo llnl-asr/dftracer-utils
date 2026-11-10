@@ -180,7 +180,8 @@ coro::CoroTask<void> resolve_and_build(const ComparisonConfig& config,
     input.force_rebuild = config.force_rebuild;
     input.build_bloom = false;
 
-    auto result = co_await resolve_and_build_index(std::move(input));
+    auto result =
+        common::unwrap(co_await resolve_and_build_index(std::move(input)));
     out_files.clear();
     for (const auto& f : result.all_files)
         out_files.emplace_back(f.data(), f.size());

@@ -13,6 +13,7 @@
 #include <dftracer/utils/trace/internal/utils.h>
 #include <doctest/doctest.h>
 #include <sys/wait.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <unistd.h>
 #include <zlib.h>
@@ -248,7 +249,10 @@ TEST_SUITE("DFTracerIndex") {
         REQUIRE(!f.empty());
         index::IndexerOptions o;
         o.aggregation.time_interval_us = 5'000'000;
-        index::Indexer::open({dstd::String(dstd::StringView(f))}, o).build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(
+                index::Indexer::open({dstd::String(dstd::StringView(f))}, o))
+                .build());
 
         const auto index_path = dstd::String(
             dftracer::utils::trace::internal::determine_index_path(f, ""));

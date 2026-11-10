@@ -416,7 +416,8 @@ fields:
         put(gz, m0);
         index::IndexerOptions options;
         options.schema = "live_path_roles";
-        index::Indexer::open({gz}, options).build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(index::Indexer::open({gz}, options)).build());
 
         LiveView live({gz});
         const View old = live.snapshot();

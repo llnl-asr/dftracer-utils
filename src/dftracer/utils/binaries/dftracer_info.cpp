@@ -334,7 +334,7 @@ static coro::CoroTask<void> auto_index_and_resolve(
     refresh_input.index_dir = index_dir;
     refresh_input.require_checkpoints = true;
 
-    auto refresh_result = co_await resolver(refresh_input);
+    auto refresh_result = common::unwrap(co_await resolver(refresh_input));
 
     if (!refresh_result.cached.empty()) {
         indexed_groups[refresh_result.index_path] =
@@ -372,8 +372,8 @@ static coro::CoroTask<int> run_info(const InfoArgParse* cli) {
                 co_return 1;
             }
 
-            co_await ensure_index_fresh(directory, "", index_dir,
-                                        force_rebuild);
+            common::unwrap(co_await ensure_index_fresh(directory, "", index_dir,
+                                                       force_rebuild));
 
             auto trusted_index_path =
                 internal::determine_index_path(directory, index_dir);
@@ -427,7 +427,7 @@ static coro::CoroTask<int> run_info(const InfoArgParse* cli) {
                 auto input = dstd::make_unique<ResolverInput>();
                 input->directory = directory;
                 input->index_dir = index_dir;
-                auto result = co_await resolver(*input);
+                auto result = common::unwrap(co_await resolver(*input));
                 files = std::move(result.all_files);
                 if (!result.cached.empty()) {
                     indexed_groups[result.index_path] =
@@ -437,13 +437,13 @@ static coro::CoroTask<int> run_info(const InfoArgParse* cli) {
             }
         } else {
             common::ScopedTimer rs(stages, "resolve_index_state");
-            co_await ensure_indexes_fresh("", cli_files, index_dir,
-                                          force_rebuild);
+            common::unwrap(co_await ensure_indexes_fresh(
+                "", cli_files, index_dir, force_rebuild));
             Resolver resolver;
             auto input = dstd::make_unique<ResolverInput>();
             input->files = cli_files;
             input->index_dir = index_dir;
-            auto result = co_await resolver(*input);
+            auto result = common::unwrap(co_await resolver(*input));
             files = std::move(result.all_files);
             if (!result.cached.empty()) {
                 indexed_groups[result.index_path] = std::move(result.cached);

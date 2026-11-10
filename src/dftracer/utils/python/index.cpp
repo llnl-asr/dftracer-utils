@@ -158,11 +158,11 @@ PyObject *Index_write_agg_config(IndexObject *self, PyObject *args) {
     if (!PyArg_ParseTuple(args, "O", &config_obj)) return nullptr;
     const auto config = python::agg_config_from_py(config_obj);
     if (!run_blocking([&] {
-            index::schemas::dft::agg::tier::write_config(
+            common::unwrap(index::schemas::dft::agg::tier::write_config(
                 *self->index,
                 index::schemas::dft::agg::tier::Config{
                     config.time_interval_us, config.params_hash(),
-                    config.group_by_file, config.extra_group_keys});
+                    config.group_by_file, config.extra_group_keys}));
         }))
         return nullptr;
     Py_RETURN_NONE;

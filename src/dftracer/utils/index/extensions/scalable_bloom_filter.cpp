@@ -128,10 +128,10 @@ void ScalableBloomFilter::serialize_into(
     }
 }
 
-ScalableBloomFilter ScalableBloomFilter::from_blob(const unsigned char* data,
-                                                   std::size_t size) {
+dstd::Result<ScalableBloomFilter> ScalableBloomFilter::from_blob(
+    const unsigned char* data, std::size_t size) {
     if (!has_chain_magic(data, size)) {
-        throw common::DFTUtilsException(
+        return common::make_error(
             common::ErrorCode::Parse,
             "ScalableBloomFilter::from_blob: not a filter chain");
     }
@@ -146,7 +146,7 @@ ScalableBloomFilter ScalableBloomFilter::from_blob(const unsigned char* data,
     std::size_t cursor = CHAIN_HEADER_SIZE;
     for (std::uint32_t i = 0; i < count; ++i) {
         if (cursor + LEVEL_HEADER_SIZE > size) {
-            throw common::DFTUtilsException(
+            return common::make_error(
                 common::ErrorCode::Parse,
                 "ScalableBloomFilter::from_blob: truncated level header");
         }
@@ -154,15 +154,16 @@ ScalableBloomFilter ScalableBloomFilter::from_blob(const unsigned char* data,
         const std::size_t blob_size = dstd::read_u32_le(data + cursor + 8);
         cursor += LEVEL_HEADER_SIZE;
         if (cursor + blob_size > size) {
-            throw common::DFTUtilsException(
+            return common::make_error(
                 common::ErrorCode::Parse,
                 "ScalableBloomFilter::from_blob: truncated level payload");
         }
         auto filter = BloomFilter::from_blob(data + cursor, blob_size);
+        if (!filter) return filter.error();
         cursor += blob_size;
-        const auto entries = filter.entry_count();
+        const auto entries = filter->entry_count();
         result.distinct_ += entries;
-        result.levels_.push_back(Level{std::move(filter), capacity, entries});
+        result.levels_.push_back(Level{std::move(*filter), capacity, entries});
     }
 
     if (result.levels_.empty()) result.open_level(result.initial_capacity_);

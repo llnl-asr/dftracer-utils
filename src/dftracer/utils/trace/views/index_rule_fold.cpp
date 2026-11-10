@@ -40,7 +40,7 @@ dstd::UniquePtr<Fold> IndexRuleFold::slice() const {
     return dstd::make_unique<IndexRuleFold>(Key{}, rules_);
 }
 
-void IndexRuleFold::step(const FoldBatch& batch) {
+dstd::Result<void> IndexRuleFold::step(const FoldBatch& batch) {
     const bool filter = rules_->apply_query && rules_->plan->query.has_value();
     for (const FoldEvent& ev : batch.events) {
         if (filter &&
@@ -48,6 +48,7 @@ void IndexRuleFold::step(const FoldBatch& batch) {
             continue;
         folder_.add_event(ev, nullptr);
     }
+    return {};
 }
 
 void IndexRuleFold::merge(Fold& other) {

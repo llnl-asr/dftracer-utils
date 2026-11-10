@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -48,17 +49,17 @@ struct TimeBounds {
 dstd::Expected<dstd::Optional<Config>, dstd::Error> read_config(
     const Snapshot& snapshot);
 /// Replaces the index-wide config, blocking until it is published.
-void write_config(const Index& index, const Config& config);
+dstd::Result<void> write_config(const Index& index, const Config& config);
 
 /// nullopt when the index holds no time bounds, or ones in another format.
 dstd::Expected<dstd::Optional<TimeBounds>, dstd::Error> read_time_bounds(
     const Snapshot& snapshot);
 /// Replaces the index-wide time bounds, blocking until they are published.
-void write_time_bounds(const Index& index, TimeBounds bounds);
+dstd::Result<void> write_time_bounds(const Index& index, TimeBounds bounds);
 
 /// Removes every record of the aggregation tier from `index`, the config and
 /// the time bounds included. Blocking.
-void clear(const Index& index);
+dstd::Result<void> clear(const Index& index);
 
 }  // namespace dftracer::utils::index::schemas::dft::agg::tier
 

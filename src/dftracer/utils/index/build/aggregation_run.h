@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_INDEX_BUILD_AGGREGATION_RUN_H
 #define DFTRACER_UTILS_INDEX_BUILD_AGGREGATION_RUN_H
 
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
@@ -20,15 +21,18 @@ struct AggRun {
     IndexBuildBatchConfig::AggFoldFactory factory;
 };
 
-AggRun start_aggregation(
+/// An error when the index cannot be opened or its aggregation config cannot
+/// be written.
+dstd::Result<AggRun> start_aggregation(
     dstd::StringView index_path,
     const index::schemas::dft::agg::AggregationConfig& config);
 
-void finish_aggregation(AggRun& run, IndexBuildBatchResult& batch);
+dstd::Result<void> finish_aggregation(AggRun& run,
+                                      IndexBuildBatchResult& batch);
 
 /// Removes the tier of the index at @p index_path, so the next build does not
 /// merge onto rows of other settings.
-void clear_aggregation(const dstd::String& index_path);
+dstd::Result<void> clear_aggregation(const dstd::String& index_path);
 
 }  // namespace dftracer::utils::index::build
 

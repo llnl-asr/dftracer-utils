@@ -176,7 +176,10 @@ struct Fixture {
         index::IndexerOptions o;
         o.index_dir = env.dir() + "/idx";
         o.checkpoint_size = MEMBER_BYTES;
-        index::Indexer::open(dftu_utils_test::dstd_paths(gz), o).build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(
+                index::Indexer::open(dftu_utils_test::dstd_paths(gz), o))
+                .build());
         index_path =
             dstd::String(determine_index_path(gz.front(), o.index_dir));
     }
@@ -549,7 +552,10 @@ TEST_SUITE("ViewIndexParity") {
         dstd::fs::remove(plain).discard();
         index::IndexerOptions o;
         o.index_dir = env.dir() + "/idx";
-        index::Indexer::open({dstd::String(dstd::StringView(gz))}, o).build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(
+                index::Indexer::open({dstd::String(dstd::StringView(gz))}, o))
+                .build());
         const dstd::String index =
             dstd::String(determine_index_path(gz, o.index_dir));
 
@@ -606,7 +612,10 @@ TEST_SUITE("ViewIndexParity") {
         opts.index_dir = env.dir() + "/idx";
         opts.aggregation.time_interval_us = INTERVAL_US;
         opts.aggregation.extra_group_keys = {"epoch"};
-        index::Indexer::open(dftu_utils_test::dstd_paths(gz), opts).build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(
+                index::Indexer::open(dftu_utils_test::dstd_paths(gz), opts))
+                .build());
         const dstd::String index =
             dstd::String(determine_index_path(gz.front(), opts.index_dir));
 
@@ -725,8 +734,10 @@ TEST_SUITE("ViewIndexParity") {
         index::IndexerOptions opts;
         opts.index_dir = env.dir() + "/idx";
         opts.checkpoint_size = MEMBER_BYTES;
-        index::Indexer::open({dstd::String(dstd::StringView(gz))}, opts)
-            .build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(index::Indexer::open(
+                                    {dstd::String(dstd::StringView(gz))}, opts))
+                .build());
         const dstd::String index =
             dstd::String(determine_index_path(gz, opts.index_dir));
 
@@ -771,7 +782,10 @@ TEST_SUITE("ViewIndexParity") {
         index::IndexerOptions opts;
         opts.index_dir = env.dir() + "/idx";
         opts.checkpoint_size = MEMBER_BYTES;
-        index::Indexer::open(dftu_utils_test::dstd_paths(gz), opts).build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(
+                index::Indexer::open(dftu_utils_test::dstd_paths(gz), opts))
+                .build());
         const dstd::Vector<ViewFile> files{
             {dstd::String(gz[0]),
              dstd::String(

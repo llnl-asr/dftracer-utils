@@ -27,23 +27,25 @@ constexpr std::array<dstd::StringView, 2> META_NAMES = {CONFIG_NAME,
 
 /// Publishes one index-wide record. Blocking, so a caller inside a coroutine
 /// does not have to await it.
-void publish_meta(const Index& index, dstd::StringView name,
-                  dstd::StringView value) {
+dstd::Result<void> publish_meta(const Index& index, dstd::StringView name,
+                                dstd::StringView value) {
     dstd::Expected<void, dstd::Error> published;
-    common::unwrap(default_runtime().block_on(
+    auto ran = default_runtime().block_on(
         coro::named("aggregation meta", [&]() -> coro::CoroTask<void> {
             published = co_await put_agg_meta(index, name, value);
-        }())));
-    common::unwrap(std::move(published));
+        }()));
+    if (!ran) return ran.error();
+    return published;
 }
 
-void drop_meta(const Index& index, dstd::StringView name) {
+dstd::Result<void> drop_meta(const Index& index, dstd::StringView name) {
     dstd::Expected<void, dstd::Error> dropped;
-    common::unwrap(default_runtime().block_on(
+    auto ran = default_runtime().block_on(
         coro::named("aggregation meta drop", [&]() -> coro::CoroTask<void> {
             dropped = co_await delete_agg_meta(index, name);
-        }())));
-    common::unwrap(std::move(dropped));
+        }()));
+    if (!ran) return ran.error();
+    return dropped;
 }
 
 dstd::Optional<Config> decode_config(dstd::StringView value) {
@@ -80,7 +82,7 @@ dstd::Expected<dstd::Optional<Config>, dstd::Error> read_config(
     return decode_config(dstd::StringView((*value)->data(), (*value)->size()));
 }
 
-void write_config(const Index& index, const Config& config) {
+dstd::Result<void> write_config(const Index& index, const Config& config) {
     dstd::String value;
     dstd::append_u64_be(value, config.time_interval_us);
     dstd::append_u64_be(value, config.params_hash);
@@ -90,7 +92,7 @@ void write_config(const Index& index, const Config& config) {
         if (i != 0) value.push_back(KEY_SEP);
         value.append(config.extra_group_keys[i]);
     }
-    publish_meta(index, CONFIG_NAME, value);
+    return publish_meta(index, CONFIG_NAME, value);
 }
 
 dstd::Expected<dstd::Optional<TimeBounds>, dstd::Error> read_time_bounds(
@@ -102,29 +104,36 @@ dstd::Expected<dstd::Optional<TimeBounds>, dstd::Error> read_time_bounds(
         dstd::StringView((*value)->data(), (*value)->size()));
 }
 
-void write_time_bounds(const Index& index, TimeBounds bounds) {
+dstd::Result<void> write_time_bounds(const Index& index, TimeBounds bounds) {
     dstd::String value;
     dstd::append_u64_be(value, bounds.min_bucket);
     dstd::append_u64_be(value, bounds.max_bucket);
-    publish_meta(index, TIME_BOUNDS_NAME, value);
+    return publish_meta(index, TIME_BOUNDS_NAME, value);
 }
 
-void clear(const Index& index) {
-    auto snapshot = common::unwrap(index.snapshot());
-    auto files = common::unwrap(snapshot.files());
+dstd::Result<void> clear(const Index& index) {
+    auto snapshot = index.snapshot();
+    if (!snapshot) return snapshot.error();
+    auto files = snapshot->files();
+    if (!files) return files.error();
     dstd::Vector<dstd::StringView> paths;
-    paths.reserve(files.size());
-    for (const FileRef& file : files) paths.push_back(file.path());
+    paths.reserve(files->size());
+    for (const FileRef& file : *files) paths.push_back(file.path());
     const dstd::Span<const dstd::StringView> listed(paths.data(), paths.size());
 
     dstd::Expected<void, dstd::Error> dropped;
-    common::unwrap(default_runtime().block_on(
+    auto ran = default_runtime().block_on(
         coro::named("aggregation tier clear", [&]() -> coro::CoroTask<void> {
             dropped = co_await remove_extension(
                 index, index::store::layout::Ext::Agg, listed);
-        }())));
-    common::unwrap(std::move(dropped));
-    for (const dstd::StringView name : META_NAMES) drop_meta(index, name);
+        }()));
+    if (!ran) return ran.error();
+    if (!dropped) return dropped.error();
+    for (const dstd::StringView name : META_NAMES) {
+        auto gone = drop_meta(index, name);
+        if (!gone) return gone;
+    }
+    return {};
 }
 
 }  // namespace dftracer::utils::index::schemas::dft::agg::tier

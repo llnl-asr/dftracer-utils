@@ -242,19 +242,22 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexer::operator()(
                                                           val) {
                         if (need_hhash && key == "hhash") {
                             auto s = val.get_string();
-                            if (!s.error() && !s.value().empty()) {
-                                output.bloom_filters[DIM_HHASH].add(s.value());
+                            if (!s.error() && !s.value_unsafe().empty()) {
+                                output.bloom_filters[DIM_HHASH].add(
+                                    s.value_unsafe());
                             }
                         } else if (need_fhash && key == "fhash") {
                             auto s = val.get_string();
-                            if (!s.error() && !s.value().empty()) {
-                                output.bloom_filters[DIM_FHASH].add(s.value());
+                            if (!s.error() && !s.value_unsafe().empty()) {
+                                output.bloom_filters[DIM_FHASH].add(
+                                    s.value_unsafe());
                             }
                         } else if (need_shash &&
                                    (key == "cmd_hash" || key == "exec_hash")) {
                             auto s = val.get_string();
-                            if (!s.error() && !s.value().empty()) {
-                                output.bloom_filters[DIM_SHASH].add(s.value());
+                            if (!s.error() && !s.value_unsafe().empty()) {
+                                output.bloom_filters[DIM_SHASH].add(
+                                    s.value_unsafe());
                             }
                         } else if (has_extra_dims) {
                             for (const auto& dim :
@@ -278,17 +281,19 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexer::operator()(
                                             dim.size() - dot_pos - 1);
                                         auto obj = val.get_object();
                                         if (!obj.error()) {
-                                            for (auto field : obj.value()) {
+                                            for (auto field :
+                                                 obj.value_unsafe()) {
                                                 if (field.error()) continue;
                                                 auto fkey =
                                                     field.unescaped_key();
                                                 if (fkey.error()) continue;
-                                                if (fkey.value() == suffix) {
+                                                if (fkey.value_unsafe() ==
+                                                    suffix) {
                                                     auto fval = field.value();
                                                     if (fval.error()) continue;
                                                     dstd::String str_val =
                                                         ondemand_value_to_string(
-                                                            fval.value());
+                                                            fval.value_unsafe());
                                                     if (!str_val.empty()) {
                                                         output
                                                             .bloom_filters[dim]

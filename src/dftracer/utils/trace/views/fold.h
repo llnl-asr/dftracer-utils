@@ -107,7 +107,7 @@ class Fold {
     /// One per worker slot, folded lock-free, merged after the fan-out joins.
     virtual dstd::UniquePtr<Fold> slice() const = 0;
 
-    virtual void step(const FoldBatch& batch) = 0;
+    virtual dstd::Result<void> step(const FoldBatch& batch) = 0;
     virtual void seal_unit(const ScanUnit& unit) = 0;
     virtual void drop_unit(const ScanUnit& unit) = 0;
     /// A unit the scan passes over unread (covered or pruned mid-scan).

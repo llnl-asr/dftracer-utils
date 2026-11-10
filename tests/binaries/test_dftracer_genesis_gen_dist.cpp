@@ -243,11 +243,11 @@ TEST_CASE("records carry the run id and resolve run keys through the index") {
 
     index::IndexerOptions o;
     o.index_dir = d.str();
-    auto indexer =
-        index::Indexer::open({dstd::String(dstd::StringView(out))}, o);
-    indexer.build();
-    REQUIRE(indexer.files().size() == 1);
-    CHECK(indexer.files()[0].schema == "genesis");
+    auto indexer = dftu_utils_test::ok(
+        index::Indexer::open({dstd::String(dstd::StringView(out))}, o));
+    dftu_utils_test::ok(indexer.build());
+    REQUIRE(dftu_utils_test::ok(indexer.files()).size() == 1);
+    CHECK(dftu_utils_test::ok(indexer.files())[0].schema == "genesis");
 
     const dstd::String index_path = d.file(".dftindex");
     auto rows = [&](const dstd::String& q) {
@@ -314,11 +314,11 @@ TEST_CASE("a dftracer trace is still detected as dftracer") {
                "\n");
     index::IndexerOptions o;
     o.index_dir = d.str();
-    auto indexer =
-        index::Indexer::open({dstd::String(dstd::StringView(trace))}, o);
-    indexer.build();
-    REQUIRE(indexer.files().size() == 1);
-    CHECK(indexer.files()[0].schema == "dftracer");
+    auto indexer = dftu_utils_test::ok(
+        index::Indexer::open({dstd::String(dstd::StringView(trace))}, o));
+    dftu_utils_test::ok(indexer.build());
+    REQUIRE(dftu_utils_test::ok(indexer.files()).size() == 1);
+    CHECK(dftu_utils_test::ok(indexer.files())[0].schema == "dftracer");
 }
 
 TEST_CASE("a run over its share is still written") {

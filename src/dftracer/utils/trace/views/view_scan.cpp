@@ -666,7 +666,7 @@ coro::CoroTask<ExportStats> for_each_scanned_batch(
                                     fold_events.discard_last();
                             }
                             FoldBatch fb{fold_events.events(), units[i]};
-                            for (auto& s : slices) s->step(fb);
+                            for (auto& s : slices) common::unwrap(s->step(fb));
                         }
                         produced.fetch_add(b->events.size(),
                                            std::memory_order_relaxed);

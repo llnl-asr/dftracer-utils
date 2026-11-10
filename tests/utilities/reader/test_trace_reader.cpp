@@ -4,11 +4,14 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/scope_exit.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
+#include <dftracer/utils/index/index.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/utilities/arrow/array_view.h>
 #include <dftracer/utils/utilities/arrow/arrow_export.h>
@@ -19,6 +22,7 @@
 #include <refused_lines.h>
 #include <task_result.h>
 #include <testing_utilities.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <cmath>
@@ -206,6 +210,36 @@ TEST_SUITE("TraceReader") {
                                         .get());
             CHECK(n_plain == n_indexed);
         }
+    }
+
+    TEST_CASE("An index that cannot be read is an error, not an empty read") {
+        if (geteuid() == 0) return;  // root reads every file
+        TestEnvironment env(100);
+        dstd::String gz_file = env.create_dft_test_gzip_file(100);
+        dstd::String index_dir = env.dir();
+        dstd::String index_path = env.get_index_path(gz_file);
+
+        auto indexer = CheckpointIndexerFactory::create(
+            gz_file, index_path, 32 * 1024 * 1024, false);
+        REQUIRE(indexer != nullptr);
+        indexer->build();
+        const dstd::String root = determine_index_path(gz_file, index_dir);
+        REQUIRE(dstd::fs::exists(root).value());
+
+        // The build's open handle is gone and the store directory stops being
+        // readable.
+        indexer.reset();
+        dftracer::utils::index::release_root(root);
+        const dstd::String store = dftracer::utils::index::store_dir(root);
+        REQUIRE(dstd::fs::set_permissions(store, 0).has_value());
+        auto restore = dstd::defer(
+            [&store] { (void)dstd::fs::set_permissions(store, 0755); });
+
+        TraceReader reader({.file_path = dstd::String(gz_file),
+                            .index_dir = dstd::String(index_dir)});
+        auto counted = count_lines_until_error(reader.read_lines()).get();
+        REQUIRE_FALSE(counted.has_value());
+        CHECK_FALSE(counted.error().message().empty());
     }
 
     TEST_CASE("Query nested args field by bare and dotted name") {

@@ -42,9 +42,10 @@ dstd::String write_tagged(TestEnvironment& env, std::size_t path_budget) {
     dstd::fs::remove(plain).discard();
     dftracer::utils::index::IndexerOptions o;
     o.bloom->path_budget = path_budget;
-    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))},
-                                          o)
-        .build();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+                                {dstd::String(dstd::StringView(gz))}, o))
+            .build());
     return gz;
 }
 
@@ -79,12 +80,13 @@ TEST_SUITE("AnyView") {
         CHECK(stats.events_matched == 300);
         CHECK(stats.chunks_skipped > 0);
 
-        auto ix = dftracer::utils::index::Indexer::open(
-            {dstd::String(dstd::StringView(gz))});
-        const auto e = ix.explain(q);
+        auto ix = dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+            {dstd::String(dstd::StringView(gz))}));
+        const auto e = dftu_utils_test::ok(ix.explain(q));
         REQUIRE(e.size() == 1);
         CHECK(e[0].read.size() < e[0].chunks);
-        CHECK(ix.explain(R"(any(tags) == "absent")")[0].read.empty());
+        CHECK(dftu_utils_test::ok(ix.explain(R"(any(tags) == "absent")"))[0]
+                  .read.empty());
     }
 
     TEST_CASE("an aggregate counts the rows a row scan returns") {
@@ -130,9 +132,10 @@ TEST_SUITE("AnyView") {
                       view_of(gz).duql(cond).sink_json(sink).get())
                       .events_matched == want);
         }
-        auto ix = dftracer::utils::index::Indexer::open(
-            {dstd::String(dstd::StringView(gz))});
-        const auto e = ix.explain(R"(any(tags, . == "absent"))");
+        auto ix = dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+            {dstd::String(dstd::StringView(gz))}));
+        const auto e =
+            dftu_utils_test::ok(ix.explain(R"(any(tags, . == "absent"))"));
         REQUIRE(e.size() == 1);
         CHECK(e[0].read.size() == e[0].chunks);
     }

@@ -301,8 +301,8 @@ static coro::CoroTask<void> verify_output(const dstd::String& final_output,
                                           bool& verify_failed) {
     dstd::String output_arg{dstd::StringView(final_output)};
     dstd::String index_dir_arg{dstd::StringView(index_dir)};
-    co_await dftracer::utils::index::build::ensure_index_fresh(
-        "", std::move(output_arg), std::move(index_dir_arg));
+    common::unwrap(co_await dftracer::utils::index::build::ensure_index_fresh(
+        "", std::move(output_arg), std::move(index_dir_arg)));
     ViewFile ovf = make_view_file(
         final_output, internal::determine_index_path(final_output, index_dir),
         checkpoint_size);
@@ -486,8 +486,8 @@ static coro::CoroTask<void> refresh_indexes(
     const dstd::Vector<dstd::String>& files, const dstd::String& index_dir) {
     auto to_check = files;
     dstd::String dir_arg{dstd::StringView(index_dir)};
-    co_await dftracer::utils::index::build::ensure_indexes_fresh(
-        "", std::move(to_check), std::move(dir_arg));
+    common::unwrap(co_await dftracer::utils::index::build::ensure_indexes_fresh(
+        "", std::move(to_check), std::move(dir_arg)));
 }
 
 static dstd::Vector<dstd::String> select_columns(dstd::StringView select) {
@@ -891,8 +891,9 @@ coro::CoroTask<void> ViewRun::run_distributed_aggregate(
         bin.index_dir = rank_idx;
         bin.checkpoint_size = checkpoint_size;
         bin.require_checkpoints = true;
-        co_await dftracer::utils::index::build::resolve_and_build_index(
-            std::move(bin));
+        common::unwrap(
+            co_await dftracer::utils::index::build::resolve_and_build_index(
+                std::move(bin)));
     }
     dstd::Vector<ViewFile> shard_files_vf;
     for (const auto& f : shard) {
@@ -987,8 +988,9 @@ coro::CoroTask<void> ViewRun::run_distributed_write(
         } else if (!no_index) {
             dstd::String file_arg{dstd::StringView(final_output)};
             dstd::String dir_arg{dstd::StringView(index_dir)};
-            co_await dftracer::utils::index::build::ensure_index_fresh(
-                "", std::move(file_arg), std::move(dir_arg));
+            common::unwrap(
+                co_await dftracer::utils::index::build::ensure_index_fresh(
+                    "", std::move(file_arg), std::move(dir_arg)));
         }
     }
     co_return;

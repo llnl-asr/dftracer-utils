@@ -53,9 +53,10 @@ struct CountFold : dftracer::utils::trace::views::detail::Fold {
     slice() const override {
         return dftracer::utils::dstd::make_unique<CountFold>(total);
     }
-    void step(
+    dftracer::utils::dstd::Result<void> step(
         const dftracer::utils::trace::views::detail::FoldBatch& b) override {
         local += b.events.size();
+        return {};
     }
     void seal_unit(
         const dftracer::utils::trace::views::detail::ScanUnit&) override {}

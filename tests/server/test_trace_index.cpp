@@ -193,9 +193,10 @@ TEST_CASE("TraceIndex - genesis output resolves run keys through runs") {
     dftu_utils_test::write_gz_trace(gz, text);
     dftracer::utils::index::IndexerOptions o;
     o.index_dir = env.dir();
-    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))},
-                                          o)
-        .build();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+                                {dstd::String(dstd::StringView(gz))}, o))
+            .build());
 
     Runtime rt(2);
     dstd::String schema, app, nodes;

@@ -22,6 +22,7 @@
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
+#include <memory/fresh_process.h>
 #include <simdjson.h>
 #include <task_result.h>
 #include <testing_runtime.h>
@@ -184,7 +185,8 @@ TEST_SUITE("BloomFold") {
                 unit.file_path = "f.pfw.gz";
                 unit.index_path = env.dir() + "/.dftindex";
                 unit.checkpoint_idx = cp;
-                fold.step(FoldBatch{dstd::Span<const FoldEvent>(events), unit});
+                dftu_utils_test::ok(fold.step(
+                    FoldBatch{dstd::Span<const FoldEvent>(events), unit}));
             }
         };
         const dstd::String dropped = env.dir() + "/dropped";
@@ -219,7 +221,7 @@ TEST_SUITE("BloomFold") {
             // The run goes into the build and is staged; the commit publishes
             // it with the chunks the fold still holds.
             dftu_utils_test::ok(fold.write_run().get());
-            fold.write(build);
+            dftu_utils_test::ok(fold.write(build));
             REQUIRE(build.commit().get());
         }
         // The staged tier holds every chunk the fold saw, as the tier a fold
@@ -230,7 +232,7 @@ TEST_SUITE("BloomFold") {
             BloomFold fold(intern);
             drive(fold);
             CHECK(fold.spill_runs() == 0);
-            fold.write(build);
+            dftu_utils_test::ok(fold.write(build));
             REQUIRE(build.commit().get());
         }
         auto chunks = [](const dstd::String& path) {
@@ -333,7 +335,7 @@ TEST_SUITE("BloomFold") {
             auto events = events_of(lines, intern);
             BloomFold fold(intern);
             FoldBatch batch{dstd::Span<const FoldEvent>(events), unit};
-            fold.step(batch);
+            dftu_utils_test::ok(fold.step(batch));
             fold.seal_unit(unit);
             return dftu_utils_test::ok(fold.finalize(cov).get());
         };
@@ -392,8 +394,8 @@ TEST_SUITE("BloomFold") {
         BloomFold bloom(intern);
         RowSetFold dict(intern, dftracer_rowsets());
         FoldBatch fb{dstd::Span<const FoldEvent>(events), unit};
-        bloom.step(fb);
-        dict.step(fb);
+        dftu_utils_test::ok(bloom.step(fb));
+        dftu_utils_test::ok(dict.step(fb));
         bloom.seal_unit(unit);
         dict.seal_unit(unit);
 
@@ -401,8 +403,8 @@ TEST_SUITE("BloomFold") {
             const auto logical =
                 dftracer::utils::index::store::internal::get_logical_path(gz);
             auto build = rebuild_file(index_path, logical);
-            bloom.write(build);
-            dict.write(build);
+            dftu_utils_test::ok(bloom.write(build));
+            dftu_utils_test::ok(dict.write(build));
             REQUIRE(build.commit().get());
         }
 
@@ -458,8 +460,8 @@ TEST_SUITE("BloomFold") {
             const auto logical =
                 dftracer::utils::index::store::internal::get_logical_path(gz);
             auto build = rebuild_file(index_path, logical);
-            bloom.write(build);
-            dict.write(build);
+            dftu_utils_test::ok(bloom.write(build));
+            dftu_utils_test::ok(dict.write(build));
             REQUIRE(build.commit().get());
         }
 
@@ -658,7 +660,7 @@ TEST_SUITE("BloomFold - auto fields") {
             auto res =
                 co_await dftracer::utils::index::build::resolve_and_build_index(
                     input);
-            index_path = res.index_path;
+            if (res) index_path = res->index_path;
         });
         const auto snapshot = dftu_utils_test::index_snapshot(index_path);
         const auto file = dftu_utils_test::require_indexed_file(snapshot, gz);
@@ -748,5 +750,22 @@ TEST_CASE("numeric bounds keep the min and max text of the text path") {
             REQUIRE(typed.min_value == text_path.min_value);
             REQUIRE(typed.max_value == text_path.max_value);
         }
+    }
+}
+
+TEST_SUITE("BloomFold - misuse") {
+    TEST_CASE("a fold over an unvalidated config aborts") {
+        auto result = fresh_process::run(
+            "a fold over an unvalidated config ends the process");
+        CHECK(result.aborted_with("the config was not validated"));
+    }
+
+    TEST_CASE("a fold over an unvalidated config ends the process" *
+              doctest::skip()) {
+        fresh_process::announce_abort();
+        dstd::StringIntern intern;
+        ChunkIndexerConfig config;
+        config.stats_share = 0.0;
+        BloomFold fold(intern, config);
     }
 }

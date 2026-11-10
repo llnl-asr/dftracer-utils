@@ -66,9 +66,10 @@ dstd::String write_records(TestEnvironment& env, const dstd::String& name,
         for (const auto& extension : extensions)
             o.extensions.emplace_back(extension);
     }
-    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))},
-                                          o)
-        .build();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+                                {dstd::String(dstd::StringView(gz))}, o))
+            .build());
     return gz;
 }
 

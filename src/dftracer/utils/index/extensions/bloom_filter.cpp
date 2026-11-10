@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/hash/xxh3.h>
 #include <dftracer/utils/dstd/little_endian.h>
@@ -82,10 +83,10 @@ BloomFilter::BloomFilter(dstd::Vector<unsigned char> bits,
       hash_count_(hash_count),
       entry_count_(entry_count) {}
 
-BloomFilter BloomFilter::from_blob(const unsigned char* data,
-                                   std::size_t size) {
+dstd::Result<BloomFilter> BloomFilter::from_blob(const unsigned char* data,
+                                                 std::size_t size) {
     if (size < HEADER_SIZE) {
-        throw common::DFTUtilsException(
+        return common::make_error(
             common::ErrorCode::Parse,
             "BloomFilter::from_blob: data too small for header");
     }
@@ -148,9 +149,7 @@ bool BloomFilter::possibly_contains(const Hashes& hashes) const {
 void BloomFilter::merge_from(const BloomFilter& other) {
     if (bits_.size() != other.bits_.size() || bit_count_ != other.bit_count_ ||
         hash_count_ != other.hash_count_) {
-        throw common::DFTUtilsException(
-            common::ErrorCode::InvalidArgument,
-            "BloomFilter::merge_from: incompatible filter parameters");
+        dstd::fatal("BloomFilter::merge_from: incompatible filter parameters");
     }
 
     auto* dst = reinterpret_cast<std::uint64_t*>(bits_.data());

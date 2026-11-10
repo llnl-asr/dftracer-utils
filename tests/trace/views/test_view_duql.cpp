@@ -263,8 +263,10 @@ View view_of_lines(TestEnvironment& env,
     const dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
     dstd::fs::remove(pfw).discard();
-    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
-        .build();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+                                {dstd::String(dstd::StringView(gz))}))
+            .build());
     return View::from_file(
         dstd::String(gz),
         dstd::String(dstd::String(determine_index_path(gz, ""))));
@@ -2448,9 +2450,10 @@ TEST_SUITE("View duql reshape determinism") {
         dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz,
                                                            member_bytes);
         dstd::fs::remove(pfw).discard();
-        dftracer::utils::index::Indexer::open(
-            {dstd::String(dstd::StringView(gz))})
-            .build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+                                    {dstd::String(dstd::StringView(gz))}))
+                .build());
         return gz;
     }
 
@@ -2911,9 +2914,10 @@ TEST_SUITE("View duql session") {
         dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz,
                                                            member_bytes);
         dstd::fs::remove(pfw).discard();
-        dftracer::utils::index::Indexer::open(
-            {dstd::String(dstd::StringView(gz))})
-            .build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+                                    {dstd::String(dstd::StringView(gz))}))
+                .build());
         return gz;
     }
 

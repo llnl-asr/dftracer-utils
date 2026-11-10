@@ -74,7 +74,7 @@ class EngineAggFold : public Fold {
         return dstd::make_unique<EngineAggFold>(*plan_, *intern_, apply_query_);
     }
 
-    void step(const FoldBatch& batch) override {
+    dstd::Result<void> step(const FoldBatch& batch) override {
         dstd::Vector<FoldEvent> keep =
             select_events(batch, [&](const FoldEvent& ev) {
                 if (ev.phase == RecordPhase::Metadata && !keep_metadata_ &&
@@ -86,12 +86,12 @@ class EngineAggFold : public Fold {
                 return !apply_query_ ||
                        pod_matches(*plan_->query, ev, *intern_, qmap_);
             });
-        if (keep.empty()) return;
+        if (keep.empty()) return {};
         dftracer::utils::dataframe::DataFrame f =
             build_agg_input_frame(keep, *intern_, spec_, resolver_);
-        common::unwrap(dftracer::utils::dataframe::agg_accumulate_chunk(
+        return dftracer::utils::dataframe::agg_accumulate_chunk(
             *state_, f, spec_.group_key_names, lowered_.value_names,
-            spec_.emit_dyn ? spec_.dyn_prefix : dstd::String()));
+            spec_.emit_dyn ? spec_.dyn_prefix : dstd::String());
     }
 
     void seal_unit(const ScanUnit&) override {}

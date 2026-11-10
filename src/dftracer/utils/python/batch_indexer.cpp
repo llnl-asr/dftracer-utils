@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dstd/hash/hash_combine.h>
@@ -373,8 +374,9 @@ static bool with_indexer(IndexerObject* self, Fn fn) {
     if (!options) return false;
     auto paths = indexer_paths(self);
     return run_blocking([&] {
-        fn(dftracer::utils::index::Indexer::open(std::move(paths),
-                                                 std::move(*options)));
+        fn(dftracer::utils::common::unwrap(
+            dftracer::utils::index::Indexer::open(std::move(paths),
+                                                  std::move(*options))));
     });
 }
 
@@ -387,28 +389,29 @@ static bool run_indexer(IndexerObject* self, IndexerCall call,
     auto paths = indexer_paths(self);
     const bool force = self->force_rebuild != 0;
     return run_blocking([&] {
-        auto ix = dftracer::utils::index::Indexer::open(std::move(paths),
-                                                        std::move(*options));
+        auto ix = dftracer::utils::common::unwrap(
+            dftracer::utils::index::Indexer::open(std::move(paths),
+                                                  std::move(*options)));
         switch (call) {
             case IndexerCall::Status:
-                out = ix.status();
+                out = dftracer::utils::common::unwrap(ix.status());
                 break;
             case IndexerCall::Build:
-                out = ix.build();
+                out = dftracer::utils::common::unwrap(ix.build());
                 break;
             case IndexerCall::Rebuild:
-                out = ix.rebuild();
+                out = dftracer::utils::common::unwrap(ix.rebuild());
                 break;
             case IndexerCall::Ensure: {
                 if (!force) {
-                    out = ix.build();
+                    out = dftracer::utils::common::unwrap(ix.build());
                     break;
                 }
-                auto before = ix.status();
+                auto before = dftracer::utils::common::unwrap(ix.status());
                 out = before.needs_work.empty() &&
                               !before.aggregation_needs_rebuild
                           ? std::move(before)
-                          : ix.rebuild();
+                          : dftracer::utils::common::unwrap(ix.rebuild());
                 break;
             }
         }
@@ -487,7 +490,8 @@ static PyObject* Indexer_manifest(IndexerObject* self,
                                   PyObject* Py_UNUSED(ignored)) {
     dftracer::utils::dstd::String json;
     if (!with_indexer(self, [&](dftracer::utils::index::Indexer ix) {
-            json = dftracer::utils::index::to_json(ix.manifest());
+            json = dftracer::utils::index::to_json(
+                dftracer::utils::common::unwrap(ix.manifest()));
         }))
         return nullptr;
     return PyUnicode_FromStringAndSize(json.data(),
@@ -499,7 +503,8 @@ static PyObject* Indexer_explain(IndexerObject* self, PyObject* args) {
     if (!PyArg_ParseTuple(args, "s", &query)) return nullptr;
     dftracer::utils::dstd::String json;
     if (!with_indexer(self, [&](dftracer::utils::index::Indexer ix) {
-            json = dftracer::utils::index::to_json(ix.explain(query));
+            json = dftracer::utils::index::to_json(
+                dftracer::utils::common::unwrap(ix.explain(query)));
         }))
         return nullptr;
     return PyUnicode_FromStringAndSize(json.data(),
@@ -512,7 +517,7 @@ static PyObject* Indexer_rebuild_extension(IndexerObject* self,
     if (!PyArg_ParseTuple(args, "s", &name)) return nullptr;
     dftracer::utils::index::IndexStatus st;
     if (!with_indexer(self, [&](dftracer::utils::index::Indexer ix) {
-            st = ix.rebuild_extension(name);
+            st = dftracer::utils::common::unwrap(ix.rebuild_extension(name));
         }))
         return nullptr;
     return status_dict(st);
@@ -523,7 +528,7 @@ static PyObject* Indexer_drop_extension(IndexerObject* self, PyObject* args) {
     if (!PyArg_ParseTuple(args, "s", &name)) return nullptr;
     dftracer::utils::index::IndexStatus st;
     if (!with_indexer(self, [&](dftracer::utils::index::Indexer ix) {
-            st = ix.drop_extension(name);
+            st = dftracer::utils::common::unwrap(ix.drop_extension(name));
         }))
         return nullptr;
     return status_dict(st);
@@ -565,10 +570,18 @@ static PyObject* Indexer_get_checkpoint_indexer(IndexerObject* self,
     }
 
     // Create the native handle
-    try {
-        auto native =
-            dftracer::utils::index::gzip::CheckpointIndexerFactory::create(
+    {
+        auto created =
+            dftracer::utils::index::gzip::CheckpointIndexerFactory::try_create(
                 file_path, index_path, self->checkpoint_size, false);
+        if (!created) {
+            Py_DECREF((PyObject*)indexer);
+            const auto message = created.error().message();
+            PyErr_SetString(PyExc_RuntimeError,
+                            dftracer::utils::dstd::String(message).c_str());
+            return nullptr;
+        }
+        auto native = std::move(*created);
         if (!native) {
             Py_DECREF((PyObject*)indexer);
             PyErr_SetString(PyExc_RuntimeError, "Unsupported archive format");
@@ -579,10 +592,6 @@ static PyObject* Indexer_get_checkpoint_indexer(IndexerObject* self,
                 dftracer::utils::index::gzip::CheckpointIndexer>>(
                 std::move(native))
                 .release();
-    } catch (const std::exception& e) {
-        Py_DECREF((PyObject*)indexer);
-        PyErr_SetString(PyExc_RuntimeError, e.what());
-        return nullptr;
     }
 
     return (PyObject*)indexer;
@@ -609,7 +618,7 @@ static PyObject* Indexer_rowset(IndexerObject* self, PyObject* args) {
     if (!PyArg_ParseTuple(args, "s", &name)) return nullptr;
     dftracer::utils::dataframe::DataFrame frame;
     if (!with_indexer(self, [&](dftracer::utils::index::Indexer ix) {
-            frame = ix.rowset(name);
+            frame = dftracer::utils::common::unwrap(ix.rowset(name));
         }))
         return nullptr;
     return dftracer::utils::python::wrap_dataframe(std::move(frame));

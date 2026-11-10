@@ -385,8 +385,8 @@ TEST_CASE("plugin ABI: on_batch hands the batch as columns") {
         make_event(intern, "f", "h"), make_event(intern, "f", "h"),
         make_event(intern, "f", "h")};
     trace::views::detail::ScanUnit unit{};
-    fold.step(trace::views::detail::FoldBatch{
-        dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}});
+    dftu_utils_test::ok(fold.step(trace::views::detail::FoldBatch{
+        dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}}));
     CHECK(g_col_state.dur_sum == 15);  // 3 events x dur 5, SIMD-reduced
 }
 
@@ -537,7 +537,7 @@ TEST_CASE("plugin ABI: plan_duql on fhash delivers only matching events") {
         trace::views::detail::FoldBatch batch{
             dstd::Span<const trace::views::detail::FoldEvent>(evs), unit};
 
-        fx.fold->step(batch);
+        dftu_utils_test::ok(fx.fold->step(batch));
         CHECK(fx.fold->take_pending() == nullptr);
 
         // The regression: a plan_duql on fhash must not silently drop matches.
@@ -559,7 +559,7 @@ TEST_CASE("plugin ABI: plan_duql on fhash delivers only matching events") {
         trace::views::detail::FoldBatch batch{
             dstd::Span<const trace::views::detail::FoldEvent>(evs), unit};
 
-        fx.fold->step(batch);
+        dftu_utils_test::ok(fx.fold->step(batch));
         CHECK(g_count.seen == 2);
         for (const auto& h : g_count.hhashes) CHECK(h == "hhZ");
     }

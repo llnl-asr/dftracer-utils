@@ -111,7 +111,7 @@ TEST_SUITE("PluginResults") {
             trace::views::detail::ScanUnit unit;
             trace::views::detail::FoldBatch fb{
                 dstd::Span<const trace::views::detail::FoldEvent>(evs), unit};
-            pf->step(fb);
+            dftu_utils_test::ok(pf->step(fb));
             master.fold->merge(*pf);
             total += n;
         }

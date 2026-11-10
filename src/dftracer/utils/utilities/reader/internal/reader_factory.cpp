@@ -9,8 +9,6 @@
 #include <dftracer/utils/utilities/reader/internal/gzip_reader.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 
-#include <exception>
-
 namespace dftracer::utils::utilities::reader::internal {
 
 dstd::Result<dstd::SharedPtr<Reader>> ReaderFactory::create(
@@ -26,21 +24,25 @@ dstd::Result<dstd::SharedPtr<Reader>> ReaderFactory::create(
         case common::ArchiveFormat::Gzip: {
             dstd::SharedPtr<dftracer::utils::index::gzip::CheckpointIndexer>
                 indexer;
-            // The indexer factory still reports a failure as an exception.
             const dstd::String index(index_path);
-            try {
-                indexer =
-                    dftracer::utils::index::gzip::CheckpointIndexerFactory::
-                        create(archive_path, index, index_ckpt_size, false);
-            } catch (const std::exception &e) {
+            auto created =
+                dftracer::utils::index::gzip::CheckpointIndexerFactory::
+                    try_create(archive_path, index, index_ckpt_size, false);
+            if (!created) {
                 return reader_error<ReaderErrorType::InitializationError,
                                     "Failed to initialize reader with "
-                                    "indexer: {}">(dstd::StringView(e.what()));
+                                    "indexer: {}">(created.error().message());
             }
+            indexer = std::move(*created);
             if (!indexer) {
                 return reader_error(ReaderErrorType::InitializationError,
                                     "Failed to initialize reader with "
                                     "indexer: no indexer for the file");
+            }
+            if (const auto loaded = indexer->load(); !loaded) {
+                return reader_error<ReaderErrorType::InitializationError,
+                                    "Failed to initialize reader with "
+                                    "indexer: {}">(loaded.error().message());
             }
             DFTRACER_UTILS_LOG_DEBUG(
                 "Successfully created GZIP reader for gz: {} and index: {}",
@@ -63,6 +65,11 @@ dstd::Result<dstd::SharedPtr<Reader>> ReaderFactory::create(
                             "Indexer cannot be null");
     }
 
+    if (const auto loaded = indexer->load(); !loaded) {
+        return reader_error<ReaderErrorType::InitializationError,
+                            "Failed to initialize reader with indexer: {}">(
+            loaded.error().message());
+    }
     return dstd::SharedPtr<Reader>(
         dstd::make_shared<GzipReader>(std::move(indexer)));
 }

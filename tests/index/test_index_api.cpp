@@ -423,8 +423,8 @@ TEST_CASE("the typed agg readers read what the aggregation store reads") {
     schemas::dft::agg::AggregationConfig config;
     config.time_interval_us = 100000;
     options.aggregation = config;
-    auto indexer = index::Indexer::open(traces, options);
-    indexer.build();
+    auto indexer = dftu_utils_test::ok(index::Indexer::open(traces, options));
+    dftu_utils_test::ok(indexer.build());
 
     const dstd::String index_path = dstd::String((root / ".dftindex").str());
     auto opened = Index::open(index_path);

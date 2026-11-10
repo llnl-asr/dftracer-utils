@@ -66,7 +66,10 @@ dstd::String write_indexed(TestEnvironment& env, const dstd::String& name,
     o.checkpoint_size = member_bytes;
     o.schema = schema;
     if (tier_interval_us > 0) o.aggregation.time_interval_us = tier_interval_us;
-    index::Indexer::open({dstd::String(dstd::StringView(gz))}, o).build();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(
+            index::Indexer::open({dstd::String(dstd::StringView(gz))}, o))
+            .build());
     return gz;
 }
 
@@ -450,10 +453,11 @@ source: |
         REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, gz));
         index::IndexerOptions o;
         o.schema = "typed_rows";
-        auto indexer =
-            index::Indexer::open({dstd::String(dstd::StringView(gz))}, o);
-        indexer.build();
-        const dataframe::DataFrame stored = indexer.rowset("items");
+        auto indexer = dftu_utils_test::ok(
+            index::Indexer::open({dstd::String(dstd::StringView(gz))}, o));
+        dftu_utils_test::ok(indexer.build());
+        const dataframe::DataFrame stored =
+            dftu_utils_test::ok(indexer.rowset("items"));
         REQUIRE(stored.num_rows() == 2);
         CHECK(stored.columns[0].type() == dataframe::TypeId::Int64);
         CHECK(bstr(stored, 0, "meta") == R"({"a":[1,2],"b":1})");

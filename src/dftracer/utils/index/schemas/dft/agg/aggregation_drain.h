@@ -25,9 +25,10 @@ struct AggFoldOutput {
 
 /// Widens the stored time bounds of `index` by the range of the events of
 /// `outputs`. Synchronous, so safe to call from a coroutine without suspending.
-/// The bounds already stored are read from a snapshot of `index`.
-void merge_aggregation_folds(dstd::Vector<AggFoldOutput>& outputs,
-                             const index::Index& index);
+/// The bounds already stored are read from a snapshot of `index`. An error when
+/// the index cannot be read or written.
+dstd::Result<void> merge_aggregation_folds(dstd::Vector<AggFoldOutput>& outputs,
+                                           const index::Index& index);
 
 }  // namespace dftracer::utils::index::schemas::dft::agg
 

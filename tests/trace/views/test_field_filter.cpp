@@ -66,9 +66,10 @@ TEST_SUITE("View unified F filter") {
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                    16 * 1024));
         dstd::fs::remove(plain).discard();
-        dftracer::utils::index::Indexer::open(
-            {dstd::String(dstd::StringView(gz))})
-            .build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+                                    {dstd::String(dstd::StringView(gz))}))
+                .build());
         const dstd::String idx = dstd::String(determine_index_path(gz, ""));
         auto count = [&](Phase ph, const char* q) {
             return run(View::from_file(dstd::String(gz), dstd::String(idx))

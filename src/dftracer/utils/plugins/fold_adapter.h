@@ -182,7 +182,7 @@ class PluginFold : public trace::views::detail::Fold {
     /// Name this plugin logs under (its load-path stem); empty if unknown.
     const dstd::String& plugin_name() const { return plugin_name_; }
 
-    void step(const FoldBatch& batch) override;
+    dstd::Result<void> step(const FoldBatch& batch) override;
     void seal_unit(const ScanUnit&) override {}
     void drop_unit(const ScanUnit&) override {}
     void merge(Fold& other) override;

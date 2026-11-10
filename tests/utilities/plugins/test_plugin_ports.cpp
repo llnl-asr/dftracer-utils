@@ -15,6 +15,7 @@
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 
@@ -137,8 +138,8 @@ TEST_SUITE("PluginPorts") {
         g_present = false;
         g_consumed = 0;
         bus.clear();
-        prod.fold->step(fb);
-        cons.fold->step(fb);
+        dftu_utils_test::ok(prod.fold->step(fb));
+        dftu_utils_test::ok(cons.fold->step(fb));
         CHECK(g_present);
         CHECK(g_consumed == 3);
     }
@@ -161,8 +162,9 @@ TEST_SUITE("PluginPorts") {
         g_present = true;
         g_consumed = 123;
         bus.clear();
-        cons.fold->step(fb);  // producer has not published yet
-        prod.fold->step(fb);
+        dftu_utils_test::ok(
+            cons.fold->step(fb));  // producer has not published yet
+        dftu_utils_test::ok(prod.fold->step(fb));
         CHECK_FALSE(g_present);
         CHECK(g_consumed == 0);
     }
@@ -183,14 +185,14 @@ TEST_SUITE("PluginPorts") {
             dstd::Span<const trace::views::detail::FoldEvent>(evs), unit};
 
         bus.clear();
-        prod.fold->step(fb);
-        cons.fold->step(fb);
+        dftu_utils_test::ok(prod.fold->step(fb));
+        dftu_utils_test::ok(cons.fold->step(fb));
         REQUIRE(g_present);
         REQUIRE(g_consumed == 2);
 
         // Next batch: the driver clears the bus and the producer stays silent.
         bus.clear();
-        cons.fold->step(fb);
+        dftu_utils_test::ok(cons.fold->step(fb));
         CHECK_FALSE(g_present);
         CHECK(g_consumed == 0);
     }

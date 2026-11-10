@@ -4,10 +4,12 @@
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -146,25 +148,26 @@ IndexStatus to_status(const build::ResolverResult& r) {
     return s;
 }
 
-void throw_on_failures(const build::ResolverResult& r) {
-    if (r.failures.empty()) return;
+dstd::Result<void> check_failures(const build::ResolverResult& r) {
+    if (r.failures.empty()) return {};
     const auto& f = r.failures.front();
-    throw common::DFTUtilsException::cat(common::ErrorCode::Io,
-                                         "failed to index ", f.file_path, ": ",
-                                         f.message);
+    return common::make_error<"failed to index {}: {}">(common::ErrorCode::Io,
+                                                        f.file_path, f.message);
 }
 
-void throw_on_error(const dstd::Error& error, dstd::StringView what) {
-    throw common::DFTUtilsException::cat(common::ErrorCode::Io, what, ": ",
-                                         error.message());
+dstd::Unexpected<dstd::Error> failed(dstd::StringView what,
+                                     const dstd::Error& error) {
+    return common::make_error<"{}: {}">(common::ErrorCode::Io, what,
+                                        error.message());
 }
 
 /// Clears plugin extension `name` of every file in `traces`.
-coro::CoroTask<void> drop_plugin_extension(
+coro::CoroTask<dstd::Result<void>> drop_plugin_extension(
     const dstd::String& index_path, const dstd::String& name,
     const dstd::Vector<const dstd::String*>& traces) {
     auto opened = Index::open(normalize_index_root(index_path));
-    if (!opened) throw_on_error(opened.error(), "drop extension " + name);
+    if (!opened)
+        co_return failed(dstd::fmt<"drop extension {}">(name), opened.error());
     dstd::Vector<dstd::String> logical;
     logical.reserve(traces.size());
     for (const auto* p : traces)
@@ -175,71 +178,88 @@ coro::CoroTask<void> drop_plugin_extension(
     auto dropped = co_await remove_plugin(
         *opened, dstd::StringView(name),
         dstd::Span<const dstd::StringView>(views.data(), views.size()));
-    if (!dropped) throw_on_error(dropped.error(), "drop extension " + name);
+    if (!dropped)
+        co_return failed(dstd::fmt<"drop extension {}">(name), dropped.error());
+    co_return dstd::Result<void>{};
 }
 
-store::IndexExtension tier_extension(const dstd::String& name) {
+dstd::Result<store::IndexExtension> tier_extension(const dstd::String& name) {
     if (extensions::find_plugin_extension(name))
         return store::IndexExtension::Plugin;
     auto ext = store::parse_extension(name);
     if (!ext || !(store::PRUNING_EXTENSIONS.has(*ext) ||
                   *ext == store::IndexExtension::Stats ||
                   *ext == store::IndexExtension::Metadata))
-        throw common::DFTUtilsException::cat(
-            common::ErrorCode::InvalidArgument, "not a tier extension: ", name,
-            " (expected zonemap, bloom, counts, postings, dft.stats, "
-            "dft.metadata or a registered plugin extension)");
+        return common::make_error<
+            "not a tier extension: {} (expected zonemap, bloom, counts, "
+            "postings, dft.stats, dft.metadata or a registered plugin "
+            "extension)">(common::ErrorCode::InvalidArgument, name);
     return *ext;
 }
 
-template <class T, class Fn>
-T block_on(Runtime& rt, const char* name, Fn fn) {
-    T out;
-    common::unwrap(rt.block_on(coro::named(
-        name, coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
-            out = co_await fn(scope);
-        }))));
-    return out;
+// The registered schema `id`, or the error get_schema throws for another.
+dstd::Result<const RecordSchema*> schema_by_id(dstd::StringView id) {
+    if (const RecordSchema* found = find_schema(id)) return found;
+    dstd::String ids;
+    for (const RecordSchema* s : registered_schemas()) {
+        if (!ids.empty()) ids += ", ";
+        ids += s->id;
+    }
+    return common::make_error<
+        "unknown record schema {} (registered: {}); user schemas load from "
+        "$DFTRACER_UTILS_SCHEMA_PATH and <index_dir>/schemas/">(
+        common::ErrorCode::InvalidArgument, id, ids);
 }
 
-coro::CoroTask<bool> has_store(dstd::String index_path) {
+template <class T, class Fn>
+dstd::Result<T> block_on(Runtime& rt, const char* name, Fn fn) {
+    return rt.block_on(coro::named(
+        name, coro::with_scope([&](coro::Scope& scope) { return fn(scope); })));
+}
+
+coro::CoroTask<dstd::Result<bool>> has_store(dstd::String index_path) {
     const dstd::String store_path = store_of(index_path);
     auto checking = runtime::fs::exists(dstd::PathView(store_path));
-    co_return common::unwrap(co_await std::move(checking));
+    co_return co_await std::move(checking);
 }
 
 }  // namespace
 
 Indexer::Indexer(dstd::SharedPtr<Impl> impl) : impl_(std::move(impl)) {}
 
-void Indexer::validate_options(Impl& impl) {
+dstd::Result<void> Indexer::validate_options(Impl& impl) {
     for (const auto& name : impl.options.extensions) {
         auto ext = store::parse_extension(name);
         if (!ext || !store::PRUNING_EXTENSIONS.has(*ext))
-            throw common::DFTUtilsException::cat(
-                common::ErrorCode::InvalidArgument,
-                "Indexer::open: not a pruning extension: ", name,
-                " (expected zonemap, bloom, counts or postings)");
+            return common::make_error<
+                "Indexer::open: not a pruning extension: {} (expected "
+                "zonemap, bloom, counts or postings)">(
+                common::ErrorCode::InvalidArgument, name);
         impl.extensions.add(*ext);
     }
-    if (impl.options.bloom) impl.bloom_config().validate();
+    if (impl.options.bloom) return impl.bloom_config().validate();
+    return {};
 }
 
-Indexer Indexer::finish_open(dstd::SharedPtr<Impl> impl) {
+dstd::Result<Indexer> Indexer::finish_open(dstd::SharedPtr<Impl> impl) {
     for (const auto& [index_path, traces] : impl->by_index())
         load_index_schemas(index_path);
-    if (!impl->options.schema.empty()) get_schema(impl->options.schema);
+    if (!impl->options.schema.empty()) {
+        const auto found = schema_by_id(impl->options.schema);
+        if (!found) return found.error();
+    }
     return Indexer(std::move(impl));
 }
 
-Indexer Indexer::open(dstd::Vector<dstd::String> paths,
-                      IndexerOptions options) {
+dstd::Result<Indexer> Indexer::open(dstd::Vector<dstd::String> paths,
+                                    IndexerOptions options) {
     if (paths.empty())
-        throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
-                                        "Indexer::open: no trace paths given");
+        return common::make_error<"Indexer::open: no trace paths given">(
+            common::ErrorCode::InvalidArgument);
     auto impl = dstd::make_shared<Impl>();
     impl->options = std::move(options);
-    validate_options(*impl);
+    const auto valid = validate_options(*impl);
+    if (!valid) return valid.error();
     for (auto& p : paths) {
         common::InputFileStat self;
         const bool known = common::stat_input(p, self);
@@ -248,9 +268,8 @@ Indexer Indexer::open(dstd::Vector<dstd::String> paths,
         const auto present = dstd::fs::exists(dstd::PathView(p));
         if (!is_directory && !is_regular_file &&
             !(present.has_value() && *present))
-            throw common::DFTUtilsException::cat(
-                common::ErrorCode::NotFound,
-                "Indexer::open: no such path: ", p);
+            return common::make_error<"Indexer::open: no such path: {}">(
+                common::ErrorCode::NotFound, p);
         if (!is_directory) {
             impl->paths.push_back(std::move(p));
             continue;
@@ -265,7 +284,7 @@ Indexer Indexer::open(dstd::Vector<dstd::String> paths,
                 return runtime::fs::find_all(scope, dstd::PathView(p),
                                              find_options);
             })));
-        if (!found) throw common::DFTUtilsException(found.error());
+        if (!found) return found.error();
         const auto& matched = *found;
         for (const auto& e : matched)
             impl->paths.push_back(dstd::String(e.path.str()));
@@ -273,14 +292,15 @@ Indexer Indexer::open(dstd::Vector<dstd::String> paths,
     return finish_open(std::move(impl));
 }
 
-Indexer detail::open_scanned(dstd::Vector<runtime::fs::FoundFile> files,
-                             IndexerOptions options) {
+dstd::Result<Indexer> detail::open_scanned(
+    dstd::Vector<runtime::fs::FoundFile> files, IndexerOptions options) {
     if (files.empty())
-        throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
-                                        "open_scanned: no trace files given");
+        return common::make_error<"open_scanned: no trace files given">(
+            common::ErrorCode::InvalidArgument);
     auto impl = dstd::make_shared<Indexer::Impl>();
     impl->options = std::move(options);
-    Indexer::validate_options(*impl);
+    const auto valid = Indexer::validate_options(*impl);
+    if (!valid) return valid.error();
     for (auto& e : files) {
         impl->paths.emplace_back(e.path.str());
         impl->opened.push_back(std::move(e));
@@ -288,15 +308,18 @@ Indexer detail::open_scanned(dstd::Vector<runtime::fs::FoundFile> files,
     return Indexer::finish_open(std::move(impl));
 }
 
-coro::CoroTask<IndexStatus> Indexer::status(coro::Scope& scope) const {
+coro::CoroTask<dstd::Result<IndexStatus>> Indexer::status(
+    coro::Scope& scope) const {
     co_return co_await status_of(scope, impl_->take_entries());
 }
 
-coro::CoroTask<IndexStatus> Indexer::status_of(
+coro::CoroTask<dstd::Result<IndexStatus>> Indexer::status_of(
     coro::Scope& scope, dstd::Vector<runtime::fs::FoundFile> entries) const {
     build::Resolver resolver;
-    auto result =
+    auto resolved =
         co_await resolver(scope, impl_->resolver_input(std::move(entries)));
+    if (!resolved) co_return resolved.error();
+    const build::ResolverResult& result = *resolved;
     auto status = to_status(result);
     dstd::HashMap<dstd::String, dstd::Vector<const build::ResolvedFile*>>
         by_index;
@@ -305,50 +328,66 @@ coro::CoroTask<IndexStatus> Indexer::status_of(
                      f.file_path, impl_->options.index_dir)]
             .push_back(&f);
     for (const auto& [index_path, ready] : by_index) {
-        const auto snapshot = common::unwrap(plan::open_snapshot(index_path));
+        const auto opened = plan::open_snapshot(index_path);
+        if (!opened) co_return opened.error();
+        const auto& snapshot = *opened;
         for (const auto* f : ready) {
             const auto file =
                 snapshot.file(store::internal::get_logical_path(f->file_path));
             if (!file) continue;
-            const auto meta = common::unwrap(file_metadata(snapshot, *file));
-            if (meta && meta->truncated)
+            const auto meta = file_metadata(snapshot, *file);
+            if (!meta) co_return meta.error();
+            if (*meta && (*meta)->truncated)
                 status.truncated.push_back(f->file_path);
         }
     }
     co_return status;
 }
 
-coro::CoroTask<IndexStatus> Indexer::build(coro::Scope& scope) {
+coro::CoroTask<dstd::Result<IndexStatus>> Indexer::build(coro::Scope& scope) {
     auto entries = impl_->take_entries();
     auto before = co_await status_of(scope, entries);
-    if (before.needs_work.empty() && !before.aggregation_needs_rebuild)
+    if (!before) co_return before.error();
+    if (before->needs_work.empty() && !before->aggregation_needs_rebuild)
         co_return before;
-    const std::size_t indexed = before.aggregation_needs_rebuild
-                                    ? before.total
-                                    : before.needs_work.size();
-    throw_on_failures(co_await build::resolve_and_build_index(
-        impl_->build_input(false, entries)));
+    const std::size_t indexed = before->aggregation_needs_rebuild
+                                    ? before->total
+                                    : before->needs_work.size();
+    auto built = co_await build::resolve_and_build_index(
+        impl_->build_input(false, entries));
+    if (!built) co_return built.error();
+    const auto checked = check_failures(*built);
+    if (!checked) co_return checked.error();
     auto after = co_await status_of(scope, std::move(entries));
-    after.indexed = indexed;
+    if (!after) co_return after.error();
+    after->indexed = indexed;
     co_return after;
 }
 
-coro::CoroTask<IndexStatus> Indexer::rebuild(coro::Scope& scope) {
+coro::CoroTask<dstd::Result<IndexStatus>> Indexer::rebuild(coro::Scope& scope) {
     auto entries = impl_->take_entries();
-    throw_on_failures(co_await build::resolve_and_build_index(
-        impl_->build_input(true, entries)));
+    auto built = co_await build::resolve_and_build_index(
+        impl_->build_input(true, entries));
+    if (!built) co_return built.error();
+    const auto checked = check_failures(*built);
+    if (!checked) co_return checked.error();
     auto after = co_await status_of(scope, std::move(entries));
-    after.indexed = impl_->paths.size();
+    if (!after) co_return after.error();
+    after->indexed = impl_->paths.size();
     co_return after;
 }
 
-coro::CoroTask<dstd::Vector<IndexedFile>> Indexer::files(coro::Scope&) const {
+coro::CoroTask<dstd::Result<dstd::Vector<IndexedFile>>> Indexer::files(
+    coro::Scope&) const {
     dstd::Vector<IndexedFile> out;
     for (const auto& [index_path, traces] : impl_->by_index()) {
         auto checking = has_store(index_path);
-        const bool store_present = co_await std::move(checking);
-        if (!store_present) continue;
-        const auto snapshot = common::unwrap(plan::open_snapshot(index_path));
+        const auto store_present = co_await std::move(checking);
+        if (!store_present.has_value()) co_return store_present.error();
+        if (!*store_present) continue;
+        const auto opened = plan::open_snapshot(index_path);
+        if (!opened) co_return opened.error();
+        const auto& snapshot = *opened;
         for (const auto* p : traces) {
             const auto logical = store::internal::get_logical_path(*p);
             const auto file = snapshot.file(logical);
@@ -358,25 +397,31 @@ coro::CoroTask<dstd::Vector<IndexedFile>> Indexer::files(coro::Scope&) const {
             f.index_path = index_path;
             f.size_bytes = file->stat().size;
             f.mtime = file->stat().mtime;
-            const auto meta = common::unwrap(file_metadata(snapshot, *file));
-            f.truncated = meta && meta->truncated;
-            const auto recorded = common::unwrap(schema(snapshot, *file));
-            if (recorded) f.schema.assign(recorded->data(), recorded->size());
+            const auto meta = file_metadata(snapshot, *file);
+            if (!meta) co_return meta.error();
+            f.truncated = *meta && (*meta)->truncated;
+            const auto recorded = schema(snapshot, *file);
+            if (!recorded) co_return recorded.error();
+            if (*recorded)
+                f.schema.assign((*recorded)->data(), (*recorded)->size());
             out.push_back(std::move(f));
         }
     }
     co_return out;
 }
 
-coro::CoroTask<dstd::Vector<FileManifest>> Indexer::manifest(
+coro::CoroTask<dstd::Result<dstd::Vector<FileManifest>>> Indexer::manifest(
     coro::Scope&) const {
     const auto config = impl_->bloom_config();
     dstd::Vector<FileManifest> out;
     for (const auto& [index_path, traces] : impl_->by_index()) {
         auto checking = has_store(index_path);
-        const bool store_present = co_await std::move(checking);
-        if (!store_present) continue;
-        const auto snapshot = common::unwrap(plan::open_snapshot(index_path));
+        const auto store_present = co_await std::move(checking);
+        if (!store_present.has_value()) co_return store_present.error();
+        if (!*store_present) continue;
+        const auto opened = plan::open_snapshot(index_path);
+        if (!opened) co_return opened.error();
+        const auto& snapshot = *opened;
         const std::uint64_t agg_params =
             impl_->options.aggregation.params_hash();
         for (const auto* p : traces) {
@@ -384,12 +429,18 @@ coro::CoroTask<dstd::Vector<FileManifest>> Indexer::manifest(
                 snapshot.file(store::internal::get_logical_path(*p));
             if (!file) continue;
             FileManifest m{*p, index_path, {}};
-            const auto recorded = common::unwrap(schema(snapshot, *file));
+            const auto recorded = schema(snapshot, *file);
+            if (!recorded) co_return recorded.error();
             const dstd::String id =
-                recorded ? dstd::String(recorded->data(), recorded->size())
-                         : dstd::String{};
-            const RecordSchema* rec_schema =
-                recorded ? &get_schema(id) : nullptr;
+                *recorded
+                    ? dstd::String((*recorded)->data(), (*recorded)->size())
+                    : dstd::String{};
+            const RecordSchema* rec_schema = nullptr;
+            if (*recorded) {
+                const auto found = schema_by_id(id);
+                if (!found) co_return found.error();
+                rec_schema = *found;
+            }
             const auto file_config =
                 rec_schema ? build::for_schema(config, *rec_schema) : config;
             for (auto ext : store::ALL_EXTENSIONS) {
@@ -406,7 +457,9 @@ coro::CoroTask<dstd::Vector<FileManifest>> Indexer::manifest(
                      extension_current(snapshot, *file, ext) &&
                          state->params_hash == want});
             }
-            for (const auto& copy : common::unwrap(plugins(snapshot, *file))) {
+            const auto copies = plugins(snapshot, *file);
+            if (!copies) co_return copies.error();
+            for (const auto& copy : *copies) {
                 const dstd::String name(copy.name.data(), copy.name.size());
                 const auto ext = extensions::find_plugin_extension(name);
                 const bool current =
@@ -421,18 +474,18 @@ coro::CoroTask<dstd::Vector<FileManifest>> Indexer::manifest(
     co_return out;
 }
 
-coro::CoroTask<dstd::Vector<FileExplain>> Indexer::explain(
+coro::CoroTask<dstd::Result<dstd::Vector<FileExplain>>> Indexer::explain(
     coro::Scope&, dstd::String query) const {
     auto parsed = duql::Query::from_string(query);
     if (!parsed)
-        throw common::DFTUtilsException::cat(
-            common::ErrorCode::InvalidArgument,
-            "Indexer::explain: ", parsed.error().format());
+        co_return common::make_error<"Indexer::explain: {}">(
+            common::ErrorCode::InvalidArgument, parsed.error().format());
     dstd::Vector<FileExplain> out;
     for (const auto& [index_path, traces] : impl_->by_index()) {
         auto checking = has_store(index_path);
-        const bool store_present = co_await std::move(checking);
-        if (!store_present) {
+        const auto store_present = co_await std::move(checking);
+        if (!store_present.has_value()) co_return store_present.error();
+        if (!*store_present) {
             for (const auto* p : traces) {
                 FileExplain f;
                 f.path = *p;
@@ -440,7 +493,9 @@ coro::CoroTask<dstd::Vector<FileExplain>> Indexer::explain(
             }
             continue;
         }
-        const auto snapshot = common::unwrap(plan::open_snapshot(index_path));
+        const auto opened = plan::open_snapshot(index_path);
+        if (!opened) co_return opened.error();
+        const auto& snapshot = *opened;
         const duql::Query& q = *parsed;
         for (const auto* p : traces) {
             auto e = plan::explain_file_chunks(snapshot, *p, q);
@@ -459,9 +514,11 @@ coro::CoroTask<dstd::Vector<FileExplain>> Indexer::explain(
     co_return out;
 }
 
-coro::CoroTask<IndexStatus> Indexer::rebuild_extension(coro::Scope& scope,
-                                                       dstd::String extension) {
-    const auto ext = tier_extension(extension);
+coro::CoroTask<dstd::Result<IndexStatus>> Indexer::rebuild_extension(
+    coro::Scope& scope, dstd::String extension) {
+    const auto named = tier_extension(extension);
+    if (!named) co_return named.error();
+    const auto ext = *named;
     auto entries = impl_->take_entries();
     auto in = impl_->build_input(false, entries);
     in.build_bloom = true;
@@ -469,26 +526,37 @@ coro::CoroTask<IndexStatus> Indexer::rebuild_extension(coro::Scope& scope,
     in.bloom_config = impl_->bloom_config();
     in.bloom_config.extensions.add(ext);
     in.rebuild_extensions.add(ext);
-    throw_on_failures(co_await build::resolve_and_build_index(std::move(in)));
+    auto built = co_await build::resolve_and_build_index(std::move(in));
+    if (!built) co_return built.error();
+    const auto checked = check_failures(*built);
+    if (!checked) co_return checked.error();
     auto after = co_await status_of(scope, std::move(entries));
-    after.indexed = impl_->paths.size();
+    if (!after) co_return after.error();
+    after->indexed = impl_->paths.size();
     co_return after;
 }
 
-coro::CoroTask<IndexStatus> Indexer::drop_extension(coro::Scope& scope,
-                                                    dstd::String extension) {
-    const auto ext = tier_extension(extension);
+coro::CoroTask<dstd::Result<IndexStatus>> Indexer::drop_extension(
+    coro::Scope& scope, dstd::String extension) {
+    const auto named = tier_extension(extension);
+    if (!named) co_return named.error();
+    const auto ext = *named;
     for (const auto& [index_path, traces] : impl_->by_index()) {
         auto checking = has_store(index_path);
-        const bool store_present = co_await std::move(checking);
-        if (!store_present) continue;
+        const auto store_present = co_await std::move(checking);
+        if (!store_present.has_value()) co_return store_present.error();
+        if (!*store_present) continue;
         if (ext == store::IndexExtension::Plugin) {
-            co_await drop_plugin_extension(index_path, extension, traces);
+            auto dropping =
+                drop_plugin_extension(index_path, extension, traces);
+            const auto plugin_dropped = co_await std::move(dropping);
+            if (!plugin_dropped) co_return plugin_dropped.error();
             continue;
         }
         auto opened = Index::open(index_path);
         if (!opened)
-            throw_on_error(opened.error(), "drop extension " + extension);
+            co_return failed(dstd::fmt<"drop extension {}">(extension),
+                             opened.error());
         dstd::Vector<dstd::String> logical;
         logical.reserve(traces.size());
         for (const auto* p : traces)
@@ -500,66 +568,71 @@ coro::CoroTask<IndexStatus> Indexer::drop_extension(coro::Scope& scope,
             *opened, ext,
             dstd::Span<const dstd::StringView>(views.data(), views.size()));
         if (!dropped)
-            throw_on_error(dropped.error(), "drop extension " + extension);
+            co_return failed(dstd::fmt<"drop extension {}">(extension),
+                             dropped.error());
     }
     co_return co_await status(scope);
 }
 
-IndexStatus Indexer::status() const {
+dstd::Result<IndexStatus> Indexer::status() const {
     return block_on<IndexStatus>(impl_->runtime(), "indexer-status",
                                  [this](coro::Scope& s) { return status(s); });
 }
 
-IndexStatus Indexer::build() {
+dstd::Result<IndexStatus> Indexer::build() {
     return block_on<IndexStatus>(impl_->runtime(), "indexer-build",
                                  [this](coro::Scope& s) { return build(s); });
 }
 
-IndexStatus Indexer::rebuild() {
+dstd::Result<IndexStatus> Indexer::rebuild() {
     return block_on<IndexStatus>(impl_->runtime(), "indexer-rebuild",
                                  [this](coro::Scope& s) { return rebuild(s); });
 }
 
-dstd::Vector<IndexedFile> Indexer::files() const {
+dstd::Result<dstd::Vector<IndexedFile>> Indexer::files() const {
     return block_on<dstd::Vector<IndexedFile>>(
         impl_->runtime(), "indexer-files",
         [this](coro::Scope& s) { return files(s); });
 }
 
-dstd::Vector<FileManifest> Indexer::manifest() const {
+dstd::Result<dstd::Vector<FileManifest>> Indexer::manifest() const {
     return block_on<dstd::Vector<FileManifest>>(
         impl_->runtime(), "indexer-manifest",
         [this](coro::Scope& s) { return manifest(s); });
 }
 
-dstd::Vector<FileExplain> Indexer::explain(dstd::StringView query) const {
+dstd::Result<dstd::Vector<FileExplain>> Indexer::explain(
+    dstd::StringView query) const {
     const dstd::String text(query);
     return block_on<dstd::Vector<FileExplain>>(
         impl_->runtime(), "indexer-explain",
         [this, &text](coro::Scope& s) { return explain(s, text); });
 }
 
-IndexStatus Indexer::rebuild_extension(dstd::StringView extension) {
+dstd::Result<IndexStatus> Indexer::rebuild_extension(
+    dstd::StringView extension) {
     const dstd::String name(extension);
     return block_on<IndexStatus>(
         impl_->runtime(), "indexer-rebuild-extension",
         [this, &name](coro::Scope& s) { return rebuild_extension(s, name); });
 }
 
-dataframe::DataFrame Indexer::rowset(dstd::String name) const {
-    dstd::Vector<plan::RowSetFile> files;
-    for (const auto& f : this->files()) files.push_back({f.path, f.index_path});
-    auto frame = plan::stored_rowset(files, name);
+dstd::Result<dataframe::DataFrame> Indexer::rowset(dstd::String name) const {
+    dstd::Vector<plan::RowSetFile> rowset_files;
+    const auto listed = this->files();
+    if (!listed) return listed.error();
+    for (const auto& f : *listed)
+        rowset_files.push_back({f.path, f.index_path});
+    auto frame = plan::stored_rowset(rowset_files, name);
     if (!frame)
-        throw common::DFTUtilsException::cat(
-            common::ErrorCode::InvalidArgument,
-            "Indexer::rowset: the index holds no "
-            "rows for row set '",
-            name, "'; read it with View::duql(\"from ", name, "\")");
+        return common::make_error<
+            "Indexer::rowset: the index holds no rows for row set '{}'; read "
+            "it with View::duql(\"from {}\")">(
+            common::ErrorCode::InvalidArgument, name, name);
     return std::move(*frame);
 }
 
-IndexStatus Indexer::drop_extension(dstd::StringView extension) {
+dstd::Result<IndexStatus> Indexer::drop_extension(dstd::StringView extension) {
     const dstd::String name(extension);
     return block_on<IndexStatus>(
         impl_->runtime(), "indexer-drop-extension",

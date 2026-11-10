@@ -319,7 +319,7 @@ BootstrapBuild open_bootstrap_build(BootstrapRoot& root, dstd::StringView file,
 }
 
 // Puts the file's index, the tier its runs staged included, into its build.
-void fill_bootstrap_file(
+dstd::Result<void> fill_bootstrap_file(
     dftracer::utils::index::FileBuild& build,
     const dftracer::utils::index::gzip::GzipBuildArtifacts& arts,
     const dftracer::utils::index::RecordSchema& schema,
@@ -335,8 +335,9 @@ void fill_bootstrap_file(
         index::clear_chunk_copies(build);
     index::put_profile(build, schema.id);
     build.finish(index::store::IndexExtension::Profile, schema.params_hash());
-    bloom.write(build);
-    rowsets.write(build);
+    auto bloom_written = bloom.write(build);
+    if (!bloom_written) return bloom_written.error();
+    return rowsets.write(build);
 }
 
 // Publishes the files of `group` in one record. The lines are already out in
@@ -360,12 +361,15 @@ class SinkWriterVisitor : public dftracer::utils::index::build::IndexVisitor {
     SinkWriterVisitor(ExportSink& sink, bool drop_metadata)
         : sink_(&sink), drop_metadata_(drop_metadata) {}
     void begin(std::size_t) override {}
-    coro::CoroTask<void> on_checkpoint(std::size_t) override { co_return; }
-    coro::CoroTask<void> on_chunk(const char* data, std::size_t len,
-                                  std::size_t) override {
+    coro::CoroTask<dstd::Result<void>> on_checkpoint(std::size_t) override {
+        co_return dstd::Result<void>{};
+    }
+    coro::CoroTask<dstd::Result<void>> on_chunk(const char* data,
+                                                std::size_t len,
+                                                std::size_t) override {
         buf_.append(data, len);
         const std::size_t last_nl = buf_.rfind('\n');
-        if (last_nl == dstd::String::npos) co_return;
+        if (last_nl == dstd::String::npos) co_return dstd::Result<void>{};
         if (!drop_metadata_) {
             sink_->write(dstd::StringView(buf_.data(), last_nl + 1));
         } else {
@@ -383,7 +387,7 @@ class SinkWriterVisitor : public dftracer::utils::index::build::IndexVisitor {
             if (!kept_.empty()) sink_->write(kept_);
         }
         buf_.erase(0, last_nl + 1);
-        co_return;
+        co_return dstd::Result<void>{};
     }
 
    private:
@@ -468,8 +472,13 @@ coro::CoroTask<bool> try_export_bootstrap(const ViewPlan& plan,
                                      f.file_path, started.failure);
             continue;
         }
-        fill_bootstrap_file(*started.build, arts, schema, bloom, rowsets,
-                            started.fresh);
+        const auto filled = fill_bootstrap_file(*started.build, arts, schema,
+                                                bloom, rowsets, started.fresh);
+        if (!filled) {
+            DFTRACER_UTILS_LOG_ERROR("bootstrap index write failed for {}: {}",
+                                     f.file_path, filled.error().message());
+            continue;
+        }
         const dstd::String staging = co_await pending[slot].add(
             std::move(*started.build), 0,
             dftracer::utils::index::store::internal::get_logical_path(
@@ -742,7 +751,8 @@ coro::CoroTask<BootstrapFile> bootstrap_file(
     const std::uint64_t plaintext =
         dftracer::utils::index::build::FileAdmission::plaintext_estimate(
             f.uncompressed_size, compressed);
-    auto ticket = co_await run->admission->admit(plaintext);
+    auto admitted = co_await run->admission->admit(plaintext);
+    auto ticket = common::unwrap(std::move(admitted));
 #if DFTRACER_UTILS_TEST_PROBES
     auto& counters = bootstrap_counters();
     const auto now =
@@ -811,8 +821,13 @@ coro::CoroTask<BootstrapFile> bootstrap_file(
     read.events_scanned = arts.total_lines;
     counted(*plan, read);
     driver.seal();
-    fill_bootstrap_file(*started.build, arts, schema, bloom, rowsets,
-                        started.fresh);
+    const auto filled = fill_bootstrap_file(*started.build, arts, schema, bloom,
+                                            rowsets, started.fresh);
+    if (!filled) {
+        DFTRACER_UTILS_LOG_ERROR("bootstrap index write failed for {}: {}",
+                                 f.file_path, filled.error().message());
+        co_return out;
+    }
     const dstd::String failure = co_await group->add(
         std::move(*started.build), 0,
         dftracer::utils::index::store::internal::get_logical_path(f.file_path));
@@ -1176,9 +1191,9 @@ ViewPlan resolve_bucket_origin(const ViewPlan& plan) {
             };
             if (by_path) {
                 dstd::Optional<double> lowest;
-                for (const auto& [chunk, range] :
-                     index::extensions::kinds::chunk_value_ranges(
-                         snapshot, *file, roles.time)) {
+                for (const auto& [chunk, range] : common::unwrap(
+                         index::extensions::kinds::chunk_value_ranges(
+                             snapshot, *file, roles.time))) {
                     if (is_in_view(chunk))
                         lowest =
                             std::min(lowest.value_or(range.first), range.first);
@@ -1192,15 +1207,15 @@ ViewPlan resolve_bucket_origin(const ViewPlan& plan) {
             }
             if (is_past) {
                 for (const auto& [chunk, bounds] :
-                     index::extensions::kinds::chunk_time_bounds(snapshot,
-                                                                 *file))
+                     common::unwrap(index::extensions::kinds::chunk_time_bounds(
+                         snapshot, *file)))
                     if (is_in_view(chunk))
                         global_min = std::min(global_min, bounds.first);
                 continue;
             }
-            const auto b =
+            const auto b = common::unwrap(
                 dftracer::utils::index::extensions::kinds::file_time_bounds(
-                    snapshot, *file);
+                    snapshot, *file));
             if (b.valid && b.min_timestamp_us < global_min)
                 global_min = b.min_timestamp_us;
         } catch (const std::exception&) {
@@ -1299,7 +1314,7 @@ class DistinctRowFold : public Fold {
             *intern_, select_, keys_, time_scale_, keep_metadata_, by_path_);
     }
 
-    void step(const FoldBatch& batch) override {
+    dstd::Result<void> step(const FoldBatch& batch) override {
         const auto seq = static_cast<std::int64_t>(batch.unit.seq);
         if (seq != cur_seq_) {
             cur_seq_ = seq;
@@ -1323,6 +1338,7 @@ class DistinctRowFold : public Fold {
                 }
             }
         }
+        return {};
     }
 
     void seal_unit(const ScanUnit&) override {}
@@ -1938,7 +1954,7 @@ class BranchDriverFold : public Fold {
 
     // One on-demand parse per line serves the metadata gate, every predicate
     // and every consumer, each starting from the beginning of the event.
-    void step(const FoldBatch& b) override {
+    dstd::Result<void> step(const FoldBatch& b) override {
         for (dstd::StringView line : b.raw) {
             auto parsed = doc_.parse(line);
             if (!parsed) continue;
@@ -1961,6 +1977,7 @@ class BranchDriverFold : public Fold {
                 consumers_[i](event, line);
             }
         }
+        return {};
     }
 
     void seal_unit(const ScanUnit&) override {}

@@ -184,8 +184,9 @@ TEST_SUITE("ReaderInflater") {
         dftu_utils_test::run_coro(
             [&](coro::Scope& scope) -> coro::CoroTask<void> {
                 index::gzip::CheckpointIndexer::VisitorList none;
-                arts = co_await index::gzip::build_gzip_index_artifacts(
+                auto built = co_await index::gzip::build_gzip_index_artifacts(
                     f.path, 32u << 20, none, &scope);
+                if (built) arts = std::move(*built);
             });
         REQUIRE(arts.has_value());
         CHECK(arts->total_uc_size == text.size());

@@ -3298,8 +3298,15 @@ coro::CoroTask<dstd::Result<ExportStats>> fuse(
                         return fuse_worker_guarded(ctx, w, scope, failed);
                     }));
             auto results = co_await coro::when_all(std::move(workers));
-            for (auto& r : results)
-                if (!r.has_value()) co_return r.error();
+            std::size_t first_error = results.size();
+            for (std::size_t i = 0; i < results.size(); ++i) {
+                if (first_error == results.size() && !results[i].has_value())
+                    first_error = i;
+                else
+                    results[i].discard();
+            }
+            if (first_error != results.size())
+                co_return results[first_error].error();
             co_return dstd::Result<void>{};
         });
     if (!fused) co_return fused.error();

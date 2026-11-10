@@ -604,4 +604,39 @@ TEST_SUITE("Fold") {
         CHECK(outcome->failed);
         CHECK(outcome->message.find("fold step failed") != dstd::String::npos);
     }
+
+    // Several workers can fail before the stop reaches them; the scan returns
+    // one error and handles the others.
+    TEST_CASE("a scan where every worker fails returns one error") {
+        dstd::Vector<dstd::UniquePtr<TestEnvironment>> envs;
+        ViewPlan plan;
+        for (int i = 0; i < 8; ++i) {
+            envs.push_back(dstd::make_unique<TestEnvironment>(200));
+            dstd::String gz = create_mixed_trace(*envs.back(), 30, 20);
+            dstd::String idx = dstd::String(determine_index_path(gz, ""));
+            StringSink s;
+            dftu_utils_test::ok(
+                View::from_file(dstd::String(gz), dstd::String(idx))
+                    .sink_json(s)
+                    .get());
+            ViewFile f;
+            f.file_path = gz;
+            f.index_path = idx;
+            plan.files.push_back(f);
+        }
+        ViewDefinition vdef;
+        vdef.include_metadata = false;
+        for (int round = 0; round < 20; ++round) {
+            dstd::StringIntern intern;
+            FailingFold ff;
+            std::array<Fold*, 1> folds{&ff};
+            auto r =
+                fuse(plan, vdef, folds, intern, nullptr, 0, nullptr, nullptr)
+                    .get();
+            REQUIRE_FALSE(r.has_value());
+            CHECK(
+                dstd::StringView(r.error().c_str()).find("fold step failed") !=
+                dstd::StringView::npos);
+        }
+    }
 }

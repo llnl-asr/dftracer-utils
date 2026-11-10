@@ -68,37 +68,42 @@ struct IndexedCounts {
     dstd::Vector<dstd::String> to_stream;
 };
 
-IndexedCounts count_from_index(dstd::StringView index_path,
-                               const dstd::Vector<ResolvedFile>& entries) {
+dstd::Result<IndexedCounts> read_index_counts(
+    dstd::StringView index_path, const dstd::Vector<ResolvedFile>& entries) {
     IndexedCounts counts;
-    try {
-        const auto snapshot = common::unwrap(
-            dftracer::utils::index::plan::open_snapshot(index_path));
-        for (const auto& entry : entries) {
-            const auto file = snapshot.file(
-                dftracer::utils::index::store::internal::get_logical_path(
-                    entry.file_path));
-            const auto stats =
-                file ? common::unwrap(dftracer::utils::index::scalar_stats(
-                           snapshot, *file))
-                     : dstd::nullopt;
-            if (stats && stats->chunk_count > 0) {
+    auto snapshot = dftracer::utils::index::plan::open_snapshot(index_path);
+    if (!snapshot) return snapshot.error();
+    for (const auto& entry : entries) {
+        const auto file = snapshot->file(
+            dftracer::utils::index::store::internal::get_logical_path(
+                entry.file_path));
+        bool counted = false;
+        if (file) {
+            auto scalar =
+                dftracer::utils::index::scalar_stats(*snapshot, *file);
+            if (!scalar) return scalar.error();
+            if (*scalar && (*scalar)->chunk_count > 0) {
                 counts.total_events +=
-                    static_cast<std::size_t>(stats->stats.total_events);
+                    static_cast<std::size_t>((*scalar)->stats.total_events);
                 counts.files_counted++;
-            } else {
-                counts.to_stream.push_back(entry.file_path);
+                counted = true;
             }
         }
-    } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_WARN(
-            "Cannot read index {} ({}); streaming its files", index_path,
-            e.what());
-        counts = IndexedCounts{};
-        for (const auto& entry : entries)
-            counts.to_stream.push_back(entry.file_path);
+        if (!counted) counts.to_stream.push_back(entry.file_path);
     }
     return counts;
+}
+
+IndexedCounts count_from_index(dstd::StringView index_path,
+                               const dstd::Vector<ResolvedFile>& entries) {
+    auto counts = read_index_counts(index_path, entries);
+    if (counts) return std::move(*counts);
+    DFTRACER_UTILS_LOG_WARN("Cannot read index {} ({}); streaming its files",
+                            index_path, counts.error().c_str());
+    IndexedCounts fallback;
+    for (const auto& entry : entries)
+        fallback.to_stream.push_back(entry.file_path);
+    return fallback;
 }
 
 class StreamCounter {
@@ -167,22 +172,24 @@ class StreamCounter {
     bool path_decoder_;
 };
 
-coro::CoroTask<std::size_t> stream_count(dstd::String path) {
+coro::CoroTask<dstd::Result<std::size_t>> stream_count(dstd::String path) {
     const dstd::OpenOptions open_options;
     auto opening = runtime::io::open_file(dstd::PathView(path), open_options);
     auto file = co_await std::move(opening);
     if (!file)
-        throw common::DFTUtilsException::cat(common::ErrorCode::Io,
-                                             "cannot open ", path);
+        co_return common::make_error<"cannot open {}">(common::ErrorCode::Io,
+                                                       path);
     const int fd = file->native_handle();
     struct stat st;
     const ssize_t stat_result = co_await runtime::io::fstat(fd, &st);
     if (stat_result != 0)
-        throw common::DFTUtilsException::cat(common::ErrorCode::Io,
-                                             "cannot stat ", path);
+        co_return common::make_error<"cannot stat {}">(common::ErrorCode::Io,
+                                                       path);
     const auto size = static_cast<std::uint64_t>(st.st_size);
-    const auto& schema = *common::unwrap(index::detect_file_schema(
-        path, *file, size, common::stat_mtime_ns(st)));
+    auto detected =
+        index::detect_file_schema(path, *file, size, common::stat_mtime_ns(st));
+    if (!detected) co_return detected.error();
+    const auto& schema = **detected;
     StreamCounter counter(schema.decoder == index::Decoder::Path);
 
     unsigned char magic[2] = {0, 0};
@@ -193,7 +200,7 @@ coro::CoroTask<std::size_t> stream_count(dstd::String path) {
         for (;;) {
             auto chunk = co_await members.next();
             if (!chunk) break;
-            if (!*chunk) common::throw_error(chunk->error());
+            if (!*chunk) co_return chunk->error();
             counter.feed(**chunk);
         }
     } else {
@@ -203,8 +210,8 @@ coro::CoroTask<std::size_t> stream_count(dstd::String path) {
             const auto got =
                 co_await runtime::io::pread(fd, buf.data(), buf.size(), offset);
             if (got < 0)
-                throw common::DFTUtilsException::cat(common::ErrorCode::Io,
-                                                     "cannot read ", path);
+                co_return common::make_error<"cannot read {}">(
+                    common::ErrorCode::Io, path);
             if (got == 0) break;
             counter.feed(
                 dstd::StringView(buf.data(), static_cast<std::size_t>(got)));
@@ -228,10 +235,12 @@ int main(int argc, char** argv) {
 }
 
 static int run_event_count(const EventCountArgParse* cli) {
-    const dstd::Path log_dir =
-        cli->inputs.directory.empty()
-            ? dstd::Path()
-            : binaries::absolute_path(cli->inputs.directory);
+    dstd::Path log_dir;
+    if (!cli->inputs.directory.empty()) {
+        auto absolute = binaries::absolute_path(cli->inputs.directory);
+        if (!absolute) return binaries::report_error(absolute.error());
+        log_dir = std::move(*absolute);
+    }
     const dstd::String index_dir(cli->indexing.index_dir);
     const auto force = cli->indexing.force;
     const auto executor_threads = cli->runtime_args.executor_threads;
@@ -239,8 +248,11 @@ static int run_event_count(const EventCountArgParse* cli) {
     Resolver resolver;
     ResolverInput resolve_input;
     resolve_input.directory = dstd::String(log_dir.str());
-    for (const auto file : cli->inputs.files)
-        resolve_input.files.emplace_back(binaries::absolute_path(file).str());
+    for (const auto file : cli->inputs.files) {
+        auto absolute = binaries::absolute_path(file);
+        if (!absolute) return binaries::report_error(absolute.error());
+        resolve_input.files.emplace_back(absolute->str());
+    }
     resolve_input.index_dir = index_dir;
     resolve_input.require_checkpoints = true;
 
@@ -276,7 +288,7 @@ static int run_event_count(const EventCountArgParse* cli) {
     for (auto& item : resolve_result.needs_checkpoint)
         stream_items.push_back(std::move(item.file_path));
 
-    binaries::run_on_pool(
+    auto ran = binaries::run_on_pool(
         "DFTracer Event Count", cli->runtime_args,
         [&index_groups, &stream_items, &total_events, &files_processed, &failed,
          executor_threads](coro::Scope&) -> coro::CoroTask<void> {
@@ -291,30 +303,34 @@ static int run_event_count(const EventCountArgParse* cli) {
             }
 
             if (stream_items.empty()) co_return;
-            co_await coro::with_scope([&](coro::Scope& scope)
-                                          -> coro::CoroTask<void> {
-                binaries::parallel_for_each(
-                    scope, std::move(stream_items), executor_threads,
-                    [total_events_ptr = &total_events,
-                     files_processed_ptr = &files_processed,
-                     failed_ptr = &failed](
-                        const dstd::String& path) -> coro::CoroTask<void> {
-                        try {
-                            const std::size_t n = co_await stream_count(path);
-                            total_events_ptr->fetch_add(
-                                n, std::memory_order_relaxed);
-                            files_processed_ptr->fetch_add(
-                                1, std::memory_order_relaxed);
-                        } catch (const std::exception& e) {
-                            DFTRACER_UTILS_LOG_ERROR("Cannot count {}: {}",
-                                                     path, e.what());
-                            failed_ptr->store(true, std::memory_order_relaxed);
-                        }
-                    });
-                co_return;
-            });
+            co_await coro::with_scope(
+                [&](coro::Scope& scope) -> coro::CoroTask<void> {
+                    binaries::parallel_for_each(
+                        scope, std::move(stream_items), executor_threads,
+                        [total_events_ptr = &total_events,
+                         files_processed_ptr = &files_processed,
+                         failed_ptr = &failed](
+                            const dstd::String& path) -> coro::CoroTask<void> {
+                            auto counting = stream_count(path);
+                            auto counted = co_await std::move(counting);
+                            if (counted) {
+                                total_events_ptr->fetch_add(
+                                    *counted, std::memory_order_relaxed);
+                                files_processed_ptr->fetch_add(
+                                    1, std::memory_order_relaxed);
+                            } else {
+                                DFTRACER_UTILS_LOG_ERROR(
+                                    "Cannot count {}: {}", path,
+                                    counted.error().c_str());
+                                failed_ptr->store(true,
+                                                  std::memory_order_relaxed);
+                            }
+                        });
+                    co_return;
+                });
             co_return;
         });
+    if (!ran) return binaries::report_error(ran.error());
 
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> duration = end_time - start_time;

@@ -257,9 +257,10 @@ class ViewArgParse : public binaries::ArgParse {
                       "(needs --group-by/--agg)");
     }
 
-    void post_parse() override {
+    dstd::Result<void> post_parse() override {
         time_bucket = static_cast<std::uint64_t>(std::llround(time_bucket_us));
         occ_cell = static_cast<std::uint64_t>(std::llround(occ_cell_us));
+        return {};
     }
 };
 
@@ -291,24 +292,31 @@ static ViewFile make_view_file(const dstd::String& file,
     return vf;
 }
 
+// Logs a failure outside the pool run; the exit code is 1.
+static bool fatal(const dstd::Error& error) {
+    DFTRACER_UTILS_LOG_ERROR("Fatal: {}", error.c_str());
+    return false;
+}
+
 // Re-scan a freshly written trace and confirm the event count round-trips.
 template <class Configure>
-static coro::CoroTask<void> verify_output(const dstd::String& final_output,
-                                          const dstd::String& index_dir,
-                                          std::size_t checkpoint_size,
-                                          Configure&& configure,
-                                          std::uint64_t expected_events,
-                                          bool& verify_failed) {
+static coro::CoroTask<dstd::Result<void>> verify_output(
+    const dstd::String& final_output, const dstd::String& index_dir,
+    std::size_t checkpoint_size, Configure&& configure,
+    std::uint64_t expected_events, bool& verify_failed) {
     dstd::String output_arg{dstd::StringView(final_output)};
     dstd::String index_dir_arg{dstd::StringView(index_dir)};
-    common::unwrap(co_await dftracer::utils::index::build::ensure_index_fresh(
-        "", std::move(output_arg), std::move(index_dir_arg)));
+    auto fresh = co_await dftracer::utils::index::build::ensure_index_fresh(
+        "", std::move(output_arg), std::move(index_dir_arg));
+    if (!fresh) co_return fresh.error();
     ViewFile ovf = make_view_file(
         final_output, internal::determine_index_path(final_output, index_dir),
         checkpoint_size);
     NullSink ns;
     View v = configure(View::from_files({ovf}));
-    ExportStats vs = common::unwrap(co_await v.sink_json(ns));
+    auto exported = co_await v.sink_json(ns);
+    if (!exported) co_return exported.error();
+    const ExportStats vs = *exported;
     if (vs.events_matched != expected_events) {
         DFTRACER_UTILS_LOG_ERROR(
             "Verify failed: wrote {} events but re-scan found {}",
@@ -319,6 +327,7 @@ static coro::CoroTask<void> verify_output(const dstd::String& final_output,
         std::fprintf(stderr, "Verify OK: %llu events round-tripped\n",
                      (unsigned long long)expected_events);
     }
+    co_return dstd::Result<void>{};
 }
 
 // Spec keys and reducers hold their names as owned text.
@@ -431,7 +440,7 @@ static bool parse_agg(dstd::StringView spec, dstd::Vector<AggSpec>& out) {
             const double digits =
                 dstd::from_chars<double>(op.substr(1)).value_or(0.0);
             out.push_back(AggSpec(AggOp::Pct, text(field),
-                                  text(op) + "_" + text(field), "",
+                                  dstd::fmt<"{}_{}">(op, field), "",
                                   digits / denom));
         } else {
             DFTRACER_UTILS_LOG_ERROR("Unknown --agg reducer: {}", tok);
@@ -482,12 +491,14 @@ static void emit_typed(FILE* out, const dataframe::DataFrame& regular,
 namespace {
 
 // Rebuilds the stale indexes of `files` under `index_dir`.
-static coro::CoroTask<void> refresh_indexes(
+static coro::CoroTask<dstd::Result<void>> refresh_indexes(
     const dstd::Vector<dstd::String>& files, const dstd::String& index_dir) {
     auto to_check = files;
     dstd::String dir_arg{dstd::StringView(index_dir)};
-    common::unwrap(co_await dftracer::utils::index::build::ensure_indexes_fresh(
-        "", std::move(to_check), std::move(dir_arg)));
+    auto fresh = co_await dftracer::utils::index::build::ensure_indexes_fresh(
+        "", std::move(to_check), std::move(dir_arg));
+    if (!fresh) co_return fresh.error();
+    co_return dstd::Result<void>{};
 }
 
 static dstd::Vector<dstd::String> select_columns(dstd::StringView select) {
@@ -512,14 +523,16 @@ static bool resolve_view_definition(const ViewArgParse& cli,
             return false;
         }
     } else if (!recipe_path.empty()) {
-        if (!common::unwrap(dstd::fs::exists(dstd::PathView(recipe_path)))) {
+        auto recipe_exists = dstd::fs::exists(dstd::PathView(recipe_path));
+        if (!recipe_exists.has_value()) return fatal(recipe_exists.error());
+        if (!*recipe_exists) {
             DFTRACER_UTILS_LOG_ERROR("Recipe file not found: {}",
                                      dstd::String(recipe_path));
             return false;
         }
-        auto json_content =
-            common::unwrap(dstd::fs::read_file(dstd::PathView(recipe_path)));
-        view = ViewDefinition::from_json(dstd::String(json_content));
+        auto json_content = dstd::fs::read_file(dstd::PathView(recipe_path));
+        if (!json_content) return fatal(json_content.error());
+        view = ViewDefinition::from_json(dstd::String(*json_content));
     } else {
         view.name = "custom";
         view.description = "Custom inline view";
@@ -568,24 +581,26 @@ static bool parse_time_range(dstd::StringView time_range_str,
     return true;
 }
 
-static void add_duration_filter(const ViewArgParse& cli, ViewDefinition& view) {
+static bool add_duration_filter(const ViewArgParse& cli, ViewDefinition& view) {
     const auto min_duration = cli.min_duration;
     const auto max_duration = cli.max_duration;
-    if (min_duration <= 0 && max_duration <= 0) return;
+    if (min_duration <= 0 && max_duration <= 0) return true;
     dstd::String extra;
     if (min_duration > 0) {
         if (!extra.empty()) extra += " and ";
-        extra +=
-            "dur >= " + dstd::to_string(static_cast<uint64_t>(min_duration));
+        extra += dstd::fmt<"dur >= {}">(static_cast<uint64_t>(min_duration));
     }
     if (max_duration > 0) {
         if (!extra.empty()) extra += " and ";
-        extra +=
-            "dur <= " + dstd::to_string(static_cast<uint64_t>(max_duration));
+        extra += dstd::fmt<"dur <= {}">(static_cast<uint64_t>(max_duration));
     }
     auto query = duql::Query::from_string(extra);
-    if (!query) throw duql::DuqlParseError(query.error());
+    if (!query) {
+        DFTRACER_UTILS_LOG_ERROR("Fatal: {}", query.error().format());
+        return false;
+    }
     view.with_query(std::move(*query));
+    return true;
 }
 
 // --phase selects the input phase; "any" reads every record, metadata
@@ -627,8 +642,12 @@ static bool collect_input_files(const ViewArgParse& cli,
         auto matched =
             binaries::scan_trace_files_on_pool(cli.runtime_args, directory,
                                                /*populate_size=*/false);
+        if (!matched) {
+            DFTRACER_UTILS_LOG_ERROR("Fatal: {}", matched.error().c_str());
+            return false;
+        }
 
-        for (const auto& entry : matched) {
+        for (const auto& entry : *matched) {
             files.emplace_back(entry.path.str());
         }
         std::sort(files.begin(), files.end());
@@ -656,10 +675,10 @@ static bool check_missing_indexes(const dstd::Vector<dstd::String>& files,
     for (const auto& file_path : files) {
         const dstd::String index_path =
             internal::determine_index_path(file_path, index_dir);
-        if (!common::unwrap(dstd::fs::exists(dstd::PathView(
-                dftracer::utils::index::store_dir(index_path))))) {
-            files_needing_index.push_back(file_path);
-        }
+        auto store_exists = dstd::fs::exists(
+            dstd::PathView(dftracer::utils::index::store_dir(index_path)));
+        if (!store_exists.has_value()) return fatal(store_exists.error());
+        if (!*store_exists) files_needing_index.push_back(file_path);
     }
 
     if (!files_needing_index.empty()) {
@@ -747,19 +766,19 @@ struct ViewRun {
 
     View configure(View v) const;
     View windowed(View v) const;
-    coro::CoroTask<dataframe::DataFrame> windowed_table(
+    coro::CoroTask<dstd::Result<dataframe::DataFrame>> windowed_table(
         dataframe::DataFrame table) const;
     // The exit code when the probe ends the run, else nothing.
     dstd::Optional<int> probe_duql();
 #ifdef DFTRACER_UTILS_ENABLE_MPI
-    coro::CoroTask<void> run_distributed_aggregate(
+    coro::CoroTask<dstd::Result<void>> run_distributed_aggregate(
         distributed::MpiTransport& transport);
-    coro::CoroTask<void> run_distributed_write(
+    coro::CoroTask<dstd::Result<void>> run_distributed_write(
         distributed::MpiTransport& transport);
 #endif
-    coro::CoroTask<void> run_shard_set();
-    coro::CoroTask<void> run_local();
-    coro::CoroTask<void> run();
+    coro::CoroTask<dstd::Result<void>> run_shard_set();
+    coro::CoroTask<dstd::Result<void>> run_local();
+    coro::CoroTask<dstd::Result<void>> run();
 };
 
 ViewRun::ViewRun(const ViewArgParse* c)
@@ -822,14 +841,16 @@ View ViewRun::windowed(View v) const {
 }
 
 // The same projection and window over a table merged from partials.
-coro::CoroTask<dataframe::DataFrame> ViewRun::windowed_table(
+coro::CoroTask<dstd::Result<dataframe::DataFrame>> ViewRun::windowed_table(
     dataframe::DataFrame table) const {
-    if (cli->select.empty() && !has_window) co_return table;
+    if (cli->select.empty() && !has_window) co_return std::move(table);
     dataframe::LazyFrame rows = dataframe::lazy(std::move(table));
     if (!cli->select.empty()) rows = rows.select(select_columns(cli->select));
     if (has_window)
         rows = rows.slice(static_cast<std::int64_t>(cli->offset), window_size);
-    co_return common::unwrap(co_await rows.collect());
+    auto collected = co_await rows.collect();
+    if (!collected) co_return collected.error();
+    co_return std::move(*collected);
 }
 
 // Stages after the scan give a table, not events; --explain prints the
@@ -839,22 +860,27 @@ dstd::Optional<int> ViewRun::probe_duql() {
     // duql types fields from the index catalog, so a missing index is built
     // before the query compiles. A distributed aggregation builds its shards'
     // indexes itself.
-    if (!no_auto_index && !aggregate && !counters && !fg_mode)
-        binaries::run_on_pool("dftracer_view index", cli->runtime_args,
-                              [&](coro::Scope&) -> coro::CoroTask<void> {
-                                  co_await refresh_indexes(files,
-                                                           index_dir_std);
-                              });
-    dstd::String plan;
-    try {
-        View probe = View::from_files(view_files);
-        if (!cli->record_schema.empty())
-            probe = probe.record_schema(dstd::String(cli->record_schema));
-        plan = common::unwrap(probe.explain_duql(duql_str, duql_params));
-    } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_ERROR("Invalid --duql: {}", e.what());
+    if (!no_auto_index && !aggregate && !counters && !fg_mode) {
+        auto refreshed = binaries::run_on_pool(
+            "dftracer_view index", cli->runtime_args,
+            [&](coro::Scope&) -> coro::CoroTask<dstd::Result<void>> {
+                co_return co_await refresh_indexes(files, index_dir_std);
+            });
+        if (!refreshed) {
+            DFTRACER_UTILS_LOG_ERROR("Fatal: {}", refreshed.error().c_str());
+            return 1;
+        }
+    }
+    View probe = View::from_files(view_files);
+    if (!cli->record_schema.empty())
+        probe = probe.record_schema(dstd::String(cli->record_schema));
+    auto explained = probe.explain_duql(duql_str, duql_params);
+    if (!explained) {
+        DFTRACER_UTILS_LOG_ERROR("Invalid --duql: {}",
+                                 explained.error().c_str());
         return 1;
     }
+    const dstd::String plan = std::move(*explained);
     if (cli->explain) {
         std::fputs(plan.c_str(), stdout);
         return 0;
@@ -874,7 +900,7 @@ dstd::Optional<int> ViewRun::probe_duql() {
 #ifdef DFTRACER_UTILS_ENABLE_MPI
 // Distributed aggregation: each rank aggregates its shard into a serialized
 // partial, the partials are gathered, and rank 0 merges and emits.
-coro::CoroTask<void> ViewRun::run_distributed_aggregate(
+coro::CoroTask<dstd::Result<void>> ViewRun::run_distributed_aggregate(
     distributed::MpiTransport& transport) {
     auto shard = shard_files(files, transport.rank(), transport.size());
     // Each rank builds its own shard of the root, on node-local scratch when
@@ -891,9 +917,10 @@ coro::CoroTask<void> ViewRun::run_distributed_aggregate(
         bin.index_dir = rank_idx;
         bin.checkpoint_size = checkpoint_size;
         bin.require_checkpoints = true;
-        common::unwrap(
+        auto built =
             co_await dftracer::utils::index::build::resolve_and_build_index(
-                std::move(bin)));
+                std::move(bin));
+        if (!built) co_return built.error();
     }
     dstd::Vector<ViewFile> shard_files_vf;
     for (const auto& f : shard) {
@@ -903,7 +930,9 @@ coro::CoroTask<void> ViewRun::run_distributed_aggregate(
     dataframe::LazyResult<dstd::String> partial_plan =
         fg_mode ? shard_view.flamegraph_partial(ct_partition)
                 : shard_view.aggregate_partial();
-    dstd::String partial = common::unwrap(co_await partial_plan.collect());
+    auto collected = co_await partial_plan.collect();
+    if (!collected) co_return collected.error();
+    dstd::String partial = std::move(*collected);
     auto partials = transport.all_gather(partial);
     if (transport.rank() == 0) {
         // Every rank published its shard before the gather, so the set is
@@ -916,18 +945,24 @@ coro::CoroTask<void> ViewRun::run_distributed_aggregate(
             for (int r = 0; r < transport.size(); ++r) {
                 dstd::String d(dftracer::utils::index::shard_root(
                     idx_root, static_cast<std::size_t>(r)));
-                if (common::unwrap(dstd::fs::exists(
-                        dstd::PathView(dftracer::utils::index::store_dir(d)))))
-                    shard_dirs.push_back(std::move(d));
+                auto shard_exists = dstd::fs::exists(
+                    dstd::PathView(dftracer::utils::index::store_dir(d)));
+                if (!shard_exists) co_return shard_exists.error();
+                if (*shard_exists) shard_dirs.push_back(std::move(d));
             }
             if (!shard_dirs.empty()) {
-                try {
-                    common::unwrap(write_shard_set(idx_root, shard_dirs));
-                    common::unwrap(consolidate_shard_set(idx_root));
-                } catch (const std::exception& e) {
+                dstd::Optional<dstd::Error> merge_error;
+                auto written = write_shard_set(idx_root, shard_dirs);
+                if (!written) {
+                    merge_error = written.error();
+                } else {
+                    auto consolidated = consolidate_shard_set(idx_root);
+                    if (!consolidated) merge_error = consolidated.error();
+                }
+                if (merge_error) {
                     index_merge_failed = true;
                     DFTRACER_UTILS_LOG_ERROR("shards not merged into {}: {}",
-                                             idx_root, e.what());
+                                             idx_root, merge_error->c_str());
                 }
             }
         }
@@ -939,30 +974,33 @@ coro::CoroTask<void> ViewRun::run_distributed_aggregate(
             print_table(out_target, table);
             stats.events_matched = table.num_rows();
         } else if (counters) {
-            stats = common::unwrap(merger.merge_counter_partials(pv, *sink));
+            auto counted = merger.merge_counter_partials(pv, *sink);
+            if (!counted) co_return counted.error();
+            stats = *counted;
         } else {
-            dataframe::DataFrame merged =
-                common::unwrap(merger.merge_partials(pv));
-            dataframe::DataFrame table =
-                co_await windowed_table(std::move(merged));
+            auto merged = merger.merge_partials(pv);
+            if (!merged) co_return merged.error();
+            auto windowed_result = co_await windowed_table(std::move(*merged));
+            if (!windowed_result) co_return windowed_result.error();
+            const dataframe::DataFrame& table = *windowed_result;
             print_table(out_target, table);
             stats.events_matched = table.num_rows();
         }
     }
-    co_return;
+    co_return dstd::Result<void>{};
 }
 
 // Distributed: each rank writes its shard, rank 0 concatenates.
-coro::CoroTask<void> ViewRun::run_distributed_write(
+coro::CoroTask<dstd::Result<void>> ViewRun::run_distributed_write(
     distributed::MpiTransport& transport) {
     auto shard = shard_files(files, transport.rank(), transport.size());
     dstd::String idx_base(index_dir);
     if (idx_base.empty())
         idx_base = dstd::String(dstd::PathView(files.front()).parent().str());
-    dstd::String rank_idx =
-        idx_base + "/rank_" + dstd::to_string(transport.rank());
+    dstd::String rank_idx = dstd::fmt<"{}/rank_{}">(idx_base, transport.rank());
     if (!no_auto_index) {
-        co_await refresh_indexes(shard, rank_idx);
+        auto refreshed = co_await refresh_indexes(shard, rank_idx);
+        if (!refreshed) co_return refreshed.error();
     }
     dstd::Vector<ViewFile> shard_vf;
     for (const auto& f : shard) {
@@ -970,7 +1008,7 @@ coro::CoroTask<void> ViewRun::run_distributed_write(
             f, internal::determine_index_path(f, rank_idx), checkpoint_size));
     }
     const dstd::String rank_out =
-        final_output + ".rank_" + dstd::to_string(transport.rank());
+        dstd::fmt<"{}.rank_{}">(final_output, transport.rank());
     TraceWriteOptions topts;
     topts.output_path = rank_out;
     topts.member_size = member_size;
@@ -978,7 +1016,9 @@ coro::CoroTask<void> ViewRun::run_distributed_write(
     topts.compress = true;
     View shard_view =
         windowed(configure(View::from_files(std::move(shard_vf))));
-    stats = common::unwrap(co_await shard_view.sink_trace(topts));
+    auto written = co_await shard_view.sink_trace(topts);
+    if (!written) co_return written.error();
+    stats = *written;
     auto rank_outs = transport.all_gather(rank_out);
     if (transport.rank() == 0) {
         const auto merge_rc =
@@ -989,34 +1029,40 @@ coro::CoroTask<void> ViewRun::run_distributed_write(
         } else if (!no_index) {
             dstd::String file_arg{dstd::StringView(final_output)};
             dstd::String dir_arg{dstd::StringView(index_dir)};
-            common::unwrap(
+            auto fresh =
                 co_await dftracer::utils::index::build::ensure_index_fresh(
-                    "", std::move(file_arg), std::move(dir_arg)));
+                    "", std::move(file_arg), std::move(dir_arg));
+            if (!fresh) co_return fresh.error();
         }
     }
-    co_return;
+    co_return dstd::Result<void>{};
 }
 #endif
 
 // Shard set: merge the query across the immutable shards read-only, no
 // trace-file scan when each shard's aggregation tier covers it.
-coro::CoroTask<void> ViewRun::run_shard_set() {
+coro::CoroTask<dstd::Result<void>> ViewRun::run_shard_set() {
     const auto configure_view = [this](View v) { return configure(v); };
-    ShardedView sv = common::unwrap(ShardedView::from_manifest(shard_set_root));
+    auto manifest = ShardedView::from_manifest(shard_set_root);
+    if (!manifest) co_return manifest.error();
+    ShardedView sv = std::move(*manifest);
     if (counters) {
-        stats = common::unwrap(
-            co_await sv.aggregate_counters(configure_view, *sink));
+        auto counted = co_await sv.aggregate_counters(configure_view, *sink);
+        if (!counted) co_return counted.error();
+        stats = *counted;
     } else {
-        dataframe::DataFrame merged =
-            common::unwrap(co_await sv.aggregate(configure_view));
-        dataframe::DataFrame table = co_await windowed_table(std::move(merged));
+        auto merged = co_await sv.aggregate(configure_view);
+        if (!merged) co_return merged.error();
+        auto windowed_result = co_await windowed_table(std::move(*merged));
+        if (!windowed_result) co_return windowed_result.error();
+        const dataframe::DataFrame& table = *windowed_result;
         print_table(out_target, table);
         stats.events_matched = table.num_rows();
     }
-    co_return;
+    co_return dstd::Result<void>{};
 }
 
-coro::CoroTask<void> ViewRun::run_local() {
+coro::CoroTask<dstd::Result<void>> ViewRun::run_local() {
     // The typed, rollup and counter terminals read the whole aggregation; the
     // projection and row window apply to the other outputs.
     View base = configure(View::from_files(view_files));
@@ -1026,36 +1072,55 @@ coro::CoroTask<void> ViewRun::run_local() {
     // bootstrap (answer the query and build the index in one pass);
     // pre-building first would make the index exist so the bootstrap never
     // fires. Only the plain export / collect paths bootstrap.
-    const bool will_bootstrap =
-        (aggregate && common::unwrap(base.collect_would_bootstrap())) ||
-        (!counters && !aggregate && !write_trace && !duql_rows &&
-         common::unwrap(v.export_would_bootstrap()));
+    bool will_bootstrap = false;
+    if (aggregate) {
+        auto bootstraps = base.collect_would_bootstrap();
+        if (!bootstraps.has_value()) co_return bootstraps.error();
+        will_bootstrap = *bootstraps;
+    }
+    if (!will_bootstrap && !counters && !aggregate && !write_trace &&
+        !duql_rows) {
+        auto bootstraps = v.export_would_bootstrap();
+        if (!bootstraps.has_value()) co_return bootstraps.error();
+        will_bootstrap = *bootstraps;
+    }
     if (!no_auto_index && !will_bootstrap) {
-        co_await refresh_indexes(files, index_dir_std);
+        auto refreshed = co_await refresh_indexes(files, index_dir_std);
+        if (!refreshed) co_return refreshed.error();
     }
 
     if (ct_mode || fg_mode) {
         dataframe::LazyFrame tree =
             fg_mode ? v.flamegraph(ct_partition) : v.call_tree(ct_partition);
-        dataframe::DataFrame table = common::unwrap(co_await tree.collect());
+        auto collected = co_await tree.collect();
+        if (!collected) co_return collected.error();
+        const dataframe::DataFrame& table = *collected;
         print_table(out_target, table);
         stats.events_matched = table.num_rows();
     } else if (mv_mode) {
         // Build-only terminal: compute the aggregation and persist it as a
         // rollup so a later matching query hits the fast path.
-        stats = common::unwrap(co_await base.materialize());
+        auto materialized = co_await base.materialize();
+        if (!materialized) co_return materialized.error();
+        stats = *materialized;
         std::fprintf(stderr, "Materialized rollup (%llu events).\n",
                      (unsigned long long)stats.events_matched);
     } else if (typed_mode) {
-        auto tr = common::unwrap(co_await base.collect_typed());
+        auto typed = co_await base.collect_typed();
+        if (!typed) co_return typed.error();
+        auto& tr = *typed;
         emit_typed(out_target, tr.regular, tr.aggregated, tr.counters);
         stats.events_matched = static_cast<std::uint64_t>(
             tr.regular.num_rows() + tr.aggregated.num_rows() +
             tr.counters.num_rows());
     } else if (counters) {
-        stats = common::unwrap(co_await base.sink_counters(*sink));
+        auto counted = co_await base.sink_counters(*sink);
+        if (!counted) co_return counted.error();
+        stats = *counted;
     } else if (aggregate || duql_rows) {
-        dataframe::DataFrame table = common::unwrap(co_await v.collect());
+        auto collected = co_await v.collect();
+        if (!collected) co_return collected.error();
+        const dataframe::DataFrame& table = *collected;
         print_table(out_target, table);
         stats.events_matched = table.num_rows();
         stats.events_scanned = scans->events_scanned.load();
@@ -1071,9 +1136,13 @@ coro::CoroTask<void> ViewRun::run_local() {
         topts.compress = true;
         topts.build_index = !no_index;
         topts.index_path = index_dir;
-        stats = common::unwrap(co_await v.sink_trace(topts));
+        auto written = co_await v.sink_trace(topts);
+        if (!written) co_return written.error();
+        stats = *written;
     } else {
-        stats = common::unwrap(co_await v.sink_json(*sink));
+        auto exported = co_await v.sink_json(*sink);
+        if (!exported) co_return exported.error();
+        stats = *exported;
     }
 
     if (out_file) std::fflush(out_file);
@@ -1082,35 +1151,33 @@ coro::CoroTask<void> ViewRun::run_local() {
         const auto verify_configure = [this](View b) {
             return windowed(configure(b));
         };
-        co_await verify_output(final_output, index_dir_std, checkpoint_size,
-                               verify_configure, stats.events_matched,
-                               verify_failed);
+        auto verified = co_await verify_output(
+            final_output, index_dir_std, checkpoint_size, verify_configure,
+            stats.events_matched, verify_failed);
+        if (!verified) co_return verified.error();
     }
-    co_return;
+    co_return dstd::Result<void>{};
 }
 
-coro::CoroTask<void> ViewRun::run() {
+coro::CoroTask<dstd::Result<void>> ViewRun::run() {
 #ifdef DFTRACER_UTILS_ENABLE_MPI
     distributed::MpiTransport transport;
     // Only the reductions distribute; other modes fall through to rank 0
     // (single-node) below.
     if ((counters || aggregate || fg_mode) && transport.size() > 1 &&
         shard_set_root.empty()) {
-        co_await run_distributed_aggregate(transport);
-        co_return;
+        co_return co_await run_distributed_aggregate(transport);
     }
     if (write_trace && transport.size() > 1) {
-        co_await run_distributed_write(transport);
-        co_return;
+        co_return co_await run_distributed_write(transport);
     }
     // Non-distributed modes run on rank 0 only (correct, not sharded).
-    if (transport.rank() != 0) co_return;
+    if (transport.rank() != 0) co_return dstd::Result<void>{};
 #endif
     if (!shard_set_root.empty()) {
-        co_await run_shard_set();
-        co_return;
+        co_return co_await run_shard_set();
     }
-    co_await run_local();
+    co_return co_await run_local();
 }
 
 static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
@@ -1136,7 +1203,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
         !parse_time_range(cli->time_range, run.time_range))
         co_return 1;
 
-    add_duration_filter(*cli, run.view);
+    if (!add_duration_filter(*cli, run.view)) co_return 1;
 
     if (!parse_group_by(cli->group_by, run.group_keys)) co_return 1;
     if (!parse_agg(cli->agg, run.agg_specs)) co_return 1;
@@ -1170,8 +1237,12 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
     }
 
     if (!save_recipe.empty()) {
-        common::unwrap(dstd::fs::write_file(dstd::PathView(save_recipe),
-                                            run.view.to_json()));
+        auto saved = dstd::fs::write_file(dstd::PathView(save_recipe),
+                                          run.view.to_json());
+        if (!saved) {
+            fatal(saved.error());
+            co_return 1;
+        }
         std::printf("View recipe saved to: %.*s\n",
                     static_cast<int>(save_recipe.size()), save_recipe.data());
     }
@@ -1246,13 +1317,13 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
     FileSink sink(run.out_target);
     run.sink = &sink;
 
-    try {
-        binaries::run_on_pool("DFTracer View", cli->runtime_args,
-                              [&run](coro::Scope&) -> coro::CoroTask<void> {
-                                  co_await run.run();
-                              });
-    } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_ERROR("Run failed: {}", e.what());
+    auto ran = binaries::run_on_pool(
+        "DFTracer View", cli->runtime_args,
+        [&run](coro::Scope&) -> coro::CoroTask<dstd::Result<void>> {
+            co_return co_await run.run();
+        });
+    if (!ran) {
+        DFTRACER_UTILS_LOG_ERROR("Run failed: {}", ran.error().c_str());
         co_return 1;
     }
 
@@ -1276,18 +1347,12 @@ int main(int argc, char** argv) {
         "(io, compute, dlio), custom recipes, and inline queries. Built with "
         "MPI, run under mpirun to aggregate counters distributively.",
         [](ViewArgParse& cli) -> int {
-            try {
-                auto code = run_view(&cli).get();
-                if (!code) {
-                    DFTRACER_UTILS_LOG_ERROR("Fatal: {}",
-                                             code.error().format());
-                    return 1;
-                }
-                return *code;
-            } catch (const std::exception& e) {
-                DFTRACER_UTILS_LOG_ERROR("Fatal: {}", e.what());
+            auto code = run_view(&cli).get();
+            if (!code) {
+                DFTRACER_UTILS_LOG_ERROR("Fatal: {}", code.error().format());
                 return 1;
             }
+            return *code;
         });
 #ifdef DFTRACER_UTILS_ENABLE_MPI
     MPI_Finalize();

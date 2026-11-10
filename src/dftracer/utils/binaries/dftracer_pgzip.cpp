@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/binaries/common_cli.h>
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/detail/coro.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/file.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -18,7 +20,6 @@
 #include <chrono>
 #include <cstdio>
 #include <mutex>
-#include <stdexcept>
 
 using namespace dftracer::utils;
 
@@ -61,96 +62,102 @@ struct FileResult {
     dstd::String error_message;
 };
 
+static coro::CoroTask<dstd::Result<void>> compress_file_body(
+    FileResult& result, const dstd::String& file_path, int compression_level,
+    std::size_t worker_count, std::size_t chunk_size) {
+    auto checking = runtime::fs::exists(dstd::PathView(file_path));
+    auto checked = co_await coro::or_fail(std::move(checking));
+    if (!checked) {
+        result.error_message = dstd::fmt<"File does not exist: {}">(file_path);
+        co_return dstd::Result<void>();
+    }
+
+    auto input_stat = runtime::fs::stat(dstd::PathView(file_path));
+    auto input_info = co_await coro::or_fail(std::move(input_stat));
+    result.original_size = static_cast<std::size_t>(input_info.size);
+    if (result.original_size == 0) {
+        result.error_message = dstd::fmt<"Empty file: {}">(file_path);
+        co_return dstd::Result<void>();
+    }
+
+    const dstd::OpenOptions open_options;
+    auto opening =
+        runtime::io::open_file(dstd::PathView(file_path), open_options);
+    auto input = co_await std::move(opening);
+    if (!input) {
+        result.error_message = dstd::fmt<"Cannot open file: {}">(file_path);
+        co_return dstd::Result<void>();
+    }
+
+    utilities::fileio::GzipWriterOptions opts;
+    opts.member_size = chunk_size;
+    opts.level = compression_level;
+    opts.workers = worker_count;
+    auto opening_writer = utilities::fileio::GzipLineWriter::open(
+        dstd::String(result.output_path), std::move(opts));
+    auto writer = co_await coro::or_fail(std::move(opening_writer));
+
+    dstd::String buf;
+    dstd::String carry;
+    buf.resize(std::max<std::size_t>(chunk_size, 1 << 20));
+    bool read_failed = false;
+    std::uint64_t read_offset = 0;
+    for (;;) {
+        auto got = input->read_at(
+            read_offset,
+            dstd::Span<std::uint8_t>(
+                reinterpret_cast<std::uint8_t*>(buf.data()), buf.size()));
+        if (!got) {
+            read_failed = true;
+            break;
+        }
+        const std::size_t n = *got;
+        if (n == 0) break;
+        read_offset += n;
+        dstd::StringView block(buf.data(), n);
+        auto nl = block.rfind('\n');
+        if (nl == dstd::StringView::npos) {
+            carry.append(block);
+            continue;
+        }
+        dstd::StringView whole = block.substr(0, nl + 1);
+        if (carry.empty()) {
+            auto appending = writer.append(whole);
+            co_await coro::or_fail(std::move(appending));
+        } else {
+            carry.append(whole);
+            auto appending = writer.append(carry);
+            co_await coro::or_fail(std::move(appending));
+            carry.clear();
+        }
+        carry.append(block.substr(nl + 1));
+    }
+    if (read_failed)
+        co_return common::make_error<"read error: {}">(common::ErrorCode::Io,
+                                                       file_path);
+
+    auto closing = writer.close(carry);
+    co_await coro::or_fail(std::move(closing));
+    auto output_stat = runtime::fs::stat(dstd::PathView(result.output_path));
+    auto output_info = co_await coro::or_fail(std::move(output_stat));
+    result.compressed_size = static_cast<std::size_t>(output_info.size);
+    result.success = true;
+    co_return dstd::Result<void>();
+}
+
 static coro::CoroTask<FileResult> compress_file_parallel(
     const dstd::String& file_path, int compression_level,
     std::size_t worker_count, std::size_t chunk_size) {
     FileResult result;
     result.input_path = file_path;
-    result.output_path = file_path + ".gz";
+    result.output_path = dstd::fmt<"{}.gz">(file_path);
 
-    bool remove_output = false;
-    try {
-        auto checking = runtime::fs::exists(dstd::PathView(file_path));
-        const bool present = common::unwrap(co_await std::move(checking));
-        if (!present) {
-            result.error_message = "File does not exist: " + file_path;
-            co_return result;
-        }
-
-        auto input_stat = runtime::fs::stat(dstd::PathView(file_path));
-        result.original_size = static_cast<std::size_t>(
-            common::unwrap(co_await std::move(input_stat)).size);
-        if (result.original_size == 0) {
-            result.error_message = "Empty file: " + file_path;
-            co_return result;
-        }
-
-        const dstd::OpenOptions open_options;
-        auto opening =
-            runtime::io::open_file(dstd::PathView(file_path), open_options);
-        auto input = co_await std::move(opening);
-        if (!input) {
-            result.error_message = "Cannot open file: " + file_path;
-            co_return result;
-        }
-
-        utilities::fileio::GzipWriterOptions opts;
-        opts.member_size = chunk_size;
-        opts.level = compression_level;
-        opts.workers = worker_count;
-        auto writer =
-            common::unwrap(co_await utilities::fileio::GzipLineWriter::open(
-                dstd::String(result.output_path), std::move(opts)));
-
-        dstd::String buf;
-        dstd::String carry;
-        buf.resize(std::max<std::size_t>(chunk_size, 1 << 20));
-        bool read_failed = false;
-        std::uint64_t read_offset = 0;
-        for (;;) {
-            auto got = input->read_at(
-                read_offset,
-                dstd::Span<std::uint8_t>(
-                    reinterpret_cast<std::uint8_t*>(buf.data()), buf.size()));
-            if (!got) {
-                read_failed = true;
-                break;
-            }
-            const std::size_t n = *got;
-            if (n == 0) break;
-            read_offset += n;
-            dstd::StringView block(buf.data(), n);
-            auto nl = block.rfind('\n');
-            if (nl == dstd::StringView::npos) {
-                carry.append(block);
-                continue;
-            }
-            dstd::StringView whole = block.substr(0, nl + 1);
-            if (carry.empty()) {
-                common::unwrap(co_await writer.append(whole));
-            } else {
-                carry.append(whole);
-                common::unwrap(co_await writer.append(carry));
-                carry.clear();
-            }
-            carry.append(block.substr(nl + 1));
-        }
-        if (read_failed) {
-            throw std::runtime_error(
-                common::str_cat("read error: ", file_path).c_str());
-        }
-
-        common::unwrap(co_await writer.close(carry));
-        auto output_stat =
-            runtime::fs::stat(dstd::PathView(result.output_path));
-        result.compressed_size = static_cast<std::size_t>(
-            common::unwrap(co_await std::move(output_stat)).size);
-        result.success = true;
-    } catch (const std::exception& e) {
-        result.error_message = dstd::String("Compression failed: ") + e.what();
-        remove_output = true;
-    }
-    if (remove_output) {
+    auto body = compress_file_body(result, file_path, compression_level,
+                                   worker_count, chunk_size);
+    auto outcome = co_await std::move(body);
+    if (!outcome) {
+        result.error_message =
+            dstd::fmt<"Compression failed: {}">(outcome.error().c_str());
         auto removing = runtime::fs::remove(dstd::PathView(result.output_path));
         // Best effort: the compression error is already recorded.
         (co_await std::move(removing)).discard();
@@ -162,19 +169,22 @@ static coro::CoroTask<FileResult> compress_file_parallel(
 }  // namespace
 
 static int run_pgzip(const PgzipArgParse& cli) {
-    const auto input_dir = binaries::absolute_path(cli.inputs.directory);
+    auto absolute_dir = binaries::absolute_path(cli.inputs.directory);
+    if (!absolute_dir) return binaries::report_error(absolute_dir.error());
+    const auto input_dir = std::move(*absolute_dir);
     const auto executor_threads = cli.runtime_args.executor_threads;
     const auto compression_level = cli.compression_level;
     const auto chunk_size = cli.chunk_size;
 
     dstd::Vector<dstd::String> input_files;
     if (!cli.inputs.directory.empty()) {
-        const auto dir =
-            common::unwrap(dstd::fs::Dir::open(dstd::PathView(input_dir)));
-        auto listing = common::unwrap(dir.entries());
-        for (const dstd::fs::DirEntry& entry : listing) {
+        auto dir = dstd::fs::Dir::open(dstd::PathView(input_dir));
+        if (!dir) return binaries::report_error(dir.error());
+        auto listing = dir->entries();
+        if (!listing) return binaries::report_error(listing.error());
+        for (const dstd::fs::DirEntry& entry : *listing) {
             if (dstd::PathView(entry.name).extension() != ".pfw") continue;
-            const auto st = dir.stat(entry.name);
+            const auto st = dir->stat(entry.name);
             if (!st || st->kind != dstd::fs::FileKind::File) continue;
             input_files.emplace_back(
                 (dstd::PathView(input_dir) / entry.name).str());
@@ -182,7 +192,9 @@ static int run_pgzip(const PgzipArgParse& cli) {
     }
     for (const auto file : cli.inputs.files) {
         if (dstd::PathView(file).extension() != ".pfw") continue;
-        input_files.emplace_back(binaries::absolute_path(file).str());
+        auto absolute = binaries::absolute_path(file);
+        if (!absolute) return binaries::report_error(absolute.error());
+        input_files.emplace_back(absolute->str());
     }
 
     if (input_files.empty()) {
@@ -210,7 +222,7 @@ static int run_pgzip(const PgzipArgParse& cli) {
     auto* results_ptr = &results;
     auto* mutex_ptr = &results_mutex;
 
-    binaries::run_on_pool(
+    auto ran = binaries::run_on_pool(
         "DFTracer Parallel Gzip", cli.runtime_args, cli.watchdog,
         [files_ptr, results_ptr, mutex_ptr, compression_level, executor_threads,
          chunk_size](coro::Scope&) -> coro::CoroTask<void> {
@@ -265,14 +277,12 @@ static int run_pgzip(const PgzipArgParse& cli) {
                             }
 
                             if (result.success) {
-                                try {
-                                    common::unwrap(
-                                        dstd::fs::remove(dstd::PathView(path)));
-                                } catch (const std::exception& e) {
+                                auto removed =
+                                    dstd::fs::remove(dstd::PathView(path));
+                                if (!removed.has_value())
                                     DFTRACER_UTILS_LOG_ERROR(
                                         "Failed to remove {}: {}", path,
-                                        e.what());
-                                }
+                                        removed.error().c_str());
                             }
 
                             {
@@ -290,6 +300,7 @@ static int run_pgzip(const PgzipArgParse& cli) {
 
             co_return;
         });
+    if (!ran) return binaries::report_error(ran.error());
 
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> duration = end_time - start_time;

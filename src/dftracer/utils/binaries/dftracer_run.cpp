@@ -272,7 +272,11 @@ static coro::CoroTask<int> run_plugins(const RunArgParse* cli,
     if (!directory.empty()) {
         auto matched =
             binaries::scan_trace_files_on_pool(cli->runtime_args, directory);
-        for (const auto& entry : matched) files.emplace_back(entry.path.str());
+        if (!matched) {
+            DFTRACER_UTILS_LOG_ERROR("Fatal: {}", matched.error().c_str());
+            co_return 1;
+        }
+        for (const auto& entry : *matched) files.emplace_back(entry.path.str());
     }
     for (const auto file : cli->inputs.files) files.emplace_back(file);
 
@@ -301,25 +305,25 @@ static coro::CoroTask<int> run_plugins(const RunArgParse* cli,
     }
 
     ExportStats stats;
-    try {
-        binaries::run_on_pool(
-            "DFTracer Run", cli->runtime_args, cli->watchdog,
-            [&](coro::Scope&) -> coro::CoroTask<void> {
-                if (!no_auto_index)
-                    common::unwrap(
-                        co_await dftracer::utils::index::build::
-                            ensure_indexes_fresh("", files, index_dir));
-                View view = View::from_files(view_files);
-                auto run = co_await plugins->run(view);
-                if (!run) {
-                    DFTRACER_UTILS_LOG_ERROR("{}", run.error().format());
-                    co_return;
-                }
-                stats = run->stats;
-                co_return;
-            });
-    } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_ERROR("Run failed: {}", e.what());
+    auto ran = binaries::run_on_pool(
+        "DFTracer Run", cli->runtime_args, cli->watchdog,
+        [&](coro::Scope&) -> coro::CoroTask<dstd::Result<void>> {
+            if (!no_auto_index) {
+                auto fresh = co_await dftracer::utils::index::build::
+                    ensure_indexes_fresh("", files, index_dir);
+                if (!fresh) co_return fresh.error();
+            }
+            View view = View::from_files(view_files);
+            auto run = co_await plugins->run(view);
+            if (!run) {
+                DFTRACER_UTILS_LOG_ERROR("{}", run.error().format());
+                co_return dstd::Result<void>{};
+            }
+            stats = run->stats;
+            co_return dstd::Result<void>{};
+        });
+    if (!ran) {
+        DFTRACER_UTILS_LOG_ERROR("Run failed: {}", ran.error().c_str());
         co_return 1;
     }
 
@@ -351,17 +355,11 @@ int main(int argc, char** argv) {
         "scanning.",
         [&plugin_args](RunArgParse& cli) -> int {
             if (cli.describe) return describe_plugins(plugin_args);
-            try {
-                auto code = run_plugins(&cli, &plugin_args).get();
-                if (!code) {
-                    DFTRACER_UTILS_LOG_ERROR("Fatal: {}",
-                                             code.error().format());
-                    return 1;
-                }
-                return *code;
-            } catch (const std::exception& e) {
-                DFTRACER_UTILS_LOG_ERROR("Fatal: {}", e.what());
+            auto code = run_plugins(&cli, &plugin_args).get();
+            if (!code) {
+                DFTRACER_UTILS_LOG_ERROR("Fatal: {}", code.error().format());
                 return 1;
             }
+            return *code;
         });
 }

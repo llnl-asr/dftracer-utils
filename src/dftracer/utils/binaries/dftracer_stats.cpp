@@ -7,6 +7,7 @@
 #include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -483,7 +484,7 @@ static void print_detailed_grouped_duration(
                 dstd::String display_key =
                     resolve_display_key(key, hash_resolutions);
                 if (display_key.size() > 30) {
-                    display_key = display_key.substr(0, 27) + "...";
+                    display_key = dstd::fmt<"{}...">(display_key.substr(0, 27));
                 }
 
                 bool has_sketch = !dist->sketch.empty();
@@ -596,7 +597,7 @@ static void print_detailed_grouped_io(
                 dstd::String display_key =
                     resolve_display_key(key, hash_resolutions);
                 if (display_key.size() > 30) {
-                    display_key = display_key.substr(0, 27) + "...";
+                    display_key = dstd::fmt<"{}...">(display_key.substr(0, 27));
                 }
 
                 const dstd::String size_mean =
@@ -694,50 +695,50 @@ static coro::CoroTask<dstd::Result<void>> process_file_detailed(
 
     // Hash resolution (sequential, all chunks done)
     dstd::HashMap<dstd::String, dstd::String> hash_resolutions;
-    if (needs_hash_resolution &&
-        common::unwrap(dstd::fs::exists(
-            dstd::PathView(dftracer::utils::index::store_dir(index_path))))) {
-        try {
-            using dftracer::utils::index::plan::GroupResolver;
-            const dstd::Vector<dftracer::utils::index::plan::RowSetFile> files{
-                {dstd::String(dstd::StringView(file_path)),
-                 dstd::String(dstd::StringView(index_path))}};
-            auto resolve_hashes = [&](const GroupResolver::Column& column) {
-                const GroupResolver r(files, {column});
-                const auto* values = r.column(column.name);
-                if (!values) return;
-                auto add = [&](const auto& grouped) {
-                    for (const auto& [key, _] : grouped) {
-                        const dstd::String k{dstd::StringView(key)};
-                        if (hash_resolutions.count(k) == 0)
-                            if (auto it = values->find(key);
-                                it != values->end())
-                                hash_resolutions[k] = dstd::String(
-                                    it->second.data(), it->second.size());
-                    }
-                };
-                add(file_detailed.grouped_duration);
-                add(file_detailed.grouped_io);
-            };
-
-            for (const auto& dim : *group_by_ptr) {
-                if (dim == "fhash") {
-                    resolve_hashes({"file", "files", "fhash", "path"});
-                } else if (dim == "hhash") {
-                    resolve_hashes({"host", "hosts", "hhash", "name"});
+    bool has_store = false;
+    if (needs_hash_resolution) {
+        auto store_exists = dstd::fs::exists(
+            dstd::PathView(dftracer::utils::index::store_dir(index_path)));
+        if (!store_exists.has_value()) co_return store_exists.error();
+        has_store = *store_exists;
+    }
+    if (has_store) {
+        using dftracer::utils::index::plan::GroupResolver;
+        const dstd::Vector<dftracer::utils::index::plan::RowSetFile> files{
+            {dstd::String(dstd::StringView(file_path)),
+             dstd::String(dstd::StringView(index_path))}};
+        auto resolve_hashes = [&](const GroupResolver::Column& column) {
+            const GroupResolver r(files, {column});
+            const auto* values = r.column(column.name);
+            if (!values) return;
+            auto add = [&](const auto& grouped) {
+                for (const auto& [key, _] : grouped) {
+                    const dstd::String k{dstd::StringView(key)};
+                    if (hash_resolutions.count(k) == 0)
+                        if (auto it = values->find(key); it != values->end())
+                            hash_resolutions[k] = dstd::String(
+                                it->second.data(), it->second.size());
                 }
+            };
+            add(file_detailed.grouped_duration);
+            add(file_detailed.grouped_io);
+        };
+
+        for (const auto& dim : *group_by_ptr) {
+            if (dim == "fhash") {
+                resolve_hashes({"file", "files", "fhash", "path"});
+            } else if (dim == "hhash") {
+                resolve_hashes({"host", "hosts", "hhash", "name"});
             }
-        } catch (const std::exception& e) {
-            DFTRACER_UTILS_LOG_WARN("Hash resolution failed for {}: {}",
-                                    file_path, e.what());
         }
     }
 
     // Output per-file results
     if (json_output) {
         dstd::String detail_json = file_detailed.to_json();
-        dstd::String json_obj = dstd::String("{\"file_path\": \"") + file_path +
-                                "\", \"detailed\": " + detail_json + "}";
+        dstd::String json_obj =
+            dstd::fmt<"{\"file_path\": \"{}\", \"detailed\": {}}">(file_path,
+                                                                   detail_json);
         std::lock_guard<std::mutex> lock(*output_mutex_ptr);
         json_results_ptr->emplace_back(fi, std::move(json_obj));
     } else {
@@ -877,7 +878,7 @@ static void print_text_query_output(const TraceStatistics& stats,
     }
 }
 
-static coro::CoroTask<dstd::Vector<dstd::String>> collect_files(
+static coro::CoroTask<dstd::Result<dstd::Vector<dstd::String>>> collect_files(
     coro::Scope& ctx, const dstd::Vector<dstd::String>& cli_files,
     dstd::String directory) {
     if (!directory.empty()) {
@@ -886,9 +887,11 @@ static coro::CoroTask<dstd::Vector<dstd::String>> collect_files(
             co_return dstd::Vector<dstd::String>{};
         }
 
-        auto files =
+        auto scanned =
             co_await dftracer::utils::binaries::scan_directory_trace_files(
                 ctx, directory, /*recursive=*/true);
+        if (!scanned) co_return dstd::Unexpected<dstd::Error>(scanned.error());
+        const auto& files = *scanned;
 
         if (files.empty()) {
             DFTRACER_UTILS_LOG_ERROR("No trace files found in: {}", directory);
@@ -906,12 +909,15 @@ static coro::CoroTask<dstd::Vector<dstd::String>> collect_files(
     co_return cli_files;
 }
 
-static dstd::UniquePtr<IndexedRootSnapshot> load_index_root_snapshot_impl(
-    const dstd::String& index_path) {
+static dstd::Result<dstd::UniquePtr<IndexedRootSnapshot>>
+load_index_root_snapshot_impl(const dstd::String& index_path) {
     auto snapshot = dstd::make_unique<IndexedRootSnapshot>();
-    const auto index_snapshot =
-        common::unwrap(dftracer::utils::index::plan::open_snapshot(index_path));
-    const auto registry = common::unwrap(index_snapshot.files());
+    auto opened = dftracer::utils::index::plan::open_snapshot(index_path);
+    if (!opened) return opened.error();
+    const auto& index_snapshot = *opened;
+    auto listed = index_snapshot.files();
+    if (!listed) return listed.error();
+    const auto& registry = *listed;
 
     snapshot->logical_files.reserve(registry.size());
     snapshot->partition.indexed_entries.reserve(registry.size());
@@ -938,7 +944,7 @@ static dstd::UniquePtr<IndexedRootSnapshot> load_index_root_snapshot_impl(
     return snapshot;
 }
 
-static coro::CoroTask<dstd::UniquePtr<IndexedRootSnapshot>>
+static coro::CoroTask<dstd::Result<dstd::UniquePtr<IndexedRootSnapshot>>>
 load_index_root_snapshot(dstd::String index_path) {
     co_return load_index_root_snapshot_impl(index_path);
 }
@@ -959,7 +965,7 @@ static IndexPartition build_partition(ResolverResult result) {
     return partition;
 }
 
-static coro::CoroTask<IndexPartition> resolve_index_state(
+static coro::CoroTask<dstd::Result<IndexPartition>> resolve_index_state(
     dstd::Vector<dstd::String> files, dstd::String index_dir,
     StatisticsQueryType report_type) {
     Resolver resolver;
@@ -967,7 +973,8 @@ static coro::CoroTask<IndexPartition> resolve_index_state(
     input.files = std::move(files);
     input.index_dir = std::move(index_dir);
     input.require_bloom = report_type == StatisticsQueryType::Detailed;
-    auto result = common::unwrap(co_await resolver(input));
+    auto resolving = resolver(input);
+    auto result = co_await coro::or_fail(std::move(resolving));
     co_return build_partition(std::move(result));
 }
 
@@ -979,10 +986,9 @@ run_batch_build(
         std::move(config));
 }
 
-static coro::CoroTask<void> auto_index_files(IndexPartition& partition,
-                                             const dstd::String& index_dir,
-                                             std::size_t checkpoint_size,
-                                             std::size_t executor_threads) {
+static coro::CoroTask<dstd::Result<void>> auto_index_files(
+    IndexPartition& partition, const dstd::String& index_dir,
+    std::size_t checkpoint_size, std::size_t executor_threads) {
     auto index_path = trace::internal::determine_index_path(
         partition.files_needing_index.front().file_path, index_dir);
     dftracer::utils::index::release_root(index_path);
@@ -1038,14 +1044,17 @@ static coro::CoroTask<void> auto_index_files(IndexPartition& partition,
     refresh_input.index_dir = index_dir;
     refresh_input.require_checkpoints = true;
 
-    auto refresh_result = common::unwrap(co_await resolver(refresh_input));
+    auto refreshing = resolver(refresh_input);
+    auto refresh_result = co_await coro::or_fail(std::move(refreshing));
 
     // Add successfully indexed files
     dstd::Optional<dftracer::utils::index::Snapshot> refreshed;
-    if (!refresh_result.cached.empty())
-        refreshed.emplace(
-            common::unwrap(dftracer::utils::index::plan::open_snapshot(
-                refresh_result.index_path)));
+    if (!refresh_result.cached.empty()) {
+        auto reopened = dftracer::utils::index::plan::open_snapshot(
+            refresh_result.index_path);
+        if (!reopened) co_return reopened.error();
+        refreshed.emplace(std::move(*reopened));
+    }
     for (auto& entry : refresh_result.cached) {
         const auto file = refreshed->file(
             dftracer::utils::index::store::internal::get_logical_path(
@@ -1073,7 +1082,7 @@ static coro::CoroTask<void> auto_index_files(IndexPartition& partition,
     // Update resolver result
     partition.resolver_result.index_path = refresh_result.index_path;
 
-    co_return;
+    co_return dstd::Result<void>();
 }
 
 static coro::CoroTask<int> run_detailed_stats(
@@ -1164,15 +1173,16 @@ static coro::CoroTask<int> run_detailed_stats(
 // One file's statistics from the per-file rows the index build wrote. The
 // duration sketch and histogram stay empty, as on the View path. Nullopt when
 // a row the report needs is missing or not current.
-static dstd::Optional<ChunkStatistics> file_rows_to_statistics(
+static dstd::Result<dstd::Optional<ChunkStatistics>> file_rows_to_statistics(
     const dftracer::utils::index::Snapshot& snapshot,
     const dftracer::utils::index::FileRef& file,
     const MergedStatisticsResult* scalar,
     dstd::StringViewMap<std::uint64_t>* pid_tids, bool cats, bool names) {
-    if (!scalar || scalar->chunk_count == 0) return dstd::nullopt;
+    if (!scalar || scalar->chunk_count == 0)
+        return dstd::Optional<ChunkStatistics>();
     if ((cats || names) && !dftracer::utils::index::extension_current(
                                snapshot, file, IndexExtension::Counts))
-        return dstd::nullopt;
+        return dstd::Optional<ChunkStatistics>();
 
     ChunkStatistics cs;
     const auto& row = scalar->stats;
@@ -1188,17 +1198,20 @@ static dstd::Optional<ChunkStatistics> file_rows_to_statistics(
     if (cats) {
         // Categories are reported in lower case, as the View path groups them.
         dstd::StringViewMap<std::uint64_t> raw;
-        common::unwrap(add_path_counts(snapshot, file, "cat", raw));
+        auto added = add_path_counts(snapshot, file, "cat", raw);
+        if (!added) return added.error();
         for (const auto& [cat, count] : raw) {
             dstd::String lower(cat);
             ::dftracer::utils::common::detail::lower_ascii(lower);
             cs.category_counts[lower] += count;
         }
     }
-    if (names)
-        common::unwrap(add_path_counts(snapshot, file, "name", cs.name_counts));
+    if (names) {
+        auto added = add_path_counts(snapshot, file, "name", cs.name_counts);
+        if (!added) return added.error();
+    }
     if (pid_tids) cs.pid_tid_counts = std::move(*pid_tids);
-    return cs;
+    return dstd::Optional<ChunkStatistics>(std::move(cs));
 }
 
 static views::ViewFile view_file(dstd::StringView file,
@@ -1207,6 +1220,153 @@ static views::ViewFile view_file(dstd::StringView file,
     out.file_path.assign(file.data(), file.size());
     out.index_path.assign(index.data(), index.size());
     return out;
+}
+
+static coro::CoroTask<dstd::Result<void>> index_group_body(
+    const dstd::String* index_path_ptr,
+    const dstd::Vector<ResolvedFile>* group_ptr,
+    dstd::Vector<dstd::Pair<std::size_t, TraceStatistics>>* indexed_stats_ptr,
+    std::mutex* stats_mutex_ptr, bool needs_per_file_results,
+    TraceStatistics* total_ptr, std::mutex* total_mutex_ptr,
+    std::atomic<std::size_t>* successful_ptr,
+    std::atomic<std::size_t>* failed_ptr,
+    StatisticsQueryType report_type_for_reader) {
+    trace::statistics::StatNeeds needs;
+    needs.names = report_type_for_reader == StatisticsQueryType::Names ||
+                  report_type_for_reader == StatisticsQueryType::TopNNames;
+    needs.pid_tids = report_type_for_reader == StatisticsQueryType::Summary ||
+                     report_type_for_reader == StatisticsQueryType::PidTids;
+    const bool needs_cats =
+        report_type_for_reader == StatisticsQueryType::Summary ||
+        report_type_for_reader == StatisticsQueryType::Categories ||
+        report_type_for_reader == StatisticsQueryType::TopNCategories;
+
+    // Files whose per-file rows answer the report are read here with no
+    // fold and no write. The rest go through the View path below.
+    // Release the ReadOnly index handle before materialize(), which opens
+    // the same index ReadWrite to persist.
+    dstd::HashMap<std::size_t, std::uint64_t> chunk_count_map;
+    ChunkStatistics fast_total;
+    std::uint64_t fast_chunks = 0;
+    std::size_t fast_files = 0;
+    dstd::Vector<const ResolvedFile*> slow_files;
+    {
+        auto opened =
+            dftracer::utils::index::plan::open_snapshot(*index_path_ptr);
+        if (!opened) co_return opened.error();
+        const auto& snapshot = *opened;
+        for (const auto& rf : *group_ptr) {
+            const auto file = snapshot.file(
+                dftracer::utils::index::store::internal::get_logical_path(
+                    rf.file_path));
+            if (!file) {
+                slow_files.push_back(&rf);
+                continue;
+            }
+            auto scalar_result =
+                dftracer::utils::index::scalar_stats(snapshot, *file);
+            if (!scalar_result) co_return scalar_result.error();
+            auto& scalar = *scalar_result;
+            if (scalar) chunk_count_map[rf.file_index] = scalar->chunk_count;
+            dstd::Optional<dstd::StringViewMap<std::uint64_t>> pid_tids;
+            if (needs.pid_tids) {
+                auto counts_result =
+                    dftracer::utils::index::pid_tid_counts(snapshot, *file);
+                if (!counts_result) co_return counts_result.error();
+                auto& counts = *counts_result;
+                if (!counts) {
+                    slow_files.push_back(&rf);
+                    continue;
+                }
+                pid_tids = std::move(*counts);
+            }
+            auto cs_result = file_rows_to_statistics(
+                snapshot, *file, &*scalar, pid_tids ? &*pid_tids : nullptr,
+                needs_cats, needs.names);
+            if (!cs_result) co_return cs_result.error();
+            auto& cs = *cs_result;
+            if (!cs) {
+                slow_files.push_back(&rf);
+                continue;
+            }
+            if (needs_per_file_results) {
+                TraceStatistics stats;
+                stats.file_path = rf.file_path;
+                stats.index_path.assign(index_path_ptr->data(),
+                                        index_path_ptr->size());
+                stats.chunk_count = scalar->chunk_count;
+                stats.merged = std::move(*cs);
+                stats.success = true;
+                std::lock_guard<std::mutex> lock(*stats_mutex_ptr);
+                indexed_stats_ptr->emplace_back(rf.file_index,
+                                                std::move(stats));
+            } else {
+                fast_total.merge_from(*cs);
+                fast_chunks += scalar->chunk_count;
+            }
+            ++fast_files;
+        }
+    }
+    auto chunk_count_of = [&](std::size_t file_index) -> std::uint64_t {
+        auto it = chunk_count_map.find(file_index);
+        return (it != chunk_count_map.end()) ? it->second : 0;
+    };
+
+    if (!needs_per_file_results && fast_files > 0) {
+        std::lock_guard<std::mutex> lock(*total_mutex_ptr);
+        total_ptr->merged.merge_from(fast_total);
+        total_ptr->chunk_count += fast_chunks;
+        successful_ptr->fetch_add(fast_files, std::memory_order_relaxed);
+    }
+    if (slow_files.empty()) co_return dstd::Result<void>();
+
+    if (!needs_per_file_results) {
+        // Whole-group total: one View aggregation over every file at once.
+        dstd::Vector<views::ViewFile> view_files;
+        view_files.reserve(slow_files.size());
+        std::uint64_t total_chunks = 0;
+        for (const auto* rf : slow_files) {
+            view_files.push_back(view_file(rf->file_path, *index_path_ptr));
+            total_chunks += chunk_count_of(rf->file_index);
+        }
+        auto sv =
+            trace::statistics::StatsView::from_files(std::move(view_files));
+        // Persist the rollups once so later runs read them instead of
+        // rescanning; idempotent, so a warm index skips to collect.
+        auto materializing = sv.materialize(needs);
+        co_await coro::or_fail(std::move(materializing));
+        auto collecting = sv.collect(needs);
+        trace::statistics::ViewStats vs =
+            co_await coro::or_fail(std::move(collecting));
+        TraceStatistics stats;
+        stats.index_path.assign(index_path_ptr->data(), index_path_ptr->size());
+        stats.chunk_count = total_chunks;
+        trace::statistics::fill_chunk_statistics(stats.merged, vs);
+        std::lock_guard<std::mutex> lock(*total_mutex_ptr);
+        total_ptr->merged.merge_from(stats.merged);
+        total_ptr->chunk_count += stats.chunk_count;
+        successful_ptr->fetch_add(slow_files.size(), std::memory_order_relaxed);
+        co_return dstd::Result<void>();
+    }
+
+    for (const auto* rf : slow_files) {
+        TraceStatistics stats;
+        stats.file_path.assign(rf->file_path.data(), rf->file_path.size());
+        stats.index_path.assign(index_path_ptr->data(), index_path_ptr->size());
+        stats.chunk_count = chunk_count_of(rf->file_index);
+        auto sv = trace::statistics::StatsView::from_file(
+            dstd::String(rf->file_path), dstd::String(*index_path_ptr));
+        auto materializing = sv.materialize(needs);
+        co_await coro::or_fail(std::move(materializing));
+        auto collecting = sv.collect(needs);
+        trace::statistics::ViewStats vs =
+            co_await coro::or_fail(std::move(collecting));
+        trace::statistics::fill_chunk_statistics(stats.merged, vs);
+        stats.success = true;
+        std::lock_guard<std::mutex> lock(*stats_mutex_ptr);
+        indexed_stats_ptr->emplace_back(rf->file_index, std::move(stats));
+    }
+    co_return dstd::Result<void>();
 }
 
 static coro::CoroTask<void> process_index_group(
@@ -1218,152 +1378,26 @@ static coro::CoroTask<void> process_index_group(
     std::atomic<std::size_t>* successful_ptr,
     std::atomic<std::size_t>* failed_ptr,
     StatisticsQueryType report_type_for_reader) {
-    try {
-        trace::statistics::StatNeeds needs;
-        needs.names = report_type_for_reader == StatisticsQueryType::Names ||
-                      report_type_for_reader == StatisticsQueryType::TopNNames;
-        needs.pid_tids =
-            report_type_for_reader == StatisticsQueryType::Summary ||
-            report_type_for_reader == StatisticsQueryType::PidTids;
-        const bool needs_cats =
-            report_type_for_reader == StatisticsQueryType::Summary ||
-            report_type_for_reader == StatisticsQueryType::Categories ||
-            report_type_for_reader == StatisticsQueryType::TopNCategories;
-
-        // Files whose per-file rows answer the report are read here with no
-        // fold and no write. The rest go through the View path below.
-        // Release the ReadOnly index handle before materialize(), which opens
-        // the same index ReadWrite to persist.
-        dstd::HashMap<std::size_t, std::uint64_t> chunk_count_map;
-        ChunkStatistics fast_total;
-        std::uint64_t fast_chunks = 0;
-        std::size_t fast_files = 0;
-        dstd::Vector<const ResolvedFile*> slow_files;
-        {
-            const auto snapshot = common::unwrap(
-                dftracer::utils::index::plan::open_snapshot(*index_path_ptr));
-            for (const auto& rf : *group_ptr) {
-                const auto file = snapshot.file(
-                    dftracer::utils::index::store::internal::get_logical_path(
-                        rf.file_path));
-                if (!file) {
-                    slow_files.push_back(&rf);
-                    continue;
-                }
-                auto scalar = common::unwrap(
-                    dftracer::utils::index::scalar_stats(snapshot, *file));
-                if (scalar)
-                    chunk_count_map[rf.file_index] = scalar->chunk_count;
-                dstd::Optional<dstd::StringViewMap<std::uint64_t>> pid_tids;
-                if (needs.pid_tids) {
-                    auto counts =
-                        common::unwrap(dftracer::utils::index::pid_tid_counts(
-                            snapshot, *file));
-                    if (!counts) {
-                        slow_files.push_back(&rf);
-                        continue;
-                    }
-                    pid_tids = std::move(*counts);
-                }
-                auto cs = file_rows_to_statistics(
-                    snapshot, *file, &*scalar, pid_tids ? &*pid_tids : nullptr,
-                    needs_cats, needs.names);
-                if (!cs) {
-                    slow_files.push_back(&rf);
-                    continue;
-                }
-                if (needs_per_file_results) {
-                    TraceStatistics stats;
-                    stats.file_path = rf.file_path;
-                    stats.index_path.assign(index_path_ptr->data(),
-                                            index_path_ptr->size());
-                    stats.chunk_count = scalar->chunk_count;
-                    stats.merged = std::move(*cs);
-                    stats.success = true;
-                    std::lock_guard<std::mutex> lock(*stats_mutex_ptr);
-                    indexed_stats_ptr->emplace_back(rf.file_index,
-                                                    std::move(stats));
-                } else {
-                    fast_total.merge_from(*cs);
-                    fast_chunks += scalar->chunk_count;
-                }
-                ++fast_files;
-            }
+    auto processing = index_group_body(
+        index_path_ptr, group_ptr, indexed_stats_ptr, stats_mutex_ptr,
+        needs_per_file_results, total_ptr, total_mutex_ptr, successful_ptr,
+        failed_ptr, report_type_for_reader);
+    auto done = co_await std::move(processing);
+    if (done) co_return;
+    DFTRACER_UTILS_LOG_ERROR("Indexed stats batch failed for {}: {}",
+                             index_path_ptr->c_str(), done.error().c_str());
+    if (needs_per_file_results) {
+        std::lock_guard<std::mutex> lock(*stats_mutex_ptr);
+        for (const auto& entry : *group_ptr) {
+            TraceStatistics failed_result;
+            failed_result.file_path = entry.file_path;
+            failed_result.success = false;
+            failed_result.error_message = done.error().c_str();
+            indexed_stats_ptr->emplace_back(entry.file_index,
+                                            std::move(failed_result));
         }
-        auto chunk_count_of = [&](std::size_t file_index) -> std::uint64_t {
-            auto it = chunk_count_map.find(file_index);
-            return (it != chunk_count_map.end()) ? it->second : 0;
-        };
-
-        if (!needs_per_file_results && fast_files > 0) {
-            std::lock_guard<std::mutex> lock(*total_mutex_ptr);
-            total_ptr->merged.merge_from(fast_total);
-            total_ptr->chunk_count += fast_chunks;
-            successful_ptr->fetch_add(fast_files, std::memory_order_relaxed);
-        }
-        if (slow_files.empty()) co_return;
-
-        if (!needs_per_file_results) {
-            // Whole-group total: one View aggregation over every file at once.
-            dstd::Vector<views::ViewFile> view_files;
-            view_files.reserve(slow_files.size());
-            std::uint64_t total_chunks = 0;
-            for (const auto* rf : slow_files) {
-                view_files.push_back(view_file(rf->file_path, *index_path_ptr));
-                total_chunks += chunk_count_of(rf->file_index);
-            }
-            auto sv =
-                trace::statistics::StatsView::from_files(std::move(view_files));
-            // Persist the rollups once so later runs read them instead of
-            // rescanning; idempotent, so a warm index skips to collect.
-            common::unwrap(co_await sv.materialize(needs));
-            trace::statistics::ViewStats vs =
-                common::unwrap(co_await sv.collect(needs));
-            TraceStatistics stats;
-            stats.index_path.assign(index_path_ptr->data(),
-                                    index_path_ptr->size());
-            stats.chunk_count = total_chunks;
-            trace::statistics::fill_chunk_statistics(stats.merged, vs);
-            std::lock_guard<std::mutex> lock(*total_mutex_ptr);
-            total_ptr->merged.merge_from(stats.merged);
-            total_ptr->chunk_count += stats.chunk_count;
-            successful_ptr->fetch_add(slow_files.size(),
-                                      std::memory_order_relaxed);
-            co_return;
-        }
-
-        for (const auto* rf : slow_files) {
-            TraceStatistics stats;
-            stats.file_path.assign(rf->file_path.data(), rf->file_path.size());
-            stats.index_path.assign(index_path_ptr->data(),
-                                    index_path_ptr->size());
-            stats.chunk_count = chunk_count_of(rf->file_index);
-            auto sv = trace::statistics::StatsView::from_file(
-                dstd::String(rf->file_path), dstd::String(*index_path_ptr));
-            common::unwrap(co_await sv.materialize(needs));
-            trace::statistics::ViewStats vs =
-                common::unwrap(co_await sv.collect(needs));
-            trace::statistics::fill_chunk_statistics(stats.merged, vs);
-            stats.success = true;
-            std::lock_guard<std::mutex> lock(*stats_mutex_ptr);
-            indexed_stats_ptr->emplace_back(rf->file_index, std::move(stats));
-        }
-    } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_ERROR("Indexed stats batch failed for {}: {}",
-                                 index_path_ptr->c_str(), e.what());
-        if (needs_per_file_results) {
-            std::lock_guard<std::mutex> lock(*stats_mutex_ptr);
-            for (const auto& entry : *group_ptr) {
-                TraceStatistics failed_result;
-                failed_result.file_path = entry.file_path;
-                failed_result.success = false;
-                failed_result.error_message = e.what();
-                indexed_stats_ptr->emplace_back(entry.file_index,
-                                                std::move(failed_result));
-            }
-        }
-        failed_ptr->fetch_add(group_ptr->size(), std::memory_order_relaxed);
     }
+    failed_ptr->fetch_add(group_ptr->size(), std::memory_order_relaxed);
     co_return;
 }
 
@@ -1500,8 +1534,8 @@ static coro::CoroTask<int> output_aggregate_stats(
     co_return 0;
 }
 
-static coro::CoroTask<int> run_stats(coro::Scope& ctx,
-                                     const StatsArgParse* args) {
+static coro::CoroTask<dstd::Result<int>> run_stats(coro::Scope& ctx,
+                                                   const StatsArgParse* args) {
     StatsConfig config;
     if (!args->to_config(config)) {
         co_return 1;
@@ -1523,23 +1557,26 @@ static coro::CoroTask<int> run_stats(coro::Scope& ctx,
             dstd::String index_dir_arg{dstd::StringView(config.index_dir)};
             if (!config.directory.empty()) {
                 dstd::String directory_arg{dstd::StringView(config.directory)};
-                common::unwrap(co_await ensure_index_fresh(
-                    std::move(directory_arg), "", std::move(index_dir_arg)));
+                auto freshening = ensure_index_fresh(
+                    std::move(directory_arg), "", std::move(index_dir_arg));
+                co_await coro::or_fail(std::move(freshening));
             } else {
                 dstd::Vector<dstd::String> to_check;
                 for (const auto& f : config.files)
                     to_check.emplace_back(dstd::StringView(f));
-                common::unwrap(co_await ensure_indexes_fresh(
-                    "", std::move(to_check), std::move(index_dir_arg)));
+                auto freshening = ensure_indexes_fresh(
+                    "", std::move(to_check), std::move(index_dir_arg));
+                co_await coro::or_fail(std::move(freshening));
             }
         }
         if (!config.directory.empty() &&
             config.report_type != StatisticsQueryType::Detailed) {
             auto trusted_index_path = trace::internal::determine_index_path(
                 config.directory, config.index_dir);
-            const bool trusted_index_exists =
-                common::unwrap(dstd::fs::exists(dstd::PathView(
-                    dftracer::utils::index::store_dir(trusted_index_path))));
+            auto trusted_exists = dstd::fs::exists(dstd::PathView(
+                dftracer::utils::index::store_dir(trusted_index_path)));
+            if (!trusted_exists.has_value()) co_return trusted_exists.error();
+            const bool trusted_index_exists = *trusted_exists;
             DFTRACER_UTILS_LOG_DEBUG(
                 "Stats direct-index decision: directory={} index_path={} "
                 "exists={} json={} report={}",
@@ -1548,8 +1585,8 @@ static coro::CoroTask<int> run_stats(coro::Scope& ctx,
                 static_cast<int>(config.report_type));
             if (trusted_index_exists) {
                 common::ScopedTimer ls(stages, "load_index_snapshot");
-                auto snapshot =
-                    co_await load_index_root_snapshot(trusted_index_path);
+                auto loading = load_index_root_snapshot(trusted_index_path);
+                auto snapshot = co_await coro::or_fail(std::move(loading));
                 files = std::move(snapshot->logical_files);
                 partition = std::move(snapshot->partition);
                 used_index_source_of_truth = true;
@@ -1559,8 +1596,12 @@ static coro::CoroTask<int> run_stats(coro::Scope& ctx,
         if (!used_index_source_of_truth) {
             {
                 common::ScopedTimer cf(stages, "collect_files");
-                files =
+                auto collected =
                     co_await collect_files(ctx, config.files, config.directory);
+                if (!collected)
+                    co_return dftracer::utils::binaries::report_error(
+                        collected.error());
+                files = std::move(*collected);
             }
             if (files.empty()) {
                 co_return 1;
@@ -1571,9 +1612,10 @@ static coro::CoroTask<int> run_stats(coro::Scope& ctx,
                 for (const auto& f : files)
                     to_resolve.emplace_back(dstd::StringView(f));
                 dstd::String index_dir_arg{dstd::StringView(config.index_dir)};
-                partition = co_await resolve_index_state(
-                    std::move(to_resolve), std::move(index_dir_arg),
-                    config.report_type);
+                auto resolving = resolve_index_state(std::move(to_resolve),
+                                                     std::move(index_dir_arg),
+                                                     config.report_type);
+                partition = co_await coro::or_fail(std::move(resolving));
             }
         }
     }
@@ -1591,9 +1633,10 @@ static coro::CoroTask<int> run_stats(coro::Scope& ctx,
             co_return 1;
         }
         common::ScopedTimer ai(stages, "auto_index_files");
-        co_await auto_index_files(partition, config.index_dir,
-                                  config.checkpoint_size,
-                                  config.executor_threads);
+        auto indexing =
+            auto_index_files(partition, config.index_dir,
+                             config.checkpoint_size, config.executor_threads);
+        co_await coro::or_fail(std::move(indexing));
     }
 
     if (config.report_type == StatisticsQueryType::Detailed) {
@@ -1622,10 +1665,12 @@ int main(int argc, char** argv) {
         ".dftindex databases. Auto-builds indexes if missing. "
         "Zero-cost reads from index metadata, no decompression.",
         [](StatsArgParse& args) {
-            return dftracer::utils::binaries::run_on_pool(
-                "DFTracer Stats Main", args.runtime_args,
-                [&args](coro::Scope& ctx) -> coro::CoroTask<int> {
-                    co_return co_await run_stats(ctx, &args);
-                });
+            return dftracer::utils::binaries::exit_code_of(
+                dftracer::utils::binaries::run_on_pool(
+                    "DFTracer Stats Main", args.runtime_args,
+                    [&args](
+                        coro::Scope& ctx) -> coro::CoroTask<dstd::Result<int>> {
+                        co_return co_await run_stats(ctx, &args);
+                    }));
         });
 }

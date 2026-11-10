@@ -51,7 +51,7 @@ struct FileValResult {
 // The file inputs plus a recursive trace file scan of the directory. The
 // scanner is spawned on the scope so its recursive walk fans out per
 // subdirectory (parallel readdir); sizes are not needed here.
-coro::CoroTask<dstd::Vector<dstd::String>> collect_files(
+coro::CoroTask<dstd::Result<dstd::Vector<dstd::String>>> collect_files(
     coro::Scope& ctx, dstd::StringView directory,
     const dstd::Vector<dstd::StringView>* cli_files) {
     dstd::Vector<dstd::String> files;
@@ -59,8 +59,9 @@ coro::CoroTask<dstd::Vector<dstd::String>> collect_files(
     if (!directory.empty()) {
         auto scanned = co_await binaries::scan_directory_trace_files(
             ctx, directory, /*recursive=*/true);
-        files.insert(files.end(), std::make_move_iterator(scanned.begin()),
-                     std::make_move_iterator(scanned.end()));
+        if (!scanned) co_return dstd::Unexpected<dstd::Error>(scanned.error());
+        files.insert(files.end(), std::make_move_iterator(scanned->begin()),
+                     std::make_move_iterator(scanned->end()));
     }
     co_return files;
 }
@@ -68,49 +69,53 @@ coro::CoroTask<dstd::Vector<dstd::String>> collect_files(
 // Stream every line and confirm each non-wrapper line is valid JSON. Wrapper
 // lines ("[" / "]"), blanks, and boundary artifacts are skipped, matching the
 // pfw layout (leading "[" then one JSON object per line, no trailing comma).
+coro::CoroTask<dstd::Result<void>> validate_lines(FileValResult* result) {
+    // Stream the gzip directly, never through TraceReader: its indexed
+    // read path serves a byte range from a `.dftindex`, and a file whose
+    // entry is absent from a shared root index resolves to zero bytes, so
+    // validate would read no lines and still count the file as passing
+    // without ever decompressing it.
+    const dstd::String std_path(result->path);
+    if (CheckpointIndexerFactory::detect_format(std_path) !=
+        common::ArchiveFormat::Gzip) {
+        co_return dstd::Unexpected<dstd::Error>(dstd::Error{
+            dstd::Condition::Parse,
+            "not a gzip trace (dftracer traces must be gzip-compressed)"});
+    }
+    // DOM (eager) parse: validates the whole line's JSON grammar. The
+    // on-demand API is lazy and would accept malformed lines it never
+    // navigates into.
+    simdjson::dom::parser parser;
+    // A cut trace is invalid here, not recovered.
+    auto gen = async_streaming_gz_lines(result->path, 0, 0,
+                                        /*recover_truncated=*/false);
+    for (;;) {
+        auto line_opt = co_await gen.next();
+        if (!line_opt) break;
+        if (!*line_opt)
+            co_return dstd::Unexpected<dstd::Error>(line_opt->error());
+        const auto& line = **line_opt;
+        const char* start = nullptr;
+        std::size_t trimmed = 0;
+        if (!trim_and_validate(line.content.data(), line.content.size(), start,
+                               trimmed)) {
+            continue;
+        }
+        ++result->total_lines;
+        if (parser.parse(start, trimmed).error() != simdjson::SUCCESS) {
+            ++result->invalid_lines;
+            if (result->first_bad_line == 0) {
+                result->first_bad_line = line.line_number;
+            }
+        }
+    }
+    co_return dstd::Result<void>{};
+}
+
 coro::CoroTask<void> validate_file(dstd::String path, FileValResult* result) {
     result->path = std::move(path);
-    try {
-        // Stream the gzip directly, never through TraceReader: its indexed
-        // read path serves a byte range from a `.dftindex`, and a file whose
-        // entry is absent from a shared root index resolves to zero bytes, so
-        // validate would read no lines and still count the file as passing
-        // without ever decompressing it.
-        const dstd::String std_path(result->path);
-        if (CheckpointIndexerFactory::detect_format(std_path) !=
-            common::ArchiveFormat::Gzip) {
-            throw std::runtime_error(
-                "not a gzip trace (dftracer traces must be gzip-compressed)");
-        }
-        // DOM (eager) parse: validates the whole line's JSON grammar. The
-        // on-demand API is lazy and would accept malformed lines it never
-        // navigates into.
-        simdjson::dom::parser parser;
-        // A cut trace is invalid here, not recovered.
-        auto gen = async_streaming_gz_lines(result->path, 0, 0,
-                                            /*recover_truncated=*/false);
-        for (;;) {
-            auto line_opt = co_await gen.next();
-            if (!line_opt) break;
-            if (!*line_opt) common::throw_error(line_opt->error());
-            const auto& line = **line_opt;
-            const char* start = nullptr;
-            std::size_t trimmed = 0;
-            if (!trim_and_validate(line.content.data(), line.content.size(),
-                                   start, trimmed)) {
-                continue;
-            }
-            ++result->total_lines;
-            if (parser.parse(start, trimmed).error() != simdjson::SUCCESS) {
-                ++result->invalid_lines;
-                if (result->first_bad_line == 0) {
-                    result->first_bad_line = line.line_number;
-                }
-            }
-        }
-    } catch (const std::exception& e) {
-        result->error = e.what();
-    }
+    auto validated = co_await validate_lines(result);
+    if (!validated) result->error = validated.error().c_str();
     result->ok = result->error.empty() && result->invalid_lines == 0;
     co_return;
 }
@@ -123,13 +128,16 @@ static coro::CoroTask<int> run_validate(const ValidateArgParse* cli) {
     const auto executor_threads = cli->runtime_args.executor_threads;
 
     auto start_time = std::chrono::high_resolution_clock::now();
-    binaries::run_on_pool(
+    auto ran = binaries::run_on_pool(
         "DFTracer Validate", cli->runtime_args,
-        [cli, files, &results,
-         executor_threads](coro::Scope& scope) -> coro::CoroTask<void> {
-            *files = co_await collect_files(scope, cli->inputs.directory,
-                                            &cli->inputs.files);
-            if (files->empty()) co_return;
+        [cli, files, &results, executor_threads](
+            coro::Scope& scope) -> coro::CoroTask<dstd::Result<void>> {
+            auto collected = co_await collect_files(
+                scope, cli->inputs.directory, &cli->inputs.files);
+            if (!collected)
+                co_return dstd::Unexpected<dstd::Error>(collected.error());
+            *files = std::move(*collected);
+            if (files->empty()) co_return dstd::Result<void>{};
             results.resize(files->size());
             binaries::parallel_for_each(
                 scope, std::views::iota(std::size_t{0}, files->size()),
@@ -137,8 +145,9 @@ static coro::CoroTask<int> run_validate(const ValidateArgParse* cli) {
                 [files, &results](std::size_t idx) -> coro::CoroTask<void> {
                     co_await validate_file((*files)[idx], &results[idx]);
                 });
-            co_return;
+            co_return dstd::Result<void>{};
         });
+    if (!ran) co_return binaries::report_error(ran.error());
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> duration = end_time - start_time;
 

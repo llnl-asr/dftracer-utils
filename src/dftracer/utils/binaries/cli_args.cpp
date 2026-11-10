@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/binaries/cli_args.h>
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/to_chars.h>
 
 #include <algorithm>
-#include <cstdio>
 #include <cstdlib>
 
 namespace dftracer::utils::binaries {
@@ -97,21 +99,21 @@ ArgSpec& ArgParser::add_converted(Names names, StringView help,
     spec.quote_default_ = true;
     spec.set_ = std::move(convert);
     if (auto error = spec.set_(default_text)) {
-        std::fprintf(stderr, "bad default for %s: %s\n",
-                     String(spec.names_.front()).c_str(), error->c_str());
-        std::abort();
+        dstd::fatal(
+            dstd::fmt<"bad default for {}: {}">(spec.names_.front(), *error)
+                .c_str());
     }
     return spec;
 }
 
 String ArgParser::number_text(double value) {
     char buf[32];
-    const int n = std::snprintf(buf, sizeof(buf), "%g", value);
-    return String(buf, static_cast<std::size_t>(n));
+    char* end = dstd::to_chars_general(buf, buf + sizeof(buf), value, 6);
+    return String(buf, static_cast<std::size_t>(end - buf));
 }
 
 String ArgParser::number_error(StringView name, StringView text) {
-    return common::str_cat("Invalid number for ", name, ": '", text, "'");
+    return dstd::fmt<"Invalid number for {}: '{}'">(name, text);
 }
 
 StringView ArgParser::long_name(Names names) {
@@ -171,13 +173,14 @@ ArgSpec& ArgParser::add_bytes(Names names, StringView help,
             auto parsed = common::parse_bytes(text);
             const auto parts = common::detail::split_value_unit(text);
             if (unit_required && (!parsed || !parts || parts->second.empty())) {
-                return common::str_cat(
-                    "Invalid byte size for ", name, ": '", text,
-                    "' (a unit is required, use e.g. 4MB or 512KB)");
+                return dstd::fmt<
+                    "Invalid byte size for {}: '{}' (a unit is required, use "
+                    "e.g. 4MB or 512KB)">(name, text);
             }
             if (!parsed) {
-                return common::str_cat("Invalid byte size for ", name, ": '",
-                                       text, "' (use e.g. 65536, 64KB, 1.5GB)");
+                return dstd::fmt<
+                    "Invalid byte size for {}: '{}' (use e.g. 65536, 64KB, "
+                    "1.5GB)">(name, text);
             }
             store(*parsed);
             return dstd::nullopt;
@@ -198,9 +201,9 @@ ArgSpec& ArgParser::bytes_signed(std::int64_t& target, Names names,
                              }
                              auto parsed = common::parse_bytes(text);
                              if (!parsed) {
-                                 return common::str_cat(
-                                     "Invalid byte size for ", name, ": '",
-                                     text, "' (use e.g. 65536, 64KB, 1.5GB)");
+                                 return dstd::fmt<
+                                     "Invalid byte size for {}: '{}' (use e.g. "
+                                     "65536, 64KB, 1.5GB)">(name, text);
                              }
                              target = static_cast<std::int64_t>(*parsed);
                              return dstd::nullopt;
@@ -214,9 +217,9 @@ ArgSpec& ArgParser::seconds(double& target, Names names, StringView help,
                          [&target, name](StringView text) -> Optional<String> {
                              auto parsed = common::parse_duration_seconds(text);
                              if (!parsed) {
-                                 return common::str_cat(
-                                     "Invalid duration for ", name, ": '", text,
-                                     "' (use e.g. 30, 30s, 5m, 1.5h)");
+                                 return dstd::fmt<
+                                     "Invalid duration for {}: '{}' (use e.g. "
+                                     "30, 30s, 5m, 1.5h)">(name, text);
                              }
                              target = *parsed;
                              return dstd::nullopt;
@@ -227,19 +230,19 @@ ArgSpec& ArgParser::duration(double& target, double native_per_second,
                              Names names, StringView help,
                              StringView default_text) {
     const StringView name = long_name(names);
-    return add_converted(
-        names, help, default_text,
-        [&target, native_per_second,
-         name](StringView text) -> Optional<String> {
-            auto parsed = common::parse_duration_as(text, native_per_second);
-            if (!parsed) {
-                return common::str_cat("Invalid duration for ", name, ": '",
-                                       text,
-                                       "' (use e.g. 5000, 5s, 500ms, 1.5h)");
-            }
-            target = *parsed;
-            return dstd::nullopt;
-        });
+    return add_converted(names, help, default_text,
+                         [&target, native_per_second,
+                          name](StringView text) -> Optional<String> {
+                             auto parsed = common::parse_duration_as(
+                                 text, native_per_second);
+                             if (!parsed) {
+                                 return dstd::fmt<
+                                     "Invalid duration for {}: '{}' (use e.g. "
+                                     "5000, 5s, 500ms, 1.5h)">(name, text);
+                             }
+                             target = *parsed;
+                             return dstd::nullopt;
+                         });
 }
 
 ArgSpec& ArgParser::optional_duration(Optional<double>& target,
@@ -256,8 +259,9 @@ ArgSpec& ArgParser::optional_duration(Optional<double>& target,
         }
         auto parsed = common::parse_duration_as(text, native_per_second);
         if (!parsed) {
-            return common::str_cat("Invalid duration for ", name, ": '", text,
-                                   "' (use e.g. 5000, 5s, 500ms, 1.5h)");
+            return dstd::fmt<
+                "Invalid duration for {}: '{}' (use e.g. 5000, 5s, 500ms, "
+                "1.5h)">(name, text);
         }
         target = *parsed;
         return dstd::nullopt;
@@ -385,7 +389,7 @@ ParseOutcome ArgParser::parse(const Vector<StringView>& args) {
             !options_done && token.size() > 1 && token[0] == '-';
         if (!option_like) {
             if (!positional) {
-                return fail(common::str_cat("Unexpected argument: ", token));
+                return fail(dstd::fmt<"Unexpected argument: {}">(token));
             }
             positional->set_(token);
             positional->used_ = true;
@@ -405,7 +409,7 @@ ParseOutcome ArgParser::parse(const Vector<StringView>& args) {
             inline_value = token.substr(eq + 1);
         }
         ArgSpec* spec = find(name);
-        if (!spec) return fail(common::str_cat("Unknown option: ", name));
+        if (!spec) return fail(dstd::fmt<"Unknown option: {}">(name));
         ++i;
         spec->used_ = true;
         if (spec == specs_[0].get()) {
@@ -422,8 +426,7 @@ ParseOutcome ArgParser::parse(const Vector<StringView>& args) {
         }
         if (spec->kind_ == ArgSpec::Kind::Flag) {
             if (inline_value) {
-                return fail(
-                    common::str_cat("Option ", name, " takes no value"));
+                return fail(dstd::fmt<"Option {} takes no value">(name));
             }
             spec->set_(StringView());
             continue;
@@ -444,7 +447,7 @@ ParseOutcome ArgParser::parse(const Vector<StringView>& args) {
             }
         }
         if (values.empty()) {
-            return fail(common::str_cat("Missing value for ", name));
+            return fail(dstd::fmt<"Missing value for {}">(name));
         }
         for (const auto& value : values) {
             if (auto error = spec->set_(value)) return fail(std::move(*error));
@@ -454,12 +457,12 @@ ParseOutcome ArgParser::parse(const Vector<StringView>& args) {
     for (const auto& spec : specs_) {
         if (spec->kind_ == ArgSpec::Kind::Positional) {
             if (spec->min_one_ && !spec->used_) {
-                return fail(common::str_cat("Missing required input: ",
-                                            spec->names_.front()));
+                return fail(dstd::fmt<"Missing required input: {}">(
+                    spec->names_.front()));
             }
         } else if (spec->is_required_ && !spec->used_) {
-            return fail(common::str_cat("Missing required option: ",
-                                        longest_flag(spec->names_)));
+            return fail(dstd::fmt<"Missing required option: {}">(
+                longest_flag(spec->names_)));
         }
     }
     return ParseOutcome{};

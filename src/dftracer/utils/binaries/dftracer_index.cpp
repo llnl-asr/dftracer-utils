@@ -118,9 +118,11 @@ class IndexArgParse : public binaries::ArgParse {
 
 // Split out so the lambda that calls it holds no coroutine locals, which ICEs
 // GCC 12/13.
-static coro::CoroTask<int> select_stale_task(ResolverInput input,
-                                             IndexWork* stale) {
-    *stale = common::unwrap(co_await files_needing_index(std::move(input)));
+static coro::CoroTask<dstd::Result<int>> select_stale_task(ResolverInput input,
+                                                           IndexWork* stale) {
+    auto listed = co_await files_needing_index(std::move(input));
+    if (!listed) co_return listed.error();
+    *stale = std::move(*listed);
     co_return 0;
 }
 
@@ -147,7 +149,9 @@ static void print_summary(double seconds, std::size_t indexed,
 }
 
 static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
-    const auto log_dir = binaries::absolute_path(cli->inputs.directory);
+    auto absolute = binaries::absolute_path(cli->inputs.directory);
+    if (!absolute) co_return binaries::report_error(absolute.error());
+    const auto log_dir = std::move(*absolute);
     const auto force_rebuild = cli->indexing.force;
     const auto checkpoint_size = cli->indexing.checkpoint_size;
     const auto executor_threads = cli->runtime_args.executor_threads;
@@ -232,8 +236,10 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
         stage_start = now;
     };
 
-    auto matched_entries =
+    auto scanned =
         binaries::scan_trace_files_on_pool(cli->runtime_args, log_dir.str());
+    if (!scanned) co_return binaries::report_error(scanned.error());
+    auto matched_entries = std::move(*scanned);
 
     const auto start_time = std::chrono::high_resolution_clock::now();
     if (matched_entries.empty()) {
@@ -255,10 +261,11 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
         resolve_input.bloom_config = indexer_config;
         resolve_input.schema = dstd::String(cli->record_schema);
         IndexWork stale;
-        binaries::run_on_pool(
+        auto selected = binaries::run_on_pool(
             "DFTracer Bloom Indexer", cli->runtime_args, [&](coro::Scope&) {
                 return select_stale_task(std::move(resolve_input), &stale);
             });
+        if (!selected) co_return binaries::report_error(selected.error());
         skipped_fresh = matched_entries.size() - stale.files.size();
         matched_entries = std::move(stale.files);
         stale_tiers.insert(stale.stale_aggregation_roots.begin(),
@@ -315,11 +322,16 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
 
     const dstd::String agg_index =
         trace::internal::determine_index_path(input_files.front(), index_dir);
-    if (force_rebuild &&
-        common::unwrap(dstd::fs::exists(dstd::PathView(agg_index))))
-        stale_tiers.insert(agg_index);
-    for (const auto& root : stale_tiers)
-        common::unwrap(clear_aggregation(root));
+    if (force_rebuild) {
+        auto agg_exists = dstd::fs::exists(dstd::PathView(agg_index));
+        if (!agg_exists.has_value())
+            co_return binaries::report_error(agg_exists.error());
+        if (*agg_exists) stale_tiers.insert(agg_index);
+    }
+    for (const auto& root : stale_tiers) {
+        auto cleared = clear_aggregation(root);
+        if (!cleared) co_return binaries::report_error(cleared.error());
+    }
 
     auto batch_config = dstd::make_shared<IndexBuildBatchConfig>();
     batch_config->file_paths = std::move(input_files);
@@ -333,19 +345,23 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     batch_config->memory_budget = cli->memory_budget;
     batch_config->schema = dstd::String(cli->record_schema);
 
-    AggRun agg_run = common::unwrap(start_aggregation(
-        agg_index, index::schemas::dft::agg::standard_aggregation_config()));
+    auto started = start_aggregation(
+        agg_index, index::schemas::dft::agg::standard_aggregation_config());
+    if (!started) co_return binaries::report_error(started.error());
+    AggRun agg_run = std::move(*started);
     batch_config->agg_fold_factory = std::move(agg_run.factory);
 
     IndexBuildBatchResult batch_result;
-    binaries::run_on_pool(
+    auto built = binaries::run_on_pool(
         "DFTracer Bloom Indexer", cli->runtime_args,
         [&batch_result, batch_config](coro::Scope&) -> coro::CoroTask<void> {
             batch_result =
                 co_await BatchBuilder::process(std::move(batch_config));
         });
+    if (!built) co_return binaries::report_error(built.error());
     log_stage("build");
-    common::unwrap(finish_aggregation(agg_run, batch_result));
+    auto finished = finish_aggregation(agg_run, batch_result);
+    if (!finished) co_return binaries::report_error(finished.error());
     log_stage("aggregate");
     DFTRACER_UTILS_LOG_DEBUG(
         "dftracer_index: thread_ms parse={:.2f} schema={:.2f} "

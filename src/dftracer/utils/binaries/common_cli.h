@@ -18,6 +18,9 @@
 #include <dftracer/utils/coro/stop_token.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/error.h>
+#include <dftracer/utils/dstd/expected.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
@@ -55,7 +58,7 @@ class ArgParse;
 struct CliSchema {
     virtual ~CliSchema() = default;
     virtual void register_on(ArgParser& p) = 0;
-    virtual void after_parse() {}
+    virtual dstd::Result<void> after_parse() { return {}; }
     virtual bool validate() { return true; }
 };
 
@@ -75,6 +78,18 @@ inline void apply_log_level_arg(dstd::StringView name) {
             "Unknown --log-level '{}'; keeping '{}'", name,
             common::logger::level_name(common::logger::level()));
     }
+}
+
+// Logs the error of a tool and gives its exit code. A thrown-origin error
+// prints its message alone, as the tools always did.
+inline int report_error(const dstd::Error& error) {
+    DFTRACER_UTILS_LOG_ERROR("Error: {}", error.c_str());
+    return 1;
+}
+
+// The exit code of a tool whose run ended in `outcome`.
+inline int exit_code_of(const dstd::Result<int>& outcome) {
+    return outcome ? *outcome : report_error(outcome.error());
 }
 
 class ArgParse {
@@ -104,15 +119,13 @@ class ArgParse {
             }
             return outcome.exit_code;
         }
-        try {
-            apply_log_level_arg(log_level_);
-            for (auto* s : schemas_) s->after_parse();
-            post_parse();
-        } catch (const std::exception& err) {
-            DFTRACER_UTILS_LOG_ERROR("Error: {}", err.what());
-            std::fprintf(stderr, "%s\n", parser_.help().c_str());
-            return 1;
+        apply_log_level_arg(log_level_);
+        for (auto* s : schemas_) {
+            if (auto parsed = s->after_parse(); !parsed)
+                return fail_parse(parsed.error());
         }
+        if (auto parsed = post_parse(); !parsed)
+            return fail_parse(parsed.error());
         for (auto* s : schemas_) {
             if (!s->validate()) return 1;
         }
@@ -127,13 +140,19 @@ class ArgParse {
 
    protected:
     virtual void register_args() {}
-    virtual void post_parse() {}
+    virtual dstd::Result<void> post_parse() { return {}; }
     virtual bool validate() { return true; }
 
     ArgParser& parser() { return parser_; }
     const ArgParser& parser() const { return parser_; }
 
    private:
+    int fail_parse(const dstd::Error& error) {
+        const int code = report_error(error);
+        std::fprintf(stderr, "%s\n", parser_.help().c_str());
+        return code;
+    }
+
     ArgParser& parser_;
     dstd::Vector<CliSchema*> schemas_;
     dstd::StringView log_level_;
@@ -150,7 +169,8 @@ dstd::Optional<int> setup_and_parse(Cli& cli, int argc, char** argv) {
 // Shared CLI main prologue: logger init, parser construction with the package
 // version, description, ArgParse (CliT) setup+parse (returns its exit code),
 // then `run(cli)`. `run` is a template param so it inlines with no type
-// erasure; it receives the parsed CliT and returns the process exit code.
+// erasure; it receives the parsed CliT and returns the process exit code, or a
+// dstd::Result<int> whose error is logged and exits with 1.
 template <class CliT, class RunFn>
 int cli_main(int argc, char** argv, const char* name, const char* description,
              RunFn&& run) {
@@ -169,20 +189,15 @@ int cli_main(int argc, char** argv, const char* name, const char* description,
     ArgParser program(name, DFTRACER_UTILS_PACKAGE_VERSION, description);
     CliT cli(program);
     if (auto code = setup_and_parse(cli, argc, argv)) return *code;
-    try {
-        auto outcome = run(cli);
-        if constexpr (std::is_same_v<decltype(outcome), int>) {
-            return outcome;
-        } else {
-            if (!outcome) {
-                DFTRACER_UTILS_LOG_ERROR("Error: {}", outcome.error().format());
-                return 1;
-            }
-            return *outcome;
+    auto outcome = run(cli);
+    if constexpr (std::is_same_v<decltype(outcome), int>) {
+        return outcome;
+    } else {
+        if (!outcome) {
+            DFTRACER_UTILS_LOG_ERROR("Error: {}", outcome.error().format());
+            return 1;
         }
-    } catch (const std::exception& err) {
-        DFTRACER_UTILS_LOG_ERROR("Error: {}", err.what());
-        return 1;
+        return *outcome;
     }
 }
 
@@ -208,10 +223,10 @@ struct InputArgs : CliSchema {
         if (mode == DirMode::Required) spec.at_least_one();
     }
 
-    void after_parse() override {
+    dstd::Result<void> after_parse() override {
         if (mode == DirMode::DefaultDot && paths.empty()) {
             directory = ".";
-            return;
+            return {};
         }
         for (const auto path : paths) {
             dftracer::utils::common::InputFileStat st;
@@ -230,6 +245,7 @@ struct InputArgs : CliSchema {
                 files.push_back(path);
             }
         }
+        return {};
     }
 
     bool validate() override {
@@ -366,14 +382,15 @@ struct DuqlArgs : CliSchema {
             .append();
     }
 
-    void after_parse() override {
+    dstd::Result<void> after_parse() override {
         for (const auto& path : macro_paths) {
             auto loaded = dftracer::utils::duql::load_macros(path);
             if (!loaded) {
                 macro_error_ = loaded.error().c_str();
-                return;
+                return {};
             }
         }
+        return {};
     }
 
     bool validate() override {
@@ -418,12 +435,13 @@ struct WatchdogArgs : CliSchema {
                   "600");
     }
 
-    void after_parse() override {
+    dstd::Result<void> after_parse() override {
         global_timeout = whole_seconds(global_timeout_);
         task_timeout = whole_seconds(task_timeout_);
         interval = whole_seconds(interval_);
         warning_threshold = whole_seconds(warning_threshold_);
         deadlock_timeout = whole_seconds(deadlock_timeout_);
+        return {};
     }
 
     void apply(RuntimeSettings& settings) const {
@@ -443,46 +461,31 @@ struct WatchdogArgs : CliSchema {
     double deadlock_timeout_ = 600;
 };
 
-// The value of a task run by run_on_pool. A task that ended with an error is
-// raised, which cli_main reports as the error of the tool.
-template <class R>
-R take_pool_result(coro::TaskResult<R>&& result) {
-    if constexpr (coro::detail::is_expected_v<R>) {
-        return std::move(result);
-    } else {
-        if (!result) common::throw_error(result.error());
-        if constexpr (!std::is_void_v<R>) return std::move(*result);
-    }
-}
-
 // A CLI's run coroutine runs on main's one-thread coro::RunLoop, so work
 // awaited outside the runtime is serial. A tool runs here instead, as one named
 // task on the process runtime, and blocks until done. `body` takes a
-// coro::Scope& and returns a coro::CoroTask.
+// coro::Scope& and returns a coro::CoroTask. The result holds the error of a
+// task that ended with one.
 template <class Body>
 auto run_on_pool(const char* name, const RuntimeArgs& runtime, Body&& body) {
     RuntimeSettings settings;
     runtime.apply(settings);
-    using R = typename std::invoke_result_t<std::decay_t<Body>&,
-                                            coro::Scope&>::value_type;
-    return take_pool_result<R>(configure_default_runtime(settings).block_on(
-        coro::named(name, coro::with_scope(std::forward<Body>(body)))));
+    return configure_default_runtime(settings).block_on(
+        coro::named(name, coro::with_scope(std::forward<Body>(body))));
 }
 
-// As above, with a watchdog that stops the task and raises a
+// As above, with a watchdog that stops the task and gives a
 // dstd::Condition::Timeout error when a timeout passes.
 template <class Body>
 auto run_on_pool(const char* name, const RuntimeArgs& runtime,
                  const WatchdogArgs& watchdog, Body&& body) {
-    using Result = typename std::invoke_result_t<std::decay_t<Body>&,
-                                                 coro::Scope&>::value_type;
     RuntimeSettings settings;
     runtime.apply(settings);
     watchdog.apply(settings);
     Runtime& rt = configure_default_runtime(settings);
     if (watchdog.disable) {
-        return take_pool_result<Result>(rt.block_on(
-            coro::named(name, coro::with_scope(std::forward<Body>(body)))));
+        return rt.block_on(
+            coro::named(name, coro::with_scope(std::forward<Body>(body))));
     }
 
     coro::StopSource source;
@@ -505,30 +508,21 @@ auto run_on_pool(const char* name, const RuntimeArgs& runtime,
     dog.mark_execution_start();
     dog.start();
     dog.register_task_start(0, name);
+    auto stop_dog = dstd::defer([&] { dog.stop(); });
 
-    try {
-        auto task = coro::named(
-            name,
-            coro::with_stop_token(coro::with_scope(std::forward<Body>(body)),
-                                  source.token()));
-        auto outcome = rt.block_on(std::move(task));
-        dog.stop();
-        // A timeout that fires after the task ended does not undo its result.
-        if (!outcome && !reason.empty() &&
-            outcome.error().is(dstd::Condition::Cancelled)) {
-            throw common::DFTUtilsException(
-                dstd::Error{dstd::Condition::Timeout, "[TIMEOUT] " + reason});
-        }
-        return take_pool_result<Result>(std::move(outcome));
-    } catch (...) {
-        // The watchdog thread is joined before `reason` is read.
-        dog.stop();
-        if (!reason.empty()) {
-            throw common::DFTUtilsException(
-                dstd::Error{dstd::Condition::Timeout, "[TIMEOUT] " + reason});
-        }
-        throw;
+    auto task = coro::named(
+        name, coro::with_stop_token(coro::with_scope(std::forward<Body>(body)),
+                                    source.token()));
+    auto outcome = rt.block_on(std::move(task));
+    // The watchdog thread is joined before `reason` is read.
+    dog.stop();
+    // A timeout that fires after the task ended does not undo its result.
+    if (!outcome && !reason.empty() &&
+        outcome.error().is(dstd::Condition::Cancelled)) {
+        return decltype(outcome)(dstd::Unexpected<dstd::Error>(dstd::Error{
+            dstd::Condition::Timeout, dstd::fmt<"[TIMEOUT] {}">(reason)}));
     }
+    return outcome;
 }
 
 // Split a comma-separated list into views of `text`, dropping empty fields.
@@ -577,10 +571,10 @@ inline void warn_if_memory_tight(std::size_t required_bytes,
     }
 }
 
-// The absolute, normalized form of `path`. Throws when the current directory
-// cannot be read.
-inline dstd::Path absolute_path(dstd::StringView path) {
-    return common::unwrap(dstd::fs::absolute(dstd::PathView(path)));
+// The absolute, normalized form of `path`, or the error when the current
+// directory cannot be read.
+inline dstd::Result<dstd::Path> absolute_path(dstd::StringView path) {
+    return dstd::fs::absolute(dstd::PathView(path));
 }
 
 // The input traces below a folder, and no folder of index data, split output
@@ -601,24 +595,24 @@ inline runtime::fs::FindOptions trace_find_options(bool recursive,
 // The trace files under `directory`, scanned recursively on a pool of its own
 // (see runtime::fs::find_all_on_pool). Stats run on I/O threads, so it needs
 // as many of them as workers.
-inline dstd::Vector<runtime::fs::FoundFile> scan_trace_files_on_pool(
-    const RuntimeArgs& runtime, dstd::StringView directory,
-    bool with_stat = true) {
+inline dstd::Result<dstd::Vector<runtime::fs::FoundFile>>
+scan_trace_files_on_pool(const RuntimeArgs& runtime, dstd::StringView directory,
+                         bool with_stat = true) {
     auto found = runtime::fs::find_all_on_pool(
         runtime.executor_threads, runtime.executor_threads,
         dstd::PathView(directory), trace_find_options(true, with_stat));
-    if (!found) throw common::DFTUtilsException(found.error());
-    return std::move(*found);
+    return found;
 }
 
 // Parallel per-subdirectory scan of `directory` for trace files over the
 // scope's executor; sizes are not populated. Returns the matched paths.
-inline coro::CoroTask<dstd::Vector<dstd::String>> scan_directory_trace_files(
-    coro::Scope& ctx, dstd::StringView directory, bool recursive) {
+inline coro::CoroTask<dstd::Result<dstd::Vector<dstd::String>>>
+scan_directory_trace_files(coro::Scope& ctx, dstd::StringView directory,
+                           bool recursive) {
     auto options = trace_find_options(recursive, /*with_stat=*/false);
     auto found = co_await runtime::fs::find_all(ctx, dstd::PathView(directory),
                                                 std::move(options));
-    if (!found) throw common::DFTUtilsException(found.error());
+    if (!found) co_return dstd::Unexpected<dstd::Error>(found.error());
     dstd::Vector<dstd::String> files;
     files.reserve(found->size());
     for (const auto& entry : *found) {
@@ -632,17 +626,20 @@ inline coro::CoroTask<dstd::Vector<dstd::String>> scan_directory_trace_files(
 // for deterministic output. `on_missing(path)` runs for inputs that are
 // neither a regular file nor a directory (template param so it inlines).
 template <class OnMissing>
-coro::CoroTask<dstd::Vector<dstd::String>> collect_input_trace_files(
-    coro::Scope& ctx, const dstd::Vector<dstd::StringView>& inputs,
-    bool recursive, OnMissing&& on_missing) {
+coro::CoroTask<dstd::Result<dstd::Vector<dstd::String>>>
+collect_input_trace_files(coro::Scope& ctx,
+                          const dstd::Vector<dstd::StringView>& inputs,
+                          bool recursive, OnMissing&& on_missing) {
     dstd::Vector<dstd::String> out;
     for (const auto in : inputs) {
         if (dftracer::utils::common::input_is_directory(
                 dstd::CStringView(in.data()))) {
             auto scanned =
                 co_await scan_directory_trace_files(ctx, in, recursive);
-            out.insert(out.end(), std::make_move_iterator(scanned.begin()),
-                       std::make_move_iterator(scanned.end()));
+            if (!scanned)
+                co_return dstd::Unexpected<dstd::Error>(scanned.error());
+            out.insert(out.end(), std::make_move_iterator(scanned->begin()),
+                       std::make_move_iterator(scanned->end()));
         } else if (dftracer::utils::common::input_is_regular_file(
                        dstd::CStringView(in.data()))) {
             out.emplace_back(in);
@@ -654,9 +651,10 @@ coro::CoroTask<dstd::Vector<dstd::String>> collect_input_trace_files(
     co_return out;
 }
 
-inline coro::CoroTask<dstd::Vector<dstd::String>> collect_input_trace_files(
-    coro::Scope& ctx, const dstd::Vector<dstd::StringView>& inputs,
-    bool recursive) {
+inline coro::CoroTask<dstd::Result<dstd::Vector<dstd::String>>>
+collect_input_trace_files(coro::Scope& ctx,
+                          const dstd::Vector<dstd::StringView>& inputs,
+                          bool recursive) {
     co_return co_await collect_input_trace_files(ctx, inputs, recursive,
                                                  [](dstd::StringView) {});
 }
@@ -664,7 +662,7 @@ inline coro::CoroTask<dstd::Vector<dstd::String>> collect_input_trace_files(
 // Split out so the lambda that calls it holds no coroutine locals, which ICEs
 // GCC 12/13. Leaves the scan in `entries` so the caller resolves
 // again without scanning.
-inline coro::CoroTask<int> ensure_indexes_fresh_task(
+inline coro::CoroTask<dstd::Result<int>> ensure_indexes_fresh_task(
     coro::Scope& ctx, dstd::StringView directory,
     dstd::Vector<dstd::StringView> files, dstd::StringView index_dir,
     bool force_rebuild, dstd::Vector<runtime::fs::FoundFile>* entries,
@@ -676,7 +674,7 @@ inline coro::CoroTask<int> ensure_indexes_fresh_task(
         auto options = trace_find_options(true, /*with_stat=*/true);
         auto found = co_await runtime::fs::find_all(
             ctx, dstd::PathView(directory), std::move(options));
-        if (!found) throw common::DFTUtilsException(found.error());
+        if (!found) co_return dstd::Unexpected<dstd::Error>(found.error());
         *entries = std::move(*found);
     } else {
         dstd::Vector<dstd::Path> paths;
@@ -701,20 +699,22 @@ inline coro::CoroTask<int> ensure_indexes_fresh_task(
     options.bloom->required = false;
     options.aggregation = std::move(aggregation);
     if (checkpoint_size != 0) options.checkpoint_size = checkpoint_size;
-    auto indexer = dftracer::utils::common::unwrap(
-        dftracer::utils::index::detail::open_scanned(*entries,
-                                                     std::move(options)));
+    auto opened = dftracer::utils::index::detail::open_scanned(
+        *entries, std::move(options));
+    if (!opened) co_return dstd::Unexpected<dstd::Error>(opened.error());
+    auto& indexer = *opened;
     if (force_rebuild) {
         auto rebuilt = co_await indexer.rebuild(ctx);
-        dftracer::utils::common::unwrap(std::move(rebuilt));
+        if (!rebuilt) co_return dstd::Unexpected<dstd::Error>(rebuilt.error());
     } else {
         auto built = co_await indexer.build(ctx);
-        dftracer::utils::common::unwrap(std::move(built));
+        if (!built) co_return dstd::Unexpected<dstd::Error>(built.error());
     }
     co_return 0;
 }
 
-inline dstd::Vector<runtime::fs::FoundFile> ensure_indexes_fresh_blocking(
+inline dstd::Result<dstd::Vector<runtime::fs::FoundFile>>
+ensure_indexes_fresh_blocking(
     const char* name, const RuntimeArgs& runtime, dstd::StringView directory,
     dstd::Vector<dstd::StringView> files, dstd::StringView index_dir,
     bool force_rebuild = false,
@@ -724,11 +724,14 @@ inline dstd::Vector<runtime::fs::FoundFile> ensure_indexes_fresh_blocking(
     std::size_t checkpoint_size = 0) {
     dstd::Vector<runtime::fs::FoundFile> entries;
     if (directory.empty() && files.empty()) return entries;
-    run_on_pool(name, runtime, [&](coro::Scope& ctx) -> coro::CoroTask<int> {
-        co_return co_await ensure_indexes_fresh_task(
-            ctx, directory, std::move(files), index_dir, force_rebuild,
-            &entries, std::move(aggregation), checkpoint_size);
-    });
+    auto ran = run_on_pool(
+        name, runtime,
+        [&](coro::Scope& ctx) -> coro::CoroTask<dstd::Result<int>> {
+            co_return co_await ensure_indexes_fresh_task(
+                ctx, directory, std::move(files), index_dir, force_rebuild,
+                &entries, std::move(aggregation), checkpoint_size);
+        });
+    if (!ran) return dstd::Unexpected<dstd::Error>(ran.error());
     return entries;
 }
 

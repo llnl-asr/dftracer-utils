@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/binaries/common_cli.h>
-#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/time.h>
 #include <dftracer/utils/dstd/error.h>
@@ -25,28 +24,43 @@ binaries::RuntimeArgs small_runtime() {
 }  // namespace
 
 TEST_CASE("run_on_pool returns the value of the body") {
-    const int value = binaries::run_on_pool(
+    auto result = binaries::run_on_pool(
         "value", small_runtime(),
         [](coro::Scope&) -> coro::CoroTask<int> { co_return 7; });
-    CHECK(value == 7);
+    REQUIRE(result.has_value());
+    CHECK(*result == 7);
 }
 
-TEST_CASE("run_on_pool raises the error of the body") {
+TEST_CASE("run_on_pool returns the error result of the body") {
+    auto result = binaries::run_on_pool(
+        "fail result", small_runtime(),
+        [](coro::Scope&) -> coro::CoroTask<dstd::Result<int>> {
+            co_return dstd::Unexpected<dstd::Error>(
+                dstd::Error{dstd::Condition::InvalidArgument, "bad input"});
+        });
+    REQUIRE(!result.has_value());
+    CHECK(result.error().is(dstd::Condition::InvalidArgument));
+    CHECK(dstd::StringView(result.error().c_str()) == "bad input");
+}
+
+TEST_CASE("run_on_pool raises the exception of the body") {
     CHECK_THROWS_AS(
         binaries::run_on_pool("fail", small_runtime(),
                               [](coro::Scope&) -> coro::CoroTask<void> {
                                   throw std::runtime_error("boom");
                                   co_return;
-                              }),
+                              })
+            .discard(),
         std::runtime_error);
 }
 
 TEST_CASE("run_on_pool with a watchdog returns the value of the body") {
     binaries::WatchdogArgs watchdog;
-    const int value = binaries::run_on_pool(
+    auto result = binaries::run_on_pool(
         "watched", small_runtime(), watchdog,
         [](coro::Scope&) -> coro::CoroTask<int> { co_return 3; });
-    CHECK(value == 3);
+    REQUIRE(result.has_value());
+    CHECK(*result == 3);
 }
 
 TEST_CASE("a watchdog timeout stops the task and raises a timeout error") {
@@ -54,18 +68,15 @@ TEST_CASE("a watchdog timeout stops the task and raises a timeout error") {
     watchdog.global_timeout = 1;
     watchdog.interval = 1;
     const auto start = std::chrono::steady_clock::now();
-    try {
-        binaries::run_on_pool(
-            "slow", small_runtime(), watchdog,
-            [](coro::Scope&) -> coro::CoroTask<void> {
-                co_await coro::sleep(std::chrono::seconds(60));
-            });
-        FAIL("the timeout did not raise");
-    } catch (const common::DFTUtilsException& e) {
-        CHECK(e.condition() == dstd::Condition::Timeout);
-        CHECK(dstd::StringView(e.what()).find("Global timeout") !=
-              dstd::StringView::npos);
-    }
+    auto result = binaries::run_on_pool(
+        "slow", small_runtime(), watchdog,
+        [](coro::Scope&) -> coro::CoroTask<void> {
+            co_await coro::sleep(std::chrono::seconds(60));
+        });
+    REQUIRE(!result.has_value());
+    CHECK(result.error().is(dstd::Condition::Timeout));
+    CHECK(dstd::StringView(result.error().c_str()).find("Global timeout") !=
+          dstd::StringView::npos);
     CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(30));
 }
 
@@ -74,18 +85,15 @@ TEST_CASE("a watchdog task timeout names the task and stops it") {
     watchdog.task_timeout = 1;
     watchdog.interval = 1;
     const auto start = std::chrono::steady_clock::now();
-    try {
-        binaries::run_on_pool(
-            "slow_task", small_runtime(), watchdog,
-            [](coro::Scope&) -> coro::CoroTask<void> {
-                co_await coro::sleep(std::chrono::seconds(60));
-            });
-        FAIL("the timeout did not raise");
-    } catch (const common::DFTUtilsException& e) {
-        CHECK(e.condition() == dstd::Condition::Timeout);
-        CHECK(dstd::StringView(e.what()).find("Task 'slow_task' timed out") !=
-              dstd::StringView::npos);
-    }
+    auto result = binaries::run_on_pool(
+        "slow_task", small_runtime(), watchdog,
+        [](coro::Scope&) -> coro::CoroTask<void> {
+            co_await coro::sleep(std::chrono::seconds(60));
+        });
+    REQUIRE(!result.has_value());
+    CHECK(result.error().is(dstd::Condition::Timeout));
+    CHECK(dstd::StringView(result.error().c_str())
+              .find("Task 'slow_task' timed out") != dstd::StringView::npos);
     CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(30));
 }
 
@@ -93,29 +101,26 @@ TEST_CASE("a watchdog timeout raises for a body that gives a value") {
     binaries::WatchdogArgs watchdog;
     watchdog.global_timeout = 1;
     watchdog.interval = 1;
-    dstd::Condition condition = dstd::Condition::Unknown;
-    try {
-        binaries::run_on_pool(
-            "slow value", small_runtime(), watchdog,
-            [](coro::Scope&) -> coro::CoroTask<int> {
-                co_await coro::sleep(std::chrono::seconds(60));
-                co_return 1;
-            });
-    } catch (const common::DFTUtilsException& e) {
-        condition = e.condition();
-    }
-    CHECK(condition == dstd::Condition::Timeout);
+    auto result = binaries::run_on_pool(
+        "slow value", small_runtime(), watchdog,
+        [](coro::Scope&) -> coro::CoroTask<int> {
+            co_await coro::sleep(std::chrono::seconds(60));
+            co_return 1;
+        });
+    REQUIRE(!result.has_value());
+    CHECK(result.error().is(dstd::Condition::Timeout));
 }
 
 TEST_CASE("a disabled watchdog does not stop a task") {
     binaries::WatchdogArgs watchdog;
     watchdog.disable = true;
     watchdog.global_timeout = 1;
-    const int value = binaries::run_on_pool(
+    auto result = binaries::run_on_pool(
         "unwatched", small_runtime(), watchdog,
         [](coro::Scope&) -> coro::CoroTask<int> {
             co_await coro::sleep(std::chrono::milliseconds(1500));
             co_return 5;
         });
-    CHECK(value == 5);
+    REQUIRE(result.has_value());
+    CHECK(*result == 5);
 }

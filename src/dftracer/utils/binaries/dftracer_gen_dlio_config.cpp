@@ -191,10 +191,12 @@ int main(int argc, char** argv) {
             const index::schemas::dft::agg::AggregationConfig query_config =
                 agg_config;
 
-            const auto scanned = binaries::ensure_indexes_fresh_blocking(
+            auto scan = binaries::ensure_indexes_fresh_blocking(
                 "DLIO Config Generator", cli.runtime_args, cli.inputs.directory,
                 {}, cli.indexing.index_dir, cli.indexing.force, agg_config,
                 cli.indexing.checkpoint_size);
+            if (!scan) return binaries::report_error(scan.error());
+            const auto& scanned = *scan;
             if (scanned.empty()) {
                 DFTRACER_UTILS_LOG_ERROR(
                     "No trace files found in {}; cannot generate DLIO config",
@@ -220,34 +222,32 @@ int main(int argc, char** argv) {
                 }
             }
             utilities::dlio::AggregatedTraces traces;
-            try {
-                index::build::ResolverInput resolver_input;
-                resolver_input.directory = dstd::String(
-                    binaries::absolute_path(cli.inputs.directory).str());
-                resolver_input.index_dir = dstd::String(cli.indexing.index_dir);
-                resolver_input.require_checkpoints = false;
-                const auto resolved =
-                    index::build::Resolver{}(resolver_input).get();
-                if (!resolved) {
-                    DFTRACER_UTILS_LOG_ERROR("{}", resolved.error().format());
-                    return 1;
-                }
-                dstd::Vector<dstd::String> files;
-                for (const auto& f : resolved->all_files) files.emplace_back(f);
-                auto loaded = utilities::dlio::load_aggregated_traces(
-                    index_path, files, query_config, loader_opts);
-                if (!loaded) {
-                    DFTRACER_UTILS_LOG_ERROR(
-                        "Failed to query the aggregation: {}",
-                        loaded.error().message());
-                    return 1;
-                }
-                traces = std::move(*loaded);
-            } catch (const std::exception& e) {
+            index::build::ResolverInput resolver_input;
+            auto absolute = binaries::absolute_path(cli.inputs.directory);
+            if (!absolute) {
                 DFTRACER_UTILS_LOG_ERROR("Failed to query the aggregation: {}",
-                                         e.what());
+                                         absolute.error().c_str());
                 return 1;
             }
+            resolver_input.directory = dstd::String(absolute->str());
+            resolver_input.index_dir = dstd::String(cli.indexing.index_dir);
+            resolver_input.require_checkpoints = false;
+            const auto resolved =
+                index::build::Resolver{}(resolver_input).get();
+            if (!resolved) {
+                DFTRACER_UTILS_LOG_ERROR("{}", resolved.error().format());
+                return 1;
+            }
+            dstd::Vector<dstd::String> files;
+            for (const auto& f : resolved->all_files) files.emplace_back(f);
+            auto loaded = utilities::dlio::load_aggregated_traces(
+                index_path, files, query_config, loader_opts);
+            if (!loaded) {
+                DFTRACER_UTILS_LOG_ERROR("Failed to query the aggregation: {}",
+                                         loaded.error().message());
+                return 1;
+            }
+            traces = std::move(*loaded);
             if (!traces.any_data) {
                 DFTRACER_UTILS_LOG_ERROR(
                     "No DLIO events ({}/{}, {}/{}) found in {}",

@@ -46,16 +46,16 @@ using namespace dftracer::utils::utilities::replay;
 
 namespace {
 
-// Throws std::invalid_argument on a token that is not a 32-bit unsigned
+// The error is InvalidArgument for a token that is not a 32-bit unsigned
 // integer.
-dstd::HashSet<std::uint32_t> parse_csv_uint32(dstd::StringView csv) {
+dstd::Result<dstd::HashSet<std::uint32_t>> parse_csv_uint32(
+    dstd::StringView csv) {
     dstd::HashSet<std::uint32_t> out;
     for (const auto token : binaries::split_csv(csv)) {
         const auto value = dstd::from_chars<std::uint32_t>(token);
         if (!value) {
-            throw std::invalid_argument(
-                common::str_cat("\"", token, "\" is not an unsigned integer")
-                    .c_str());
+            return common::make_error<"\"{}\" is not an unsigned integer">(
+                common::ErrorCode::InvalidArgument, token);
         }
         out.insert(*value);
     }
@@ -175,13 +175,14 @@ class ReplayArgParse : public binaries::ArgParse {
                  "and dispatch consumer, at least 1 (default 4096)");
     }
 
-    void post_parse() override {
+    dstd::Result<void> post_parse() override {
         start_timestamp =
             static_cast<std::uint64_t>(std::llround(start_timestamp_us));
         end_timestamp =
             end_timestamp_us
                 ? static_cast<std::uint64_t>(std::llround(*end_timestamp_us))
                 : UINT64_MAX;
+        return {};
     }
 
     bool validate() override {
@@ -219,10 +220,9 @@ class ReplayArgParse : public binaries::ArgParse {
             {"--filter-tid", &filter_tid_csv},
             {"--exclude-tid", &exclude_tid_csv}};
         for (const auto& [flag, csv] : id_lists) {
-            try {
-                (void)parse_csv_uint32(*csv);
-            } catch (const std::invalid_argument& e) {
-                std::fprintf(stderr, "Error: %s: %s\n", flag, e.what());
+            if (auto parsed = parse_csv_uint32(*csv); !parsed) {
+                std::fprintf(stderr, "Error: %s: %s\n", flag,
+                             parsed.error().c_str());
                 return false;
             }
         }
@@ -260,7 +260,13 @@ coro::CoroTask<void> task_scan(RunCtx* ctx, coro::Scope& scope) {
             DFTRACER_UTILS_LOG_ERROR("Input not found or not accessible: {}",
                                      binaries::c_str(in));
         });
-    for (const auto& file : collected) ctx->trace_files.emplace_back(file);
+    if (!collected) {
+        DFTRACER_UTILS_LOG_ERROR("Run failed: {}", collected.error().c_str());
+        ctx->failed = true;
+        ctx->exit_code = 1;
+        co_return;
+    }
+    for (const auto& file : *collected) ctx->trace_files.emplace_back(file);
 
     ctx->scan_ms = std::chrono::duration<double, std::milli>(
                        std::chrono::steady_clock::now() - t0)
@@ -378,9 +384,20 @@ coro::CoroTask<void> task_execute(RunCtx* ctx, coro::Scope* scope) {
         // Call tree path stays sync, replay_with_call_tree builds the
         // full tree in memory first, so there's nothing to hide behind a
         // channel. We just call it from inside this task.
-        if (ctx->cli->inputs.size() != 1 ||
-            !common::unwrap(
-                dstd::fs::is_directory(dstd::PathView(ctx->cli->inputs[0])))) {
+        bool single_directory = false;
+        if (ctx->cli->inputs.size() == 1) {
+            auto is_dir =
+                dstd::fs::is_directory(dstd::PathView(ctx->cli->inputs[0]));
+            if (!is_dir.has_value()) {
+                DFTRACER_UTILS_LOG_ERROR("Run failed: {}",
+                                         is_dir.error().c_str());
+                ctx->failed = true;
+                ctx->exit_code = 1;
+                co_return;
+            }
+            single_directory = *is_dir;
+        }
+        if (!single_directory) {
             if (ctx->is_root) {
                 std::fprintf(stderr,
                              "Error: --use-call-tree requires exactly one "
@@ -470,10 +487,22 @@ int run(int argc, char** argv) {
     c.use_call_tree = cli.use_call_tree;
     c.hierarchical_replay = cli.hierarchical_replay;
     c.respect_call_hierarchy = cli.respect_call_hierarchy;
-    c.filter_pids = parse_csv_uint32(cli.filter_pid_csv);
-    c.exclude_pids = parse_csv_uint32(cli.exclude_pid_csv);
-    c.filter_tids = parse_csv_uint32(cli.filter_tid_csv);
-    c.exclude_tids = parse_csv_uint32(cli.exclude_tid_csv);
+    auto assign_csv =
+        [](dstd::StringView csv,
+           dstd::HashSet<std::uint32_t>& out) -> dstd::Result<void> {
+        auto parsed = parse_csv_uint32(csv);
+        if (!parsed) return parsed.error();
+        out = std::move(*parsed);
+        return {};
+    };
+    if (auto r = assign_csv(cli.filter_pid_csv, c.filter_pids); !r)
+        return binaries::report_error(r.error());
+    if (auto r = assign_csv(cli.exclude_pid_csv, c.exclude_pids); !r)
+        return binaries::report_error(r.error());
+    if (auto r = assign_csv(cli.filter_tid_csv, c.filter_tids); !r)
+        return binaries::report_error(r.error());
+    if (auto r = assign_csv(cli.exclude_tid_csv, c.exclude_tids); !r)
+        return binaries::report_error(r.error());
     c.filter_functions = parse_csv_string(cli.filter_function_csv);
     c.exclude_functions = parse_csv_string(cli.exclude_function_csv);
     c.filter_categories = parse_csv_string(cli.filter_category_csv);
@@ -487,19 +516,17 @@ int run(int argc, char** argv) {
     c.max_events = cli.max_events;
 
     RunCtx* ctx_ptr = &ctx;
-    try {
-        binaries::run_on_pool(
-            "DFTracer Replay", cli.runtime_args,
-            [ctx_ptr](coro::Scope&) -> coro::CoroTask<void> {
-                co_await coro::with_scope([&](coro::Scope& scope) {
-                    return task_scan(ctx_ptr, scope);
-                });
-                co_await coro::with_scope([&](coro::Scope& scope) {
-                    return task_execute(ctx_ptr, &scope);
-                });
+    auto ran = binaries::run_on_pool(
+        "DFTracer Replay", cli.runtime_args,
+        [ctx_ptr](coro::Scope&) -> coro::CoroTask<void> {
+            co_await coro::with_scope(
+                [&](coro::Scope& scope) { return task_scan(ctx_ptr, scope); });
+            co_await coro::with_scope([&](coro::Scope& scope) {
+                return task_execute(ctx_ptr, &scope);
             });
-    } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_ERROR("Run failed: {}", e.what());
+        });
+    if (!ran) {
+        DFTRACER_UTILS_LOG_ERROR("Run failed: {}", ran.error().c_str());
         return 1;
     }
 

@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/binaries/common_cli.h>
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/when_all.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -158,14 +160,13 @@ void render_comparison_output(const ComparisonOutput& output,
 
 // Indexes the traces under `path` with the aggregation config the queries use
 // and lists the trace files.
-coro::CoroTask<void> resolve_and_build(const ComparisonConfig& config,
-                                       const dstd::String& path,
-                                       const dstd::String& index_dir,
-                                       dstd::Vector<dstd::String>& out_files,
-                                       std::size_t parallelism) {
+coro::CoroTask<dstd::Result<void>> resolve_and_build(
+    const ComparisonConfig& config, const dstd::String& path,
+    const dstd::String& index_dir, dstd::Vector<dstd::String>& out_files,
+    std::size_t parallelism) {
     if (!common::input_exists(path)) {
         DFTRACER_UTILS_LOG_ERROR("Path does not exist: {}", path);
-        co_return;
+        co_return dstd::Result<void>();
     }
 
     ResolveAndBuildInput input;
@@ -180,20 +181,21 @@ coro::CoroTask<void> resolve_and_build(const ComparisonConfig& config,
     input.force_rebuild = config.force_rebuild;
     input.build_bloom = false;
 
-    auto result =
-        common::unwrap(co_await resolve_and_build_index(std::move(input)));
+    auto building = resolve_and_build_index(std::move(input));
+    auto result = co_await coro::or_fail(std::move(building));
     out_files.clear();
     for (const auto& f : result.all_files)
         out_files.emplace_back(f.data(), f.size());
 
     if (out_files.empty()) {
         DFTRACER_UTILS_LOG_ERROR("No trace files found in: {}", path);
-        co_return;
+        co_return dstd::Result<void>();
     }
     for (const auto& failure : result.failures) {
         DFTRACER_UTILS_LOG_WARN("Could not index {}: {}", failure.file_path,
                                 failure.message);
     }
+    co_return dstd::Result<void>();
 }
 
 // What the steps share. The ids of both sides' groups are in one string table.
@@ -217,40 +219,44 @@ struct ComparatorState {
 
 // One side on its own: build its index, then aggregate it. The two sides run
 // this at once when their indexes are apart, so each takes half of the threads.
-coro::CoroTask<void> index_and_aggregate_side(ComparatorState& state,
-                                              bool is_baseline,
-                                              std::size_t threads) {
+coro::CoroTask<dstd::Result<void>> index_and_aggregate_side(
+    ComparatorState& state, bool is_baseline, std::size_t threads) {
     const auto& config = state.config;
     const auto& path = is_baseline ? config.baseline : config.variant;
     const auto& index_dir =
         is_baseline ? config.baseline_index_dir : config.variant_index_dir;
     auto& files = is_baseline ? state.baseline_files : state.variant_files;
-    co_await resolve_and_build(config, path, index_dir, files, threads);
+    auto resolving = resolve_and_build(config, path, index_dir, files, threads);
+    co_await coro::or_fail(std::move(resolving));
     co_await aggregate_all(
         files, state.filters, index_dir, config, threads, state.strings,
         is_baseline ? state.baseline_side : state.variant_side,
         is_baseline ? state.baseline_failed : state.variant_failed);
+    co_return dstd::Result<void>();
 }
 
 // Both sides share one index root: build it once, baseline first, then
 // aggregate. The two aggregations run at once unless both sides are the same
 // files.
-coro::CoroTask<void> index_and_aggregate_shared(ComparatorState& state,
-                                                bool same_files) {
+coro::CoroTask<dstd::Result<void>> index_and_aggregate_shared(
+    ComparatorState& state, bool same_files) {
     const auto& config = state.config;
-    co_await resolve_and_build(config, config.baseline,
-                               config.baseline_index_dir, state.baseline_files,
-                               config.executor_threads);
+    auto resolving_baseline =
+        resolve_and_build(config, config.baseline, config.baseline_index_dir,
+                          state.baseline_files, config.executor_threads);
+    co_await coro::or_fail(std::move(resolving_baseline));
     if (same_files) {
         state.variant_files = state.baseline_files;
         co_await aggregate_all(state.baseline_files, state.filters,
                                config.baseline_index_dir, config,
                                config.executor_threads, state.strings,
                                state.baseline_side, state.baseline_failed);
-        co_return;
+        co_return dstd::Result<void>();
     }
-    co_await resolve_and_build(config, config.variant, config.variant_index_dir,
-                               state.variant_files, config.executor_threads);
+    auto resolving_variant =
+        resolve_and_build(config, config.variant, config.variant_index_dir,
+                          state.variant_files, config.executor_threads);
+    co_await coro::or_fail(std::move(resolving_variant));
     const std::size_t agg_threads =
         std::max<std::size_t>(1, config.executor_threads / 2);
     auto baseline_task = aggregate_all(
@@ -260,10 +266,12 @@ coro::CoroTask<void> index_and_aggregate_shared(ComparatorState& state,
         state.variant_files, state.filters, config.variant_index_dir, config,
         agg_threads, state.strings, state.variant_side, state.variant_failed);
     co_await coro::when_all(std::move(baseline_task), std::move(variant_task));
+    co_return dstd::Result<void>();
 }
 
 // Compares the two aggregates and prints the result. Returns the exit code.
-coro::CoroTask<int> compare_sides(ComparatorState& state, bool same_files) {
+coro::CoroTask<dstd::Result<int>> compare_sides(ComparatorState& state,
+                                                bool same_files) {
     const auto& config = state.config;
     if (state.baseline_files.empty() || state.variant_files.empty() ||
         state.baseline_failed || state.variant_failed) {
@@ -308,8 +316,9 @@ coro::CoroTask<int> compare_sides(ComparatorState& state, bool same_files) {
         cmp_input.variant_file_count = state.variant_files.size();
 
         ComparisonUtility cmp;
-        auto cmp_output = co_await cmp(cmp_input);
-        output.nodes.push_back(std::move(cmp_output->result));
+        auto comparing = cmp(cmp_input);
+        auto cmp_output = co_await coro::or_fail(std::move(comparing));
+        output.nodes.push_back(std::move(cmp_output.result));
     }
 
     auto meta_rows =
@@ -376,7 +385,7 @@ static dstd::Optional<ComparisonConfig> build_comparison_config(
             for (auto& n : config.nodes) {
                 n.query = n.query.empty()
                               ? duql_str
-                              : "(" + n.query + ") AND (" + duql_str + ")";
+                              : dstd::fmt<"({}) AND ({})">(n.query, duql_str);
             }
         }
     } else if (!baseline_path.empty() && !variant_path.empty()) {
@@ -472,31 +481,36 @@ static int run_comparator(const ComparatorArgParse* cli) {
     const bool shared_index = baseline_index_path == variant_index_path;
     const bool same_files = shared_index && config.baseline == config.variant;
 
-    try {
-        return binaries::run_on_pool(
-            "DFTracer Comparator", cli->runtime_args,
-            [&](coro::Scope&) -> coro::CoroTask<int> {
-                if (shared_index) {
-                    co_await index_and_aggregate_shared(state, same_files);
-                } else {
-                    // The two sides run at once on one executor, so each plans
-                    // for half of its threads. Each holds buffers per planned
-                    // worker.
-                    const std::size_t side_threads =
-                        std::max<std::size_t>(1, config.executor_threads / 2);
-                    auto baseline_task = index_and_aggregate_side(
-                        state, /*is_baseline=*/true, side_threads);
-                    auto variant_task = index_and_aggregate_side(
-                        state, /*is_baseline=*/false, side_threads);
-                    co_await coro::when_all(std::move(baseline_task),
-                                            std::move(variant_task));
-                }
-                co_return co_await compare_sides(state, same_files);
-            });
-    } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_ERROR("Run failed: {}", e.what());
+    auto ran = binaries::run_on_pool(
+        "DFTracer Comparator", cli->runtime_args,
+        [&](coro::Scope&) -> coro::CoroTask<dstd::Result<int>> {
+            if (shared_index) {
+                auto shared = index_and_aggregate_shared(state, same_files);
+                co_await coro::or_fail(std::move(shared));
+            } else {
+                // The two sides run at once on one executor, so each plans
+                // for half of its threads. Each holds buffers per planned
+                // worker.
+                const std::size_t side_threads =
+                    std::max<std::size_t>(1, config.executor_threads / 2);
+                auto baseline_task = index_and_aggregate_side(
+                    state, /*is_baseline=*/true, side_threads);
+                auto variant_task = index_and_aggregate_side(
+                    state, /*is_baseline=*/false, side_threads);
+                auto sides = co_await coro::when_all(std::move(baseline_task),
+                                                     std::move(variant_task));
+                auto& [baseline_done, variant_done] = sides;
+                if (!baseline_done) co_return baseline_done.error();
+                if (!variant_done) co_return variant_done.error();
+            }
+            auto comparing = compare_sides(state, same_files);
+            co_return co_await std::move(comparing);
+        });
+    if (!ran) {
+        DFTRACER_UTILS_LOG_ERROR("Run failed: {}", ran.error().c_str());
         return 1;
     }
+    return *ran;
 }
 
 int main(int argc, char** argv) {

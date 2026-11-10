@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/binaries/common_cli.h>
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/combinators.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/stage.h>
 #include <dftracer/utils/dstd/file.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/scope_exit.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -54,10 +57,10 @@ class SplitArgParse : public binaries::ArgParse {
         member.with_index_dir = false;
         member.with_force = false;
         member.group = "Output";
-        member.checkpoint_help =
+        member.checkpoint_help = dstd::fmt<
             "Gzip member size of the output files in uncompressed bytes "
-            "(default: " +
-            member.checkpoint_default + "). Accepts units, e.g. 512KB, 4MB";
+            "(default: {}). Accepts units, e.g. 512KB, 4MB">(
+            member.checkpoint_default);
         memory.help =
             "Most memory the chunk writers hold, with units (e.g. 64GB). A "
             "group of files starts only while the budget holds its writer, "
@@ -125,13 +128,17 @@ struct RechunkDir {
     std::mutex mu;
     dstd::Path path;
 
-    const dstd::Path& get() {
+    dstd::Result<dstd::Path> get() {
         std::lock_guard<std::mutex> lock(mu);
         if (path.empty()) {
-            path = dstd::fs::temp_directory().view() /
-                   ("dftracer_rechunk_" + dstd::to_string(std::time(nullptr)) +
-                    "_" + dstd::to_string(getpid()));
-            common::unwrap(dstd::fs::create_directories(path.view()));
+            const dstd::String name = dstd::fmt<"dftracer_rechunk_{}_{}">(
+                std::time(nullptr), getpid());
+            path = dstd::fs::temp_directory().view() / dstd::PathView(name);
+            auto created = dstd::fs::create_directories(path.view());
+            if (!created.has_value()) {
+                path = dstd::Path();
+                return created.error();
+            }
         }
         return path;
     }
@@ -181,7 +188,8 @@ std::size_t chunk_uncompressed_bytes(std::size_t chunk_bytes, double ratio,
     return static_cast<std::size_t>(std::max(aim, 1.0));
 }
 
-coro::CoroTask<std::size_t> hash_events(const dstd::String& path) {
+coro::CoroTask<dstd::Result<std::size_t>> hash_events(
+    const dstd::String& path) {
     // std::string (utilities step)
     std::size_t content_hash = 0;
     utilities::hash::HasherUtility hasher;
@@ -190,7 +198,7 @@ coro::CoroTask<std::size_t> hash_events(const dstd::String& path) {
     for (;;) {
         auto line_opt = co_await line_gen.next();
         if (!line_opt) break;
-        if (!*line_opt) common::throw_error(line_opt->error());
+        if (!*line_opt) co_return line_opt->error();
         const auto& line = **line_opt;
         const dstd::StringView event = trace::event_of_line(
             dstd::StringView(line.content.data(), line.content.length()));
@@ -232,12 +240,13 @@ void print_banner(const SplitSettings& settings, const dstd::Path& log_dir,
     std::printf("==========================================\n\n");
 }
 
-dstd::Vector<dstd::String> collect_inputs(const SplitArgParse& cli,
-                                          const dstd::Path& log_dir,
-                                          const dstd::Path& output_dir) {
+dstd::Result<dstd::Vector<dstd::String>> collect_inputs(
+    const SplitArgParse& cli, const dstd::Path& log_dir,
+    const dstd::Path& output_dir) {
     dstd::Vector<dstd::String> input_files;
     auto matched =
         binaries::scan_trace_files_on_pool(cli.runtime_args, log_dir.str());
+    if (!matched) return dstd::Unexpected<dstd::Error>(matched.error());
     // Never read back this run's own output. A file is tested by its walked
     // path, so a symlink into the output directory from outside its
     // spelling is not caught.
@@ -254,7 +263,7 @@ dstd::Vector<dstd::String> collect_inputs(const SplitArgParse& cli,
         const dstd::StringView text = rel.str();
         return !text.empty() && text != ".." && !text.starts_with("../");
     };
-    for (const auto& entry : matched) {
+    for (const auto& entry : *matched) {
         if (inside(entry.path.view(), out_canonical.view()) ||
             inside(entry.path.view(), out_walked.view()))
             continue;
@@ -280,7 +289,7 @@ bool check_inputs(dstd::Vector<dstd::String>& input_files,
 class ProbeStage {
    public:
     using Input = dstd::Vector<dstd::String>;
-    using Output = FileProbes;
+    using Output = dstd::Result<FileProbes>;
     static constexpr const char* NAME = "ProbeFile";
 
     ProbeStage(const SplitSettings& settings, RechunkDir& rechunk_dir,
@@ -292,14 +301,23 @@ class ProbeStage {
           open_count_(&open_count) {}
 
     coro::CoroTask<Output> run(Input input_files) const {
-        co_return co_await coro::parallel_map(
+        auto probing = coro::parallel_map(
             std::move(input_files),
             [this](dstd::String path) { return probe_file(std::move(path)); },
             {.max_in_flight = executor_threads_});
+        auto results = co_await std::move(probing);
+        FileProbes probes;
+        probes.reserve(results.size());
+        for (auto& result : results) {
+            if (!result) co_return result.error();
+            probes.push_back(std::move(*result));
+        }
+        co_return probes;
     }
 
    private:
-    coro::CoroTask<FileProbe> probe_file(dstd::String path) const {
+    coro::CoroTask<dstd::Result<FileProbe>> probe_file(
+        dstd::String path) const {
         FileProbe probe;
         probe.path = std::move(path);
         auto opened = co_await runtime::io::open_file(probe.path, {});
@@ -331,19 +349,28 @@ class ProbeStage {
             sfd.close().discard();
         }
         if (first.exceeds_cap) {
-            dstd::String out((rechunk_dir_->get().view() /
-                              dstd::PathView(probe.path).filename())
-                                 .str());
+            auto rechunk_path = rechunk_dir_->get();
+            if (!rechunk_path) co_return rechunk_path.error();
+            dstd::String out(
+                (rechunk_path->view() / dstd::PathView(probe.path).filename())
+                    .str());
             DFTRACER_UTILS_LOG_WARN(
                 "Input {} is a single large gzip member; rechunking to bounded "
                 "members at {}",
                 probe.path, out);
-            co_await utilities::fileio::compress::gzip_rechunk_to_members(
-                dstd::String(probe.path), dstd::String(out), member_size_bytes_,
-                6);
+            auto rechunking =
+                utilities::fileio::compress::gzip_rechunk_to_members(
+                    dstd::String(probe.path), dstd::String(out),
+                    member_size_bytes_, 6);
+            auto settled = co_await coro::settle(std::move(rechunking));
+            if (settled.stopped) co_await coro::stop_here();
+            if (settled.exception)
+                co_return dstd::Unexpected<dstd::Error>(
+                    common::error_of_exception(settled.exception));
             probe.path = out;
-            probe.bytes =
-                common::unwrap(dstd::fs::file_size(dstd::PathView(out)));
+            auto rechunked_size = dstd::fs::file_size(dstd::PathView(out));
+            if (!rechunked_size) co_return rechunked_size.error();
+            probe.bytes = *rechunked_size;
         }
         probe.ok = true;
         co_return probe;
@@ -433,15 +460,9 @@ class ExtractStage {
             [admission_ptr](
                 ExtractInput input) -> coro::CoroTask<ExtractResult> {
             co_await admission_ptr->enter();
-            try {
-                trace::ChunkExtractorUtility extractor;
-                auto result = co_await extractor(input);
-                admission_ptr->leave();
-                co_return result;
-            } catch (...) {
-                admission_ptr->leave();
-                throw;
-            }
+            auto leave = dstd::defer([&] { admission_ptr->leave(); });
+            trace::ChunkExtractorUtility extractor;
+            co_return co_await extractor(input);
         };
         auto extracts =
             coro::parallel_map(std::move(inputs), std::move(extract_one),
@@ -468,7 +489,7 @@ struct VerifyInput {
 class VerifyStage {
    public:
     using Input = VerifyInput;
-    using Output = trace::ChunkVerificationUtilityOutput;
+    using Output = dstd::Result<trace::ChunkVerificationUtilityOutput>;
     static constexpr const char* NAME = "VerifyChunks";
 
     explicit VerifyStage(const SplitSettings& settings)
@@ -480,14 +501,19 @@ class VerifyStage {
             output_hash += chunk.event_hash;
         }
 
-        auto file_hashes = co_await coro::parallel_map(
+        auto hashing = coro::parallel_map(
             std::move(input.files),
-            [](dstd::String path) -> coro::CoroTask<std::size_t> {
-                co_return co_await hash_events(path);
+            [](dstd::String path) -> coro::CoroTask<dstd::Result<std::size_t>> {
+                auto hashed = hash_events(path);
+                co_return co_await std::move(hashed);
             },
             {.max_in_flight = executor_threads_});
+        auto file_hashes = co_await std::move(hashing);
         std::size_t input_hash = 0;
-        for (const std::size_t file_hash : file_hashes) input_hash += file_hash;
+        for (const auto& file_hash : file_hashes) {
+            if (!file_hash) co_return file_hash.error();
+            input_hash += *file_hash;
+        }
 
         co_return trace::ChunkVerificationUtilityOutput::success(
             static_cast<std::uint64_t>(input_hash),
@@ -556,8 +582,14 @@ int print_report(const ExtractChunksOutput& split_results,
 }  // namespace
 
 static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
-    const auto log_dir = binaries::absolute_path(cli->inputs.directory);
-    const auto output_dir = binaries::absolute_path(cli->output_dir);
+    auto absolute_log_dir = binaries::absolute_path(cli->inputs.directory);
+    if (!absolute_log_dir)
+        co_return binaries::report_error(absolute_log_dir.error());
+    const auto log_dir = std::move(*absolute_log_dir);
+    auto absolute_output_dir = binaries::absolute_path(cli->output_dir);
+    if (!absolute_output_dir)
+        co_return binaries::report_error(absolute_output_dir.error());
+    const auto output_dir = std::move(*absolute_output_dir);
     SplitSettings settings;
     settings.app_name = dstd::String(cli->app_name);
     settings.chunk_size_bytes = cli->chunk_size_bytes;
@@ -570,17 +602,22 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
 
     print_banner(settings, log_dir, output_dir);
 
-    if (!common::unwrap(dstd::fs::exists(dstd::PathView(output_dir)))) {
-        common::unwrap(
-            dstd::fs::create_directories(dstd::PathView(output_dir)));
+    auto output_exists = dstd::fs::exists(dstd::PathView(output_dir));
+    if (!output_exists.has_value())
+        co_return binaries::report_error(output_exists.error());
+    if (!*output_exists) {
+        auto created = dstd::fs::create_directories(dstd::PathView(output_dir));
+        if (!created.has_value())
+            co_return binaries::report_error(created.error());
     }
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
     DFTRACER_UTILS_LOG_INFO("{}", "Discovering input files...");
 
-    dstd::Vector<dstd::String> input_files =
-        collect_inputs(*cli, log_dir, output_dir);
+    auto collected = collect_inputs(*cli, log_dir, output_dir);
+    if (!collected) co_return binaries::report_error(collected.error());
+    dstd::Vector<dstd::String> input_files = std::move(*collected);
     if (!check_inputs(input_files, log_dir)) co_return 1;
 
     DFTRACER_UTILS_LOG_INFO("Found {} input files", input_files.size());
@@ -599,10 +636,11 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
 
     DFTRACER_UTILS_LOG_INFO("{}", "Running...");
 
-    binaries::run_on_pool(
+    auto ran = binaries::run_on_pool(
         "DFTracer Split", cli->runtime_args, cli->watchdog,
-        [&](coro::Scope&) -> coro::CoroTask<void> {
-            auto probes = co_await probe_stage.run(std::move(input_files));
+        [&](coro::Scope&) -> coro::CoroTask<dstd::Result<void>> {
+            auto probing = probe_stage.run(std::move(input_files));
+            auto probes = co_await coro::or_fail(std::move(probing));
             auto groups = co_await group_stage.run(std::move(probes));
             dstd::Vector<dstd::String> split_files;
             for (const auto& group : groups) {
@@ -614,9 +652,11 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
                 VerifyInput verify_input{&split_results,
                                          std::move(split_files)};
                 auto verifying = verify_stage.run(std::move(verify_input));
-                verification = co_await std::move(verifying);
+                verification = co_await coro::or_fail(std::move(verifying));
             }
+            co_return dstd::Result<void>();
         });
+    if (!ran) co_return binaries::report_error(ran.error());
 
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> duration = end_time - start_time;
@@ -624,11 +664,18 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
     const int exit_code = print_report(split_results, input_count,
                                        duration.count(), verification);
 
-    if (!rechunk_dir.path.empty() &&
-        common::unwrap(dstd::fs::exists(rechunk_dir.path.view()))) {
-        DFTRACER_UTILS_LOG_INFO("Cleaning up temporary rechunk directory: {}",
-                                rechunk_dir.path);
-        common::unwrap(dstd::fs::remove_all(rechunk_dir.path.view()));
+    if (!rechunk_dir.path.empty()) {
+        auto rechunk_exists = dstd::fs::exists(rechunk_dir.path.view());
+        if (!rechunk_exists.has_value())
+            co_return binaries::report_error(rechunk_exists.error());
+        if (*rechunk_exists) {
+            DFTRACER_UTILS_LOG_INFO(
+                "Cleaning up temporary rechunk directory: {}",
+                rechunk_dir.path);
+            auto removed = dstd::fs::remove_all(rechunk_dir.path.view());
+            if (!removed.has_value())
+                co_return binaries::report_error(removed.error());
+        }
     }
 
     co_return exit_code;

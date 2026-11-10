@@ -13,6 +13,7 @@
 #include <dftracer/utils/dstd/algorithm.h>
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/file.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -163,7 +164,7 @@ dstd::Vector<trace::genesis::RunGroup> take_shard(
 
 dstd::String shard_tag(Shard shard) {
     if (shard.count <= 1) return "[genesis]";
-    return common::str_cat("[genesis ", shard.index, "/", shard.count, "]");
+    return dstd::fmt<"[genesis {}/{}]">(shard.index, shard.count);
 }
 
 // What one process wrote, for the summary line and the MPI join.
@@ -194,13 +195,9 @@ std::uint64_t peak_rss_bytes() {
 
 dstd::String clock_text(double seconds) {
     const auto t = static_cast<long long>(seconds);
-    char buf[32];
     if (t >= 3600)
-        std::snprintf(buf, sizeof buf, "%lldh%02lldm%02llds", t / 3600,
-                      t / 60 % 60, t % 60);
-    else
-        std::snprintf(buf, sizeof buf, "%lldm%02llds", t / 60, t % 60);
-    return buf;
+        return dstd::fmt<"{}h{:02}m{:02}s">(t / 3600, t / 60 % 60, t % 60);
+    return dstd::fmt<"{}m{:02}s">(t / 60, t % 60);
 }
 
 // `done` and `total` bytes in the unit of `total`, as in "68.3/68.8 GB".
@@ -212,9 +209,7 @@ dstd::String bytes_of(double done, double total) {
         total /= 1024.0;
         ++i;
     }
-    char buf[64];
-    std::snprintf(buf, sizeof buf, "%.1f/%.1f %s", done, total, UNITS[i]);
-    return buf;
+    return dstd::fmt<"{:.1f}/{:.1f} {}">(done, total, UNITS[i]);
 }
 
 // `done` and `total` counts in the unit of `total`, as in "1.9/5.1 G".
@@ -226,10 +221,8 @@ dstd::String count_of(double done, double total) {
         total /= 1000.0;
         ++i;
     }
-    char buf[64];
-    std::snprintf(buf, sizeof buf, i ? "%.1f/%.1f%s" : "%.0f/%.0f%s", done,
-                  total, UNITS[i]);
-    return buf;
+    if (i) return dstd::fmt<"{:.1f}/{:.1f}{}">(done, total, UNITS[i]);
+    return dstd::fmt<"{:.0f}/{:.0f}{}">(done, total, UNITS[i]);
 }
 
 dstd::String rate_of(double per_second) {
@@ -239,9 +232,7 @@ dstd::String rate_of(double per_second) {
         per_second /= 1000.0;
         ++i;
     }
-    char buf[64];
-    std::snprintf(buf, sizeof buf, "%.1f%s/s", per_second, UNITS[i]);
-    return buf;
+    return dstd::fmt<"{:.1f}{}/s">(per_second, UNITS[i]);
 }
 
 using Phase = trace::genesis::GroupProgress::Phase;
@@ -334,9 +325,9 @@ class Progress {
     std::int64_t elapsed_ms() const { return common::elapsed_ms(start_ms_); }
 
     dstd::String prefix(std::int64_t now_ms) const {
-        return common::str_cat(tag_.substr(0, tag_.size() - 1), " ",
-                               clock_text(static_cast<double>(now_ms) / 1000.0),
-                               "]");
+        return dstd::fmt<"{} {}]">(
+            tag_.substr(0, tag_.size() - 1),
+            clock_text(static_cast<double>(now_ms) / 1000.0));
     }
 
     void print(std::int64_t now_ms, bool last_group) {
@@ -668,7 +659,7 @@ coro::CoroTask<int> run_gen_dist(coro::Scope& ctx, const GenDistArgParse* cli,
     };
     // The run and func records go to their own members after the counters,
     // so a query on them reads a few chunks, not every chunk of every run.
-    const dstd::String head_path = common::str_cat(output, ".head");
+    const dstd::String head_path = dstd::fmt<"{}.head">(output);
     auto head_opened = co_await open_writer(head_path, head_budget);
     if (!head_opened) co_return 1;
     auto body_opened = co_await open_writer(output, writer_budget);
@@ -774,11 +765,11 @@ coro::CoroTask<int> run_gen_dist(coro::Scope& ctx, const GenDistArgParse* cli,
 
 int run_local(GenDistArgParse& cli, Shard shard, dstd::StringView output,
               Report* report) {
-    return binaries::run_on_pool(
+    return binaries::exit_code_of(binaries::run_on_pool(
         "DFTracer Genesis Gen Dist", cli.runtime_args,
         [&cli, shard, output, report](coro::Scope& ctx) {
             return run_gen_dist(ctx, &cli, shard, output, report);
-        });
+        }));
 }
 
 void print_summary(const Report& r, dstd::StringView output) {
@@ -886,7 +877,7 @@ int run_mpi(GenDistArgParse& cli) {
             memory::resolve_spill_budget(0) / node_ranks());
     const Shard shard{static_cast<std::size_t>(rank),
                       static_cast<std::size_t>(size)};
-    const dstd::String part = common::str_cat(cli.output, ".", rank, ".part");
+    const dstd::String part = dstd::fmt<"{}.{}.part">(cli.output, rank);
     Report report;
     const int rc = run_local(cli, shard, part, &report);
     return join_parts(cli.output, part, rank, size, rc == 0, report);

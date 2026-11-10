@@ -97,8 +97,9 @@ class ServerArgParse : public binaries::ArgParse {
             "0");
     }
 
-    void post_parse() override {
+    dstd::Result<void> post_parse() override {
         timeout_seconds = static_cast<std::uint64_t>(timeout_raw);
+        return {};
     }
 };
 
@@ -114,7 +115,9 @@ static coro::CoroTask<int> run_server(const ServerArgParse* cli) {
         std::fprintf(stderr, "Using trace directory for indexes: %s\n",
                      index_dir.c_str());
     } else {
-        common::unwrap(dstd::fs::create_directories(dstd::PathView(index_dir)));
+        auto created = dstd::fs::create_directories(dstd::PathView(index_dir));
+        if (!created.has_value())
+            co_return binaries::report_error(created.error());
     }
 
     // Share decoded gzip members across concurrent queries (single-flight +
@@ -184,7 +187,7 @@ static coro::CoroTask<int> run_server(const ServerArgParse* cli) {
         }).detach();
     }
 
-    binaries::run_on_pool(
+    auto ran = binaries::run_on_pool(
         "DFTracer Server", cli->runtime_args,
         [&](coro::Scope& ctx) -> coro::CoroTask<void> {
             auto* router_ptr = &router;
@@ -211,6 +214,7 @@ static coro::CoroTask<int> run_server(const ServerArgParse* cli) {
             };
             co_await listener.accept_loop(ctx, on_connection);
         });
+    if (!ran) co_return binaries::report_error(ran.error());
 
     std::fprintf(stderr, "Server shut down gracefully\n");
 

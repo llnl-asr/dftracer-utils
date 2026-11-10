@@ -4,6 +4,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <memory/fresh_process.h>
 
 #include <cstdint>
 
@@ -187,4 +188,30 @@ TEST_CASE("parsed text points into argv and is never copied") {
     REQUIRE(o.inputs.size() == 2);
     CHECK(inside(o.inputs[0], path_a));
     CHECK(inside(o.inputs[1], path_b));
+}
+
+TEST_CASE("number defaults print in printf %g form in the help") {
+    double small = 0.5;
+    double big = 1e20;
+    double precise = 0.123456789;
+    binaries::ArgParser p("tool", "1.2.3", "A test tool.");
+    p.option(small, {"--small"}, "Small");
+    p.option(big, {"--big"}, "Big");
+    p.option(precise, {"--precise"}, "Precise");
+    auto r = p.parse({"--help"});
+    CHECK(r.out.find("0.5") != dstd::String::npos);
+    CHECK(r.out.find("1e+20") != dstd::String::npos);
+    CHECK(r.out.find("0.123457") != dstd::String::npos);
+}
+
+TEST_CASE("a bad default ends the process" * doctest::skip()) {
+    fresh_process::announce_abort();
+    std::size_t chunk = 0;
+    binaries::ArgParser p("tool", "1.2.3", "A test tool.");
+    p.bytes(chunk, {"--chunk"}, "Chunk size", "lots");
+}
+
+TEST_CASE("a bad default is a fatal error") {
+    auto result = fresh_process::run("a bad default ends the process");
+    CHECK(result.aborted_with("bad default for --chunk: Invalid byte size"));
 }

@@ -5,6 +5,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -83,7 +84,9 @@ static coro::CoroTask<int> run_verify(
         dstd::Vector<dstd::String> abs_paths;
         abs_paths.reserve(file_paths.size());
         for (const auto& fp : file_paths) {
-            abs_paths.emplace_back(binaries::absolute_path(fp).str());
+            auto absolute = binaries::absolute_path(fp);
+            if (!absolute) co_return binaries::report_error(absolute.error());
+            abs_paths.emplace_back(absolute->str());
         }
 
         auto index_path = internal::determine_index_path(abs_paths.front(), "");
@@ -98,7 +101,9 @@ static coro::CoroTask<int> run_verify(
     }
 
     for (const auto& file_path : file_paths) {
-        dstd::String abs_path(binaries::absolute_path(file_path).str());
+        auto absolute = binaries::absolute_path(file_path);
+        if (!absolute) co_return binaries::report_error(absolute.error());
+        dstd::String abs_path(absolute->str());
         dstd::String index_path = internal::determine_index_path(abs_path, "");
 
         // Collect metadata
@@ -116,123 +121,113 @@ static coro::CoroTask<int> run_verify(
         }
 
         // 3. Index chunks and write to .idx
-        try {
-            dstd::String idx_path_bidx =
-                internal::determine_index_path(abs_path, "");
-            auto opened = index::Index::open(idx_path_bidx);
-            if (!opened) {
-                std::fprintf(stderr, "  WARN: index open failed for %s\n",
-                             abs_path.c_str());
-                continue;
-            }
-            index::SourceStat source;
-            source.mtime = static_cast<std::uint64_t>(
-                index::store::internal::get_file_modification_time(abs_path));
-            source.size = index::store::internal::file_size_bytes(abs_path);
-            source.hash = index::store::internal::calculate_file_hash(abs_path);
-            auto build = opened->build(get_logical_path(abs_path), source);
-            if (!build) {
-                std::fprintf(stderr, "  WARN: index build failed for %s\n",
-                             abs_path.c_str());
-                continue;
-            }
-
-            std::size_t file_size = metadata.uncompressed_size;
-            std::size_t ckpt_count = metadata.checkpoint_count;
-
-            struct ChunkWork {
-                std::uint64_t idx;
-                std::size_t start;
-                std::size_t end;
-            };
-            dstd::Vector<ChunkWork> chunks;
-
-            if (ckpt_count == 0) {
-                chunks.push_back({0, 0, file_size});
-            } else {
-                std::size_t bytes_per = file_size / ckpt_count;
-                for (std::size_t i = 0; i < ckpt_count; ++i) {
-                    std::size_t start = i * bytes_per;
-                    std::size_t end =
-                        (i + 1 == ckpt_count) ? file_size : (i + 1) * bytes_per;
-                    chunks.push_back(
-                        {static_cast<std::uint64_t>(i), start, end});
-                }
-            }
-
-            dstd::HashMap<dstd::String, ScalableBloomFilter> file_blooms;
-            std::size_t total_events = 0;
-
-            for (const auto& chunk : chunks) {
-                ChunkIndexerInput ci;
-                ci.with_file_path(abs_path)
-                    .with_index_path(index_path)
-                    .with_checkpoint_size(ckpt_size)
-                    .with_checkpoint_idx(chunk.idx)
-                    .with_byte_range(chunk.start, chunk.end)
-                    .with_config(indexer_config)
-                    .with_batch_size(4 * 1024 * 1024);
-
-                ChunkIndexer idx_util;
-                auto indexed = co_await idx_util(ci);
-                if (!indexed) {
-                    std::fprintf(stderr,
-                                 "  ERROR: chunk index failed for %s: %s\n",
-                                 abs_path.c_str(), indexed.error().c_str());
-                    co_return 1;
-                }
-                auto output = std::move(*indexed);
-                total_events += output.events_processed;
-
-                for (auto& [dim, bloom] : output.bloom_filters) {
-                    auto blob = bloom.serialize();
-                    index::put_path_granule(
-                        *build, IndexExtension::Bloom, dim,
-                        output.checkpoint_idx,
-                        index::extensions::kinds::encode_bloom(
-                            blob, bloom.entry_count()));
-
-                    auto it = file_blooms.find(dim);
-                    if (it == file_blooms.end()) {
-                        file_blooms.emplace(dim, std::move(bloom));
-                    } else {
-                        it->second.merge_from(bloom);
-                    }
-                }
-
-                index::put_chunk_statistics(*build, output.checkpoint_idx,
-                                            output.statistics);
-            }
-
-            for (auto& [dim, bloom] : file_blooms) {
-                auto blob = bloom.serialize();
-                index::put_path_file(*build, IndexExtension::Bloom, dim,
-                                     index::extensions::kinds::encode_bloom(
-                                         blob, bloom.entry_count()));
-            }
-            for (const auto& dim : all_dimensions)
-                index::put_path(*build, IndexExtension::Bloom, dim);
-            build->finish(IndexExtension::Bloom,
-                          indexer_config.params_hash(IndexExtension::Bloom));
-            build->finish(IndexExtension::Stats,
-                          indexer_config.params_hash(IndexExtension::Stats));
-            auto committed = co_await build->commit();
-            if (!committed) {
-                std::fprintf(stderr, "  WARN: index commit failed for %s\n",
-                             abs_path.c_str());
-                continue;
-            }
-
-            const dstd::StringView basename =
-                dstd::PathView(abs_path).filename();
-            std::printf("  %.*s: indexed (%zu events, %zu chunks)\n",
-                        static_cast<int>(basename.size()), basename.data(),
-                        total_events, chunks.size());
-        } catch (const std::exception& e) {
-            std::fprintf(stderr,
-                         "  WARN: bloom index generation failed for %s: %s\n",
-                         abs_path.c_str(), e.what());
+        dstd::String idx_path_bidx =
+            internal::determine_index_path(abs_path, "");
+        auto opened = index::Index::open(idx_path_bidx);
+        if (!opened) {
+            std::fprintf(stderr, "  WARN: index open failed for %s\n",
+                         abs_path.c_str());
+            continue;
         }
+        index::SourceStat source;
+        source.mtime = static_cast<std::uint64_t>(
+            index::store::internal::get_file_modification_time(abs_path));
+        source.size = index::store::internal::file_size_bytes(abs_path);
+        source.hash = index::store::internal::calculate_file_hash(abs_path);
+        auto build = opened->build(get_logical_path(abs_path), source);
+        if (!build) {
+            std::fprintf(stderr, "  WARN: index build failed for %s\n",
+                         abs_path.c_str());
+            continue;
+        }
+
+        std::size_t file_size = metadata.uncompressed_size;
+        std::size_t ckpt_count = metadata.checkpoint_count;
+
+        struct ChunkWork {
+            std::uint64_t idx;
+            std::size_t start;
+            std::size_t end;
+        };
+        dstd::Vector<ChunkWork> chunks;
+
+        if (ckpt_count == 0) {
+            chunks.push_back({0, 0, file_size});
+        } else {
+            std::size_t bytes_per = file_size / ckpt_count;
+            for (std::size_t i = 0; i < ckpt_count; ++i) {
+                std::size_t start = i * bytes_per;
+                std::size_t end =
+                    (i + 1 == ckpt_count) ? file_size : (i + 1) * bytes_per;
+                chunks.push_back({static_cast<std::uint64_t>(i), start, end});
+            }
+        }
+
+        dstd::HashMap<dstd::String, ScalableBloomFilter> file_blooms;
+        std::size_t total_events = 0;
+
+        for (const auto& chunk : chunks) {
+            ChunkIndexerInput ci;
+            ci.with_file_path(abs_path)
+                .with_index_path(index_path)
+                .with_checkpoint_size(ckpt_size)
+                .with_checkpoint_idx(chunk.idx)
+                .with_byte_range(chunk.start, chunk.end)
+                .with_config(indexer_config)
+                .with_batch_size(4 * 1024 * 1024);
+
+            ChunkIndexer idx_util;
+            auto indexed = co_await idx_util(ci);
+            if (!indexed) {
+                std::fprintf(stderr, "  ERROR: chunk index failed for %s: %s\n",
+                             abs_path.c_str(), indexed.error().c_str());
+                co_return 1;
+            }
+            auto output = std::move(*indexed);
+            total_events += output.events_processed;
+
+            for (auto& [dim, bloom] : output.bloom_filters) {
+                auto blob = bloom.serialize();
+                index::put_path_granule(*build, IndexExtension::Bloom, dim,
+                                        output.checkpoint_idx,
+                                        index::extensions::kinds::encode_bloom(
+                                            blob, bloom.entry_count()));
+
+                auto it = file_blooms.find(dim);
+                if (it == file_blooms.end()) {
+                    file_blooms.emplace(dim, std::move(bloom));
+                } else {
+                    it->second.merge_from(bloom);
+                }
+            }
+
+            index::put_chunk_statistics(*build, output.checkpoint_idx,
+                                        output.statistics);
+        }
+
+        for (auto& [dim, bloom] : file_blooms) {
+            auto blob = bloom.serialize();
+            index::put_path_file(*build, IndexExtension::Bloom, dim,
+                                 index::extensions::kinds::encode_bloom(
+                                     blob, bloom.entry_count()));
+        }
+        for (const auto& dim : all_dimensions)
+            index::put_path(*build, IndexExtension::Bloom, dim);
+        build->finish(IndexExtension::Bloom,
+                      indexer_config.params_hash(IndexExtension::Bloom));
+        build->finish(IndexExtension::Stats,
+                      indexer_config.params_hash(IndexExtension::Stats));
+        auto committed = co_await build->commit();
+        if (!committed) {
+            std::fprintf(stderr, "  WARN: index commit failed for %s\n",
+                         abs_path.c_str());
+            continue;
+        }
+
+        const dstd::StringView basename = dstd::PathView(abs_path).filename();
+        std::printf("  %.*s: indexed (%zu events, %zu chunks)\n",
+                    static_cast<int>(basename.size()), basename.data(),
+                    total_events, chunks.size());
     }
 
     // Run queries
@@ -250,51 +245,47 @@ static coro::CoroTask<int> run_verify(
         std::size_t chunks_matched = 0;
 
         for (const auto& file_path : file_paths) {
-            dstd::String abs_path(binaries::absolute_path(file_path).str());
+            auto absolute = binaries::absolute_path(file_path);
+            if (!absolute) co_return binaries::report_error(absolute.error());
+            dstd::String abs_path(absolute->str());
             dstd::String idx_path_q =
                 internal::determine_index_path(abs_path, "");
 
-            try {
-                // Convert predicate map to query DSL string
-                dstd::String query_dsl;
-                for (const auto& [dim, vals] : q.predicates) {
-                    if (!query_dsl.empty()) query_dsl += " and ";
-                    if (vals.size() == 1) {
-                        query_dsl += dim + " == \"" + vals[0] + "\"";
-                    } else {
-                        query_dsl += dim + " in [";
-                        for (std::size_t vi = 0; vi < vals.size(); ++vi) {
-                            if (vi > 0) query_dsl += ", ";
-                            query_dsl += "\"" + vals[vi] + "\"";
-                        }
-                        query_dsl += "]";
+            // Convert predicate map to query DSL string
+            dstd::String query_dsl;
+            for (const auto& [dim, vals] : q.predicates) {
+                if (!query_dsl.empty()) query_dsl += " and ";
+                if (vals.size() == 1) {
+                    query_dsl += dstd::fmt<"{} == \"{}\"">(dim, vals[0]);
+                } else {
+                    query_dsl += dstd::fmt<"{} in [">(dim);
+                    for (std::size_t vi = 0; vi < vals.size(); ++vi) {
+                        if (vi > 0) query_dsl += ", ";
+                        query_dsl += dstd::fmt<"\"{}\"">(vals[vi]);
                     }
+                    query_dsl += "]";
                 }
+            }
 
-                auto parsed = duql::Query::from_string(query_dsl);
-                if (!parsed) continue;
+            auto parsed = duql::Query::from_string(query_dsl);
+            if (!parsed) continue;
 
-                ChunkPrunerInput pruner_input{idx_path_q, abs_path,
-                                              std::move(*parsed), nullptr};
-                ChunkPruner pruner;
-                auto pruning = pruner(pruner_input);
-                auto pruned = co_await std::move(pruning);
-                if (!pruned) {
-                    std::fprintf(stderr,
-                                 "  WARN: bloom query failed for %s: %s\n",
-                                 abs_path.c_str(), pruned.error().c_str());
-                    continue;
-                }
-                auto& result = *pruned;
-
-                total_chunks += result.total_checkpoints;
-                if (result.file_may_match) {
-                    files_matched++;
-                    chunks_matched += result.candidate_checkpoints.size();
-                }
-            } catch (const std::exception& e) {
+            ChunkPrunerInput pruner_input{idx_path_q, abs_path,
+                                          std::move(*parsed), nullptr};
+            ChunkPruner pruner;
+            auto pruning = pruner(pruner_input);
+            auto pruned = co_await std::move(pruning);
+            if (!pruned) {
                 std::fprintf(stderr, "  WARN: bloom query failed for %s: %s\n",
-                             abs_path.c_str(), e.what());
+                             abs_path.c_str(), pruned.error().c_str());
+                continue;
+            }
+            auto& result = *pruned;
+
+            total_chunks += result.total_checkpoints;
+            if (result.file_may_match) {
+                files_matched++;
+                chunks_matched += result.candidate_checkpoints.size();
             }
         }
 
@@ -382,8 +373,9 @@ class GenFakeTraceArgParse : public binaries::ArgParse {
             dstd::to_string(2 * 1024 * 1024));
     }
 
-    void post_parse() override {
+    dstd::Result<void> post_parse() override {
         step_dur_ms = static_cast<int>(std::lround(step_duration_ms));
+        return {};
     }
 };
 
@@ -441,22 +433,21 @@ TraceNames make_trace_names(const GenOptions& opts) {
     names.host_names.resize(opts.host_count);
     names.host_hashes.resize(opts.host_count);
     for (int h = 0; h < opts.host_count; ++h) {
-        names.host_names[h] = "node-" + dstd::to_string(h);
+        names.host_names[h] = dstd::fmt<"node-{}">(h);
         names.host_hashes[h] = make_hash(names.host_names[h]);
     }
 
     names.train_file_names.resize(opts.train_file_count);
     names.train_file_hashes.resize(opts.train_file_count);
     for (int f = 0; f < opts.train_file_count; ++f) {
-        names.train_file_names[f] =
-            "/data/train/shard_" + dstd::to_string(f) + ".h5";
+        names.train_file_names[f] = dstd::fmt<"/data/train/shard_{}.h5">(f);
         names.train_file_hashes[f] = make_hash(names.train_file_names[f]);
     }
 
     names.val_file_names.resize(opts.val_file_count);
     names.val_file_hashes.resize(opts.val_file_count);
     for (int f = 0; f < opts.val_file_count; ++f) {
-        names.val_file_names[f] = "/data/val/val_" + dstd::to_string(f) + ".h5";
+        names.val_file_names[f] = dstd::fmt<"/data/val/val_{}.h5">(f);
         names.val_file_hashes[f] = make_hash(names.val_file_names[f]);
     }
 
@@ -490,8 +481,8 @@ void print_banner(const GenOptions& opts) {
 dstd::Vector<dstd::String> plan_files(const GenOptions& opts) {
     dstd::Vector<dstd::String> generated_files(opts.rank_count);
     for (int rank = 0; rank < opts.rank_count; ++rank) {
-        generated_files[rank] = dstd::String(
-            common::str_cat(opts.output_dir, "/rank_", rank, ".pfw.gz"));
+        generated_files[rank] =
+            dstd::fmt<"{}/rank_{}.pfw.gz">(opts.output_dir, rank);
     }
     return generated_files;
 }
@@ -578,7 +569,6 @@ struct RankTrace {
     }
 
     void emit_train_step(int epoch, int step) {
-        char extra[256];
         std::uint64_t step_start = ts;
 
         // -- Data loading I/O (on io thread, level=2)
@@ -593,8 +583,7 @@ struct RankTrace {
         {
             auto a = make_event("open", "POSIX", tid_io, ts, jitter(rng, 5), 2);
             a.fhash = data_fhash;
-            std::snprintf(extra, sizeof(extra), R"("ret":3)");
-            a.extra = extra;
+            a.extra = R"("ret":3)";
             emit_event(writer, a);
             ts += a.dur;
             ++rank_events;
@@ -608,12 +597,10 @@ struct RankTrace {
                                 jitter(rng, 20), 2);
             a.fhash = data_fhash;
             std::uint64_t offset = static_cast<std::uint64_t>(r) * io_size;
-            std::snprintf(extra, sizeof(extra),
-                          R"("ret":%llu,"count":%llu,"offset":%llu)",
-                          static_cast<unsigned long long>(io_size),
-                          static_cast<unsigned long long>(io_size),
-                          static_cast<unsigned long long>(offset));
-            a.extra = extra;
+            a.extra = dstd::fmt<R"("ret":{},"count":{},"offset":{})">(
+                static_cast<unsigned long long>(io_size),
+                static_cast<unsigned long long>(io_size),
+                static_cast<unsigned long long>(offset));
             emit_event(writer, a);
             ts += a.dur;
             ++rank_events;
@@ -624,8 +611,7 @@ struct RankTrace {
             auto a =
                 make_event("close", "POSIX", tid_io, ts, jitter(rng, 3), 2);
             a.fhash = data_fhash;
-            std::snprintf(extra, sizeof(extra), R"("ret":0)");
-            a.extra = extra;
+            a.extra = R"("ret":0)";
             emit_event(writer, a);
             ts += a.dur;
             ++rank_events;
@@ -636,9 +622,7 @@ struct RankTrace {
         {
             auto a = make_event("data_loading", "IO", tid_io, io_start,
                                 ts - io_start, 1);
-            std::snprintf(extra, sizeof(extra), R"("epoch":%d,"step":%d)",
-                          epoch, step);
-            a.extra = extra;
+            a.extra = dstd::fmt<R"("epoch":{},"step":{})">(epoch, step);
             emit_event(writer, a);
             ++rank_events;
         }
@@ -651,9 +635,7 @@ struct RankTrace {
         for (int f = 0; f < 5; ++f) {
             auto a = make_event(fwd_ops[f], "APP", tid_main, ts,
                                 jitter(rng, opts.step_dur_us / 5), 2);
-            std::snprintf(extra, sizeof(extra), R"("epoch":%d,"step":%d)",
-                          epoch, step);
-            a.extra = extra;
+            a.extra = dstd::fmt<R"("epoch":{},"step":{})">(epoch, step);
             emit_event(writer, a);
             ts += a.dur;
             ++rank_events;
@@ -663,9 +645,7 @@ struct RankTrace {
         {
             auto a = make_event("forward", "APP", tid_main, fwd_start,
                                 ts - fwd_start, 1);
-            std::snprintf(extra, sizeof(extra), R"("epoch":%d,"step":%d)",
-                          epoch, step);
-            a.extra = extra;
+            a.extra = dstd::fmt<R"("epoch":{},"step":{})">(epoch, step);
             emit_event(writer, a);
             ++rank_events;
         }
@@ -676,9 +656,7 @@ struct RankTrace {
         for (int b = 0; b < 3; ++b) {
             auto a = make_event(back_ops[b], "APP", tid_main, ts,
                                 jitter(rng, opts.step_dur_us / 4), 2);
-            std::snprintf(extra, sizeof(extra), R"("epoch":%d,"step":%d)",
-                          epoch, step);
-            a.extra = extra;
+            a.extra = dstd::fmt<R"("epoch":{},"step":{})">(epoch, step);
             emit_event(writer, a);
             ts += a.dur;
             ++rank_events;
@@ -688,9 +666,7 @@ struct RankTrace {
         {
             auto a = make_event("backward_pass", "APP", tid_main, back_start,
                                 ts - back_start, 1);
-            std::snprintf(extra, sizeof(extra), R"("epoch":%d,"step":%d)",
-                          epoch, step);
-            a.extra = extra;
+            a.extra = dstd::fmt<R"("epoch":{},"step":{})">(epoch, step);
             emit_event(writer, a);
             ++rank_events;
         }
@@ -699,9 +675,7 @@ struct RankTrace {
         {
             auto a = make_event("optimizer_step", "APP", tid_main, ts,
                                 jitter(rng, opts.step_dur_us / 8), 1);
-            std::snprintf(extra, sizeof(extra), R"("epoch":%d,"step":%d)",
-                          epoch, step);
-            a.extra = extra;
+            a.extra = dstd::fmt<R"("epoch":{},"step":{})">(epoch, step);
             emit_event(writer, a);
             ts += a.dur;
             ++rank_events;
@@ -712,9 +686,7 @@ struct RankTrace {
         {
             auto a = make_event("train_step", "APP", tid_main, step_start,
                                 ts - step_start, 0);
-            std::snprintf(extra, sizeof(extra), R"("epoch":%d,"step":%d)",
-                          epoch, step);
-            a.extra = extra;
+            a.extra = dstd::fmt<R"("epoch":{},"step":{})">(epoch, step);
             emit_event(writer, a);
             ++rank_events;
         }
@@ -724,7 +696,6 @@ struct RankTrace {
         std::uint64_t val_phase_start = ts;
         const int val_steps = 10;
         for (int vs = 0; vs < val_steps; ++vs) {
-            char extra[256];
             int vf_idx = vs % opts.val_file_count;
             const dstd::String& vf_hash = names.val_file_hashes[vf_idx];
             std::uint64_t vio_size = jitter(rng, 4096);
@@ -735,8 +706,7 @@ struct RankTrace {
                 auto a =
                     make_event("open", "POSIX", tid_io, ts, jitter(rng, 5), 2);
                 a.fhash = vf_hash;
-                std::snprintf(extra, sizeof(extra), R"("ret":4)");
-                a.extra = extra;
+                a.extra = R"("ret":4)";
                 emit_event(writer, a);
                 ts += a.dur;
                 ++rank_events;
@@ -749,13 +719,11 @@ struct RankTrace {
                 auto a = make_event(read_ops[r % 3], "POSIX", tid_io, ts,
                                     jitter(rng, 20), 2);
                 a.fhash = vf_hash;
-                std::snprintf(extra, sizeof(extra),
-                              R"("ret":%llu,"count":%llu,"offset":%llu)",
-                              static_cast<unsigned long long>(vio_size),
-                              static_cast<unsigned long long>(vio_size),
-                              static_cast<unsigned long long>(
-                                  static_cast<std::uint64_t>(r) * vio_size));
-                a.extra = extra;
+                a.extra = dstd::fmt<R"("ret":{},"count":{},"offset":{})">(
+                    static_cast<unsigned long long>(vio_size),
+                    static_cast<unsigned long long>(vio_size),
+                    static_cast<unsigned long long>(
+                        static_cast<std::uint64_t>(r) * vio_size));
                 emit_event(writer, a);
                 ts += a.dur;
                 ++rank_events;
@@ -766,8 +734,7 @@ struct RankTrace {
                 auto a =
                     make_event("close", "POSIX", tid_io, ts, jitter(rng, 3), 2);
                 a.fhash = vf_hash;
-                std::snprintf(extra, sizeof(extra), R"("ret":0)");
-                a.extra = extra;
+                a.extra = R"("ret":0)";
                 emit_event(writer, a);
                 ts += a.dur;
                 ++rank_events;
@@ -777,9 +744,7 @@ struct RankTrace {
             {
                 auto a = make_event("val_forward", "APP", tid_main, ts,
                                     jitter(rng, opts.step_dur_us / 3), 2);
-                std::snprintf(extra, sizeof(extra), R"("epoch":%d,"step":%d)",
-                              epoch, vs);
-                a.extra = extra;
+                a.extra = dstd::fmt<R"("epoch":{},"step":{})">(epoch, vs);
                 emit_event(writer, a);
                 ts += a.dur;
                 ++rank_events;
@@ -789,9 +754,7 @@ struct RankTrace {
             {
                 auto a = make_event("val_loss", "APP", tid_main, ts,
                                     jitter(rng, opts.step_dur_us / 6), 2);
-                std::snprintf(extra, sizeof(extra), R"("epoch":%d,"step":%d)",
-                              epoch, vs);
-                a.extra = extra;
+                a.extra = dstd::fmt<R"("epoch":{},"step":{})">(epoch, vs);
                 emit_event(writer, a);
                 ts += a.dur;
                 ++rank_events;
@@ -801,9 +764,7 @@ struct RankTrace {
             {
                 auto a = make_event("val_step", "APP", tid_main, val_step_start,
                                     ts - val_step_start, 1);
-                std::snprintf(extra, sizeof(extra), R"("epoch":%d,"step":%d)",
-                              epoch, vs);
-                a.extra = extra;
+                a.extra = dstd::fmt<R"("epoch":{},"step":{})">(epoch, vs);
                 emit_event(writer, a);
                 ++rank_events;
             }
@@ -811,18 +772,15 @@ struct RankTrace {
 
         // validation wrapper (level=0)
         {
-            char extra[256];
             auto a = make_event("validation", "APP", tid_main, val_phase_start,
                                 ts - val_phase_start, 0);
-            std::snprintf(extra, sizeof(extra), R"("epoch":%d)", epoch);
-            a.extra = extra;
+            a.extra = dstd::fmt<R"("epoch":{})">(epoch);
             emit_event(writer, a);
             ++rank_events;
         }
     }
 
     void emit_checkpoint(int epoch) {
-        char extra[256];
         std::uint64_t ckpt_start = ts;
 
         // open checkpoint file (level=1)
@@ -830,8 +788,7 @@ struct RankTrace {
             auto a =
                 make_event("open", "POSIX", tid_io, ts, jitter(rng, 10), 1);
             a.fhash = ckref;
-            std::snprintf(extra, sizeof(extra), R"("ret":5)");
-            a.extra = extra;
+            a.extra = R"("ret":5)";
             emit_event(writer, a);
             ts += a.dur;
             ++rank_events;
@@ -844,13 +801,11 @@ struct RankTrace {
                                 tid_io, ts, jitter(rng, 50), 1);
             a.fhash = ckref;
             std::uint64_t wr_size = jitter(rng, 1048576);  // ~1 MB
-            std::snprintf(extra, sizeof(extra),
-                          R"("ret":%llu,"count":%llu,"offset":%llu)",
-                          static_cast<unsigned long long>(wr_size),
-                          static_cast<unsigned long long>(wr_size),
-                          static_cast<unsigned long long>(
-                              static_cast<std::uint64_t>(wr) * wr_size));
-            a.extra = extra;
+            a.extra = dstd::fmt<R"("ret":{},"count":{},"offset":{})">(
+                static_cast<unsigned long long>(wr_size),
+                static_cast<unsigned long long>(wr_size),
+                static_cast<unsigned long long>(static_cast<std::uint64_t>(wr) *
+                                                wr_size));
             emit_event(writer, a);
             ts += a.dur;
             ++rank_events;
@@ -861,8 +816,7 @@ struct RankTrace {
             auto a =
                 make_event("fsync", "POSIX", tid_io, ts, jitter(rng, 200), 1);
             a.fhash = ckref;
-            std::snprintf(extra, sizeof(extra), R"("ret":0)");
-            a.extra = extra;
+            a.extra = R"("ret":0)";
             emit_event(writer, a);
             ts += a.dur;
             ++rank_events;
@@ -873,8 +827,7 @@ struct RankTrace {
             auto a =
                 make_event("close", "POSIX", tid_io, ts, jitter(rng, 3), 1);
             a.fhash = ckref;
-            std::snprintf(extra, sizeof(extra), R"("ret":0)");
-            a.extra = extra;
+            a.extra = R"("ret":0)";
             emit_event(writer, a);
             ts += a.dur;
             ++rank_events;
@@ -884,8 +837,7 @@ struct RankTrace {
         {
             auto a = make_event("checkpoint", "IO", tid_io, ckpt_start,
                                 ts - ckpt_start, 0);
-            std::snprintf(extra, sizeof(extra), R"("epoch":%d)", epoch);
-            a.extra = extra;
+            a.extra = dstd::fmt<R"("epoch":{})">(epoch);
             emit_event(writer, a);
             ++rank_events;
         }
@@ -981,23 +933,25 @@ dstd::Vector<QuerySpec> make_test_queries(const TraceNames& names) {
 
     dstd::String pid0 = dstd::to_string(1000);
     test_queries.push_back(
-        {"pid=" + pid0 + " (rank 0 only)", {{"pid", {pid0}}}});
+        {dstd::fmt<"pid={} (rank 0 only)">(pid0), {{"pid", {pid0}}}});
 
     dstd::String tid_io_0 = dstd::to_string(10001);
-    test_queries.push_back(
-        {"tid=" + tid_io_0 + " (rank 0 io thread)", {{"tid", {tid_io_0}}}});
+    test_queries.push_back({dstd::fmt<"tid={} (rank 0 io thread)">(tid_io_0),
+                            {{"tid", {tid_io_0}}}});
 
-    test_queries.push_back({"fhash=" + names.val_file_names[0] + " (resolved)",
-                            {{"fhash", {names.val_file_hashes[0]}}}});
+    test_queries.push_back(
+        {dstd::fmt<"fhash={} (resolved)">(names.val_file_names[0]),
+         {{"fhash", {names.val_file_hashes[0]}}}});
     if (!names.train_file_hashes.empty()) {
         test_queries.push_back(
-            {"fhash=" + names.train_file_names[0] + " (resolved)",
+            {dstd::fmt<"fhash={} (resolved)">(names.train_file_names[0]),
              {{"fhash", {names.train_file_hashes[0]}}}});
     }
     test_queries.push_back(
         {"fhash=ckpt (resolved)", {{"fhash", {names.ckpt_file_hash}}}});
-    test_queries.push_back({"hhash=" + names.host_names[0] + " (resolved)",
-                            {{"hhash", {names.host_hashes[0]}}}});
+    test_queries.push_back(
+        {dstd::fmt<"hhash={} (resolved)">(names.host_names[0]),
+         {{"hhash", {names.host_hashes[0]}}}});
     test_queries.push_back(
         {"shash=train_unet3d (resolved)", {{"shash", {names.script_hash}}}});
 
@@ -1007,17 +961,18 @@ dstd::Vector<QuerySpec> make_test_queries(const TraceNames& names) {
         {"name=fsync AND fhash=ckpt",
          {{"name", {"fsync"}}, {"fhash", {names.ckpt_file_hash}}}});
     test_queries.push_back(
-        {"cat=POSIX AND hhash=" + names.host_names[0],
+        {dstd::fmt<"cat=POSIX AND hhash={}">(names.host_names[0]),
          {{"cat", {"POSIX"}}, {"hhash", {names.host_hashes[0]}}}});
-    test_queries.push_back(
-        {"cat=APP AND pid=" + pid0, {{"cat", {"APP"}}, {"pid", {pid0}}}});
+    test_queries.push_back({dstd::fmt<"cat=APP AND pid={}">(pid0),
+                            {{"cat", {"APP"}}, {"pid", {pid0}}}});
 
     if (!names.train_file_hashes.empty()) {
-        test_queries.push_back({"name=read AND hhash=" + names.host_names[0] +
-                                    " AND fhash=shard_0",
-                                {{"name", {"read"}},
-                                 {"hhash", {names.host_hashes[0]}},
-                                 {"fhash", {names.train_file_hashes[0]}}}});
+        test_queries.push_back(
+            {dstd::fmt<"name=read AND hhash={} AND fhash=shard_0">(
+                 names.host_names[0]),
+             {{"name", {"read"}},
+              {"hhash", {names.host_hashes[0]}},
+              {"fhash", {names.train_file_hashes[0]}}}});
     }
 
     test_queries.push_back(
@@ -1050,8 +1005,10 @@ int main(int argc, char** argv) {
         [](GenFakeTraceArgParse& cli) -> int {
             const GenOptions opts(cli);
 
-            common::unwrap(
-                dstd::fs::create_directories(dstd::PathView(opts.output_dir)));
+            auto created =
+                dstd::fs::create_directories(dstd::PathView(opts.output_dir));
+            if (!created.has_value())
+                return binaries::report_error(created.error());
 
             const TraceNames names = make_trace_names(opts);
             print_banner(opts);
@@ -1060,7 +1017,7 @@ int main(int argc, char** argv) {
             dstd::Vector<std::size_t> rank_event_counts(opts.rank_count, 0);
 
             const auto executor_threads = cli.runtime_args.executor_threads;
-            return binaries::run_on_pool(
+            auto ran = binaries::run_on_pool(
                 "DFTracer Fake Trace Generator", cli.runtime_args,
                 [&](coro::Scope&) -> coro::CoroTask<int> {
                     dstd::Vector<int> ranks;
@@ -1089,5 +1046,7 @@ int main(int argc, char** argv) {
                     co_return co_await run_verify(generated_files, test_queries,
                                                   opts.checkpoint_size);
                 });
+            if (!ran) return binaries::report_error(ran.error());
+            return *ran;
         });
 }

@@ -73,20 +73,24 @@ struct RootInfoSummary {
     std::uint64_t total_uncompressed = 0;
 };
 
-static coro::CoroTask<dstd::SharedPtr<RootInfoSummary>> load_root_info_summary(
-    dstd::String index_path) {
+static coro::CoroTask<dstd::Result<dstd::SharedPtr<RootInfoSummary>>>
+load_root_info_summary(dstd::String index_path) {
     auto result = dstd::make_shared<RootInfoSummary>();
 
-    const auto snapshot =
-        common::unwrap(index::plan::open_snapshot(index_path));
-    const auto listed = common::unwrap(snapshot.files());
-    result->file_count = listed.size();
-    for (const auto& file : listed) {
-        if (auto summary = common::unwrap(index::scalar_stats(snapshot, file)))
-            result->total_events += summary->stats.total_events;
-        if (auto meta = common::unwrap(index::file_metadata(snapshot, file))) {
-            result->total_lines += meta->line_count;
-            result->total_uncompressed += meta->max_bytes;
+    auto snapshot = index::plan::open_snapshot(index_path);
+    if (!snapshot) co_return snapshot.error();
+    auto listed = snapshot->files();
+    if (!listed) co_return listed.error();
+    result->file_count = listed->size();
+    for (const auto& file : *listed) {
+        auto summary = index::scalar_stats(*snapshot, file);
+        if (!summary) co_return summary.error();
+        if (*summary) result->total_events += (*summary)->stats.total_events;
+        auto meta = index::file_metadata(*snapshot, file);
+        if (!meta) co_return meta.error();
+        if (*meta) {
+            result->total_lines += (*meta)->line_count;
+            result->total_uncompressed += (*meta)->max_bytes;
         }
     }
     co_return result;
@@ -94,28 +98,31 @@ static coro::CoroTask<dstd::SharedPtr<RootInfoSummary>> load_root_info_summary(
 
 // Files of `index_path` in path order, with the ones whose pruning tier is
 // current added to `group`.
-static void load_cached_files(dstd::StringView index_path,
-                              dstd::Vector<dstd::String>& files,
-                              dstd::Vector<ResolvedFile>& group) {
-    const auto snapshot =
-        common::unwrap(index::plan::open_snapshot(index_path));
-    const auto listed = common::unwrap(snapshot.files());
-    files.reserve(listed.size());
-    group.reserve(listed.size());
+static dstd::Result<void> load_cached_files(dstd::StringView index_path,
+                                            dstd::Vector<dstd::String>& files,
+                                            dstd::Vector<ResolvedFile>& group) {
+    auto snapshot = index::plan::open_snapshot(index_path);
+    if (!snapshot) return snapshot.error();
+    auto listed = snapshot->files();
+    if (!listed) return listed.error();
+    files.reserve(listed->size());
+    group.reserve(listed->size());
     std::size_t fi = 0;
-    for (const auto& file : listed) {
+    for (const auto& file : *listed) {
         files.emplace_back(file.path());
-        if (index::extension_current(snapshot, file, IndexExtension::Stats))
+        if (index::extension_current(*snapshot, file, IndexExtension::Stats))
             group.push_back(ResolvedFile{fi, files.back(), {}});
         ++fi;
     }
+    return {};
 }
 
-static dstd::Vector<MetadataCollectorUtilityOutput>
+static dstd::Result<dstd::Vector<MetadataCollectorUtilityOutput>>
 process_index_group_info_sync(dstd::String index_path,
                               dstd::Vector<ResolvedFile> entries) {
-    const auto snapshot =
-        common::unwrap(index::plan::open_snapshot(index_path));
+    auto opened = index::plan::open_snapshot(index_path);
+    if (!opened) return opened.error();
+    const auto& snapshot = *opened;
 
     dstd::Vector<MetadataCollectorUtilityOutput> results;
     results.reserve(entries.size());
@@ -129,9 +136,13 @@ process_index_group_info_sync(dstd::String index_path,
 
         const auto file = snapshot.file(
             index::store::internal::get_logical_path(entry.file_path));
-        const auto metadata =
-            file ? common::unwrap(index::file_metadata(snapshot, *file))
-                 : dstd::nullopt;
+        auto metadata_result =
+            file ? index::file_metadata(snapshot, *file)
+                 : dstd::Result<
+                       dstd::Optional<index::store::FileMetadataResult>>(
+                       dstd::nullopt);
+        if (!metadata_result) return metadata_result.error();
+        const auto& metadata = *metadata_result;
         if (!metadata) {
             meta.success = false;
             meta.error_message = "No file metadata found in shared index";
@@ -155,8 +166,10 @@ process_index_group_info_sync(dstd::String index_path,
                 meta.checkpoint_size;
         }
 
-        const auto merged = common::unwrap(
-            index::schemas::dft::merged_statistics(snapshot, *file));
+        auto merged_result =
+            index::schemas::dft::merged_statistics(snapshot, *file);
+        if (!merged_result) return merged_result.error();
+        const auto& merged = *merged_result;
         if (merged) {
             meta.valid_events = merged->stats.total_events;
             if (merged->chunk_count > 0) {
@@ -177,7 +190,8 @@ process_index_group_info_sync(dstd::String index_path,
     return results;
 }
 
-static coro::CoroTask<dstd::Vector<MetadataCollectorUtilityOutput>>
+static coro::CoroTask<
+    dstd::Result<dstd::Vector<MetadataCollectorUtilityOutput>>>
 process_index_group_info(dstd::SharedPtr<dstd::String> index_path,
                          dstd::SharedPtr<dstd::Vector<ResolvedFile>> entries) {
     co_return process_index_group_info_sync(std::move(*index_path),
@@ -189,39 +203,42 @@ static void print_extensions(const MetadataCollectorUtilityOutput& info,
                              const index::Snapshot& snapshot) {
     using dftracer::utils::index::store::ALL_EXTENSIONS;
     using dftracer::utils::index::store::extension_name;
-    try {
-        const auto file = snapshot.file(
-            dftracer::utils::index::store::internal::get_logical_path(
-                info.file_path));
-        if (!file) return;
-        if (auto schema = common::unwrap(index::schema(snapshot, *file)))
-            std::printf("  Schema: %s\n", schema->c_str());
-        std::printf("  Extensions:");
-        for (auto ext : ALL_EXTENSIONS) {
-            const auto name = extension_name(ext);
-            if (index::extension_current(snapshot, *file, ext)) {
-                std::printf(" %.*s", static_cast<int>(name.size()),
-                            name.data());
-                continue;
-            }
-            // An extension built at another format version reads as absent.
-            const auto state = snapshot.extension(*file, ext, 0);
-            if (state == index::Freshness::Missing) continue;
-            const char* note =
-                state == index::Freshness::Failed ? " (failed)" : " (outdated)";
-            std::printf(" %.*s%s", static_cast<int>(name.size()), name.data(),
-                        note);
-        }
-        // No plugin is loaded here, so a plugin extension's currency is
-        // unknown.
-        for (const auto& plugin :
-             common::unwrap(index::plugins(snapshot, *file)))
-            std::printf(" %s (plugin%s)", plugin.name.c_str(),
-                        plugin.ready ? "" : ", failed");
-        std::printf("\n");
-    } catch (const std::exception& e) {
-        std::printf("  Extensions: unreadable (%s)\n", e.what());
+    const auto file =
+        snapshot.file(dftracer::utils::index::store::internal::get_logical_path(
+            info.file_path));
+    if (!file) return;
+    auto schema = index::schema(snapshot, *file);
+    if (!schema) {
+        std::printf("  Extensions: unreadable (%s)\n", schema.error().c_str());
+        return;
     }
+    auto plugins = index::plugins(snapshot, *file);
+    if (!plugins) {
+        std::printf("  Extensions: unreadable (%s)\n", plugins.error().c_str());
+        return;
+    }
+    if (*schema) std::printf("  Schema: %s\n", (*schema)->c_str());
+    std::printf("  Extensions:");
+    for (auto ext : ALL_EXTENSIONS) {
+        const auto name = extension_name(ext);
+        if (index::extension_current(snapshot, *file, ext)) {
+            std::printf(" %.*s", static_cast<int>(name.size()), name.data());
+            continue;
+        }
+        // An extension built at another format version reads as absent.
+        const auto state = snapshot.extension(*file, ext, 0);
+        if (state == index::Freshness::Missing) continue;
+        const char* note =
+            state == index::Freshness::Failed ? " (failed)" : " (outdated)";
+        std::printf(" %.*s%s", static_cast<int>(name.size()), name.data(),
+                    note);
+    }
+    // No plugin is loaded here, so a plugin extension's currency is
+    // unknown.
+    for (const auto& plugin : *plugins)
+        std::printf(" %s (plugin%s)", plugin.name.c_str(),
+                    plugin.ready ? "" : ", failed");
+    std::printf("\n");
 }
 
 static void print_file_info(const MetadataCollectorUtilityOutput& info,
@@ -291,7 +308,7 @@ static void print_file_info(const MetadataCollectorUtilityOutput& info,
     std::printf("\n");
 }
 
-static coro::CoroTask<void> auto_index_and_resolve(
+static coro::CoroTask<dstd::Result<void>> auto_index_and_resolve(
     dstd::Vector<FileWorkItem>& files_needing_index,
     const dstd::String& index_dir, std::size_t checkpoint_size,
     std::size_t executor_threads,
@@ -334,12 +351,15 @@ static coro::CoroTask<void> auto_index_and_resolve(
     refresh_input.index_dir = index_dir;
     refresh_input.require_checkpoints = true;
 
-    auto refresh_result = common::unwrap(co_await resolver(refresh_input));
+    auto refreshed = co_await resolver(refresh_input);
+    if (!refreshed) co_return refreshed.error();
+    auto& refresh_result = *refreshed;
 
     if (!refresh_result.cached.empty()) {
         indexed_groups[refresh_result.index_path] =
             std::move(refresh_result.cached);
     }
+    co_return dstd::Result<void>{};
 }
 
 static coro::CoroTask<int> run_info(const InfoArgParse* cli) {
@@ -372,18 +392,28 @@ static coro::CoroTask<int> run_info(const InfoArgParse* cli) {
                 co_return 1;
             }
 
-            common::unwrap(co_await ensure_index_fresh(directory, "", index_dir,
-                                                       force_rebuild));
+            auto fresh = co_await ensure_index_fresh(directory, "", index_dir,
+                                                     force_rebuild);
+            if (!fresh) co_return binaries::report_error(fresh.error());
 
             auto trusted_index_path =
                 internal::determine_index_path(directory, index_dir);
-            if (!force_rebuild &&
-                common::unwrap(dstd::fs::exists(dstd::PathView(
-                    dftracer::utils::index::store_dir(trusted_index_path))))) {
+            bool has_store = false;
+            if (!force_rebuild) {
+                auto store_exists = dstd::fs::exists(dstd::PathView(
+                    dftracer::utils::index::store_dir(trusted_index_path)));
+                if (!store_exists.has_value())
+                    co_return binaries::report_error(store_exists.error());
+                has_store = *store_exists;
+            }
+            if (has_store) {
                 if (summary_mode) {
                     common::ScopedTimer rt(stages, "root_summary_read");
-                    auto root_result =
+                    auto root_loaded =
                         co_await load_root_info_summary(trusted_index_path);
+                    if (!root_loaded)
+                        co_return binaries::report_error(root_loaded.error());
+                    auto root_result = std::move(*root_loaded);
 
                     if (stages) stages->print_stages();
 
@@ -418,8 +448,11 @@ static coro::CoroTask<int> run_info(const InfoArgParse* cli) {
 
                 {
                     common::ScopedTimer lr(stages, "load_registry");
-                    load_cached_files(trusted_index_path, files,
-                                      indexed_groups[trusted_index_path]);
+                    auto cached =
+                        load_cached_files(trusted_index_path, files,
+                                          indexed_groups[trusted_index_path]);
+                    if (!cached)
+                        co_return binaries::report_error(cached.error());
                 }
             } else {
                 common::ScopedTimer ds(stages, "scan_and_resolve");
@@ -427,7 +460,10 @@ static coro::CoroTask<int> run_info(const InfoArgParse* cli) {
                 auto input = dstd::make_unique<ResolverInput>();
                 input->directory = directory;
                 input->index_dir = index_dir;
-                auto result = common::unwrap(co_await resolver(*input));
+                auto resolved = co_await resolver(*input);
+                if (!resolved)
+                    co_return binaries::report_error(resolved.error());
+                auto& result = *resolved;
                 files = std::move(result.all_files);
                 if (!result.cached.empty()) {
                     indexed_groups[result.index_path] =
@@ -437,13 +473,16 @@ static coro::CoroTask<int> run_info(const InfoArgParse* cli) {
             }
         } else {
             common::ScopedTimer rs(stages, "resolve_index_state");
-            common::unwrap(co_await ensure_indexes_fresh(
-                "", cli_files, index_dir, force_rebuild));
+            auto fresh = co_await ensure_indexes_fresh("", cli_files, index_dir,
+                                                       force_rebuild);
+            if (!fresh) co_return binaries::report_error(fresh.error());
             Resolver resolver;
             auto input = dstd::make_unique<ResolverInput>();
             input->files = cli_files;
             input->index_dir = index_dir;
-            auto result = common::unwrap(co_await resolver(*input));
+            auto resolved = co_await resolver(*input);
+            if (!resolved) co_return binaries::report_error(resolved.error());
+            auto& result = *resolved;
             files = std::move(result.all_files);
             if (!result.cached.empty()) {
                 indexed_groups[result.index_path] = std::move(result.cached);
@@ -459,6 +498,7 @@ static coro::CoroTask<int> run_info(const InfoArgParse* cli) {
 
     dstd::Vector<MetadataCollectorUtilityOutput> all_results;
     std::mutex results_mutex;
+    dstd::Optional<dstd::Error> group_error;
 
     if (!indexed_groups.empty()) {
         common::ScopedTimer _t(stages, "index_batch_read");
@@ -466,30 +506,38 @@ static coro::CoroTask<int> run_info(const InfoArgParse* cli) {
             [&](coro::Scope& scope) -> coro::CoroTask<void> {
                 auto* all_results_ptr = &all_results;
                 auto* mutex_ptr = &results_mutex;
+                auto* error_ptr = &group_error;
                 for (auto& [ip, group] : indexed_groups) {
                     auto idx_path_ptr = dstd::make_shared<dstd::String>(ip);
                     auto entries_ptr =
                         dstd::make_shared<dstd::Vector<ResolvedFile>>(
                             std::move(group));
                     scope.spawn([idx_path_ptr, entries_ptr, all_results_ptr,
-                                 mutex_ptr]() mutable -> coro::CoroTask<void> {
+                                 mutex_ptr,
+                                 error_ptr]() mutable -> coro::CoroTask<void> {
                         auto infos = co_await process_index_group_info(
                             std::move(idx_path_ptr), std::move(entries_ptr));
                         std::lock_guard<std::mutex> lock(*mutex_ptr);
-                        for (auto& info : infos) {
+                        if (!infos) {
+                            if (!*error_ptr) *error_ptr = infos.error();
+                            co_return;
+                        }
+                        for (auto& info : *infos) {
                             all_results_ptr->push_back(std::move(info));
                         }
                     });
                 }
                 co_return;
             });
+        if (group_error) co_return binaries::report_error(*group_error);
     }
 
     if (!files_needing_index.empty()) {
         common::ScopedTimer _t(stages, "auto_index_and_build");
-        co_await auto_index_and_resolve(files_needing_index, index_dir,
-                                        checkpoint_size, executor_threads,
-                                        indexed_groups);
+        auto indexed = co_await auto_index_and_resolve(
+            files_needing_index, index_dir, checkpoint_size, executor_threads,
+            indexed_groups);
+        if (!indexed) co_return binaries::report_error(indexed.error());
 
         if (!indexed_groups.empty()) {
             common::ScopedTimer t2(stages, "newly_indexed_batch_read");
@@ -497,23 +545,30 @@ static coro::CoroTask<int> run_info(const InfoArgParse* cli) {
                                           -> coro::CoroTask<void> {
                 auto* all_results_ptr = &all_results;
                 auto* mutex_ptr = &results_mutex;
+                auto* error_ptr = &group_error;
                 for (auto& [ip, group] : indexed_groups) {
                     auto idx_path_ptr = dstd::make_shared<dstd::String>(ip);
                     auto entries_ptr =
                         dstd::make_shared<dstd::Vector<ResolvedFile>>(
                             std::move(group));
                     scope.spawn([idx_path_ptr, entries_ptr, all_results_ptr,
-                                 mutex_ptr]() mutable -> coro::CoroTask<void> {
+                                 mutex_ptr,
+                                 error_ptr]() mutable -> coro::CoroTask<void> {
                         auto infos = co_await process_index_group_info(
                             std::move(idx_path_ptr), std::move(entries_ptr));
                         std::lock_guard<std::mutex> lock(*mutex_ptr);
-                        for (auto& info : infos) {
+                        if (!infos) {
+                            if (!*error_ptr) *error_ptr = infos.error();
+                            co_return;
+                        }
+                        for (auto& info : *infos) {
                             all_results_ptr->push_back(std::move(info));
                         }
                     });
                 }
                 co_return;
             });
+            if (group_error) co_return binaries::report_error(*group_error);
         }
     }
 
@@ -566,12 +621,11 @@ static coro::CoroTask<int> run_info(const InfoArgParse* cli) {
     dstd::HashMap<dstd::String, index::Snapshot> snapshots;
     for (const auto& r : all_results) {
         auto it = snapshots.find(r.index_path);
-        if (it == snapshots.end())
-            it = snapshots
-                     .emplace(r.index_path,
-                              common::unwrap(
-                                  index::plan::open_snapshot(r.index_path)))
-                     .first;
+        if (it == snapshots.end()) {
+            auto opened = index::plan::open_snapshot(r.index_path);
+            if (!opened) co_return binaries::report_error(opened.error());
+            it = snapshots.emplace(r.index_path, std::move(*opened)).first;
+        }
         print_file_info(r, it->second, !summary_mode);
     }
 
@@ -610,10 +664,10 @@ int main(int argc, char** argv) {
         "Display metadata and index information for DFTracer compressed files "
         "using composable utilities",
         [](InfoArgParse& cli) {
-            return binaries::run_on_pool(
+            return binaries::exit_code_of(binaries::run_on_pool(
                 "DFTracer Info", cli.runtime_args,
                 [&cli](coro::Scope&) -> coro::CoroTask<int> {
                     co_return co_await run_info(&cli);
-                });
+                }));
         });
 }

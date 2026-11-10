@@ -362,11 +362,8 @@ class ProbeStage {
                 utilities::fileio::compress::gzip_rechunk_to_members(
                     dstd::String(probe.path), dstd::String(out),
                     member_size_bytes_, 6);
-            auto settled = co_await coro::settle(std::move(rechunking));
-            if (settled.stopped) co_await coro::stop_here();
-            if (settled.exception)
-                co_return dstd::Unexpected<dstd::Error>(
-                    common::error_of_exception(settled.exception));
+            auto rechunked = co_await std::move(rechunking);
+            if (!rechunked) co_return rechunked.error();
             probe.path = out;
             auto rechunked_size = dstd::fs::file_size(dstd::PathView(out));
             if (!rechunked_size) co_return rechunked_size.error();

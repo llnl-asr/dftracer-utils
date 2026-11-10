@@ -73,9 +73,10 @@ TEST_SUITE("member_cache_integration") {
 
         write_single_member(src, make_trace(n));
         dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
-            co_await utilities::fileio::compress::gzip_rechunk_to_members(
-                dstd::String(src), dstd::String(gz), /*member_size=*/4096,
-                /*level=*/6);
+            dftu_utils_test::ok(
+                co_await utilities::fileio::compress::gzip_rechunk_to_members(
+                    dstd::String(src), dstd::String(gz), /*member_size=*/4096,
+                    /*level=*/6));
             co_return;
         });
         {

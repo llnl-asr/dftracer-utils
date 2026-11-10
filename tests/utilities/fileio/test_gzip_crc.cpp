@@ -233,12 +233,9 @@ PathResult rechunker(const dstd::String& path) {
     bool ok = true;
     dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         CrcWindow window;
-        try {
-            co_await fileio::compress::gzip_rechunk_to_members(path, out_path,
-                                                               1u << 20, 1);
-        } catch (...) {
-            ok = false;
-        }
+        auto rechunked = co_await fileio::compress::gzip_rechunk_to_members(
+            path, out_path, 1u << 20, 1);
+        ok = rechunked.has_value();
     });
     if (!ok) return dstd::nullopt;
     auto decoded = zlib_decode_all(out_path);

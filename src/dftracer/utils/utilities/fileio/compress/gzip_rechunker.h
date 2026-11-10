@@ -105,20 +105,22 @@ inline coro::CoroTask<FirstMember> gzip_first_member(
 /// to `out_path`: identical uncompressed bytes, re-framed by @ref
 /// GzipLineWriter into members of about `member_size` uncompressed bytes that
 /// end at newlines.
-inline coro::CoroTask<void> gzip_rechunk_to_members(dstd::String in_path,
-                                                    dstd::String out_path,
-                                                    std::size_t member_size,
-                                                    int level) {
+///
+/// Fails with @ref common::ErrorCode::Io when the input cannot be opened or
+/// statted, @ref common::ErrorCode::Compression when it cannot be decoded, and
+/// with the writer's error when the output cannot be written.
+inline coro::CoroTask<dstd::Result<void>> gzip_rechunk_to_members(
+    dstd::String in_path, dstd::String out_path, std::size_t member_size,
+    int level) {
     if (member_size == 0)
         member_size = common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
     if (level < 0) level = 6;
 
     auto opened = co_await runtime::io::open_file(in_path, {});
     if (!opened) {
-        throw common::DFTUtilsException(
-            common::make_error<"Cannot open file: {}">(common::ErrorCode::Io,
-                                                       in_path)
-                .error());
+        co_return common::make_error<"Cannot open file: {}">(
+            common::ErrorCode::Io, in_path)
+            .error();
     }
     const dstd::File in_file = std::move(*opened);
     const int in_fd = in_file.native_handle();
@@ -126,10 +128,9 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(dstd::String in_path,
     struct stat st;
     const ssize_t stat_result = co_await runtime::io::fstat(in_fd, &st);
     if (stat_result != 0) {
-        throw common::DFTUtilsException(
-            common::make_error<"Cannot stat file: {}">(common::ErrorCode::Io,
-                                                       in_path)
-                .error());
+        co_return common::make_error<"Cannot stat file: {}">(
+            common::ErrorCode::Io, in_path)
+            .error();
     }
     const auto file_size = static_cast<std::uint64_t>(st.st_size);
     unsigned char magic[2] = {0, 0};
@@ -138,17 +139,18 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(dstd::String in_path,
 
     GzipStreamInflater gz;
     if (!plain && !gz.init(15 + 16)) {
-        throw common::DFTUtilsException(
-            common::make_error<"cannot open a gzip stream for {}">(
-                common::ErrorCode::Compression, in_path)
-                .error());
+        co_return common::make_error<"cannot open a gzip stream for {}">(
+            common::ErrorCode::Compression, in_path)
+            .error();
     }
 
     GzipWriterOptions opts;
     opts.member_size = member_size;
     opts.level = level;
-    auto writer = common::unwrap(
-        co_await GzipLineWriter::open(out_path, std::move(opts)));
+    auto opened_writer =
+        co_await GzipLineWriter::open(out_path, std::move(opts));
+    if (!opened_writer) co_return opened_writer.error();
+    auto writer = std::move(*opened_writer);
 
     dstd::Vector<unsigned char> in(1u << 20);
     dstd::Vector<unsigned char> out(1u << 20);
@@ -156,15 +158,18 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(dstd::String in_path,
     std::uint64_t off = 0;
 
     // Appends the whole lines of `text` and keeps the rest in `carry`.
-    auto feed = [&](dstd::StringView text) -> coro::CoroTask<void> {
+    auto feed =
+        [&](dstd::StringView text) -> coro::CoroTask<dstd::Result<void>> {
         const auto nl = text.rfind('\n');
         if (nl == dstd::StringView::npos) {
             carry.append(text);
-            co_return;
+            co_return dstd::Result<void>();
         }
         carry.append(text.substr(0, nl + 1));
-        common::unwrap(co_await writer.append(carry));
+        auto appended = co_await writer.append(carry);
+        if (!appended) co_return appended.error();
         carry.assign(text.substr(nl + 1));
+        co_return dstd::Result<void>();
     };
 
     bool ok = true;
@@ -177,9 +182,10 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(dstd::String in_path,
                 co_await runtime::io::pread(in_fd, in.data(), want, off);
             if (n <= 0) break;
             off += static_cast<std::uint64_t>(n);
-            co_await feed(
+            auto fed = co_await feed(
                 dstd::StringView(reinterpret_cast<const char*>(in.data()),
                                  static_cast<std::size_t>(n)));
+            if (!fed) co_return fed.error();
             continue;
         }
         if (gz.avail_in() == 0) {
@@ -195,9 +201,10 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(dstd::String in_path,
 
         gz.set_output(out.data(), out.size());
         const InflateStatus rc = gz.inflate();
-        co_await feed(
+        auto fed = co_await feed(
             dstd::StringView(reinterpret_cast<const char*>(out.data()),
                              out.size() - gz.avail_out()));
+        if (!fed) co_return fed.error();
 
         if (rc == InflateStatus::StreamEnd) {
             if (gz.total_in() >= file_size && gz.avail_in() == 0) break;
@@ -211,12 +218,13 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(dstd::String in_path,
     }
 
     if (!ok) {
-        throw common::DFTUtilsException(
-            common::make_error<"decompression failed for {}">(
-                common::ErrorCode::Compression, in_path)
-                .error());
+        co_return common::make_error<"decompression failed for {}">(
+            common::ErrorCode::Compression, in_path)
+            .error();
     }
-    common::unwrap(co_await writer.close(carry));
+    auto closed = co_await writer.close(carry);
+    if (!closed) co_return closed.error();
+    co_return dstd::Result<void>();
 }
 
 }  // namespace dftracer::utils::utilities::fileio::compress

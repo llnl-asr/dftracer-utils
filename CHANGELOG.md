@@ -25,6 +25,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Build the trace library without exceptions.
   Only the file that reads YAML keeps exceptions, to catch the ones of yaml-cpp.
   Python keeps its exception types.
+- Build the utilities library and the command line tools without exceptions.
+  Only the two files that call yaml-cpp keep exceptions, to catch the ones of yaml-cpp.
+- Make the viz server answer 400 for a bad query, such as an invalid argument or a duql parse error, and 500 for I/O and internal errors, where every failure answered 500 before.
+- Make a command line tool that fails print `Error: <message>` and exit with 1 in cases where it aborted before, such as an index folder that cannot be written.
+- Make `dftracer_stats` in detailed mode stop at the first error and exit with 1.
+- Print NaN and infinite values as `nan`, `inf` and `-inf` on every platform.
 - Return a `dstd::Result` from `View::export_would_bootstrap`, `collect_would_bootstrap`, `materialize_dir`, `register_materialized`, `mv_source` and `reconstruct_if_cached`, and from `rows<T>`.
 - Return the first builder error of a `View` from every terminal, in place of raising.
   A view over files of more than one record schema returns the mixed record schema error, in place of falling back to the dftracer schema.

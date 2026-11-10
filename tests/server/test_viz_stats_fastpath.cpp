@@ -102,15 +102,16 @@ TEST_SUITE("viz_stats_fastpath") {
             // several must sit fully inside a window for the fast path to skip
             // decodes.
             Runtime rt(4);
-            auto task = coro::with_scope([&](coro::Scope&)
-                                             -> coro::CoroTask<
-                                                 dstd::Result<void>> {
-                co_await utilities::fileio::compress::gzip_rechunk_to_members(
-                    dstd::String(src), dstd::String(gz),
-                    /*member_size=*/4096,
-                    /*level=*/6);
-                co_return co_await index.initialize();
-            });
+            auto task = coro::with_scope(
+                [&](coro::Scope&) -> coro::CoroTask<dstd::Result<void>> {
+                    auto rechunked = co_await utilities::fileio::compress::
+                        gzip_rechunk_to_members(dstd::String(src),
+                                                dstd::String(gz),
+                                                /*member_size=*/4096,
+                                                /*level=*/6);
+                    if (!rechunked) co_return rechunked.error();
+                    co_return co_await index.initialize();
+                });
             dftu_utils_test::ok(rt.submit(std::move(task), "setup").wait());
             rt.shutdown();
         }

@@ -174,6 +174,20 @@ TEST_SUITE("gzip_rechunker") {
         dstd::fs::remove_all(dir).discard();
     }
 
+    TEST_CASE("rechunk of a missing input is an Io error") {
+        auto dir = dftu_utils_test::make_unique_test_path("rechunk_missing");
+        REQUIRE(dstd::fs::create_directories(dir).has_value());
+        const dstd::String in = dstd::String((dir / "absent.pfw.gz").str());
+        const dstd::String out = dstd::String((dir / "out.pfw.gz").str());
+
+        dftu_utils_test::expect_error(
+            fileio::compress::gzip_rechunk_to_members(in, out, 4 * 1024, 6)
+                .get(),
+            common::ErrorCode::Io);
+
+        dstd::fs::remove_all(dir).discard();
+    }
+
     TEST_CASE("rechunk handles a payload with no trailing newline") {
         auto dir = dftu_utils_test::make_unique_test_path("rechunk_nonl");
         REQUIRE(dstd::fs::create_directories(dir).has_value());

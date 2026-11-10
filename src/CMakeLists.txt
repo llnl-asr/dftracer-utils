@@ -1610,6 +1610,8 @@ foreach(variant objects shared static)
 
     if(variant STREQUAL "objects")
       target_set_warnings(dftracer_utils_utilities_objects)
+      target_compile_options(dftracer_utils_utilities_objects
+                             PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
 
       # Boost.Math (standalone, header-only) for DLIO distribution fitting.
       link_boost_math(dftracer_utils_utilities_objects)
@@ -2293,6 +2295,8 @@ if(DFTRACER_UTILS_BUILD_BINARIES)
     dftracer_utils_cli PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../include
                               ${CMAKE_CURRENT_SOURCE_DIR})
   target_set_warnings(dftracer_utils_cli)
+  target_compile_options(dftracer_utils_cli
+                         PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
   set_target_properties(dftracer_utils_cli PROPERTIES POSITION_INDEPENDENT_CODE
                                                       ON)
 
@@ -2319,6 +2323,8 @@ if(DFTRACER_UTILS_BUILD_BINARIES)
 
 
     target_set_warnings(${bin_exec})
+    target_compile_options(${bin_exec}
+                           PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
 
     # Apply coverage flags if enabled
     if(DFTRACER_UTILS_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -2448,6 +2454,8 @@ if(DFTRACER_UTILS_BUILD_BINARIES)
       ${bin_exec} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include
                           ${CMAKE_CURRENT_SOURCE_DIR})
     target_set_warnings(${bin_exec})
+    target_compile_options(${bin_exec}
+                           PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
 
     if(DFTRACER_UTILS_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
       target_compile_options(${bin_exec} PRIVATE --coverage -fprofile-arcs

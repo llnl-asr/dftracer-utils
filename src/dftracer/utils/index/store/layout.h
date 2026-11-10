@@ -94,6 +94,8 @@ inline constexpr std::uint32_t NO_FILE = 0xFFFFFFFFu;
 /// version is stale.
 std::uint32_t ext_version(Ext ext);
 
+/// The big-endian integer at the start of `bytes`, which must hold at least
+/// its width; a shorter input ends the process.
 std::uint16_t read_u16(dstd::StringView bytes);
 std::uint32_t read_u32(dstd::StringView bytes);
 std::uint64_t read_u64(dstd::StringView bytes);

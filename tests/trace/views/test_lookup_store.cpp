@@ -9,6 +9,8 @@
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/trace/views/view_scan.h>
+#include <memory/fresh_process.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -81,6 +83,19 @@ std::uint64_t entry_bytes(std::size_t value_size) {
 }  // namespace
 
 TEST_SUITE("LookupStore") {
+    TEST_CASE("a lookup signature of an unresolved plan ends the process" *
+              doctest::skip()) {
+        fresh_process::announce_abort();
+        views::detail::ViewPlan plan;
+        (void)index::cache::lookup_signature(plan, "side");
+    }
+
+    TEST_CASE("a lookup signature of an unresolved plan is fatal") {
+        auto result = fresh_process::run(
+            "a lookup signature of an unresolved plan ends the process");
+        CHECK(result.aborted_with("the plan's record schema is not resolved"));
+    }
+
     TEST_CASE("a stored side reads back inside the index root") {
         TestEnvironment env(200);
         const auto gz = indexed_trace(env, 30);
@@ -97,11 +112,13 @@ TEST_SUITE("LookupStore") {
         auto db = index::cache::open_lookup_db(
             path, index::cache::CacheStore::Mode::ReadWrite);
         REQUIRE(db);
-        CHECK_FALSE(index::cache::lookup_exists(*db, *sig));
-        CHECK_FALSE(index::cache::read_lookup(*db, *sig));
-        index::cache::persist_lookup(*db, *sig, dstd::String("ipc\0bytes", 9));
-        CHECK(index::cache::lookup_exists(*db, *sig));
-        CHECK(index::cache::read_lookup(*db, *sig) ==
+        CHECK_FALSE(
+            dftu_utils_test::ok(index::cache::lookup_exists(*db, *sig)));
+        CHECK_FALSE(dftu_utils_test::ok(index::cache::read_lookup(*db, *sig)));
+        dftu_utils_test::ok(index::cache::persist_lookup(
+            *db, *sig, dstd::String("ipc\0bytes", 9)));
+        CHECK(dftu_utils_test::ok(index::cache::lookup_exists(*db, *sig)));
+        CHECK(dftu_utils_test::ok(index::cache::read_lookup(*db, *sig)) ==
               dstd::String("ipc\0bytes", 9));
     }
 
@@ -112,18 +129,18 @@ TEST_SUITE("LookupStore") {
         const dstd::String value(1000, 'v');
         ::setenv("DFTRACER_UTILS_CACHE_MAX_BYTES",
                  dstd::to_string(2 * entry_bytes(value.size())).c_str(), 1);
-        index::cache::persist_lookup(*db, 1, value);
+        dftu_utils_test::ok(index::cache::persist_lookup(*db, 1, value));
         tick();
-        index::cache::persist_lookup(*db, 2, value);
+        dftu_utils_test::ok(index::cache::persist_lookup(*db, 2, value));
         tick();
-        CHECK(index::cache::read_lookup(*db, 1) ==
+        CHECK(dftu_utils_test::ok(index::cache::read_lookup(*db, 1)) ==
               dstd::String(dstd::StringView(value)));
         tick();
-        index::cache::persist_lookup(*db, 3, value);
+        dftu_utils_test::ok(index::cache::persist_lookup(*db, 3, value));
         ::unsetenv("DFTRACER_UTILS_CACHE_MAX_BYTES");
-        CHECK(index::cache::lookup_exists(*db, 1));
-        CHECK_FALSE(index::cache::lookup_exists(*db, 2));
-        CHECK(index::cache::lookup_exists(*db, 3));
+        CHECK(dftu_utils_test::ok(index::cache::lookup_exists(*db, 1)));
+        CHECK_FALSE(dftu_utils_test::ok(index::cache::lookup_exists(*db, 2)));
+        CHECK(dftu_utils_test::ok(index::cache::lookup_exists(*db, 3)));
     }
 
     TEST_CASE("without a read the oldest side goes first") {
@@ -133,16 +150,16 @@ TEST_SUITE("LookupStore") {
         const dstd::String value(1000, 'v');
         ::setenv("DFTRACER_UTILS_CACHE_MAX_BYTES",
                  dstd::to_string(2 * entry_bytes(value.size())).c_str(), 1);
-        index::cache::persist_lookup(*db, 1, value);
+        dftu_utils_test::ok(index::cache::persist_lookup(*db, 1, value));
         tick();
-        index::cache::persist_lookup(*db, 2, value);
+        dftu_utils_test::ok(index::cache::persist_lookup(*db, 2, value));
         tick();
-        CHECK(index::cache::lookup_exists(*db, 1));
-        index::cache::persist_lookup(*db, 3, value);
+        CHECK(dftu_utils_test::ok(index::cache::lookup_exists(*db, 1)));
+        dftu_utils_test::ok(index::cache::persist_lookup(*db, 3, value));
         ::unsetenv("DFTRACER_UTILS_CACHE_MAX_BYTES");
-        CHECK_FALSE(index::cache::lookup_exists(*db, 1));
-        CHECK(index::cache::lookup_exists(*db, 2));
-        CHECK(index::cache::lookup_exists(*db, 3));
+        CHECK_FALSE(dftu_utils_test::ok(index::cache::lookup_exists(*db, 1)));
+        CHECK(dftu_utils_test::ok(index::cache::lookup_exists(*db, 2)));
+        CHECK(dftu_utils_test::ok(index::cache::lookup_exists(*db, 3)));
     }
 
     TEST_CASE("a side larger than the whole budget is not kept") {
@@ -150,11 +167,13 @@ TEST_SUITE("LookupStore") {
         auto db = store_in(env);
         REQUIRE(db);
         ::setenv("DFTRACER_UTILS_CACHE_MAX_BYTES", "100", 1);
-        index::cache::persist_lookup(*db, 1, dstd::String(1000, 'v'));
-        CHECK_FALSE(index::cache::lookup_exists(*db, 1));
-        index::cache::persist_lookup(*db, 2, "small");
+        dftu_utils_test::ok(
+            index::cache::persist_lookup(*db, 1, dstd::String(1000, 'v')));
+        CHECK_FALSE(dftu_utils_test::ok(index::cache::lookup_exists(*db, 1)));
+        dftu_utils_test::ok(index::cache::persist_lookup(*db, 2, "small"));
         ::unsetenv("DFTRACER_UTILS_CACHE_MAX_BYTES");
-        CHECK(index::cache::read_lookup(*db, 2) == "small");
+        CHECK(dftu_utils_test::ok(index::cache::read_lookup(*db, 2)) ==
+              "small");
     }
 
     TEST_CASE("re-indexing a file with new records changes the signature") {
@@ -182,7 +201,8 @@ TEST_SUITE("LookupStore") {
             auto db = index::cache::open_lookup_db(
                 path, index::cache::CacheStore::Mode::ReadWrite);
             REQUIRE(db);
-            index::cache::persist_lookup(*db, *sig, "rows");
+            dftu_utils_test::ok(
+                index::cache::persist_lookup(*db, *sig, "rows"));
         }
         dstd::fs::remove_all(path).discard();
 
@@ -191,9 +211,11 @@ TEST_SUITE("LookupStore") {
         auto db = index::cache::open_lookup_db(
             path, index::cache::CacheStore::Mode::ReadWrite);
         REQUIRE(db);
-        CHECK_FALSE(index::cache::lookup_exists(*db, *sig));
-        index::cache::persist_lookup(*db, *sig, "rows");
-        CHECK(index::cache::read_lookup(*db, *sig) == "rows");
+        CHECK_FALSE(
+            dftu_utils_test::ok(index::cache::lookup_exists(*db, *sig)));
+        dftu_utils_test::ok(index::cache::persist_lookup(*db, *sig, "rows"));
+        CHECK(dftu_utils_test::ok(index::cache::read_lookup(*db, *sig)) ==
+              "rows");
     }
 
     TEST_CASE("repeated queries that hit a stored side add one data file") {
@@ -224,25 +246,26 @@ TEST_SUITE("LookupStore") {
             auto db = index::cache::open_lookup_db(
                 path, index::cache::CacheStore::Mode::ReadWrite);
             REQUIRE(db);
-            index::cache::persist_lookup(*db, 1, "one");
+            dftu_utils_test::ok(index::cache::persist_lookup(*db, 1, "one"));
         }
         {
             auto ro = index::cache::open_lookup_db(
                 path, index::cache::CacheStore::Mode::ReadOnly);
             REQUIRE(ro);
-            CHECK(index::cache::lookup_exists(*ro, 1));
-            CHECK_FALSE(index::cache::lookup_exists(*ro, 2));
+            CHECK(dftu_utils_test::ok(index::cache::lookup_exists(*ro, 1)));
+            CHECK_FALSE(
+                dftu_utils_test::ok(index::cache::lookup_exists(*ro, 2)));
         }
         {
             auto rw = index::cache::open_lookup_db(
                 path, index::cache::CacheStore::Mode::ReadWrite);
             REQUIRE(rw);
-            index::cache::persist_lookup(*rw, 2, "two");
+            dftu_utils_test::ok(index::cache::persist_lookup(*rw, 2, "two"));
         }
         auto ro = index::cache::open_lookup_db(
             path, index::cache::CacheStore::Mode::ReadOnly);
         REQUIRE(ro);
-        CHECK(index::cache::lookup_exists(*ro, 2));
+        CHECK(dftu_utils_test::ok(index::cache::lookup_exists(*ro, 2)));
     }
 
     TEST_CASE("a store that cannot be opened is null") {

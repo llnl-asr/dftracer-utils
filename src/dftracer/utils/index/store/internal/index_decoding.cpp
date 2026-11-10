@@ -5,12 +5,13 @@
 #include <dftracer/utils/index/store/internal/index_encoding.h>
 #include <dftracer/utils/index/store/internal/payload_codec.h>
 
+#include <algorithm>
 #include <string>
 
 namespace dftracer::utils::index::store::internal::decoding {
 
-index::schemas::dft::ChunkStatistics decode_chunk_statistics_value(
-    dstd::StringView value) {
+dstd::Result<index::schemas::dft::ChunkStatistics>
+decode_chunk_statistics_value(dstd::StringView value) {
     Cursor cursor(value);
     index::schemas::dft::ChunkStatistics stats;
     stats.total_events = cursor.u64();
@@ -78,11 +79,12 @@ index::schemas::dft::ChunkStatistics decode_chunk_statistics_value(
         index::schemas::dft::ChunkStatistics::parse_double_map_json(
             cursor.str());
 
+    if (cursor.failed()) return cursor.error();
     return stats;
 }
 
-index::gzip::GzipMemberRecord decode_gzip_member(std::uint32_t member_idx,
-                                                 dstd::StringView body) {
+dstd::Result<index::gzip::GzipMemberRecord> decode_gzip_member(
+    std::uint32_t member_idx, dstd::StringView body) {
     index::gzip::GzipMemberRecord member;
     member.member_idx = member_idx;
     Cursor cursor(body);
@@ -96,8 +98,8 @@ index::gzip::GzipMemberRecord decode_gzip_member(std::uint32_t member_idx,
         const auto kind = cursor.u8();
         if (kind >
             static_cast<std::uint8_t>(index::gzip::GzipRecordKind::Restart))
-            throw common::DFTUtilsException::cat(
-                common::ErrorCode::Indexer, "unknown gzip record kind ", kind);
+            return common::make_error<"unknown gzip record kind {}">(
+                common::ErrorCode::Parse, kind);
         member.kind = static_cast<index::gzip::GzipRecordKind>(kind);
         const auto bits = cursor.u8();
         member.bits = bits & static_cast<std::uint8_t>(
@@ -105,23 +107,26 @@ index::gzip::GzipMemberRecord decode_gzip_member(std::uint32_t member_idx,
         member.opens_mid_line =
             (bits & encoding::MEMBER_FLAG_OPENS_MID_LINE) != 0;
     }
+    if (cursor.failed()) return cursor.error();
     return member;
 }
 
-dstd::StringViewMap<std::uint64_t> decode_count_map_value(
+dstd::Result<dstd::StringViewMap<std::uint64_t>> decode_count_map_value(
     dstd::StringView value) {
     Cursor cursor(value);
     dstd::StringViewMap<std::uint64_t> counts;
     auto entry_count = cursor.u32();
-    counts.reserve(entry_count);
-    for (std::uint32_t i = 0; i < entry_count; ++i) {
+    counts.reserve(std::min<std::size_t>(entry_count, value.size()));
+    for (std::uint32_t i = 0; i < entry_count && !cursor.failed(); ++i) {
         auto key = cursor.str();
         counts.emplace(std::move(key), cursor.u64());
     }
+    if (cursor.failed()) return cursor.error();
     return counts;
 }
 
-FileMetadataResult decode_metadata_record(dstd::StringView value) {
+dstd::Result<FileMetadataResult> decode_metadata_record(
+    dstd::StringView value) {
     Cursor cursor(value);
     FileMetadataResult meta;
     meta.checkpoint_size = cursor.u64();
@@ -133,6 +138,7 @@ FileMetadataResult decode_metadata_record(dstd::StringView value) {
     meta.has_mid_line_chunk =
         (flags & encoding::METADATA_FLAG_MID_LINE_CHUNK) != 0;
     meta.next_member_idx = cursor.u64();
+    if (cursor.failed()) return cursor.error();
     return meta;
 }
 

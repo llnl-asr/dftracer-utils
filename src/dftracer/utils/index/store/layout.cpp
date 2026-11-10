@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/versions.h>
 #include <dftracer/utils/dstd/big_endian.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -51,8 +51,7 @@ namespace {
 template <typename T>
 T read_be_checked(dstd::StringView bytes) {
     if (bytes.size() < sizeof(T))
-        throw common::DFTUtilsException(common::ErrorCode::Parse,
-                                        "index layout: truncated integer");
+        dstd::fatal("index layout: truncated integer");
     return dstd::read_be<T>(
         reinterpret_cast<const std::uint8_t*>(bytes.data()));
 }

@@ -1113,21 +1113,21 @@ GzipIndexer::GzipIndexer(const dstd::String& gz_path,
       cached_checkpoint_size_(0),
       cached_checkpoint_size_ready_(false) {
     if (gz_path_.empty()) {
-        throw index::store::IndexerError(
-            index::store::IndexerError::Type::InvalidArgument,
-            "gz_path must not be empty");
+        common::throw_error(index::store::indexer_error(
+            index::store::IndexerErrorKind::InvalidArgument,
+            "gz_path must not be empty"));
     }
 
     if (!common::input_exists(gz_path_)) {
-        throw index::store::IndexerError(
-            index::store::IndexerError::Type::FileError,
-            "gz_path does not exist: " + gz_path_);
+        common::throw_error(index::store::indexer_error(
+            index::store::IndexerErrorKind::FileError,
+            "gz_path does not exist: " + gz_path_));
     }
 
     if (ckpt_size_ == 0) {
-        throw index::store::IndexerError(
-            index::store::IndexerError::Type::InvalidArgument,
-            "ckpt_size must be greater than 0");
+        common::throw_error(index::store::indexer_error(
+            index::store::IndexerErrorKind::InvalidArgument,
+            "ckpt_size must be greater than 0"));
     }
 
     open();
@@ -1207,9 +1207,9 @@ dftracer::utils::coro::CoroTask<void> GzipIndexer::build_async() const {
                 gz_path_, final_ckpt_size, visitors_, &scope);
         });
     if (!artifacts) {
-        throw index::store::IndexerError(
-            index::store::IndexerError::Type::BuildError,
-            "Failed to build index for " + gz_path_);
+        common::throw_error(index::store::indexer_error(
+            index::store::IndexerErrorKind::BuildError,
+            "Failed to build index for " + gz_path_));
     }
 
     dstd::Optional<index::Snapshot> snapshot;
@@ -1238,10 +1238,10 @@ dftracer::utils::coro::CoroTask<void> GzipIndexer::build_async() const {
             committed = dstd::Unexpected<dstd::Error>(build.error());
         }
         if (!committed) {
-            throw index::store::IndexerError(
-                index::store::IndexerError::Type::BuildError,
+            common::throw_error(index::store::indexer_error(
+                index::store::IndexerErrorKind::BuildError,
                 "Failed to write the index of " + gz_path_ + ": " +
-                    dstd::String(committed.error().message()));
+                    dstd::String(committed.error().message())));
         }
         snapshot.emplace(common::unwrap(opened->snapshot()));
     }

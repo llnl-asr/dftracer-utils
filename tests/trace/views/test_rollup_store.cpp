@@ -70,11 +70,12 @@ TEST_SUITE("RollupStore") {
         auto a = make_state({10, 20, 30});         // grp: n=3 total=60
         auto b = make_state({5, 15, 25, 35, 45});  // grp: n=5 total=125
         dataframe::agg_merge(*a, *b);              // grp: n=8 total=185
-        persist_rollup(*db, sig, /*rest_sig=*/0, /*time_bucket_us=*/0,
-                       /*group_by=*/{}, *a);
+        dftu_utils_test::ok(persist_rollup(*db, sig, /*rest_sig=*/0,
+                                           /*time_bucket_us=*/0,
+                                           /*group_by=*/{}, *a));
 
-        CHECK(rollup_exists(*db, sig));
-        auto got = read_rollup(*db, sig);
+        CHECK(dftu_utils_test::ok(rollup_exists(*db, sig)));
+        auto got = dftu_utils_test::ok(read_rollup(*db, sig));
         REQUIRE(got);
         dataframe::DataFrame r = dataframe::agg_finalize(*got, "grp");
         REQUIRE(r.num_rows() == 1);
@@ -82,8 +83,8 @@ TEST_SUITE("RollupStore") {
         CHECK(r.column("total").data<double>()[0] == doctest::Approx(185));
 
         // A different signature is isolated and absent.
-        CHECK_FALSE(rollup_exists(*db, 0x99999999));
-        CHECK(read_rollup(*db, 0x99999999) == nullptr);
+        CHECK_FALSE(dftu_utils_test::ok(rollup_exists(*db, 0x99999999)));
+        CHECK(dftu_utils_test::ok(read_rollup(*db, 0x99999999)) == nullptr);
 
         dstd::fs::remove_all(dir).discard();
     }
@@ -105,11 +106,12 @@ TEST_SUITE("RollupStore") {
         auto b = make_state_kv({"g2", "g3"}, {50, 7});
         dataframe::agg_merge(*a,
                              *b);  // g1: n=2 t=30; g2: n=2 t=150; g3: n=1 t=7
-        persist_rollup(*db, sig, /*rest_sig=*/0, /*time_bucket_us=*/0,
-                       /*group_by=*/{}, *a);
+        dftu_utils_test::ok(persist_rollup(*db, sig, /*rest_sig=*/0,
+                                           /*time_bucket_us=*/0,
+                                           /*group_by=*/{}, *a));
 
-        CHECK(rollup_exists(*db, sig));
-        auto got = read_rollup(*db, sig);
+        CHECK(dftu_utils_test::ok(rollup_exists(*db, sig)));
+        auto got = dftu_utils_test::ok(read_rollup(*db, sig));
         REQUIRE(got);
         dataframe::DataFrame r = dataframe::agg_finalize(*got, "grp");
         REQUIRE(r.num_rows() == 3);

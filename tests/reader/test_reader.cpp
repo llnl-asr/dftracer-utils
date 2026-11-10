@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -9,7 +10,6 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
-#include <dftracer/utils/index/store/error.h>
 #include <dftracer/utils/utilities/reader/error.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
@@ -180,10 +180,14 @@ TEST_CASE("C++ Reader - Basic functionality") {
 
 TEST_CASE("C++ API - Error handling") {
     SUBCASE("Invalid indexer creation") {
-        CHECK_THROWS_AS(CheckpointIndexerFactory::create(
-                            "/nonexistent/path.gz", "/nonexistent/path.idx",
-                            static_cast<std::uint64_t>(1.0)),
-                        index::store::IndexerError);
+        try {
+            (void)CheckpointIndexerFactory::create(
+                "/nonexistent/path.gz", "/nonexistent/path.idx",
+                static_cast<std::uint64_t>(1.0));
+            FAIL("create did not throw");
+        } catch (const common::DFTUtilsException& e) {
+            CHECK(e.error().is_code(common::ErrorCode::Indexer));
+        }
     }
 
     SUBCASE("Invalid reader creation") {
@@ -386,9 +390,13 @@ TEST_CASE("C++ API - Exception handling comprehensive tests") {
     dstd::String idx_file = env.get_index_path(gz_file);
 
     SUBCASE("Indexer with invalid chunk size should throw in constructor") {
-        CHECK_THROWS_AS(
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.0)),
-            index::store::IndexerError);
+        try {
+            (void)CheckpointIndexerFactory::create(gz_file, idx_file,
+                                                   mb_to_b(0.0));
+            FAIL("create did not throw");
+        } catch (const common::DFTUtilsException& e) {
+            CHECK(e.error().is_code(common::ErrorCode::Indexer));
+        }
     }
 
     SUBCASE("Reader with invalid paths should throw in constructor") {

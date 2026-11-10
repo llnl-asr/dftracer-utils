@@ -17,6 +17,7 @@
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
 #include <generator_ok.h>
+#include <memory/fresh_process.h>
 #include <task_result.h>
 #include <testing_utilities.h>
 
@@ -751,10 +752,33 @@ runs = where gtype == "run" | select run, app, system, unique_input, nodes, ppn,
              {dstd::Pair<dstd::String, dstd::String>{"dftracer", dft_old},
               dstd::Pair<dstd::String, dstd::String>{"genesis", genesis_old}}) {
             const auto& s = index::get_schema(id);
-            CHECK(s.source == index::merge_source({}, old, id));
+            CHECK(s.source ==
+                  dftu_utils_test::ok(index::merge_source({}, old, id)));
             index::RecordSchema before = s;
-            before.source = index::merge_source({}, old, id);
+            before.source =
+                dftu_utils_test::ok(index::merge_source({}, old, id));
             CHECK(s.params_hash() == before.params_hash());
         }
+    }
+
+    TEST_CASE("a source that does not parse is an InvalidArgument error") {
+        const auto merged = index::merge_source({}, "data = where (", "test");
+        REQUIRE_FALSE(merged.has_value());
+        CHECK(merged.error().is_code(common::ErrorCode::InvalidArgument));
+    }
+
+    TEST_CASE("a data condition of a source that does not parse is fatal") {
+        auto result = fresh_process::run(
+            "a data condition of an unparsable source ends the process");
+        CHECK(result.aborted_with("the source no longer parses"));
+    }
+
+    TEST_CASE("a data condition of an unparsable source ends the process" *
+              doctest::skip()) {
+        fresh_process::announce_abort();
+        index::RecordSchema schema;
+        schema.id = "bad";
+        schema.source = "data = where (";
+        (void)index::data_condition(schema);
     }
 }

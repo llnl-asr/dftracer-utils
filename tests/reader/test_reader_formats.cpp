@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
-#include <dftracer/utils/index/store/error.h>
 #include <dftracer/utils/utilities/reader/error.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
@@ -76,10 +76,13 @@ TEST_CASE_TEMPLATE("Indexer creation and destruction", FormatType, GZIPFormat) {
     }
 
     SUBCASE("Invalid file path") {
-        CHECK_THROWS_AS(
-            CheckpointIndexerFactory::create("/nonexistent/file.gz",
-                                             fixture.index_file(), 1024 * 1024),
-            index::store::IndexerError);
+        try {
+            (void)CheckpointIndexerFactory::create(
+                "/nonexistent/file.gz", fixture.index_file(), 1024 * 1024);
+            FAIL("create did not throw");
+        } catch (const common::DFTUtilsException& e) {
+            CHECK(e.error().is_code(common::ErrorCode::Indexer));
+        }
     }
 }
 

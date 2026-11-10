@@ -138,7 +138,9 @@ TimestampHistogram TimestampHistogram::deserialize(const std::uint8_t* data,
     if (!dstd::read_varint(ptr, end, hist.total_count_)) return hist;
     if (!dstd::read_varint(ptr, end, bin_count)) return hist;
 
-    hist.bins_.reserve(static_cast<std::size_t>(bin_count));
+    // A bin takes at least two bytes, so the blob bounds a corrupt count.
+    hist.bins_.reserve(std::min<std::uint64_t>(
+        bin_count, static_cast<std::uint64_t>(end - ptr) / 2));
     std::uint64_t prev_idx = 0;
     for (std::uint64_t i = 0; i < bin_count; ++i) {
         std::uint64_t delta = 0;

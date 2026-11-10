@@ -1225,10 +1225,10 @@ void persist_rollup(const ViewPlan& plan, const dataframe::AggState& state) {
         auto db = dftracer::utils::index::cache::open_rollup_db(
             rdir, dftracer::utils::index::cache::CacheStore::Mode::ReadWrite);
         if (db)
-            dftracer::utils::index::cache::persist_rollup(
+            common::unwrap(dftracer::utils::index::cache::persist_rollup(
                 *db, dftracer::utils::index::cache::plan_signature(plan),
                 dftracer::utils::index::cache::rest_signature(plan),
-                plan.time_bucket_us, plan.group_by, state);
+                plan.time_bucket_us, plan.group_by, state));
     } catch (const std::exception& e) {
         DFTRACER_UTILS_LOG_WARN("rollup materialize skipped: {}", e.what());
     }

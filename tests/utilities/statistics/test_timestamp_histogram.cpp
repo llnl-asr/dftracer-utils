@@ -203,6 +203,15 @@ TEST_SUITE("TimestampHistogram") {
         CHECK(h.empty());
     }
 
+    TEST_CASE("deserialize bounds a corrupt bin count by the blob size") {
+        // total 5, then a bin count of 2^62 and no bins.
+        const std::uint8_t blob[] = {5,    0x80, 0x80, 0x80, 0x80,
+                                     0x80, 0x80, 0x80, 0x80, 0x40};
+        auto h = TimestampHistogram::deserialize(blob, sizeof(blob));
+        CHECK(h.total_count() == 5);
+        CHECK(h.bins().empty());
+    }
+
     TEST_CASE("varint encoding handles large timestamps") {
         TimestampHistogram h;
         // Typical 2026 timestamp: ~1.77e15 us

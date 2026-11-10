@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/versions.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/hash/xxh3.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -43,10 +44,8 @@ dstd::String lookup_cache_path(const trace::views::detail::ViewPlan& plan) {
 dstd::Optional<std::uint64_t> lookup_signature(
     const trace::views::detail::ViewPlan& plan, dstd::StringView side_text) {
     if (!plan.record_schema)
-        throw common::DFTUtilsException(
-            common::ErrorCode::InvalidArgument,
-            "lookup signature: the plan's record schema "
-            "is not resolved");
+        dstd::fatal(
+            "lookup signature: the plan's record schema is not resolved");
     dstd::String sig;
     auto add = [&](dstd::StringView s) {
         sig.append(s);
@@ -66,12 +65,9 @@ dstd::Optional<std::uint64_t> lookup_signature(
         auto [it, fresh] =
             snaps.try_emplace(dstd::String(dstd::StringView(f->index_path)));
         if (fresh) {
-            try {
-                it->second.emplace(
-                    common::unwrap(index::plan::open_snapshot(it->first)));
-            } catch (const common::DFTUtilsException&) {
-                return dstd::nullopt;
-            }
+            auto opened = index::plan::open_snapshot(it->first);
+            if (!opened) return dstd::nullopt;
+            it->second.emplace(std::move(*opened));
         }
         const index::Snapshot& snapshot = *it->second;
         const dstd::String logical =
@@ -99,20 +95,29 @@ dstd::SharedPtr<CacheStore> open_lookup_db(dstd::StringView path,
     return CacheStore::open(path, mode);
 }
 
-dstd::Optional<dstd::String> read_lookup(CacheStore& db, std::uint64_t sig) {
+dstd::Result<dstd::Optional<dstd::String>> read_lookup(CacheStore& db,
+                                                       std::uint64_t sig) {
     auto value = db.get(sig, VALUE_KEY);
-    if (value) db.touch(sig);
+    if (!value) return value;
+    if (*value) {
+        auto touched = db.touch(sig);
+        if (!touched) return touched.error();
+    }
     return value;
 }
 
-bool lookup_exists(const CacheStore& db, std::uint64_t sig) {
-    return db.get(sig, VALUE_KEY).has_value();
+dstd::Result<bool> lookup_exists(const CacheStore& db, std::uint64_t sig) {
+    auto value = db.get(sig, VALUE_KEY);
+    if (!value) return value.error();
+    return value->has_value();
 }
 
-void persist_lookup(CacheStore& db, std::uint64_t sig, dstd::StringView value) {
+dstd::Result<void> persist_lookup(CacheStore& db, std::uint64_t sig,
+                                  dstd::StringView value) {
     dstd::Vector<dstd::Pair<dstd::String, dstd::String>> entries;
     entries.emplace_back(VALUE_KEY, value);
-    db.put(sig, entries, 2 * (1 + SIG_BYTES) + value.size() + USAGE_BYTES);
+    return db.put(sig, entries,
+                  2 * (1 + SIG_BYTES) + value.size() + USAGE_BYTES);
 }
 
 }  // namespace dftracer::utils::index::cache

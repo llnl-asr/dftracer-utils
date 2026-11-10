@@ -4,6 +4,8 @@
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/internal/expr_handle.h>  // expr_canonical
 #include <dftracer/utils/dstd/big_endian.h>
+#include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash/xxh3.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -56,6 +58,46 @@ dstd::String key_identity(const trace::views::GroupKey& gk) {
     return id;
 }
 
+// Reads the shape descriptor persist_rollup writes. A read past the end sets
+// failed() and returns zeros and empty text.
+class DescCursor {
+   public:
+    explicit DescCursor(dstd::StringView data) : data_(data) {}
+
+    std::uint32_t be32() {
+        return dstd::read_u32_be(bytes(take(sizeof(std::uint32_t))));
+    }
+    std::uint64_t be64() {
+        return dstd::read_u64_be(bytes(take(sizeof(std::uint64_t))));
+    }
+    dstd::StringView str() {
+        const std::size_t len =
+            dstd::read_u16_be(bytes(take(sizeof(std::uint16_t))));
+        return take(len);
+    }
+    bool failed() const { return failed_; }
+
+   private:
+    static const std::uint8_t* bytes(dstd::StringView s) {
+        return reinterpret_cast<const std::uint8_t*>(s.data());
+    }
+
+    dstd::StringView take(std::size_t n) {
+        static constexpr char ZEROS[8] = {};
+        if (failed_ || off_ + n > data_.size()) {
+            failed_ = true;
+            return dstd::StringView(ZEROS, n <= sizeof(ZEROS) ? n : 0);
+        }
+        const dstd::StringView s = data_.substr(off_, n);
+        off_ += n;
+        return s;
+    }
+
+    dstd::StringView data_;
+    std::size_t off_ = 0;
+    bool failed_ = false;
+};
+
 void add_rest_fields(dstd::String& sig,
                      const trace::views::detail::ViewPlan& plan) {
     auto add = [&](dstd::StringView s) {
@@ -66,10 +108,8 @@ void add_rest_fields(dstd::String& sig,
     // Dictionaries of the record schema resolve `resolved.*` fields, so a
     // rollup made under one schema must not serve another.
     if (!plan.record_schema)
-        throw common::DFTUtilsException(
-            common::ErrorCode::InvalidArgument,
-            "rollup signature: the plan's record schema "
-            "is not resolved");
+        dstd::fatal(
+            "rollup signature: the plan's record schema is not resolved");
     add(dstd::to_string(plan.record_schema->params_hash()));
     dstd::Vector<const trace::views::ViewFile*> files;
     files.reserve(plan.files.size());
@@ -112,7 +152,7 @@ void add_rest_fields(dstd::String& sig,
     add(dstd::to_string(plan.bucket_origin_us));
     add(plan.bucket_origin_min ? "1" : "0");
     if (plan.bucket_origin_us || plan.bucket_origin_min)
-        add("bw=" + dstd::to_string(plan.time_bucket_us));
+        add(dstd::fmt<"bw={}">(plan.time_bucket_us));
     add(plan.auto_numeric_metrics ? "1" : "0");
     // Whether a per-arg quantile sketch was collected: an MV built without it
     // cannot serve a dyn Pct query, so it must not be reused for one. The dyn
@@ -137,10 +177,11 @@ dstd::SharedPtr<CacheStore> open_rollup_db(dstd::StringView path,
     return CacheStore::open(path, mode);
 }
 
-void persist_rollup(CacheStore& db, std::uint64_t sig, std::uint64_t rest_sig,
-                    std::uint64_t time_bucket_us,
-                    dstd::Span<const trace::views::GroupKey> group_by,
-                    const dataframe::AggState& state) {
+dstd::Result<void> persist_rollup(
+    CacheStore& db, std::uint64_t sig, std::uint64_t rest_sig,
+    std::uint64_t time_bucket_us,
+    dstd::Span<const trace::views::GroupKey> group_by,
+    const dataframe::AggState& state) {
     const std::int64_t ng = dataframe::agg_group_count(state);
     // agg_group_key renders a null key as "", so the finalized key columns
     // tell a null key apart from an empty one.
@@ -184,23 +225,34 @@ void persist_rollup(CacheStore& db, std::uint64_t sig, std::uint64_t rest_sig,
     }
     bytes += 2 * (1 + SIG_BYTES) + desc.size() + USAGE_BYTES;
     entries.emplace_back(DESC_KEY, std::move(desc));
-    db.put(sig, entries, bytes);
+    return db.put(sig, entries, bytes);
 }
 
-bool rollup_exists(const CacheStore& db, std::uint64_t sig) {
-    return db.get(sig, DESC_KEY).has_value();
+dstd::Result<bool> rollup_exists(const CacheStore& db, std::uint64_t sig) {
+    auto found = db.get(sig, DESC_KEY);
+    if (!found) return found.error();
+    return found->has_value();
 }
 
-dataframe::AggStatePtr read_rollup(const CacheStore& db, std::uint64_t sig) {
+dstd::Result<dataframe::AggStatePtr> read_rollup(const CacheStore& db,
+                                                 std::uint64_t sig) {
     dataframe::AggStatePtr merged;
-    db.scan(sig, ROW_TAG, [&](dstd::StringView, dstd::StringView blob) {
-        auto one =
-            common::unwrap(dataframe::agg_deserialize(dstd::String(blob)));
-        if (!merged)
-            merged = std::move(one);
-        else
-            dataframe::agg_merge(*merged, *one);
-    });
+    dstd::Optional<dstd::Error> failed;
+    auto scanned =
+        db.scan(sig, ROW_TAG, [&](dstd::StringView, dstd::StringView blob) {
+            if (failed) return;
+            auto one = dataframe::agg_deserialize(dstd::String(blob));
+            if (!one) {
+                failed = one.error();
+                return;
+            }
+            if (!merged)
+                merged = std::move(*one);
+            else
+                dataframe::agg_merge(*merged, **one);
+        });
+    if (!scanned) return scanned.error();
+    if (failed) return *failed;
     return merged;
 }
 
@@ -224,7 +276,7 @@ std::uint64_t plan_signature(const trace::views::detail::ViewPlan& plan) {
     return dftracer::utils::dstd::hash::xxh3_64(sig);
 }
 
-dstd::Optional<dataframe::DataFrame> find_subsuming_rollup(
+dstd::Result<dstd::Optional<dataframe::DataFrame>> find_subsuming_rollup(
     CacheStore& db, const trace::views::detail::ViewPlan& plan) {
     const std::uint64_t q_rest = rest_signature(plan);
 
@@ -234,13 +286,14 @@ dstd::Optional<dataframe::DataFrame> find_subsuming_rollup(
     std::uint64_t best_bucket = 0;
     dstd::Vector<trace::views::GroupKey> best_gb;
     bool have_best = false;
+    dstd::Optional<dstd::Error> failed;
 
-    db.scan_all(
+    auto listed = db.scan_all(
         DESC_KEY, ROW_TAG,
         [&](std::uint64_t sig, dstd::StringView k, dstd::StringView v) {
             if (k != DESC_KEY) return true;
             if (v.size() < 20) return true;
-            utilities::serialization::BinaryReader br(v);
+            DescCursor br(v);
             if (br.be64() != q_rest) return true;
             const std::uint64_t r_bucket = br.be64();
 
@@ -253,12 +306,17 @@ dstd::Optional<dataframe::DataFrame> find_subsuming_rollup(
 
             dstd::Vector<trace::views::GroupKey> r_gb;
             const std::uint32_t n = br.be32();
-            r_gb.reserve(n);
-            for (std::uint32_t i = 0; i < n; ++i) {
+            r_gb.reserve(std::min<std::size_t>(n, v.size()));
+            for (std::uint32_t i = 0; i < n && !br.failed(); ++i) {
                 trace::views::GroupKey gk;
                 gk.kind = static_cast<trace::views::GroupKey::Kind>(br.be32());
                 gk.arg = dstd::String(br.str());
                 r_gb.push_back(std::move(gk));
+            }
+            if (br.failed()) {
+                failed = dstd::Error(common::ErrorCode::Parse,
+                                     "binary_codec: truncated data");
+                return false;
             }
             if (have_best && r_gb.size() >= best_gb.size()) return true;
 
@@ -287,11 +345,15 @@ dstd::Optional<dataframe::DataFrame> find_subsuming_rollup(
                 return false;  // exact: optimal
             return true;
         });
+    if (!listed) return listed.error();
+    if (failed) return *failed;
 
-    if (!have_best) return dstd::nullopt;
+    if (!have_best) return dstd::Optional<dataframe::DataFrame>{};
     auto fine = read_rollup(db, best_sig);
-    if (!fine) return dstd::nullopt;
-    db.touch(best_sig);
+    if (!fine) return fine.error();
+    if (!*fine) return dstd::Optional<dataframe::DataFrame>{};
+    auto touched = db.touch(best_sig);
+    if (!touched) return touched.error();
 
     // Map the query's grouping onto the stored state's key columns. The state
     // key layout is [time_bucket?, best_gb...]; keep the query's keys in query
@@ -318,7 +380,7 @@ dstd::Optional<dataframe::DataFrame> find_subsuming_rollup(
         keep.push_back(static_cast<std::int32_t>(src_off + at));
     }
 
-    auto coarse = dataframe::agg_regroup(*fine, keep, bucket_recut);
+    auto coarse = dataframe::agg_regroup(**fine, keep, bucket_recut);
     return trace::views::detail::finalize_engine_result(*coarse, plan);
 }
 

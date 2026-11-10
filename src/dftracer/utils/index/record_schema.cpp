@@ -457,7 +457,7 @@ dstd::Vector<RecordSchema> builtins() {
         const auto dict = [&](const char* tag) {
             return Pipe().where(meta && c("name") == tag);
         };
-        dft.source = merge_source(
+        dft.source = common::unwrap(merge_source(
             {},
             built_source(
                 Source()
@@ -482,7 +482,7 @@ dstd::Vector<RecordSchema> builtins() {
                                 .select({"pid", {"rank", c("args.value")}})
                                 .distinct())
                     .flag("args_fallback", true)),
-            "dftracer");
+            "dftracer"));
     }
     dft.data = data_condition(dft);
     dft.args_fallback = source_args_fallback(dft);
@@ -504,7 +504,7 @@ dstd::Vector<RecordSchema> builtins() {
     };
     {
         using namespace duql;
-        genesis.source = merge_source(
+        genesis.source = common::unwrap(merge_source(
             {},
             built_source(
                 Source()
@@ -516,7 +516,7 @@ dstd::Vector<RecordSchema> builtins() {
                                          "nodes", "ppn", "papi_set", "method",
                                          "sketch_accuracy", "leaf"})
                                 .distinct())),
-            "genesis");
+            "genesis"));
     }
     genesis.data = data_condition(genesis);
     genesis.args_fallback = source_args_fallback(genesis);
@@ -712,12 +712,12 @@ const RecordSchema& Registry::add(const SchemaSpec& spec,
                         s.never_index.end());
     if (spec.path_budget) s.path_budget = spec.path_budget;
     if (spec.stats_share) s.stats_share = spec.stats_share;
-    s.source =
-        merge_source(s.source, spec.source, source + ", schema " + spec.id);
+    s.source = common::unwrap(
+        merge_source(s.source, spec.source, source + ", schema " + spec.id));
     s.data = data_condition(s);
     s.args_fallback = source_args_fallback(s);
     derive(s);
-    check_source(s, source);
+    common::unwrap(check_source(s, source));
 
     if (const Entry* e = entry_locked(s.id)) {
         if (e->schema->params_hash() == s.params_hash()) return *e->schema;

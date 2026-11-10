@@ -1,14 +1,18 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/index.h>
+#include <dftracer/utils/index/store/internal/index_decoding.h>
 #include <dftracer/utils/index/store/internal/index_encoding.h>
+#include <dftracer/utils/index/store/internal/statistics_codec.h>
 #include <dftracer/utils/index/store/layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
+#include <memory/fresh_process.h>
 #include <testing_utilities.h>
 
 #include <cstdint>
@@ -61,7 +65,51 @@ TEST_SUITE("index layout") {
         CHECK(index::store::layout::read_u64(
                   "\x01\x02\x03\x04\x05\x06\x07\x08"sv) ==
               0x0102030405060708ULL);
-        CHECK_THROWS(index::store::layout::read_u32("\x01\x02\x03"sv));
+    }
+
+    TEST_CASE("reading an integer from short bytes ends the process" *
+              doctest::skip()) {
+        using namespace std::string_view_literals;
+        fresh_process::announce_abort();
+        (void)index::store::layout::read_u32("\x01\x02\x03"sv);
+    }
+
+    TEST_CASE("reading an integer from short bytes is fatal") {
+        auto result = fresh_process::run(
+            "reading an integer from short bytes ends the process");
+        CHECK(result.aborted_with("index layout: truncated integer"));
+    }
+
+    TEST_CASE("a truncated payload is a Parse error") {
+        const dstd::String two_entries("\0\0\0\2\0\0\0\1k", 9);
+        const auto counts =
+            index::store::internal::decoding::decode_count_map_value(
+                two_entries);
+        REQUIRE_FALSE(counts.has_value());
+        CHECK(counts.error().is_code(common::ErrorCode::Parse));
+        const auto meta =
+            index::store::internal::decoding::decode_metadata_record("short");
+        REQUIRE_FALSE(meta.has_value());
+        CHECK(meta.error().is_code(common::ErrorCode::Parse));
+        const auto stats =
+            index::store::internal::decoding::decode_chunk_statistics_value(
+                "short");
+        REQUIRE_FALSE(stats.has_value());
+        CHECK(stats.error().is_code(common::ErrorCode::Parse));
+        const auto scalar =
+            index::store::internal::decode_file_scalar_stats_value("short");
+        REQUIRE_FALSE(scalar.has_value());
+        CHECK(scalar.error().is_code(common::ErrorCode::Parse));
+        const dstd::String sixteen_zeros(16, '\0');
+        const auto scalar_cut =
+            index::store::internal::decode_file_scalar_stats_value(
+                sixteen_zeros);
+        REQUIRE_FALSE(scalar_cut.has_value());
+        CHECK(scalar_cut.error().is_code(common::ErrorCode::Parse));
+        const auto member =
+            index::store::internal::decoding::decode_gzip_member(0, "");
+        REQUIRE_FALSE(member.has_value());
+        CHECK(member.error().is_code(common::ErrorCode::Parse));
     }
 
     TEST_CASE("a stored key is its kind byte then its big-endian tail") {

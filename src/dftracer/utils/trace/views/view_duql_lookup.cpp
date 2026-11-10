@@ -30,7 +30,7 @@ bool Applier::cached(std::size_t i) const {
     if (!key) return false;
     const auto db = index::cache::open_lookup_db(
         key->path, index::cache::CacheStore::Mode::ReadOnly);
-    return db && index::cache::lookup_exists(*db, key->sig);
+    return db && common::unwrap(index::cache::lookup_exists(*db, key->sig));
 }
 
 dataframe::LazyFrame Applier::side_plan(std::size_t i, bool& memory) const {

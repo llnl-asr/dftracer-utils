@@ -3,29 +3,29 @@
 #include <dftracer/utils/index/store/error.h>
 
 namespace dftracer::utils::index::store {
-dstd::String IndexerError::format_message(Type type,
-                                          const dstd::String &message) {
+dstd::Error indexer_error(IndexerErrorKind kind, dstd::StringView message,
+                          common::ErrorCode code) {
     const char *prefix = "";
-    switch (type) {
-        case DatabaseError:
+    switch (kind) {
+        case IndexerErrorKind::DatabaseError:
             prefix = "Database error";
             break;
-        case FileError:
+        case IndexerErrorKind::FileError:
             prefix = "File error";
             break;
-        case CompressionError:
+        case IndexerErrorKind::CompressionError:
             prefix = "Compression error";
             break;
-        case InvalidArgument:
+        case IndexerErrorKind::InvalidArgument:
             prefix = "Invalid argument";
             break;
-        case BuildError:
+        case IndexerErrorKind::BuildError:
             prefix = "Build error";
             break;
-        case UnknownError:
+        case IndexerErrorKind::UnknownError:
             prefix = "Unknown error";
             break;
     }
-    return dstd::String(prefix) + ": " + message;
+    return dstd::Error::from_format<"{}: {}">(code, prefix, message);
 }
 }  // namespace dftracer::utils::index::store

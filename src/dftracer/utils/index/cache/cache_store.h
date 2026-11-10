@@ -6,6 +6,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/store/store.h>
@@ -23,7 +24,7 @@ inline constexpr std::size_t USAGE_BYTES = 16;
 /// One cache folder on the store: entries keyed by a 64-bit signature, each
 /// one copy of its own scope that is written whole, plus a usage record per
 /// entry for least recently used eviction. Every process may write the same
-/// folder. Errors throw DFTUtilsException(IO).
+/// folder. A failed read or write returns an Io error.
 class CacheStore {
    public:
     enum class Mode : std::uint8_t { ReadOnly, ReadWrite };
@@ -43,35 +44,37 @@ class CacheStore {
 
     bool writable() const noexcept { return writable_; }
 
-    dstd::Optional<dstd::String> get(std::uint64_t sig,
-                                     dstd::StringView key) const;
+    dstd::Result<dstd::Optional<dstd::String>> get(std::uint64_t sig,
+                                                   dstd::StringView key) const;
     /// In key order.
-    void scan(std::uint64_t sig, dstd::StringView prefix,
-              const dstd::Function<void(dstd::StringView, dstd::StringView)>&
-                  fn) const;
+    dstd::Result<void> scan(
+        std::uint64_t sig, dstd::StringView prefix,
+        const dstd::Function<void(dstd::StringView, dstd::StringView)>& fn)
+        const;
     /// Entry by entry in signature order. `fn` returns false to stop.
-    void scan_all(dstd::StringView begin, dstd::StringView end,
-                  const dstd::Function<bool(std::uint64_t, dstd::StringView,
-                                            dstd::StringView)>& fn) const;
-    dstd::Vector<Usage> usage() const;
+    dstd::Result<void> scan_all(
+        dstd::StringView begin, dstd::StringView end,
+        const dstd::Function<bool(std::uint64_t, dstd::StringView,
+                                  dstd::StringView)>& fn) const;
+    dstd::Result<dstd::Vector<Usage>> usage() const;
 
     /// Visible whole to the next read. Then evicts the least recently used
     /// entries until the usage total is at most cache_max_bytes(). `sig` goes
     /// only when it alone is over the budget. InvalidArgument when read-only.
-    void put(
+    dstd::Result<void> put(
         std::uint64_t sig,
         const dstd::Vector<dstd::Pair<dstd::String, dstd::String>>& entries,
         std::uint64_t bytes);
     /// Marks `sig` used now. No-op when read-only or `sig` has no record.
-    void touch(std::uint64_t sig);
+    dstd::Result<void> touch(std::uint64_t sig);
 
     CacheStore(dftracer::utils::store::Store store,
                dftracer::utils::store::Namespace data,
                dftracer::utils::store::Namespace usage, bool writable);
 
    private:
-    void evict(std::uint64_t keep);
-    dftracer::utils::store::Snapshot snapshot() const;
+    dstd::Result<void> evict(std::uint64_t keep);
+    dstd::Result<dftracer::utils::store::Snapshot> snapshot() const;
 
     mutable dftracer::utils::store::Store store_;
     dftracer::utils::store::Namespace data_;

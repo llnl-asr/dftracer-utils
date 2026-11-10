@@ -69,7 +69,8 @@ ShardedView ShardedView::from_shard_dirs(
 }
 
 ShardedView ShardedView::from_manifest(const dstd::String& root) {
-    auto manifest = dftracer::utils::index::store::read_shard_manifest(root);
+    auto manifest = common::unwrap(
+        dftracer::utils::index::store::read_shard_manifest(root));
     if (!manifest) {
         throw common::DFTUtilsException(
             common::ErrorCode::Io,
@@ -169,11 +170,13 @@ void write_shard_set(const dstd::String& root,
                          : dstd::String(rel.str());
         manifest.shards.push_back(std::move(entry));
     }
-    dftracer::utils::index::store::write_shard_manifest(root, manifest);
+    common::unwrap(
+        dftracer::utils::index::store::write_shard_manifest(root, manifest));
 }
 
 std::size_t consolidate_shard_set(const dstd::String& root) {
-    auto manifest = dftracer::utils::index::store::read_shard_manifest(root);
+    auto manifest = common::unwrap(
+        dftracer::utils::index::store::read_shard_manifest(root));
     if (!manifest) {
         throw common::DFTUtilsException(
             common::ErrorCode::Io,
@@ -301,7 +304,8 @@ void copy_agg_data(const index::Snapshot& source_db,
 
 std::size_t merge_shard_set(const dstd::String& root,
                             const dstd::String& out_root) {
-    auto manifest = dftracer::utils::index::store::read_shard_manifest(root);
+    auto manifest = common::unwrap(
+        dftracer::utils::index::store::read_shard_manifest(root));
     if (!manifest) {
         throw common::DFTUtilsException(
             common::ErrorCode::Io,

@@ -33,25 +33,21 @@ dstd::String encode_zone(const Zone& zone) {
 }
 
 dstd::Optional<Zone> decode_zone(dstd::StringView bytes) {
-    try {
-        index::store::internal::Cursor cursor(bytes);
-        Zone zone;
-        zone.value_type = cursor.str();
-        zone.min = cursor.str();
-        zone.max = cursor.str();
-        zone.observed = cursor.u64();
-        const auto flags = cursor.u8();
-        if (flags & HAS_PRESENT) zone.present = cursor.u64();
-        if (flags & HAS_HISTOGRAM) {
-            const auto blob = cursor.blob_view();
-            zone.histogram = dataframe::TimestampHistogram::deserialize(
-                reinterpret_cast<const std::uint8_t*>(blob.data()),
-                blob.size());
-        }
-        return zone;
-    } catch (const std::exception&) {
-        return dstd::nullopt;
+    index::store::internal::Cursor cursor(bytes);
+    Zone zone;
+    zone.value_type = cursor.str();
+    zone.min = cursor.str();
+    zone.max = cursor.str();
+    zone.observed = cursor.u64();
+    const auto flags = cursor.u8();
+    if (flags & HAS_PRESENT) zone.present = cursor.u64();
+    if (flags & HAS_HISTOGRAM) {
+        const auto blob = cursor.blob_view();
+        zone.histogram = dataframe::TimestampHistogram::deserialize(
+            reinterpret_cast<const std::uint8_t*>(blob.data()), blob.size());
     }
+    if (cursor.failed()) return dstd::nullopt;
+    return zone;
 }
 
 dstd::String encode_counts(const CountsGranule& counts) {
@@ -64,18 +60,15 @@ dstd::String encode_counts(const CountsGranule& counts) {
 }
 
 dstd::Optional<CountsGranule> decode_counts(dstd::StringView bytes) {
-    try {
-        index::store::internal::Cursor cursor(bytes);
-        CountsGranule counts;
-        counts.observed = cursor.u64();
-        if (cursor.u8() != 0) {
-            const auto blob = cursor.blob_view();
-            counts.compressed.emplace(blob.begin(), blob.end());
-        }
-        return counts;
-    } catch (const std::exception&) {
-        return dstd::nullopt;
+    index::store::internal::Cursor cursor(bytes);
+    CountsGranule counts;
+    counts.observed = cursor.u64();
+    if (cursor.u8() != 0) {
+        const auto blob = cursor.blob_view();
+        counts.compressed.emplace(blob.begin(), blob.end());
     }
+    if (cursor.failed()) return dstd::nullopt;
+    return counts;
 }
 
 dstd::String encode_bloom(dstd::Span<const unsigned char> bloom,

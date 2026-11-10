@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
@@ -52,9 +54,11 @@ void append_escaped(dstd::String& out, dstd::StringView s) {
 }  // namespace
 
 dstd::String to_json(const IndexShardManifest& manifest) {
+    if (!manifest.format_version)
+        dstd::fatal("shard manifest: the format version is not set");
     dstd::String out;
     out += "{\n  \"format_version\": ";
-    out += dstd::to_string(manifest.format_version.value());
+    out += dstd::to_string(*manifest.format_version);
     out += ",\n  \"shards\": [";
     for (std::size_t i = 0; i < manifest.shards.size(); ++i) {
         const IndexShardEntry& e = manifest.shards[i];
@@ -71,15 +75,13 @@ dstd::String to_json(const IndexShardManifest& manifest) {
     return out;
 }
 
-IndexShardManifest parse_manifest(dstd::StringView json) {
+dstd::Result<IndexShardManifest> parse_manifest(dstd::StringView json) {
     simdjson::dom::parser parser;
     simdjson::dom::element doc;
     auto err = parser.parse(simdjson::padded_string(json)).get(doc);
     if (err) {
-        throw common::DFTUtilsException(
-            common::ErrorCode::Parse,
-            dstd::String("shard manifest parse failed: ") +
-                simdjson::error_message(err));
+        return common::make_error<"shard manifest parse failed: {}">(
+            common::ErrorCode::Parse, simdjson::error_message(err));
     }
 
     IndexShardManifest manifest;
@@ -94,8 +96,8 @@ IndexShardManifest parse_manifest(dstd::StringView json) {
         IndexShardEntry e;
         dstd::StringView path;
         if (s["path"].get(path) != simdjson::SUCCESS) {
-            throw common::DFTUtilsException(
-                common::ErrorCode::Parse, "shard manifest entry missing path");
+            return common::make_error(common::ErrorCode::Parse,
+                                      "shard manifest entry missing path");
         }
         e.path.assign(path);
 
@@ -107,36 +109,34 @@ IndexShardManifest parse_manifest(dstd::StringView json) {
     return manifest;
 }
 
-void write_shard_manifest(dstd::StringView root,
-                          const IndexShardManifest& manifest) {
+dstd::Result<void> write_shard_manifest(dstd::StringView root,
+                                        const IndexShardManifest& manifest) {
     // A directory that cannot be made fails the write below.
     dstd::fs::create_directories(dstd::PathView(root)).discard();
 
     const dstd::Path final_path{shard_manifest_path(root)};
     const dstd::Path tmp_path =
         dstd::PathView(root) /
-        common::str_cat(SHARD_MANIFEST, ".tmp.", ::getpid());
+        dstd::fmt<"{}.tmp.{}">(SHARD_MANIFEST, ::getpid());
 
     const dstd::String body = to_json(manifest);
     if (!dstd::fs::write_file(tmp_path.view(), body)) {
         dstd::fs::remove(tmp_path.view()).discard();
-        throw common::DFTUtilsException(
-            common::ErrorCode::Io,
-            common::str_cat("failed to write shard manifest: ",
-                            tmp_path.str()));
+        return common::make_error<"failed to write shard manifest: {}">(
+            common::ErrorCode::Io, tmp_path.str());
     }
 
     const auto renamed = dstd::fs::rename(tmp_path.view(), final_path.view());
     if (!renamed) {
         dstd::fs::remove(tmp_path.view()).discard();
-        throw common::DFTUtilsException(
-            common::ErrorCode::Io,
-            common::str_cat("failed to publish shard manifest to ",
-                            final_path.str(), ": ", renamed.error().message()));
+        return common::make_error<"failed to publish shard manifest to {}: {}">(
+            common::ErrorCode::Io, final_path.str(), renamed.error().message());
     }
+    return {};
 }
 
-dstd::Optional<IndexShardManifest> read_shard_manifest(dstd::StringView root) {
+dstd::Result<dstd::Optional<IndexShardManifest>> read_shard_manifest(
+    dstd::StringView root) {
     const dstd::Path path{shard_manifest_path(root)};
     // An unreadable path reads as no manifest.
     const auto found = dstd::fs::exists(path.view());
@@ -145,12 +145,14 @@ dstd::Optional<IndexShardManifest> read_shard_manifest(dstd::StringView root) {
     simdjson::padded_string contents;
     auto load_err = simdjson::padded_string::load(path.str()).get(contents);
     if (load_err) {
-        throw common::DFTUtilsException(
-            common::ErrorCode::Io,
-            common::str_cat("failed to read shard manifest ", path.str(), ": ",
-                            simdjson::error_message(load_err)));
+        return common::make_error<"failed to read shard manifest {}: {}">(
+            common::ErrorCode::Io, path.str(),
+            simdjson::error_message(load_err));
     }
-    return parse_manifest(dstd::StringView(contents.data(), contents.size()));
+    auto parsed =
+        parse_manifest(dstd::StringView(contents.data(), contents.size()));
+    if (!parsed) return parsed.error();
+    return dstd::Optional<IndexShardManifest>(std::move(*parsed));
 }
 
 bool has_shard_manifest(dstd::StringView root) {

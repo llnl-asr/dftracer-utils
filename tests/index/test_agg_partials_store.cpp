@@ -556,6 +556,63 @@ TEST_SUITE("AggPartialsStore") {
                     .count == before[i]);
     }
 
+    TEST_CASE("a chunk record with a malformed key is a Parse error") {
+        dftu_utils_test::TestEnvironment env(10);
+        dstd::Vector<dstd::String> files;
+        dstd::Map<Key, dstd::Vector<double>> durations;
+        files.emplace_back(write_trace(env.dir(), 0, durations));
+        const auto index_dir = index_dir_of(env);
+        build_seconds(files, index_dir);
+        const auto index_path = dstd::String(
+            trace::internal::determine_index_path(files[0], index_dir));
+
+        const auto put_bad_key = [&](index::store::IndexExtension ext,
+                                     std::uint8_t kind) {
+            auto store =
+                dftracer::utils::store::Store::open(index_path + "/store");
+            REQUIRE(store.has_value());
+            auto ns = store->ns(index::ext_spec(ext));
+            REQUIRE(ns.has_value());
+            dstd::String bad_key(1, static_cast<char>(kind));
+            bad_key.append(5, '\0');
+            const dstd::String value = "x";
+            const auto snapshot = open_index(index_path);
+            const auto file = file_of(snapshot, files[0]);
+            const auto state = index::extension_state(snapshot, file, ext);
+            REQUIRE(state.has_value());
+            const dstd::Vector<index::SourceStat> sources{file.stat()};
+            dftracer::utils::store::Batch batch = store->batch(
+                *ns,
+                dftracer::utils::store::ScopeKey::file(
+                    index::store::internal::get_logical_path(files[0])),
+                state->params_hash, &sources);
+            batch.put(dstd::ByteView(bad_key), dstd::ByteView(value));
+            REQUIRE(default_runtime()
+                        .submit(store->commit(std::move(batch)))
+                        .get()
+                        .has_value());
+            REQUIRE(default_runtime().submit(store->flush()).get().has_value());
+        };
+        put_bad_key(index::store::IndexExtension::Members,
+                    index::store::layout::members::MEMBER);
+        put_bad_key(index::store::IndexExtension::Stats,
+                    index::store::layout::stats_kind::CHUNK_STATS);
+        put_bad_key(index::store::IndexExtension::Metadata,
+                    index::store::layout::metadata_kind::CHUNK);
+
+        const auto snapshot = open_index(index_path);
+        const auto file = file_of(snapshot, files[0]);
+        const auto members = index::members(snapshot, file);
+        REQUIRE_FALSE(members.has_value());
+        CHECK(members.error().is(dstd::Condition::Parse));
+        const auto stats = index::chunk_stats(snapshot, file);
+        REQUIRE_FALSE(stats.has_value());
+        CHECK(stats.error().is(dstd::Condition::Parse));
+        const auto meta = index::chunk_meta(snapshot, file);
+        REQUIRE_FALSE(meta.has_value());
+        CHECK(meta.error().is(dstd::Condition::Parse));
+    }
+
     TEST_CASE("rows written through equal the rows held in memory") {
         dftu_utils_test::TestEnvironment env(10);
         dstd::Vector<dstd::String> files;

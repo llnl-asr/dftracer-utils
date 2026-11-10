@@ -970,8 +970,8 @@ TEST_SUITE("View") {
                 dftracer::utils::index::rollups_dir(idx),
                 dftracer::utils::index::cache::CacheStore::Mode::ReadOnly);
             REQUIRE(db);
-            CHECK_FALSE(
-                db->usage().empty());  // the store holds the materialized view
+            CHECK_FALSE(dftu_utils_test::ok(db->usage())
+                            .empty());  // the store holds the materialized view
         }
 
         // A repeat query - even without materialize - reads the rollup back.
@@ -1028,7 +1028,7 @@ TEST_SUITE("View") {
                 dftracer::utils::index::rollups_dir(idx),
                 dftracer::utils::index::cache::CacheStore::Mode::ReadOnly);
             REQUIRE(db);
-            CHECK_FALSE(db->usage().empty());
+            CHECK_FALSE(dftu_utils_test::ok(db->usage()).empty());
         }
         CHECK(canon(dftu_utils_test::ok(make().collect().get())) ==
               expect);  // now reads the rollup

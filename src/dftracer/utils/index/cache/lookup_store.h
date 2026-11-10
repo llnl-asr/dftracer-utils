@@ -22,9 +22,9 @@ dstd::String lookup_cache_path(const trace::views::detail::ViewPlan& plan);
 /// A lookup side's identity: a hash of `side_text` (the side's canonical
 /// text), the duql version, the record schema params hash, and each file's
 /// index registry record (content hash, mtime, size). Nullopt when a file is
-/// not fresh in its index, so the side must not be cached. Throws
-/// INVALID_ARGUMENT until the plan's record schema is resolved
-/// (plan_record_schema).
+/// not fresh in its index, so the side must not be cached. The plan's record
+/// schema must be resolved (plan_record_schema); an unresolved one ends the
+/// process.
 dstd::Optional<std::uint64_t> lookup_signature(
     const trace::views::detail::ViewPlan& plan, dstd::StringView side_text);
 
@@ -35,16 +35,19 @@ dstd::SharedPtr<CacheStore> open_lookup_db(dstd::StringView path,
                                            CacheStore::Mode mode);
 
 /// The value stored for `sig`, or nullopt. Marks it used when `db` is
-/// writable. Throws IO on a failed read or usage write.
-dstd::Optional<dstd::String> read_lookup(CacheStore& db, std::uint64_t sig);
+/// writable. An Io error on a failed read or usage write.
+dstd::Result<dstd::Optional<dstd::String>> read_lookup(CacheStore& db,
+                                                       std::uint64_t sig);
 
-/// True if a value for `sig` is stored. No side effect.
-bool lookup_exists(const CacheStore& db, std::uint64_t sig);
+/// True if a value for `sig` is stored. No side effect. An Io error on a
+/// failed read.
+dstd::Result<bool> lookup_exists(const CacheStore& db, std::uint64_t sig);
 
 /// Store `value` for `sig`, then evict the least recently used entries until
 /// the store holds at most cache_max_bytes(); a value larger than the budget
-/// alone is not kept. Throws IO on a failed write.
-void persist_lookup(CacheStore& db, std::uint64_t sig, dstd::StringView value);
+/// alone is not kept. An Io error on a failed write.
+dstd::Result<void> persist_lookup(CacheStore& db, std::uint64_t sig,
+                                  dstd::StringView value);
 
 }  // namespace dftracer::utils::index::cache
 

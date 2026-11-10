@@ -74,14 +74,14 @@ void persist(const CacheKey& key,
         if (!db) return;
         dstd::Vector<const dataframe::DataFrame*> ptrs;
         for (const auto& p : parts) ptrs.push_back(&p);
-        index::cache::persist_lookup(
+        common::unwrap(index::cache::persist_lookup(
             *db, key.sig,
             common::unwrap(
                 ptrs.size() == 1
                     ? dataframe::frame_to_native(parts.front())
                     : dataframe::frame_to_native(
                           common::unwrap(dataframe::concat(
-                              ptrs, dataframe::ConcatHow::Diagonal)))));
+                              ptrs, dataframe::ConcatHow::Diagonal))))));
     } catch (const std::exception&) {
     }
 }
@@ -159,7 +159,8 @@ dstd::SharedPtr<const dataframe::DataFrame> Sides::distinct(std::size_t i) {
         try {
             if (const auto db = index::cache::open_lookup_db(
                     key->path, index::cache::CacheStore::Mode::ReadOnly))
-                if (auto bytes = index::cache::read_lookup(*db, key->sig))
+                if (auto bytes = common::unwrap(
+                        index::cache::read_lookup(*db, key->sig)))
                     if (auto cached = dataframe::frame_from_native(*bytes))
                         return dstd::make_shared<const dataframe::DataFrame>(
                             duql::flat_frame(std::move(*cached)));
@@ -242,7 +243,8 @@ dstd::SharedPtr<const dataframe::DataFrame> Sides::run(std::size_t i) {
     if (keys[i]) try {
             if (const auto db = index::cache::open_lookup_db(
                     keys[i]->path, index::cache::CacheStore::Mode::ReadOnly))
-                if (auto bytes = index::cache::read_lookup(*db, keys[i]->sig))
+                if (auto bytes = common::unwrap(
+                        index::cache::read_lookup(*db, keys[i]->sig)))
                     if (auto cached = dataframe::frame_from_native(*bytes))
                         return dstd::make_shared<const dataframe::DataFrame>(
                             duql::flat_frame(std::move(*cached)));
@@ -410,9 +412,11 @@ dstd::String cache_state(const dstd::Optional<CacheKey>& key) {
     if (!key) return "not cached";
     const auto db = index::cache::open_lookup_db(
         key->path, index::cache::CacheStore::Mode::ReadOnly);
-    if (!db || !index::cache::lookup_exists(*db, key->sig)) return "not cached";
+    if (!db || !common::unwrap(index::cache::lookup_exists(*db, key->sig)))
+        return "not cached";
     try {
-        if (auto bytes = index::cache::read_lookup(*db, key->sig))
+        if (auto bytes =
+                common::unwrap(index::cache::read_lookup(*db, key->sig)))
             if (auto f = dataframe::frame_from_native(*bytes))
                 return "cached, " + dstd::to_string(f->num_rows()) + " rows";
     } catch (const std::exception&) {

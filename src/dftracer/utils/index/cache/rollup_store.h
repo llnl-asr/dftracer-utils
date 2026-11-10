@@ -30,24 +30,28 @@ dstd::SharedPtr<CacheStore> open_rollup_db(dstd::StringView path,
 /// itself) so the planner can test subsumption. `state`'s key layout must be
 /// [time_bucket?, group_by...]; a read-back re-aggregates the per-group
 /// partials with agg_merge / agg_regroup. Then evicts the least recently used
-/// rollups until the store holds at most cache_max_bytes().
-void persist_rollup(CacheStore& db, std::uint64_t sig, std::uint64_t rest_sig,
-                    std::uint64_t time_bucket_us,
-                    dstd::Span<const trace::views::GroupKey> group_by,
-                    const dftracer::utils::dataframe::AggState& state);
+/// rollups until the store holds at most cache_max_bytes(). An Io error on a
+/// failed write.
+dstd::Result<void> persist_rollup(
+    CacheStore& db, std::uint64_t sig, std::uint64_t rest_sig,
+    std::uint64_t time_bucket_us,
+    dstd::Span<const trace::views::GroupKey> group_by,
+    const dftracer::utils::dataframe::AggState& state);
 
-/// True if a rollup for `sig` has been persisted.
-bool rollup_exists(const CacheStore& db, std::uint64_t sig);
+/// True if a rollup for `sig` has been persisted. An Io error on a failed
+/// read.
+dstd::Result<bool> rollup_exists(const CacheStore& db, std::uint64_t sig);
 
 /// Read every per-group blob for `sig` back into one merged fine-grain AggState
-/// (key layout [time_bucket?, group_by...]), or null if the rollup is empty.
-dftracer::utils::dataframe::AggStatePtr read_rollup(const CacheStore& db,
-                                                    std::uint64_t sig);
+/// (key layout [time_bucket?, group_by...]), or null if the rollup is empty. An
+/// Io error on a failed read, or the error of a blob that does not deserialize.
+dstd::Result<dftracer::utils::dataframe::AggStatePtr> read_rollup(
+    const CacheStore& db, std::uint64_t sig);
 
 /// A materialized view's identity: a stable hash over the plan's file set,
 /// record schema and query shape. Per-rank scans of the same plan share it, so
-/// their partials land under the same rollup key. Throws INVALID_ARGUMENT
-/// until the plan's record schema is resolved (plan_record_schema).
+/// their partials land under the same rollup key. The plan's record schema must
+/// be resolved (plan_record_schema); an unresolved one ends the process.
 std::uint64_t plan_signature(const trace::views::detail::ViewPlan& plan);
 
 /// The plan hash EXCLUDING group_by AND time_bucket: two views with the same
@@ -61,9 +65,11 @@ std::uint64_t rest_signature(const trace::views::detail::ViewPlan& plan);
 /// plan Q when they share a rest_signature (same files/filter/agg/window) and
 /// Q's group keys are a subset of R's - then Q is R rolled up over the dropped
 /// dimensions. Exact match is the identity case. This is the materialized-view
-/// query rewrite. Marks the rollup it serves as used when `db` is writable.
-dstd::Optional<dftracer::utils::dataframe::DataFrame> find_subsuming_rollup(
-    CacheStore& db, const trace::views::detail::ViewPlan& plan);
+/// query rewrite. Marks the rollup it serves as used when `db` is writable. An
+/// Io or Parse error when a stored rollup cannot be read.
+dstd::Result<dstd::Optional<dftracer::utils::dataframe::DataFrame>>
+find_subsuming_rollup(CacheStore& db,
+                      const trace::views::detail::ViewPlan& plan);
 
 /// The index root `plan`'s files share; empty when they share none, or for a
 /// plan a cached result cannot serve (a rank key).

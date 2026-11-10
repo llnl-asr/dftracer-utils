@@ -3,6 +3,8 @@
 #define DFTRACER_UTILS_INDEX_STORE_INTERNAL_PAYLOAD_CODEC_H
 
 #include <dftracer/utils/dstd/big_endian.h>
+#include <dftracer/utils/dstd/error.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -11,7 +13,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <stdexcept>
 
 namespace dftracer::utils::index::store::internal {
 
@@ -54,6 +55,9 @@ inline void append_blob(dstd::String& out,
     out.append(reinterpret_cast<const char*>(blob.data()), blob.size());
 }
 
+/// Reads big-endian fields from a payload. A read past the end sets failed()
+/// and returns zeros and empty views from then on, so a decoder checks failed()
+/// once after its last read.
 class Cursor {
    public:
     explicit Cursor(dstd::StringView data) : data_(data) {}
@@ -100,18 +104,25 @@ class Cursor {
 
     std::size_t offset() const { return offset_; }
     bool eof() const { return offset_ >= data_.size(); }
+    bool failed() const { return failed_; }
+
+    /// The error of a failed cursor, naming the decode context.
+    dstd::Error error() const {
+        if (t_decode_context[0] != '\0')
+            return indexer_error(
+                IndexerErrorKind::DatabaseError,
+                dstd::fmt<"Corrupt index payload [{}]">(t_decode_context),
+                common::ErrorCode::Parse);
+        return indexer_error(IndexerErrorKind::DatabaseError,
+                             "Corrupt index payload", common::ErrorCode::Parse);
+    }
 
    private:
     dstd::StringView take(std::size_t len) {
-        if (offset_ + len > data_.size()) {
-            char err[DECODE_CONTEXT_BUF_SIZE + 64];
-            if (t_decode_context[0] != '\0') {
-                std::snprintf(err, sizeof(err), "Corrupt index payload [%s]",
-                              t_decode_context);
-            } else {
-                std::snprintf(err, sizeof(err), "Corrupt index payload");
-            }
-            throw IndexerError(IndexerError::Type::DatabaseError, err);
+        static constexpr char ZEROS[8] = {};
+        if (failed_ || offset_ + len > data_.size()) {
+            failed_ = true;
+            return dstd::StringView(ZEROS, len <= sizeof(ZEROS) ? len : 0);
         }
         auto chunk = data_.substr(offset_, len);
         offset_ += len;
@@ -120,6 +131,7 @@ class Cursor {
 
     dstd::StringView data_;
     std::size_t offset_ = 0;
+    bool failed_ = false;
 };
 
 }  // namespace dftracer::utils::index::store::internal

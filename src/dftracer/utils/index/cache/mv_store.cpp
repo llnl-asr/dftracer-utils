@@ -230,46 +230,55 @@ dstd::Optional<Manifest> read_manifest(dstd::StringView dir) {
     const dstd::Path path = manifest_path(dir);
     const auto found = dstd::fs::exists(path.view());
     if (!found.has_value() || !*found) return dstd::nullopt;
-    try {
-        simdjson::dom::parser parser;
-        simdjson::dom::element root = parser.load(path.c_str());
-        std::int64_t version = 0;
-        if (root["version"].get(version) != simdjson::SUCCESS ||
-            version != MANIFEST_VERSION)
-            return dstd::nullopt;
-        Manifest m;
-        dstd::StringView schema;
-        if (root["schema"].get(schema) == simdjson::SUCCESS) {
-            const auto hash = parse_hex(schema);
-            if (!hash) return dstd::nullopt;
-            m.schema = *hash;
-        }
-        std::uint64_t bytes = 0;
-        if (root["bytes"].get(bytes) == simdjson::SUCCESS) m.bytes = bytes;
-        m.query = dstd::String(dstd::StringView(root["query"]));
-        m.phase = static_cast<int>(std::int64_t(root["phase"]));
-        simdjson::dom::element w = root["window"];
-        if (!w.is_null()) {
-            m.has_window = true;
-            m.win_begin = double(w["begin"]);
-            m.win_end = double(w["end"]);
-        }
-        for (simdjson::dom::element b : simdjson::dom::array(root["bases"])) {
-            BaseId id;
-            id.path = dstd::String(dstd::StringView(b["path"]));
-            id.size = std::uint64_t(std::int64_t(b["size"]));
-            id.mtime = std::int64_t(b["mtime"]);
-            m.bases.push_back(std::move(id));
-        }
-        std::sort(
-            m.bases.begin(), m.bases.end(),
-            [](const BaseId& a, const BaseId& c) { return a.path < c.path; });
-        return m;
-    } catch (const simdjson::simdjson_error&) {
+    simdjson::dom::parser parser;
+    simdjson::dom::element root;
+    if (parser.load(path.c_str()).get(root) != simdjson::SUCCESS)
         return dstd::nullopt;
-    } catch (const std::logic_error&) {
+    std::int64_t version = 0;
+    if (root["version"].get(version) != simdjson::SUCCESS ||
+        version != MANIFEST_VERSION)
         return dstd::nullopt;
+    Manifest m;
+    dstd::StringView schema;
+    if (root["schema"].get(schema) == simdjson::SUCCESS) {
+        const auto hash = parse_hex(schema);
+        if (!hash) return dstd::nullopt;
+        m.schema = *hash;
     }
+    std::uint64_t bytes = 0;
+    if (root["bytes"].get(bytes) == simdjson::SUCCESS) m.bytes = bytes;
+    dstd::StringView query;
+    std::int64_t phase = 0;
+    simdjson::dom::element w;
+    if (root["query"].get(query) != simdjson::SUCCESS ||
+        root["phase"].get(phase) != simdjson::SUCCESS ||
+        root["window"].get(w) != simdjson::SUCCESS)
+        return dstd::nullopt;
+    m.query = dstd::String(query);
+    m.phase = static_cast<int>(phase);
+    if (!w.is_null()) {
+        m.has_window = true;
+        if (w["begin"].get(m.win_begin) != simdjson::SUCCESS ||
+            w["end"].get(m.win_end) != simdjson::SUCCESS)
+            return dstd::nullopt;
+    }
+    simdjson::dom::array bases;
+    if (root["bases"].get(bases) != simdjson::SUCCESS) return dstd::nullopt;
+    for (simdjson::dom::element b : bases) {
+        dstd::StringView base_path;
+        std::int64_t size = 0;
+        if (b["path"].get(base_path) != simdjson::SUCCESS ||
+            b["size"].get(size) != simdjson::SUCCESS)
+            return dstd::nullopt;
+        BaseId id;
+        id.path = dstd::String(base_path);
+        id.size = static_cast<std::uint64_t>(size);
+        if (b["mtime"].get(id.mtime) != simdjson::SUCCESS) return dstd::nullopt;
+        m.bases.push_back(std::move(id));
+    }
+    std::sort(m.bases.begin(), m.bases.end(),
+              [](const BaseId& a, const BaseId& c) { return a.path < c.path; });
+    return m;
 }
 
 std::uint64_t dir_size(dstd::StringView dir) {

@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/pipeline.h>
@@ -19,22 +20,26 @@ namespace dftracer::utils::index {
 duql::Roles duql_roles(const RecordSchema& schema);
 
 /// `child`'s source members over `parent`'s, as canonical text: a member of
-/// the same name replaces the parent's, in the parent's position. Throws
-/// DFTUtilsException INVALID_ARGUMENT naming `origin` when either does not
-/// parse, a row set is named `all`, `data` is anything but one `where`, or a
-/// name is declared twice.
-dstd::String merge_source(dstd::StringView parent, dstd::StringView child,
-                          dstd::StringView origin);
+/// the same name replaces the parent's, in the parent's position. An
+/// InvalidArgument error naming `origin` when either does not parse, a row set
+/// is named `all`, `data` is anything but one `where`, or a name is declared
+/// twice.
+dstd::Result<dstd::String> merge_source(dstd::StringView parent,
+                                        dstd::StringView child,
+                                        dstd::StringView origin);
 
-/// Compiles `schema`'s source with its roles. Throws DFTUtilsException
-/// INVALID_ARGUMENT naming the schema and `origin` when it does not compile.
-void check_source(const RecordSchema& schema, dstd::StringView origin);
+/// Compiles `schema`'s source with its roles. An InvalidArgument error naming
+/// the schema and `origin` when it does not compile.
+dstd::Result<void> check_source(const RecordSchema& schema,
+                                dstd::StringView origin);
 
 /// The condition of `schema`'s `data` row set, or empty when it reads
-/// `all`.
+/// `all`. The source must have passed @ref check_source; one that does not
+/// parse ends the process.
 dstd::String data_condition(const RecordSchema& schema);
 
-/// Whether `schema`'s source defines `args_fallback = true`.
+/// Whether `schema`'s source defines `args_fallback = true`. The source must
+/// have passed @ref check_source; one that does not parse ends the process.
 bool source_args_fallback(const RecordSchema& schema);
 
 /// The `data` condition that leaves out the metadata phase, which a View

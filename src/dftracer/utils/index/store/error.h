@@ -3,34 +3,23 @@
 #define DFTRACER_UTILS_INDEX_STORE_ERROR_H
 
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/string.h>
-
-#include <stdexcept>
 
 namespace dftracer::utils::index::store {
 
-class IndexerError : public common::DFTUtilsException {
-   public:
-    enum Type {
-        DatabaseError,
-        FileError,
-        CompressionError,
-        InvalidArgument,
-        BuildError,
-        UnknownError
-    };
-
-    IndexerError(Type type, const dstd::String &message)
-        : common::DFTUtilsException(common::ErrorCode::Indexer,
-                                    format_message(type, message)),
-          type_(type) {}
-
-    inline Type type() const { return type_; }
-
-   private:
-    Type type_;
-    static dstd::String format_message(Type type, const dstd::String &message);
+enum class IndexerErrorKind {
+    DatabaseError,
+    FileError,
+    CompressionError,
+    InvalidArgument,
+    BuildError,
+    UnknownError
 };
+
+/// An error of `code` with the message "<kind text>: <message>".
+dstd::Error indexer_error(IndexerErrorKind kind, dstd::StringView message,
+                          common::ErrorCode code = common::ErrorCode::Indexer);
 
 }  // namespace dftracer::utils::index::store
 

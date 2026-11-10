@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_INDEX_STORE_SHARD_MANIFEST_H
 
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
@@ -34,21 +35,22 @@ struct IndexShardManifest {
 /// Serialize to the on-disk JSON representation.
 dstd::String to_json(const IndexShardManifest& manifest);
 
-/// Parse the on-disk JSON representation. Throws DFTUtilsException on malformed
+/// Parse the on-disk JSON representation. Returns a Parse error on malformed
 /// input.
-IndexShardManifest parse_manifest(dstd::StringView json);
+dstd::Result<IndexShardManifest> parse_manifest(dstd::StringView json);
 
 /// Write `manifest` to the root's `shards.json`, creating `root` if needed.
 /// Writes a temporary file beside it and renames it into place so a concurrent
-/// reader never observes a partial manifest. Throws DFTUtilsException on I/O
-/// failure.
-void write_shard_manifest(dstd::StringView root,
-                          const IndexShardManifest& manifest);
+/// reader never observes a partial manifest. Returns an Io error on I/O
+/// failure. The manifest's `format_version` must be set.
+dstd::Result<void> write_shard_manifest(dstd::StringView root,
+                                        const IndexShardManifest& manifest);
 
 /// Read the root's `shards.json`. Returns dstd::nullopt when the file is
-/// absent; throws DFTUtilsException when it exists but cannot be read or
+/// absent; returns an Io or Parse error when it exists but cannot be read or
 /// parsed.
-dstd::Optional<IndexShardManifest> read_shard_manifest(dstd::StringView root);
+dstd::Result<dstd::Optional<IndexShardManifest>> read_shard_manifest(
+    dstd::StringView root);
 
 /// True when the root holds a `shards.json`: the shards of a build are waiting
 /// to be merged.

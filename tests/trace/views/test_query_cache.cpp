@@ -48,7 +48,7 @@ dstd::Vector<std::uint64_t> rollup_sigs(const dstd::String& gz) {
     auto db = dftracer::utils::index::cache::open_rollup_db(
         rollups_of(gz),
         dftracer::utils::index::cache::CacheStore::Mode::ReadOnly);
-    for (const auto& u : db->usage()) out.push_back(u.sig);
+    for (const auto& u : dftu_utils_test::ok(db->usage())) out.push_back(u.sig);
     return out;
 }
 
@@ -57,7 +57,7 @@ std::uint64_t rollup_bytes(const dstd::String& gz) {
     auto db = dftracer::utils::index::cache::open_rollup_db(
         rollups_of(gz),
         dftracer::utils::index::cache::CacheStore::Mode::ReadOnly);
-    for (const auto& u : db->usage()) total += u.bytes;
+    for (const auto& u : dftu_utils_test::ok(db->usage())) total += u.bytes;
     return total;
 }
 

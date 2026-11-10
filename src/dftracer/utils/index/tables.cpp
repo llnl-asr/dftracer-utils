@@ -12,7 +12,6 @@
 #include <dftracer/utils/index/tables.h>
 
 #include <algorithm>
-#include <exception>
 
 namespace dftracer::utils::index {
 
@@ -131,10 +130,25 @@ std::uint32_t tail_u32(dstd::StringView key, std::size_t offset) {
     return store::layout::read_u32(key.substr(offset));
 }
 
-dstd::Unexpected<dstd::Error> parse_error(const std::exception& error) {
+dstd::Unexpected<dstd::Error> bad_chunk_key() {
     return dstd::Unexpected<dstd::Error>(
-        dstd::Error(dstd::Condition::Parse, error.what()));
+        dstd::Error(dstd::Condition::Parse, "chunk record: malformed key"));
 }
+
+constexpr std::size_t CHUNK_KEY_BYTES = 1 + sizeof(std::uint32_t);
+
+template <class T>
+struct ResultValue {
+    using type = T;
+};
+template <class T>
+struct ResultValue<dstd::Result<T>> {
+    using type = T;
+};
+template <class T>
+inline constexpr bool IS_RESULT = false;
+template <class T>
+inline constexpr bool IS_RESULT<dstd::Result<T>> = true;
 
 dftracer::utils::store::Namespace read_ns(
     const dftracer::utils::store::NamespaceSpec& spec) {
@@ -156,7 +170,8 @@ bool ready(const Snapshot& snapshot, const FileRef& file, Ext ext) {
 }
 
 /// Calls fn(key, value) for each record under `prefix`. fn returns false to
-/// stop. A decoder that throws becomes a Parse error.
+/// stop. fn returns either bool or a dstd::Result<bool>, whose error ends the
+/// scan.
 template <class Fn>
 dstd::Result<void> scan_payloads(const Snapshot& snapshot, const FileRef& file,
                                  const dftracer::utils::store::Namespace& ns,
@@ -170,11 +185,13 @@ dstd::Result<void> scan_payloads(const Snapshot& snapshot, const FileRef& file,
         auto value = cursor.value();
         if (!value) return dstd::Unexpected<dstd::Error>(value.error());
         const dstd::StringView body = as_text(*value);
+        auto step = fn(as_text(cursor.key()), body);
         bool more = true;
-        try {
-            more = fn(as_text(cursor.key()), body);
-        } catch (const std::exception& error) {
-            return parse_error(error);
+        if constexpr (IS_RESULT<decltype(step)>) {
+            if (!step.has_value()) return step.error();
+            more = *step;
+        } else {
+            more = step;
         }
         if (!more) break;
     }
@@ -200,23 +217,28 @@ dstd::Result<void> scan_keys(const Snapshot& snapshot, const FileRef& file,
     return {};
 }
 
-/// fn(value) of the record at `key`. Empty when the key is absent.
+/// fn(value) of the record at `key`, which returns the decoded value or a
+/// dstd::Result of it. Empty when the key is absent.
 template <class Fn>
 auto get_decoded(const Snapshot& snapshot, const FileRef& file,
                  const dftracer::utils::store::Namespace& ns,
                  const dstd::String& key, Fn&& fn)
-    -> dstd::Result<dstd::Optional<decltype(fn(dstd::StringView{}))>> {
-    using Out = decltype(fn(dstd::StringView{}));
+    -> dstd::Result<dstd::Optional<
+        typename ResultValue<decltype(fn(dstd::StringView{}))>::type>> {
+    using Raw = decltype(fn(dstd::StringView{}));
+    using Out = typename ResultValue<Raw>::type;
     const dftracer::utils::store::Snapshot* snap =
         IndexAccess::store_snapshot(snapshot);
     if (snap == nullptr) return dstd::Optional<Out>{};
     auto found = snap->get(ns, IndexAccess::scope(file), dstd::ByteView(key));
     if (!found) return dstd::Unexpected<dstd::Error>(found.error());
     if (!*found) return dstd::Optional<Out>{};
-    try {
-        return dstd::Optional<Out>(fn(as_text((*found)->bytes())));
-    } catch (const std::exception& error) {
-        return parse_error(error);
+    auto decoded = fn(as_text((*found)->bytes()));
+    if constexpr (IS_RESULT<Raw>) {
+        if (!decoded) return decoded.error();
+        return dstd::Optional<Out>(std::move(*decoded));
+    } else {
+        return dstd::Optional<Out>(std::move(decoded));
     }
 }
 
@@ -353,9 +375,12 @@ dstd::Result<dstd::Vector<gzip::GzipMemberRecord>> members(
     auto scanned = scan_payloads(
         snapshot, file, read_ns(Ext::Members),
         kind_key(store::layout::members::MEMBER),
-        [&](dstd::StringView key, dstd::StringView body) {
-            out.push_back(store::internal::decoding::decode_gzip_member(
-                tail_u32(key, 1), body));
+        [&](dstd::StringView key, dstd::StringView body) -> dstd::Result<bool> {
+            if (key.size() != CHUNK_KEY_BYTES) return bad_chunk_key();
+            auto member = store::internal::decoding::decode_gzip_member(
+                tail_u32(key, 1), body);
+            if (!member) return member.error();
+            out.push_back(std::move(*member));
             return true;
         });
     if (!scanned) return dstd::Unexpected<dstd::Error>(scanned.error());
@@ -396,11 +421,12 @@ dstd::Result<dstd::Vector<schemas::dft::ChunkStatisticsResult>> chunk_stats(
     auto scanned = scan_payloads(
         snapshot, file, read_ns(Ext::Stats),
         kind_key(store::layout::stats_kind::CHUNK_STATS),
-        [&](dstd::StringView key, dstd::StringView body) {
-            out.push_back(
-                {tail_u32(key, 1),
-                 store::internal::decoding::decode_chunk_statistics_value(
-                     body)});
+        [&](dstd::StringView key, dstd::StringView body) -> dstd::Result<bool> {
+            if (key.size() != CHUNK_KEY_BYTES) return bad_chunk_key();
+            auto stats =
+                store::internal::decoding::decode_chunk_statistics_value(body);
+            if (!stats) return stats.error();
+            out.push_back({tail_u32(key, 1), std::move(*stats)});
             return true;
         });
     if (!scanned) return dstd::Unexpected<dstd::Error>(scanned.error());
@@ -435,7 +461,8 @@ chunk_meta(const Snapshot& snapshot, const FileRef& file) {
     auto scanned = scan_payloads(
         snapshot, file, read_ns(Ext::Metadata),
         kind_key(store::layout::metadata_kind::CHUNK),
-        [&](dstd::StringView key, dstd::StringView body) {
+        [&](dstd::StringView key, dstd::StringView body) -> dstd::Result<bool> {
+            if (key.size() != CHUNK_KEY_BYTES) return bad_chunk_key();
             if (auto metadata = store::layout::decode_chunk_metadata(body))
                 out.emplace(tail_u32(key, 1), std::move(*metadata));
             return true;

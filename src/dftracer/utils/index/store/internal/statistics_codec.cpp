@@ -35,11 +35,12 @@ dstd::String encode_file_scalar_stats_value(
     return value;
 }
 
-index::schemas::dft::MergedStatisticsResult decode_file_scalar_stats_value(
-    dstd::StringView value) {
+dstd::Result<index::schemas::dft::MergedStatisticsResult>
+decode_file_scalar_stats_value(dstd::StringView value) {
     if (value.size() < 8) {
-        throw IndexerError(IndexerError::Type::DatabaseError,
-                           "Corrupt file scalar statistics value");
+        return indexer_error(IndexerErrorKind::DatabaseError,
+                             "Corrupt file scalar statistics value",
+                             common::ErrorCode::Parse);
     }
     Cursor cursor(value);
     index::schemas::dft::MergedStatisticsResult result;
@@ -69,6 +70,7 @@ index::schemas::dft::MergedStatisticsResult decode_file_scalar_stats_value(
     result.chunk_count = cursor.u64();
     stats.min_nonzero_timestamp_us = cursor.u64();
 
+    if (cursor.failed()) return cursor.error();
     return result;
 }
 

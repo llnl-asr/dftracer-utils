@@ -1062,8 +1062,8 @@ coro::CoroTask<ExportStats> run_materialize(const ViewPlan& plan,
                 rdir,
                 dftracer::utils::index::cache::CacheStore::Mode::ReadOnly);
             if (db &&
-                dftracer::utils::index::cache::rollup_exists(
-                    *db, dftracer::utils::index::cache::plan_signature(plan)))
+                common::unwrap(dftracer::utils::index::cache::rollup_exists(
+                    *db, dftracer::utils::index::cache::plan_signature(plan))))
                 co_return ExportStats{};
         } catch (const std::exception& e) {
             DFTRACER_UTILS_LOG_WARN("rollup check skipped: {}", e.what());
@@ -1079,10 +1079,10 @@ coro::CoroTask<ExportStats> run_materialize(const ViewPlan& plan,
                 rdir,
                 dftracer::utils::index::cache::CacheStore::Mode::ReadWrite);
             if (db)
-                dftracer::utils::index::cache::persist_rollup(
+                common::unwrap(dftracer::utils::index::cache::persist_rollup(
                     *db, dftracer::utils::index::cache::plan_signature(plan),
                     dftracer::utils::index::cache::rest_signature(plan),
-                    plan.time_bucket_us, plan.group_by, *state);
+                    plan.time_bucket_us, plan.group_by, *state));
         } catch (const std::exception& e) {
             DFTRACER_UTILS_LOG_WARN("rollup materialize skipped: {}", e.what());
         }
@@ -1110,8 +1110,9 @@ dstd::Optional<dataframe::DataFrame> try_serve_rollup(const ViewPlan& plan) {
     try {
         auto db = dftracer::utils::index::cache::open_rollup_db(rdir, mode);
         if (db)
-            return dftracer::utils::index::cache::find_subsuming_rollup(*db,
-                                                                        plan);
+            return common::unwrap(
+                dftracer::utils::index::cache::find_subsuming_rollup(*db,
+                                                                     plan));
     } catch (const std::exception& e) {
         // A locked/unreadable rollup just falls through to a normal compute;
         // never fail the query over the cache.
@@ -1713,10 +1714,10 @@ coro::CoroTask<void> run_materialize_partials(
         auto db = dftracer::utils::index::cache::open_rollup_db(
             rdir, dftracer::utils::index::cache::CacheStore::Mode::ReadWrite);
         if (db)
-            dftracer::utils::index::cache::persist_rollup(
+            common::unwrap(dftracer::utils::index::cache::persist_rollup(
                 *db, dftracer::utils::index::cache::plan_signature(plan),
                 dftracer::utils::index::cache::rest_signature(plan),
-                plan.time_bucket_us, plan.group_by, *state);
+                plan.time_bucket_us, plan.group_by, *state));
     } catch (const std::exception& e) {
         DFTRACER_UTILS_LOG_WARN("rollup materialize (partials) skipped: {}",
                                 e.what());
@@ -1872,10 +1873,10 @@ void add_materialize_branch(ViewSessionState& state,
                 rdir,
                 dftracer::utils::index::cache::CacheStore::Mode::ReadWrite);
             if (db)
-                dftracer::utils::index::cache::persist_rollup(
+                common::unwrap(dftracer::utils::index::cache::persist_rollup(
                     *db, dftracer::utils::index::cache::plan_signature(*plan),
                     dftracer::utils::index::cache::rest_signature(*plan),
-                    plan->time_bucket_us, plan->group_by, *state_out);
+                    plan->time_bucket_us, plan->group_by, *state_out));
         } catch (const std::exception& e) {
             DFTRACER_UTILS_LOG_WARN("fused rollup materialize skipped: {}",
                                     e.what());

@@ -170,12 +170,12 @@ using AggChunkColumnsFn = dstd::Function<bool(
     std::uint64_t chunk, const schemas::dft::agg::ChunkColumns& block)>;
 
 /// Calls fn for each partial of the file until fn returns false. A malformed
-/// record is an error, not a throw.
+/// record is an error.
 dstd::Result<void> for_each_agg_partial(const Snapshot& snapshot,
                                         const FileRef& file,
                                         const AggPartialFn& fn);
 /// Calls fn for each per-file partial of the file until fn returns false. A
-/// malformed record is an error, not a throw.
+/// malformed record is an error.
 dstd::Result<void> for_each_agg_file_partial(const Snapshot& snapshot,
                                              const FileRef& file,
                                              const AggFilePartialFn& fn);

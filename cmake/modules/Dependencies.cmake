@@ -887,9 +887,19 @@ function(need_vectorscan)
     list(APPEND hs_args
          "-DCMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES}")
   endif()
+  # Each function starts on a 64-byte line, so an edit to our code linked
+  # before Vectorscan does not shift its scan loops on the front end.
   foreach(lang C CXX)
+    set(hs_flags "")
     if(CMAKE_${lang}_COMPILER_ID STREQUAL "GNU")
-      list(APPEND hs_args "-DCMAKE_${lang}_FLAGS=-Wno-psabi")
+      list(APPEND hs_flags -Wno-psabi)
+    endif()
+    if(CMAKE_${lang}_COMPILER_ID MATCHES "GNU|Clang")
+      list(APPEND hs_flags -falign-functions=64)
+    endif()
+    if(hs_flags)
+      list(JOIN hs_flags " " hs_flags)
+      list(APPEND hs_args "-DCMAKE_${lang}_FLAGS=${hs_flags}")
     endif()
   endforeach()
   set(hs_fixed_args

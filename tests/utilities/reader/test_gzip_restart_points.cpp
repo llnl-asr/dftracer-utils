@@ -145,6 +145,26 @@ TEST_SUITE("gzip_restart_points") {
         check_reads_from_every_piece(fx, text);
     }
 
+    TEST_CASE("a built indexer lists its head pieces like a loaded one") {
+        const auto text = hex_lines(2u << 20, 1);
+        Fixture fx(gzip(text));
+        const auto built = fx.indexer->piece_heads();
+        REQUIRE(built.size() == 1);
+        CHECK(built[0] == 0);
+
+        index::gzip::GzipIndexer loaded(
+            dstd::String(dstd::StringView(fx.gz_path)),
+            dstd::String(dstd::StringView(fx.index_path)), CKPT, false);
+        REQUIRE(loaded.load().has_value());
+        const auto reread = loaded.piece_heads();
+        REQUIRE(reread.size() == built.size());
+        CHECK(reread[0] == built[0]);
+
+        index::gzip::GzipIndexer moved(std::move(*fx.indexer));
+        REQUIRE(moved.piece_heads().size() == 1);
+        CHECK(moved.piece_heads()[0] == 0);
+    }
+
     TEST_CASE("a read from a piece runs into the members after it") {
         const auto text = hex_lines(2u << 20, 2);
         const auto tail = hex_lines(1000, 3) + hex_lines(2000, 4);

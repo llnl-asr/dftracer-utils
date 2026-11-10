@@ -1171,6 +1171,7 @@ GzipIndexer::GzipIndexer(GzipIndexer&& other) noexcept
       cached_checkpoint_size_(other.cached_checkpoint_size_.load()),
       cached_checkpoint_size_ready_(other.cached_checkpoint_size_ready_.load()),
       cached_members_(std::move(other.cached_members_)),
+      cached_heads_(std::move(other.cached_heads_)),
       snapshot_(std::move(other.snapshot_)),
       file_ref_(std::move(other.file_ref_)),
       cached_loaded_(other.cached_loaded_.load()) {}
@@ -1194,6 +1195,7 @@ GzipIndexer& GzipIndexer::operator=(GzipIndexer&& other) noexcept {
         cached_loaded_.store(other.cached_loaded_.load());
         std::lock_guard<std::mutex> lock(cached_members_mutex_);
         cached_members_ = std::move(other.cached_members_);
+        cached_heads_ = std::move(other.cached_heads_);
         snapshot_ = std::move(other.snapshot_);
         file_ref_ = std::move(other.file_ref_);
     }
@@ -1285,10 +1287,17 @@ GzipIndexer::try_build_async() const {
     } else {
         cached_members_.clear();
     }
+    cache_heads();
     file_ref_ = file;
     snapshot_ = std::move(snapshot);
     cached_loaded_.store(true, std::memory_order_release);
     co_return dstd::Result<void>{};
+}
+
+void GzipIndexer::cache_heads() const {
+    cached_heads_.clear();
+    for (const auto& m : cached_members_)
+        if (m.kind == GzipRecordKind::Head) cached_heads_.push_back(m.c_offset);
 }
 
 bool GzipIndexer::is_valid() const { return cached_is_valid_; }
@@ -1383,9 +1392,7 @@ dstd::Result<void> GzipIndexer::load() const {
                                       std::memory_order_relaxed);
         cached_checkpoint_size_ready_.store(true, std::memory_order_relaxed);
         cached_members_.assign(members->begin(), members->end());
-        for (const auto& m : cached_members_)
-            if (m.kind == GzipRecordKind::Head)
-                cached_heads_.push_back(m.c_offset);
+        cache_heads();
     }
     file_ref_ = file;
     snapshot_ = std::move(*snapshot);

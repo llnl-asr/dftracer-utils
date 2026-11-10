@@ -183,6 +183,7 @@ class GzipIndexer : public CheckpointIndexer {
     // replaces were the dominant cost of streaming a file.
     // load(), ending the process when it fails; see CheckpointIndexer::load.
     void ensure_loaded() const;
+    void cache_heads() const;
 };
 
 }  // namespace dftracer::utils::index::gzip

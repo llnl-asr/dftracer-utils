@@ -50,7 +50,7 @@ static_assert(dstd::FmtArg<int> && dstd::FmtArg<dstd::String> &&
 static_assert(!dstd::FmtArg<void*> && !dstd::FmtArg<std::nullptr_t>);
 
 namespace inner::deep {
-dstd::String found_unqualified() { return dstd::fmt("v={}"_f, 7); }
+static dstd::String found_unqualified() { return dstd::fmt("v={}"_f, 7); }
 }  // namespace inner::deep
 
 TEST_CASE("every hole type") {
@@ -205,8 +205,8 @@ TEST_CASE("helpers forward a format in both shapes") {
     const auto b = fail_t("{} is worse"_f, 12);
     CHECK(b.error().message() == "12 is worse");
 
-    const auto fail = [&](auto f, const auto&... a) {
-        return common::make_error(common::ErrorCode::Duql, f, a...);
+    const auto fail = [&](auto f, const auto&... args) {
+        return common::make_error(common::ErrorCode::Duql, f, args...);
     };
     const auto c =
         fail("'{}' sums a column that is not a typed number"_f, "dur");

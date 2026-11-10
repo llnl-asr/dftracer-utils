@@ -403,7 +403,7 @@ FmtResult write_clamped_impl(const F& f, char* d, char* end,
         d += n;
     };
     const auto piece = [&](std::size_t i) { put(f.text(i), f.size(i)); };
-    const auto arg = [&](Spec s, const auto& v) {
+    [[maybe_unused]] const auto arg = [&](Spec s, const auto& v) {
         using D = std::decay_t<decltype(v)>;
         if constexpr (StrLike<D> || std::is_same_v<D, RawText>) {
             if constexpr (std::is_same_v<D, RawText>) {

@@ -27,7 +27,8 @@ TEST_CASE("StreamingFileWriterUtility - Basic Operations") {
 
     SUBCASE("Write single chunk") {
         {
-            StreamingFileWriterUtility writer(dstd::PathView(test_file.str()));
+            auto writer = dftu_utils_test::ok(StreamingFileWriterUtility::open(
+                dstd::PathView(test_file.str())));
             dstd::ByteView chunk("Hello, World!");
             dftu_utils_test::ok(writer.process(chunk).get());
             writer.close();
@@ -47,7 +48,8 @@ TEST_CASE("StreamingFileWriterUtility - Basic Operations") {
 
     SUBCASE("Write multiple chunks") {
         {
-            StreamingFileWriterUtility writer(dstd::PathView(test_file.str()));
+            auto writer = dftu_utils_test::ok(StreamingFileWriterUtility::open(
+                dstd::PathView(test_file.str())));
             dftu_utils_test::ok(writer.process(dstd::ByteView("First ")).get());
             dftu_utils_test::ok(
                 writer.process(dstd::ByteView("Second ")).get());
@@ -69,7 +71,8 @@ TEST_CASE("StreamingFileWriterUtility - Basic Operations") {
 
     SUBCASE("Write empty chunk") {
         {
-            StreamingFileWriterUtility writer(dstd::PathView(test_file.str()));
+            auto writer = dftu_utils_test::ok(StreamingFileWriterUtility::open(
+                dstd::PathView(test_file.str())));
             dftu_utils_test::ok(writer.process(dstd::ByteView("Before")).get());
             dftu_utils_test::ok(
                 writer.process(dstd::ByteView()).get());  // Empty chunk
@@ -94,7 +97,8 @@ TEST_CASE("StreamingFileWriterUtility - Binary Data") {
 
     SUBCASE("Write binary data") {
         {
-            StreamingFileWriterUtility writer(dstd::PathView(test_file.str()));
+            auto writer = dftu_utils_test::ok(StreamingFileWriterUtility::open(
+                dstd::PathView(test_file.str())));
             dstd::Vector<unsigned char> data = {0x00, 0x01, 0x02, 0xFF, 0xFE};
             dftu_utils_test::ok(
                 writer.process(dstd::ByteView(data.data(), data.size())).get());
@@ -118,7 +122,8 @@ TEST_CASE("StreamingFileWriterUtility - Binary Data") {
 
     SUBCASE("Write null bytes") {
         {
-            StreamingFileWriterUtility writer(dstd::PathView(test_file.str()));
+            auto writer = dftu_utils_test::ok(StreamingFileWriterUtility::open(
+                dstd::PathView(test_file.str())));
             dstd::Vector<unsigned char> data = {0x00, 0x00, 0x00};
             dftu_utils_test::ok(
                 writer.process(dstd::ByteView(data.data(), data.size())).get());
@@ -147,7 +152,8 @@ TEST_CASE("StreamingFileWriterUtility - Append Mode") {
 
     // Write initial content
     {
-        StreamingFileWriterUtility writer(dstd::PathView(test_file.str()));
+        auto writer = dftu_utils_test::ok(
+            StreamingFileWriterUtility::open(dstd::PathView(test_file.str())));
         dftu_utils_test::ok(
             writer.process(dstd::ByteView("Initial content\n")).get());
         writer.close();
@@ -155,8 +161,9 @@ TEST_CASE("StreamingFileWriterUtility - Append Mode") {
 
     // Append to file
     {
-        StreamingFileWriterUtility writer(dstd::PathView(test_file.str()),
-                                          true);  // append=true
+        auto writer = dftu_utils_test::ok(
+            StreamingFileWriterUtility::open(dstd::PathView(test_file.str()),
+                                             true));  // append=true
         dftu_utils_test::ok(
             writer.process(dstd::ByteView("Appended content\n")).get());
         writer.close();
@@ -177,9 +184,9 @@ TEST_CASE("StreamingFileWriterUtility - Directory Creation") {
 
     SUBCASE("Auto-create directories") {
         {
-            StreamingFileWriterUtility writer(dstd::PathView(test_file.str()),
-                                              false,
-                                              true);  // create_dirs=true
+            auto writer = dftu_utils_test::ok(StreamingFileWriterUtility::open(
+                dstd::PathView(test_file.str()), false,
+                true));  // create_dirs=true
             dftu_utils_test::ok(
                 writer.process(dstd::ByteView("Content")).get());
             writer.close();
@@ -192,22 +199,25 @@ TEST_CASE("StreamingFileWriterUtility - Directory Creation") {
     }
 
     SUBCASE("Don't create directories") {
-        CHECK_THROWS_AS(
-            StreamingFileWriterUtility(dstd::PathView(test_file.str()), false,
-                                       false),  // create_dirs=false
-            dftracer::utils::common::DFTUtilsException);
+        auto opened = StreamingFileWriterUtility::open(
+            dstd::PathView(test_file.str()), false,
+            false);  // create_dirs=false
+        REQUIRE(!opened);
+        CHECK(opened.error().is_code(
+            dftracer::utils::common::ErrorCode::NotFound));
     }
 }
 
 TEST_CASE("StreamingFileWriterUtility - Error Handling") {
     SUBCASE("Write to closed file") {
         dstd::Path test_file = make_unique_test_path("test_closed_writer.txt");
-        StreamingFileWriterUtility writer(dstd::PathView(test_file.str()));
+        auto writer = dftu_utils_test::ok(
+            StreamingFileWriterUtility::open(dstd::PathView(test_file.str())));
         writer.close();
 
-        CHECK_THROWS_AS(
-            dftu_utils_test::ok(writer.process(dstd::ByteView("Data")).get()),
-            dftracer::utils::common::DFTUtilsException);
+        auto written = writer.process(dstd::ByteView("Data")).get();
+        REQUIRE(!written);
+        CHECK(written.error().is_code(dftracer::utils::common::ErrorCode::Io));
 
         dstd::fs::remove(test_file).discard();
     }
@@ -215,11 +225,11 @@ TEST_CASE("StreamingFileWriterUtility - Error Handling") {
     SUBCASE("Invalid path") {
         // Try to write to invalid location (assuming /invalid/path doesn't
         // exist)
-        CHECK_THROWS_AS(
-            StreamingFileWriterUtility(
-                dstd::PathView("/invalid/nonexistent/path/file.txt"), false,
-                false),
-            dftracer::utils::common::DFTUtilsException);
+        auto opened = StreamingFileWriterUtility::open(
+            dstd::PathView("/invalid/nonexistent/path/file.txt"), false, false);
+        REQUIRE(!opened);
+        CHECK(opened.error().is_code(
+            dftracer::utils::common::ErrorCode::NotFound));
     }
 }
 
@@ -228,7 +238,8 @@ TEST_CASE("StreamingFileWriterUtility - Large Files") {
 
     SUBCASE("Write 1MB in chunks") {
         {
-            StreamingFileWriterUtility writer(dstd::PathView(test_file.str()));
+            auto writer = dftu_utils_test::ok(StreamingFileWriterUtility::open(
+                dstd::PathView(test_file.str())));
 
             // Write 1MB in 1KB chunks
             dstd::Vector<unsigned char> chunk(1024, 0xAA);
@@ -251,7 +262,8 @@ TEST_CASE("StreamingFileWriterUtility - Large Files") {
 
     SUBCASE("Write many small chunks") {
         {
-            StreamingFileWriterUtility writer(dstd::PathView(test_file.str()));
+            auto writer = dftu_utils_test::ok(StreamingFileWriterUtility::open(
+                dstd::PathView(test_file.str())));
 
             // Write 10000 small chunks
             for (int i = 0; i < 10000; ++i) {
@@ -273,7 +285,8 @@ TEST_CASE("StreamingFileWriterUtility - Round Trip") {
     SUBCASE("Write and read back") {
         dstd::String original_data;
         {
-            StreamingFileWriterUtility writer(dstd::PathView(test_file.str()));
+            auto writer = dftu_utils_test::ok(StreamingFileWriterUtility::open(
+                dstd::PathView(test_file.str())));
             for (int i = 0; i < 100; ++i) {
                 dstd::String line = dstd::fmt<"Line {}\n">(i);
                 dftu_utils_test::ok(writer.process(dstd::ByteView(line)).get());
@@ -298,7 +311,8 @@ TEST_CASE("StreamingFileWriterUtility - Automatic Closure") {
 
     SUBCASE("Destructor closes file") {
         {
-            StreamingFileWriterUtility writer(dstd::PathView(test_file.str()));
+            auto writer = dftu_utils_test::ok(StreamingFileWriterUtility::open(
+                dstd::PathView(test_file.str())));
             dftu_utils_test::ok(writer.process(dstd::ByteView("Data")).get());
             // No explicit close() - destructor should handle it
         }
@@ -319,7 +333,8 @@ TEST_CASE("StreamingFileWriterUtility - Different Data Types") {
 
     SUBCASE("Write text data") {
         {
-            StreamingFileWriterUtility writer(dstd::PathView(test_file.str()));
+            auto writer = dftu_utils_test::ok(StreamingFileWriterUtility::open(
+                dstd::PathView(test_file.str())));
             dftu_utils_test::ok(
                 writer.process(dstd::ByteView("Text line 1\n")).get());
             dftu_utils_test::ok(
@@ -337,7 +352,8 @@ TEST_CASE("StreamingFileWriterUtility - Different Data Types") {
 
     SUBCASE("Write binary patterns") {
         {
-            StreamingFileWriterUtility writer(dstd::PathView(test_file.str()));
+            auto writer = dftu_utils_test::ok(StreamingFileWriterUtility::open(
+                dstd::PathView(test_file.str())));
 
             // Write alternating pattern
             for (int i = 0; i < 100; ++i) {
@@ -369,7 +385,8 @@ TEST_CASE("StreamingFileWriterUtility - Truncate vs Append") {
 
     // Write initial data
     {
-        StreamingFileWriterUtility writer(dstd::PathView(test_file.str()));
+        auto writer = dftu_utils_test::ok(
+            StreamingFileWriterUtility::open(dstd::PathView(test_file.str())));
         dftu_utils_test::ok(
             writer.process(dstd::ByteView("Initial data\n")).get());
         writer.close();
@@ -377,9 +394,9 @@ TEST_CASE("StreamingFileWriterUtility - Truncate vs Append") {
 
     SUBCASE("Truncate mode overwrites") {
         {
-            StreamingFileWriterUtility writer(
+            auto writer = dftu_utils_test::ok(StreamingFileWriterUtility::open(
                 dstd::PathView(test_file.str()),
-                false);  // append=false (truncate)
+                false));  // append=false (truncate)
             dftu_utils_test::ok(
                 writer.process(dstd::ByteView("New data\n")).get());
             writer.close();
@@ -398,7 +415,8 @@ TEST_CASE("StreamingFileWriterUtility - Path Information") {
     dstd::Path test_file = make_unique_test_path("test_path_info.txt");
 
     {
-        StreamingFileWriterUtility writer(dstd::PathView(test_file.str()));
+        auto writer = dftu_utils_test::ok(
+            StreamingFileWriterUtility::open(dstd::PathView(test_file.str())));
         CHECK(writer.path().str() == test_file.str());
         CHECK_FALSE(writer.is_closed());
 

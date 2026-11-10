@@ -119,74 +119,73 @@ class FileDecompressorUtility {
      */
     coro::CoroTask<dstd::Result<FileDecompressionUtilityOutput>> operator()(
         const FileDecompressionUtilityInput& input) const {
-        std::size_t compressed_size = 0;
-        std::size_t decompressed_size = 0;
-
-        try {
-            // Validate input file exists
-            const auto found =
-                dstd::fs::exists(dstd::PathView(input.input_path));
-            if (!found.has_value())
-                throw common::DFTUtilsException(found.error());
-            if (!*found) {
-                co_return common::make_error<"Input file does not exist: {}">(
-                    common::ErrorCode::NotFound, input.input_path);
-            }
-
-            // Get compressed file size
-            const auto compressed =
-                dstd::fs::file_size(dstd::PathView(input.input_path));
-            if (!compressed)
-                throw common::DFTUtilsException(compressed.error());
-            compressed_size = static_cast<std::size_t>(*compressed);
-
-            auto opened = co_await runtime::io::open_file(input.input_path, {});
-            if (!opened) {
-                co_return common::make_error<"Cannot open file: {}">(
-                    common::ErrorCode::Io, input.input_path);
-            }
-            const dstd::File fd_file = std::move(*opened);
-            const int fd = fd_file.native_handle();
-
-            const auto st = fd_file.stat();
-            if (!st) {
-                co_return common::make_error<"Cannot stat file: {}">(
-                    common::ErrorCode::Io, input.input_path);
-            }
-
-            fileio::StreamingFileWriterUtility writer(
-                dstd::PathView(input.output_path));
-            auto gen = fileio::compress::decode_gzip_members(fd, st->size);
-            for (;;) {
-                auto chunk = co_await gen.next();
-                if (!chunk) break;
-                if (!*chunk) throw common::DFTUtilsException(chunk->error());
-                co_await writer.process(
-                    dstd::ByteView((*chunk)->data(), (*chunk)->size()));
-            }
-
-            writer.close();
-
-            // Get final decompressed size
-            const auto decompressed =
-                dstd::fs::file_size(dstd::PathView(input.output_path));
-            if (!decompressed) {
-                throw common::DFTUtilsException(decompressed.error());
-            }
-            decompressed_size = static_cast<std::size_t>(*decompressed);
-
-        } catch (const std::exception& e) {
-            // Clean up partial output file on error
-            dstd::fs::remove(dstd::PathView(input.output_path)).discard();
-
-            co_return common::make_error<"Decompression failed: {}">(
-                common::ErrorCode::Compression, e.what());
+        const auto found = dstd::fs::exists(dstd::PathView(input.input_path));
+        if (!found.has_value()) co_return failed(input, found.error());
+        if (!*found) {
+            co_return common::make_error<"Input file does not exist: {}">(
+                common::ErrorCode::NotFound, input.input_path);
         }
+
+        const auto compressed =
+            dstd::fs::file_size(dstd::PathView(input.input_path));
+        if (!compressed) co_return failed(input, compressed.error());
+
+        auto opened = co_await runtime::io::open_file(input.input_path, {});
+        if (!opened) {
+            co_return common::make_error<"Cannot open file: {}">(
+                common::ErrorCode::Io, input.input_path);
+        }
+        const dstd::File fd_file = std::move(*opened);
+
+        const auto st = fd_file.stat();
+        if (!st) {
+            co_return common::make_error<"Cannot stat file: {}">(
+                common::ErrorCode::Io, input.input_path);
+        }
+
+        auto written =
+            co_await write_plain(input, fd_file.native_handle(), st->size);
+        if (!written) co_return failed(input, written.error());
+
+        const auto decompressed =
+            dstd::fs::file_size(dstd::PathView(input.output_path));
+        if (!decompressed) co_return failed(input, decompressed.error());
 
         FileDecompressionUtilityOutput payload;
         payload.with_paths(input.input_path, input.output_path)
-            .with_sizes(compressed_size, decompressed_size);
+            .with_sizes(static_cast<std::size_t>(*compressed),
+                        static_cast<std::size_t>(*decompressed));
         co_return payload;
+    }
+
+   private:
+    /// Removes the partial output and reports the cause as a Compression error.
+    static dstd::Unexpected<dstd::Error> failed(
+        const FileDecompressionUtilityInput& input, const dstd::Error& cause) {
+        dstd::fs::remove(dstd::PathView(input.output_path)).discard();
+        return common::make_error<"Decompression failed: {}">(
+            common::ErrorCode::Compression, cause.message());
+    }
+
+    static coro::CoroTask<dstd::Result<void>> write_plain(
+        const FileDecompressionUtilityInput& input, int fd,
+        std::uint64_t size) {
+        auto opened = fileio::StreamingFileWriterUtility::open(
+            dstd::PathView(input.output_path));
+        if (!opened) co_return opened.error();
+        auto writer = std::move(*opened);
+
+        auto gen = fileio::compress::decode_gzip_members(fd, size);
+        for (;;) {
+            auto chunk = co_await gen.next();
+            if (!chunk) break;
+            if (!*chunk) co_return chunk->error();
+            auto wrote = co_await writer.process(
+                dstd::ByteView((*chunk)->data(), (*chunk)->size()));
+            if (!wrote) co_return wrote.error();
+        }
+        writer.close();
+        co_return dstd::Result<void>{};
     }
 };
 

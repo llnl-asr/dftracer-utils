@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/runtime/io/ops.h>
@@ -25,7 +26,9 @@ namespace dftracer::utils::utilities::fileio {
  *
  * Reads a file in chunks and yields zero-copy @ref
  * dftracer::utils::dstd::ByteView "ByteView" references into the internal read
- * buffer. Each view is valid until the next iteration.
+ * buffer. Each view is valid until the next iteration. A missing file
+ * (NotFound), a failed open or a failed read (Io) is yielded as an error and
+ * ends the stream.
  *
  * Usage:
  * @code
@@ -33,30 +36,34 @@ namespace dftracer::utils::utilities::fileio {
  * for (;;) {
  *     auto chunk = co_await gen.next();
  *     if (!chunk) break;
- *     process(chunk->as<char>(), chunk->size());
+ *     if (!*chunk) return chunk->error();
+ *     process((*chunk)->as<char>(), (*chunk)->size());
  * }
  * @endcode
  */
-inline coro::AsyncGenerator<dstd::ByteView> read_binary_file(
+inline coro::AsyncGenerator<dstd::Result<dstd::ByteView>> read_binary_file(
     dstd::Path path, std::size_t chunk_size = 64 * 1024) {
     auto checking = runtime::fs::exists(path.view());
     const auto found = co_await std::move(checking);
-    if (!found.has_value()) throw common::DFTUtilsException(found.error());
+    if (!found.has_value()) {
+        co_yield found.error();
+        co_return;
+    }
     if (!*found) {
-        throw common::DFTUtilsException(
-            common::make_error<"File does not exist: {}">(
-                common::ErrorCode::NotFound, path.str())
-                .error());
+        co_yield common::make_error<"File does not exist: {}">(
+            common::ErrorCode::NotFound, path.str())
+            .error();
+        co_return;
     }
 
     const dstd::OpenOptions open_options;
     auto opening = runtime::io::open_file(path.view(), open_options);
     auto opened = co_await std::move(opening);
     if (!opened) {
-        throw common::DFTUtilsException(
-            common::make_error<"Cannot open file: {}">(common::ErrorCode::Io,
-                                                       path.str())
-                .error());
+        co_yield common::make_error<"Cannot open file: {}">(
+            common::ErrorCode::Io, path.str())
+            .error();
+        co_return;
     }
     const dstd::File file = std::move(*opened);
 
@@ -68,16 +75,16 @@ inline coro::AsyncGenerator<dstd::ByteView> read_binary_file(
             file.native_handle(), buffer.data(), chunk_size);
         if (bytes_read == -EINTR) continue;
         if (bytes_read < 0) {
-            throw common::DFTUtilsException(
-                common::make_error<"Error reading file: {}">(
-                    common::ErrorCode::Io, path.str())
-                    .error());
+            co_yield common::make_error<"Error reading file: {}">(
+                common::ErrorCode::Io, path.str())
+                .error();
+            co_return;
         }
 
         if (bytes_read == 0) break;
 
-        co_yield dstd::ByteView(buffer.data(),
-                                static_cast<std::size_t>(bytes_read));
+        co_yield dstd::Result<dstd::ByteView>(dstd::ByteView(
+            buffer.data(), static_cast<std::size_t>(bytes_read)));
     }
 }
 

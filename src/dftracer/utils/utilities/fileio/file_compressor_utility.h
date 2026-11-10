@@ -127,78 +127,79 @@ class FileCompressorUtility {
      */
     coro::CoroTask<dstd::Result<FileCompressionUtilityOutput>> operator()(
         const FileCompressionUtilityInput& input) const {
-        std::size_t original_size = 0;
-        std::size_t compressed_size = 0;
-
-        try {
-            // Validate input file exists
-            const auto found =
-                dstd::fs::exists(dstd::PathView(input.input_path));
-            if (!found.has_value())
-                throw common::DFTUtilsException(found.error());
-            if (!*found) {
-                co_return common::make_error<"Input file does not exist: {}">(
-                    common::ErrorCode::NotFound, input.input_path);
-            }
-
-            // Get original file size
-            const auto original =
-                dstd::fs::file_size(dstd::PathView(input.input_path));
-            if (!original) throw common::DFTUtilsException(original.error());
-            original_size = static_cast<std::size_t>(*original);
-
-            int level =
-                input.compression_level < 0 ? 6 : input.compression_level;
-            const std::size_t member_size =
-                input.member_size > 0
-                    ? input.member_size
-                    : common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
-
-            GzipWriterOptions opts;
-            opts.member_size = member_size;
-            opts.level = level;
-            auto writer = common::unwrap(co_await GzipLineWriter::open(
-                input.output_path, std::move(opts)));
-
-            dstd::String carry;
-            auto gen = fileio::read_binary_file(dstd::Path(input.input_path),
-                                                member_size);
-            for (;;) {
-                auto chunk = co_await gen.next();
-                if (!chunk) break;
-                dstd::StringView block(chunk->as<char>(), chunk->size());
-                const auto nl = block.rfind('\n');
-                if (nl == dstd::StringView::npos) {
-                    carry.append(block);
-                    continue;
-                }
-                carry.append(block.substr(0, nl + 1));
-                common::unwrap(co_await writer.append(carry));
-                carry.assign(block.substr(nl + 1));
-            }
-            common::unwrap(co_await writer.close(carry));
-
-            // Get final compressed size
-            const auto compressed =
-                dstd::fs::file_size(dstd::PathView(input.output_path));
-            if (!compressed)
-                throw common::DFTUtilsException(compressed.error());
-            compressed_size = static_cast<std::size_t>(*compressed);
-
-        } catch (const std::exception& e) {
-            // Clean up partial output file on error
-            dstd::fs::remove(dstd::PathView(input.output_path)).discard();
-
-            co_return common::make_error<"Compression failed: {}">(
-                common::ErrorCode::Compression, e.what());
+        const auto found = dstd::fs::exists(dstd::PathView(input.input_path));
+        if (!found.has_value()) co_return failed(input, found.error());
+        if (!*found) {
+            co_return common::make_error<"Input file does not exist: {}">(
+                common::ErrorCode::NotFound, input.input_path);
         }
+
+        const auto original =
+            dstd::fs::file_size(dstd::PathView(input.input_path));
+        if (!original) co_return failed(input, original.error());
+
+        auto written = co_await write_gzip(input);
+        if (!written) co_return failed(input, written.error());
+
+        const auto compressed =
+            dstd::fs::file_size(dstd::PathView(input.output_path));
+        if (!compressed) co_return failed(input, compressed.error());
 
         FileCompressionUtilityOutput payload;
         payload.input_path = input.input_path;
         payload.output_path = input.output_path;
-        payload.original_size = original_size;
-        payload.compressed_size = compressed_size;
+        payload.original_size = static_cast<std::size_t>(*original);
+        payload.compressed_size = static_cast<std::size_t>(*compressed);
         co_return payload;
+    }
+
+   private:
+    /// Removes the partial output and reports the cause as a Compression error.
+    static dstd::Unexpected<dstd::Error> failed(
+        const FileCompressionUtilityInput& input, const dstd::Error& cause) {
+        dstd::fs::remove(dstd::PathView(input.output_path)).discard();
+        return common::make_error<"Compression failed: {}">(
+            common::ErrorCode::Compression, cause.message());
+    }
+
+    static coro::CoroTask<dstd::Result<void>> write_gzip(
+        const FileCompressionUtilityInput& input) {
+        const int level =
+            input.compression_level < 0 ? 6 : input.compression_level;
+        const std::size_t member_size =
+            input.member_size > 0
+                ? input.member_size
+                : common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
+
+        GzipWriterOptions opts;
+        opts.member_size = member_size;
+        opts.level = level;
+        auto opened =
+            co_await GzipLineWriter::open(input.output_path, std::move(opts));
+        if (!opened) co_return opened.error();
+        auto writer = std::move(*opened);
+
+        dstd::String carry;
+        auto gen =
+            fileio::read_binary_file(dstd::Path(input.input_path), member_size);
+        for (;;) {
+            auto chunk = co_await gen.next();
+            if (!chunk) break;
+            if (!*chunk) co_return chunk->error();
+            dstd::StringView block((*chunk)->as<char>(), (*chunk)->size());
+            const auto nl = block.rfind('\n');
+            if (nl == dstd::StringView::npos) {
+                carry.append(block);
+                continue;
+            }
+            carry.append(block.substr(0, nl + 1));
+            auto appended = co_await writer.append(carry);
+            if (!appended) co_return appended.error();
+            carry.assign(block.substr(nl + 1));
+        }
+        auto closed = co_await writer.close(carry);
+        if (!closed) co_return closed.error();
+        co_return dstd::Result<void>{};
     }
 };
 

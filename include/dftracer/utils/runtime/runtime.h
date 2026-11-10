@@ -37,11 +37,9 @@ namespace detail {
 
 /// Thread-local flag marking that the current thread is executing inside a
 /// parallel_for/parallel_reduce chunk, so a nested call runs serial (one level
-/// of data parallelism, no fork-join inside a fork-join).
-inline bool& parallel_region_flag() {
-    thread_local bool flag = false;
-    return flag;
-}
+/// of data parallelism, no fork-join inside a fork-join). Defined out of line
+/// so every library sees one flag per thread.
+bool& parallel_region_flag();
 inline bool in_parallel_region() { return parallel_region_flag(); }
 struct ParallelRegionGuard {
     bool prev;

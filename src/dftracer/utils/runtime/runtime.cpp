@@ -453,4 +453,9 @@ bool spawn_detached(coro::Executor* executor, coro::CoroTask<void> task) {
     return true;
 }
 
+bool& detail::parallel_region_flag() {
+    thread_local bool flag = false;
+    return flag;
+}
+
 }  // namespace dftracer::utils

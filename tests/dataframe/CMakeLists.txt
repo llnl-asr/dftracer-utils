@@ -37,6 +37,7 @@ set(DATAFRAME_TEST_SOURCES test_mask.cpp test_series.cpp test_methods.cpp
                            test_string_view.cpp
                            test_groupby_string_encodings.cpp
                            test_kernels_keep_layouts.cpp
+                           test_parallel_region.cpp
                            test_collect_concat.cpp
                            test_slice_views.cpp
                            test_chunked_columns.cpp

@@ -150,7 +150,8 @@ class GzipStream : public StreamBase {
         auto file = dstd::File::open(dstd::PathView(path), {});
         if (!file) {
             return reader_error<ReaderErrorType::FileIoError,
-                                "Failed to open file: {}">(path);
+                                "Failed to open file: {}: {}">(
+                path, file.error().message());
         }
         file->advise(dstd::Advice::Sequential).discard();
         return std::move(*file);

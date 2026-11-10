@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>
 #include <dftracer/utils/dataframe/internal/lazyframe_handle.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
@@ -9,6 +10,7 @@
 #include <dftracer/utils/duql/pipeline.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/views/abi.h>
+#include <dftracer/utils/trace/views/interim_guard.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
@@ -16,7 +18,6 @@
 
 #include <cstdlib>
 #include <cstring>
-#include <stdexcept>
 
 using namespace dftracer::utils;
 
@@ -54,28 +55,41 @@ char* owned_string(dftracer::utils::dstd::StringView s) {
     return out;
 }
 
-void set_error(char** error, const char* what) {
+void set_error(char** error, dftracer::utils::dstd::StringView what) {
     if (error) *error = owned_string(what);
 }
 
-View duql_view(const dftu_view* v, const char* text) {
-    if (!v || !text) throw std::invalid_argument("a view and a query text");
+// The plan operations behind a builder may still raise an exception: it is a
+// null handle, as an error is.
+template <class F>
+auto handle_or_null(F&& f) -> decltype(f()) {
+    auto r = dftracer::utils::trace::views::detail::guard_exceptions(
+        std::forward<F>(f));
+    return r ? *r : nullptr;
+}
+
+dftracer::utils::dstd::Result<View> duql_view(const dftu_view* v,
+                                              const char* text) {
+    if (!v || !text)
+        return dftracer::utils::common::make_error(
+            dftracer::utils::common::ErrorCode::InvalidArgument,
+            "a view and a query text");
     return dftracer::utils::trace::views::detail::view_of(v->p);
 }
 
-dftracer::utils::duql::Params duql_params(const char* const* names,
-                                          const char* const* values,
-                                          int32_t n) {
+dftracer::utils::dstd::Result<dftracer::utils::duql::Params> duql_params(
+    const char* const* names, const char* const* values, int32_t n) {
     dftracer::utils::duql::Params out;
     for (int32_t i = 0; i < n; ++i) {
         if (!names || !values || !names[i] || !values[i])
-            throw std::invalid_argument("a NULL parameter name or value");
+            return dftracer::utils::common::make_error(
+                dftracer::utils::common::ErrorCode::InvalidArgument,
+                "a NULL parameter name or value");
         auto value = dftracer::utils::duql::parse_param(values[i]);
         if (!value)
-            throw std::invalid_argument(
-                ("$" + dftracer::utils::dstd::String(names[i]) + ": " +
-                 value.error().message)
-                    .c_str());
+            return dftracer::utils::common::make_error<"${}: {}">(
+                dftracer::utils::common::ErrorCode::InvalidArgument, names[i],
+                value.error().message);
         out.insert_or_assign(names[i], std::move(*value));
     }
     return out;
@@ -208,7 +222,7 @@ extern "C" {
 dftu_view* dftu_view_from_files(const char* const* paths,
                                 const char* const* index_paths, int32_t n) {
     if (!paths || n < 0) return nullptr;
-    try {
+    return handle_or_null([&]() -> dftu_view* {
         dftracer::utils::dstd::Vector<ViewFile> files;
         files.reserve(static_cast<std::size_t>(n));
         for (int32_t i = 0; i < n; ++i) {
@@ -219,15 +233,13 @@ dftu_view* dftu_view_from_files(const char* const* paths,
             files.push_back(std::move(f));
         }
         return wrap(trace::views::detail::scan::from_files(std::move(files)));
-    } catch (const std::exception&) {
-        return nullptr;
-    }
+    });
 }
 
 dftu_view* dftu_view_from_directory(const char* dir, const char* index_path,
                                     dftu_runtime* rt) {
     if (!dir) return nullptr;
-    try {
+    return handle_or_null([&]() -> dftu_view* {
         auto planned = runtime_of(rt)
                            .submit(trace::views::detail::scan::from_directory(
                                dir, index_path ? index_path : ""))
@@ -236,48 +248,40 @@ dftu_view* dftu_view_from_directory(const char* dir, const char* index_path,
         trace::views::detail::scan::ScanPlan v = std::move(*planned);
         if (v->files.empty()) return nullptr;
         return wrap(std::move(v));
-    } catch (const std::exception&) {
-        return nullptr;
-    }
+    });
 }
 
 void dftu_view_free(dftu_view* v) { delete v; }
 
 dftu_view* dftu_view_filter(const dftu_view* v, const dftu_duql* q) {
     if (!v || !q) return nullptr;
-    try {
+    return handle_or_null([&]() -> dftu_view* {
         return wrap(
             trace::views::detail::scan::filter(v->p, duql_handle_unwrap(q)));
-    } catch (const std::exception&) {
-        return nullptr;
-    }
+    });
 }
 
 char* dftu_view_schema_tree(const dftu_view* v) {
     if (!v) return nullptr;
-    try {
+    return handle_or_null([&]() -> char* {
         return owned_string(
             schema_tree_json(trace::views::detail::scan::schema_tree(v->p)));
-    } catch (const std::exception&) {
-        return nullptr;
-    }
+    });
 }
 
 void dftu_view_string_free(char* s) { std::free(s); }
 
 dftu_view* dftu_view_record_schema(const dftu_view* v, const char* id) {
     if (!v || !id) return nullptr;
-    try {
+    return handle_or_null([&]() -> dftu_view* {
         return wrap(trace::views::detail::scan::record_schema(v->p, id));
-    } catch (const std::exception&) {
-        return nullptr;
-    }
+    });
 }
 
 dftu_view* dftu_view_select(const dftu_view* v, const char* const* cols,
                             int32_t n) {
     if (!v || n < 0 || (n > 0 && !cols)) return nullptr;
-    try {
+    return handle_or_null([&]() -> dftu_view* {
         dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> c;
         c.reserve(static_cast<std::size_t>(n));
         for (int32_t i = 0; i < n; ++i) {
@@ -285,9 +289,7 @@ dftu_view* dftu_view_select(const dftu_view* v, const char* const* cols,
             c.emplace_back(cols[i]);
         }
         return wrap(trace::views::detail::scan::select(v->p, std::move(c)));
-    } catch (const std::exception&) {
-        return nullptr;
-    }
+    });
 }
 
 dftu_view* dftu_view_phase(const dftu_view* v, int phase) {
@@ -312,11 +314,9 @@ dftu_view* dftu_view_phase(const dftu_view* v, int phase) {
         default:
             return nullptr;
     }
-    try {
+    return handle_or_null([&]() -> dftu_view* {
         return wrap(trace::views::detail::scan::phase(v->p, p));
-    } catch (const std::exception&) {
-        return nullptr;
-    }
+    });
 }
 
 dftu_view* dftu_view_all(const dftu_view* v) {
@@ -325,37 +325,31 @@ dftu_view* dftu_view_all(const dftu_view* v) {
 
 dftu_view* dftu_view_limit(const dftu_view* v, uint64_t n) {
     if (!v) return nullptr;
-    try {
+    return handle_or_null([&]() -> dftu_view* {
         return wrap(trace::views::detail::scan::limit(v->p, n));
-    } catch (const std::exception&) {
-        return nullptr;
-    }
+    });
 }
 
 dftu_view* dftu_view_offset(const dftu_view* v, uint64_t n) {
     if (!v) return nullptr;
-    try {
+    return handle_or_null([&]() -> dftu_view* {
         return wrap(trace::views::detail::scan::offset(v->p, n));
-    } catch (const std::exception&) {
-        return nullptr;
-    }
+    });
 }
 
 dftu_view* dftu_view_sort_by(const dftu_view* v, const char* column,
                              int32_t descending) {
     if (!v || !column) return nullptr;
-    try {
+    return handle_or_null([&]() -> dftu_view* {
         return wrap(
             trace::views::detail::scan::sort_by(v->p, column, descending != 0));
-    } catch (const std::exception&) {
-        return nullptr;
-    }
+    });
 }
 
 dftu_view* dftu_view_group_by(const dftu_view* v, const dftu_group_key* keys,
                               int32_t n) {
     if (!v || n < 0 || (n > 0 && !keys)) return nullptr;
-    try {
+    return handle_or_null([&]() -> dftu_view* {
         dftracer::utils::dstd::Vector<GroupKey> ks;
         ks.reserve(static_cast<std::size_t>(n));
         for (int32_t i = 0; i < n; ++i) {
@@ -374,15 +368,13 @@ dftu_view* dftu_view_group_by(const dftu_view* v, const dftu_group_key* keys,
             ks.push_back(std::move(k));
         }
         return wrap(trace::views::detail::scan::group_by(v->p, std::move(ks)));
-    } catch (const std::exception&) {
-        return nullptr;
-    }
+    });
 }
 
 dftu_view* dftu_view_agg(const dftu_view* v, const dftu_view_agg_spec* specs,
                          int32_t n) {
     if (!v || n < 0 || (n > 0 && !specs)) return nullptr;
-    try {
+    return handle_or_null([&]() -> dftu_view* {
         dftracer::utils::dstd::Vector<AggSpec> ag;
         ag.reserve(static_cast<std::size_t>(n));
         for (int32_t i = 0; i < n; ++i) {
@@ -392,61 +384,71 @@ dftu_view* dftu_view_agg(const dftu_view* v, const dftu_view_agg_spec* specs,
                             specs[i].by ? specs[i].by : "", specs[i].q);
         }
         return wrap(trace::views::detail::scan::agg(v->p, std::move(ag)));
-    } catch (const std::exception&) {
-        return nullptr;
-    }
+    });
 }
 
 dftu_dataframe* dftu_view_collect(const dftu_view* v, dftu_runtime* rt) {
     if (!v) return nullptr;
-    try {
+    return handle_or_null([&]() -> dftu_dataframe* {
         auto frame =
             runtime_of(rt)
                 .submit(trace::views::detail::scan::collect_frame(v->p))
                 .get();
         if (!frame) return nullptr;
         return dataframe_handle_wrap(std::move(*frame));
-    } catch (const std::exception&) {
-        return nullptr;
-    }
+    });
 }
 
 dftu_lazyframe* dftu_view_lazy(const dftu_view* v) {
     if (!v) return nullptr;
-    try {
+    return handle_or_null([&]() -> dftu_lazyframe* {
         return lazyframe_handle_wrap(LazyFrame::scan(
             dftracer::utils::dstd::make_shared<ViewSource>(v->p)));
-    } catch (const std::exception&) {
-        return nullptr;
-    }
+    });
 }
 
 dftu_lazyframe* dftu_view_duql(const dftu_view* v, const char* text,
                                const char* const* names,
                                const char* const* values, int32_t n,
                                char** error) {
-    try {
-        const View view = duql_view(v, text);
-        LazyFrame plan = view.duql(text, duql_params(names, values, n)).lazy();
-        return lazyframe_handle_wrap(std::move(plan));
-    } catch (const std::exception& e) {
-        set_error(error, e.what());
+    auto view = duql_view(v, text);
+    if (!view) {
+        set_error(error, view.error().message());
         return nullptr;
     }
+    auto params = duql_params(names, values, n);
+    if (!params) {
+        set_error(error, params.error().message());
+        return nullptr;
+    }
+    const View planned = view->duql(text, *params);
+    if (auto kept = planned.status(); !kept) {
+        set_error(error, kept.error().message());
+        return nullptr;
+    }
+    return lazyframe_handle_wrap(LazyFrame(planned.lazy()));
 }
 
 char* dftu_view_explain_duql(const dftu_view* v, const char* text,
                              const char* const* names,
                              const char* const* values, int32_t n,
                              char** error) {
-    try {
-        const View view = duql_view(v, text);
-        return owned_string(
-            view.explain_duql(text, duql_params(names, values, n)));
-    } catch (const std::exception& e) {
-        set_error(error, e.what());
+    auto view = duql_view(v, text);
+    if (!view) {
+        set_error(error, view.error().message());
         return nullptr;
     }
+    auto params = duql_params(names, values, n);
+    if (!params) {
+        set_error(error, params.error().message());
+        return nullptr;
+    }
+    auto explained = view->explain_duql(text, *params);
+    if (!explained) {
+        set_error(error, explained.error().message());
+        return nullptr;
+    }
+    return owned_string(*explained);
 }
 
 }  // extern "C"

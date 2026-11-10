@@ -412,6 +412,41 @@ TEST_SUITE("viz_schema") {
               doctest::Approx(OTEL_REQUESTS * 5000.0));
     }
 
+    TEST_CASE("the columns endpoint refuses files of two record schemas") {
+        register_schemas();
+        auto s = dstd::make_unique<Served>("viz_schema_mixed");
+        write_gz(s->dir.path() / "a.pfw.gz", twin_dftracer());
+        write_gz(s->dir.path() / "b.pfw.gz", twin_generic());
+        s->index = dstd::make_unique<TraceIndex>(
+            dstd::String(s->dir.str()), dstd::String(s->dir.file("idx")));
+        Runtime rt(4);
+        auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+            co_await s->index->initialize();
+        });
+        dftu_utils_test::ok(rt.submit(std::move(task), "setup").wait());
+        rt.shutdown();
+        REQUIRE(s->index->file_count() == 2);
+        server::register_viz_api(s->router, *s->index);
+
+        HttpRequest req;
+        req.method = "GET";
+        req.path = "/api/viz/columns";
+        Runtime rt2(4);
+        int status = 0;
+        dstd::String body;
+        auto get_task =
+            coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                HttpResponse resp = co_await s->router.handle(req);
+                status = resp.status_code;
+                body = resp.body;
+                co_return;
+            });
+        dftu_utils_test::ok(rt2.submit(std::move(get_task), "get").wait());
+        rt2.shutdown();
+        CHECK(status == 400);
+        CHECK(body.find("one record schema") != dstd::String::npos);
+    }
+
     TEST_CASE("a trace served as dftracer and as generic records agree") {
         register_schemas();
         auto dft = serve("viz_schema_dft", twin_dftracer());

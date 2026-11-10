@@ -19,6 +19,7 @@
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
+#include <memory/fresh_process.h>
 #include <task_result.h>
 #include <testing_utilities.h>
 #include <utilities/plugins/test_plugin_common.h>
@@ -274,7 +275,9 @@ TEST_SUITE("PluginAttachHandle") {
         return total;
     }
 
-    TEST_CASE("reading the handle before execute() throws") {
+    TEST_CASE("reading the handle before execute() ends the process" *
+              doctest::skip()) {
+        fresh_process::announce_abort();
         dftu_utils_test::TestEnvironment env(0);
         REQUIRE(env.is_valid());
         dstd::Vector<ViewFile> files{test_plugin_common::index_trace(
@@ -291,7 +294,14 @@ TEST_SUITE("PluginAttachHandle") {
         trace::views::TraceSession sess = base.session();
         trace::views::Deferred<plugins::PluginRun> h =
             sess.collect(plugin_result);
-        CHECK_THROWS_AS(static_cast<void>(h->results), std::logic_error);
+        static_cast<void>(h->results);
+    }
+
+    TEST_CASE("reading the handle before execute() is fatal") {
+        auto result = fresh_process::run(
+            "reading the handle before execute() ends the process");
+        CHECK(result.aborted_with(
+            "ViewSession result read before execute() resolved it"));
     }
 
     // A sole plugin branch still resolves correctly through attach(); it just

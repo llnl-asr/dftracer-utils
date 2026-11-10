@@ -289,7 +289,7 @@ TEST_SUITE("View") {
                             dftracer::utils::trace::views::detail::Fold> {
                         return dstd::make_unique<CountFold>(total);
                     },
-                    []() {});
+                    []() { return dstd::Result<void>{}; });
                 return s.collect({GroupKey::cat()}, {{AggOp::Count, "", "n"}});
             });
         dataframe::DataFrame cat = dftu_utils_test::ok(plan.collect().get());
@@ -344,8 +344,9 @@ TEST_SUITE("View") {
                 .agg(count())
                 .collect()
                 .get());
-        auto rj = join_batches(ra, rb, 1, JoinType::Inner);
-        auto rc = comparator::CompareView::compare_batches(ra, rb, 1);
+        auto rj = dftu_utils_test::ok(join_batches(ra, rb, 1, JoinType::Inner));
+        auto rc = dftu_utils_test::ok(
+            comparator::CompareView::compare_batches(ra, rb, 1));
 
         // INNER join keeps only cat=posix (b is posix-only).
         REQUIRE(j->num_rows() == rj.num_rows());
@@ -542,10 +543,12 @@ TEST_SUITE("View") {
 
         // An op with no per-arg support (Hist) is still rejected on the dyn
         // path (only FieldStat/sketch-derivable reductions are allowed).
-        CHECK_THROWS_AS(View::from_file(dstd::String(gz), dstd::String(idx))
-                            .group_by({GroupKey::cat()})
-                            .agg_numeric_args({AggSpec(AggOp::Hist, "level")}),
-                        dftracer::utils::common::DFTUtilsException);
+        dftu_utils_test::expect_error(
+            View::from_file(dstd::String(gz), dstd::String(idx))
+                .group_by({GroupKey::cat()})
+                .agg_numeric_args({AggSpec(AggOp::Hist, "level")})
+                .status(),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
     }
 
     TEST_CASE("View - set_union collects distinct field values per group") {
@@ -593,9 +596,10 @@ TEST_SUITE("View") {
                  .aggregate_partial()
                  .collect()
                  .get()));
-        auto merged = View::from_file(dstd::String(gz), dstd::String(idx))
-                          .agg({{AggOp::SetUnion, "name", "names"}})
-                          .merge_partials({p});
+        auto merged = dftu_utils_test::ok(
+            View::from_file(dstd::String(gz), dstd::String(idx))
+                .agg({{AggOp::SetUnion, "name", "names"}})
+                .merge_partials({p}));
         REQUIRE(merged.num_rows() == 1);
         CHECK(bstr(merged, 0, "names") == joined);
 
@@ -749,7 +753,8 @@ TEST_SUITE("View") {
         // Partial + merge path (serializes the accumulator and back).
         dstd::String p =
             dftu_utils_test::ok(make().aggregate_partial().collect().get());
-        dataframe::DataFrame merged = make().merge_partials({p});
+        dataframe::DataFrame merged =
+            dftu_utils_test::ok(make().merge_partials({p}));
 
         REQUIRE(direct.num_rows() == 1);
         REQUIRE(merged.num_rows() == 1);
@@ -1246,7 +1251,7 @@ TEST_SUITE("View") {
                                     .collect()
                                     .get());
         StringSink merged;
-        view({}).merge_counter_partials({pa, pb}, merged);
+        dftu_utils_test::ok(view({}).merge_counter_partials({pa, pb}, merged));
 
         // Compare against aggregating both shards at once.
         StringSink single;
@@ -1327,8 +1332,8 @@ TEST_SUITE("View") {
         auto check = [&](const views::detail::scan::ScanPlan& v,
                          const dstd::Vector<dstd::String>& keys) {
             dstd::String p = run(views::detail::scan::aggregate_partial(v));
-            dataframe::DataFrame merged =
-                views::detail::scan::merge_partials_to_table(v, {p});
+            dataframe::DataFrame merged = dftu_utils_test::ok(
+                views::detail::scan::merge_partials_to_table(v, {p}));
             frames_equal(merged, engine_collect(v), keys);
         };
         // Numeric reductions, a percentile sketch, and SetUnion survive the
@@ -1350,8 +1355,9 @@ TEST_SUITE("View") {
         // Hist (a list<struct> column) round-trips bin for bin.
         views::detail::scan::ScanPlan vh =
             by(GroupKey::cat(), {{AggOp::Hist, "dur", "h"}});
-        dataframe::DataFrame mh = views::detail::scan::merge_partials_to_table(
-            vh, {run(views::detail::scan::aggregate_partial(vh))});
+        dataframe::DataFrame mh =
+            dftu_utils_test::ok(views::detail::scan::merge_partials_to_table(
+                vh, {run(views::detail::scan::aggregate_partial(vh))}));
         dataframe::DataFrame eh = engine_collect(vh);
         REQUIRE(mh.num_rows() == eh.num_rows());
         dstd::Map<dstd::String, std::int64_t> mrow, erow;
@@ -1397,7 +1403,7 @@ TEST_SUITE("View") {
                                     .collect()
                                     .get());
         StringSink merged;
-        view({}).merge_counter_partials({pa, pb}, merged);
+        dftu_utils_test::ok(view({}).merge_counter_partials({pa, pb}, merged));
 
         StringSink single;
         dftu_utils_test::ok(view({{dstd::String(a), dstd::String(ia)},
@@ -1426,11 +1432,13 @@ TEST_SUITE("View") {
         REQUIRE(!good.empty());
         dstd::String bad = good;
         bad[0] = static_cast<char>(0x7e);  // wrong version tag
-        CHECK_THROWS_AS(v.merge_partials({bad}),
-                        dftracer::utils::common::DFTUtilsException);
+        dftu_utils_test::expect_error(
+            v.merge_partials({bad}),
+            dftracer::utils::common::ErrorCode::Aggregation);
         // A present-but-empty partial (no tag byte) is also rejected loudly.
-        CHECK_THROWS_AS(v.merge_partials({dstd::StringView()}),
-                        dftracer::utils::common::DFTUtilsException);
+        dftu_utils_test::expect_error(
+            v.merge_partials({dstd::StringView()}),
+            dftracer::utils::common::ErrorCode::Aggregation);
     }
 
     TEST_CASE("View - group_by + time_bucket yields per-interval rows") {

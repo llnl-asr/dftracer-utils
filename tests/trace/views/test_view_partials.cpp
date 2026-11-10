@@ -294,7 +294,7 @@ TEST_SUITE("ViewPartials") {
         dftu_utils_test::ok(rt.block_on(coro::named(
             "materialize",
             coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                co_await rollup.materialize();
+                dftu_utils_test::ok(co_await rollup.materialize());
             }))));
         REQUIRE(rollup.reconstruct_if_cached().has_value());
         const Rows got =

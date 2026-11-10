@@ -287,7 +287,8 @@ dstd::Vector<dstd::String> run_oracle(const Corpus& c) {
                                     dstd::String(index_path), uc, members, 0});
                 vp.query = q;
                 vp.time_range = tr;
-                const auto vdef = trace::views::detail::make_vdef(vp, false);
+                const auto vdef = dftu_utils_test::ok(
+                    trace::views::detail::make_vdef(vp, false));
                 std::uint64_t skipped = 0;
                 auto units = dftu_utils_test::ok(
 
@@ -335,7 +336,7 @@ coro::CoroTask<std::uint64_t> scan_unit(
     auto sin = trace::views::detail::make_scanner_input(u, vdef, vdef.query);
     sin.with_batch_size(SCAN_BUFFER_BYTES);
     trace::views::ViewScannerUtility scanner;
-    auto gen = scanner(sin);
+    auto gen = dftu_utils_test::ok_items(scanner(sin));
     std::uint64_t n = 0;
     while (auto b = co_await gen.next()) n += b->events_matched;
     co_return n;
@@ -348,11 +349,12 @@ std::uint64_t count_view(const dstd::String& trace,
     vp.files.push_back(
         {dstd::String(trace), dstd::String(index_path), 0, 0, 0});
     vp.query = dftu_utils_test::ok(duql::Query::from_string(text));
-    const auto vdef = trace::views::detail::make_vdef(vp, false);
+    const auto vdef =
+        dftu_utils_test::ok(trace::views::detail::make_vdef(vp, false));
     auto run = [&]() -> coro::CoroTask<std::uint64_t> {
         std::uint64_t skipped = 0;
-        const auto units =
-            co_await trace::views::detail::gather_units(vp, vdef, skipped);
+        const auto units = dftu_utils_test::ok(
+            co_await trace::views::detail::gather_units(vp, vdef, skipped));
         std::uint64_t n = 0;
         for (const auto& u : units) n += co_await scan_unit(u, vdef);
         co_return n;
@@ -366,7 +368,8 @@ std::uint64_t count_view_unpruned(const dstd::String& trace,
                                   const dstd::String& text) {
     trace::views::detail::ViewPlan vp;
     vp.query = dftu_utils_test::ok(duql::Query::from_string(text));
-    const auto vdef = trace::views::detail::make_vdef(vp, false);
+    const auto vdef =
+        dftu_utils_test::ok(trace::views::detail::make_vdef(vp, false));
     const auto snapshot = dftu_utils_test::index_snapshot(index_path);
     const auto spans = dftu_utils_test::index_take(index::spans(
         snapshot, dftu_utils_test::require_indexed_file(snapshot, trace)));
@@ -446,7 +449,8 @@ dstd::Vector<std::uint64_t> view_chunks(const dstd::String& trace,
          dftu_utils_test::index_take(index::members(snapshot, file)).size(),
          0});
     vp.query = dftu_utils_test::ok(duql::Query::from_string(text));
-    const auto vdef = trace::views::detail::make_vdef(vp, false);
+    const auto vdef =
+        dftu_utils_test::ok(trace::views::detail::make_vdef(vp, false));
     std::uint64_t skipped = 0;
     dstd::Vector<std::uint64_t> out;
     const auto units = dftu_utils_test::ok(

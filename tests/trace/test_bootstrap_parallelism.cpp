@@ -76,7 +76,7 @@ dstd::Vector<dstd::String> export_lines(const dstd::Vector<dstd::String>& files,
     dftu_utils_test::ok(default_runtime().block_on(
         coro::named("bootstrap-export",
                     coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                        co_await view.sink_json(sink);
+                        dftu_utils_test::ok(co_await view.sink_json(sink));
                     }))));
     return sink.lines();
 }

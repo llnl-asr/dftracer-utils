@@ -125,7 +125,8 @@ TEST_SUITE("RawGzipFuse") {
             dstd::StringIntern intern;
             gmoracle::OracleAggFold a(rp, intern);
             std::array<Fold*, 1> folds{&a};
-            ViewDefinition vd = make_vdef(rp, /*for_aggregation=*/true);
+            ViewDefinition vd =
+                dftu_utils_test::ok(make_vdef(rp, /*for_aggregation=*/true));
             dftu_utils_test::ok(fuse(rp, vd, folds, intern).get());
             ref = a.map();
         }

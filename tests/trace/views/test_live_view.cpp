@@ -74,6 +74,12 @@ void put(const dstd::String& path, const dstd::String& bytes) {
     REQUIRE(dstd::fs::write_file(path, bytes).has_value());
 }
 
+View snap(LiveView& live) { return dftu_utils_test::ok(live.snapshot()); }
+
+dstd::Optional<View> rows(LiveView& live) {
+    return dftu_utils_test::ok(live.new_rows());
+}
+
 std::int64_t count(const View& v) {
     return static_cast<std::int64_t>(
         dftu_utils_test::ok(v.collect().get()).num_rows());
@@ -114,13 +120,13 @@ TEST_SUITE("LiveView") {
         put(gz, m0 + m1.substr(0, m1.size() / 2));
 
         LiveView live({gz});
-        CHECK(count(live.snapshot()) == ROWS);
+        CHECK(count(snap(live)) == ROWS);
         CHECK(verified(live) == m0.size());
         CHECK(skipped(live) == m1.size() / 2);
         CHECK(live.status()[0].state != LiveFileState::Hole);
 
         put(gz, m0 + m1);
-        CHECK(count(live.snapshot()) == 2 * ROWS);
+        CHECK(count(snap(live)) == 2 * ROWS);
         CHECK(skipped(live) == 0);
     }
 
@@ -132,7 +138,7 @@ TEST_SUITE("LiveView") {
         put(gz, m0 + dstd::String(m1.size(), '\0') + m2);
 
         LiveView live({gz});
-        CHECK(count(live.snapshot()) == ROWS);
+        CHECK(count(snap(live)) == ROWS);
         REQUIRE(live.status().size() == 1);
         CHECK(live.status()[0].path == gz);
         CHECK(live.status()[0].state == LiveFileState::Hole);
@@ -140,7 +146,7 @@ TEST_SUITE("LiveView") {
         CHECK(live.status()[0].hole_bytes == m1.size());
 
         put(gz, m0 + m1 + m2);
-        CHECK(count(live.snapshot()) == 3 * ROWS);
+        CHECK(count(snap(live)) == 3 * ROWS);
         CHECK(live.status()[0].state != LiveFileState::Hole);
     }
 
@@ -154,7 +160,7 @@ TEST_SUITE("LiveView") {
         put(gz, m0 + bad);
 
         LiveView live({gz});
-        CHECK(count(live.snapshot()) == ROWS);
+        CHECK(count(snap(live)) == ROWS);
         CHECK(verified(live) == m0.size());
         CHECK(skipped(live) == bad.size());
     }
@@ -165,15 +171,15 @@ TEST_SUITE("LiveView") {
         const dstd::String gz = env.dir() + "/a.pfw.gz";
         put(gz, member(0) + member(100));
         LiveView live({gz});
-        CHECK(count(live.snapshot()) == 2 * ROWS);
+        CHECK(count(snap(live)) == 2 * ROWS);
 
         const dstd::String other = member(500);
         put(gz, other.substr(0, other.size() / 2));
-        CHECK(count(live.snapshot()) == 0);
+        CHECK(count(snap(live)) == 0);
         CHECK(verified(live) == 0);
 
         put(gz, other);
-        CHECK(count(live.snapshot()) == ROWS);
+        CHECK(count(snap(live)) == ROWS);
     }
 
     TEST_CASE("a directory is scanned again and its new files join") {
@@ -184,11 +190,11 @@ TEST_SUITE("LiveView") {
         put(dir + "/rank0/a.pfw.gz", member(0));
         // Inside the traces, so a rescan must not read the snapshots back.
         LiveView live({dir});
-        CHECK(count(live.snapshot()) == ROWS);
+        CHECK(count(snap(live)) == ROWS);
 
         put(dir + "/b-spill.pfw.gz", member(100));
-        CHECK(count(live.snapshot()) == 2 * ROWS);
-        CHECK(count(live.snapshot()) == 2 * ROWS);
+        CHECK(count(snap(live)) == 2 * ROWS);
+        CHECK(count(snap(live)) == 2 * ROWS);
     }
 
     TEST_CASE("several new files are all read") {
@@ -199,14 +205,14 @@ TEST_SUITE("LiveView") {
         put(a, member(0));
         put(b, member(100));
         LiveView live({a, b});
-        CHECK(count(live.snapshot()) == 2 * ROWS);
+        CHECK(count(snap(live)) == 2 * ROWS);
     }
 
-    TEST_CASE("a named file that does not exist throws") {
+    TEST_CASE("a named file that does not exist is an Io error") {
         TestEnvironment env(10);
         REQUIRE(env.is_valid());
         LiveView live({env.dir() + "/absent.pfw.gz"});
-        CHECK_THROWS(live.snapshot());
+        expect_error(live.snapshot(), common::ErrorCode::Io);
     }
 
     TEST_CASE("an old view keeps its rows after the file grows") {
@@ -216,14 +222,14 @@ TEST_SUITE("LiveView") {
         const dstd::String m0 = member(0), m1 = member(100);
         put(gz, m0);
         LiveView live({gz});
-        const View first = live.snapshot();
+        const View first = snap(live);
         CHECK(count(first) == ROWS);
         const auto current = dstd::make_shared<ScanCounter>();
         CHECK(total_rows(first, current) == ROWS);
         CHECK(current->chunks_scanned.load() == 0);
 
         put(gz, m0 + m1);
-        const View second = live.snapshot();
+        const View second = snap(live);
         CHECK(count(second) == 2 * ROWS);
         const auto newest = dstd::make_shared<ScanCounter>();
         CHECK(total_rows(second, newest) == 2 * ROWS);
@@ -242,12 +248,12 @@ TEST_SUITE("LiveView") {
         const dstd::String m0 = member(0);
         put(gz, m0.substr(0, m0.size() / 2));
         LiveView live({gz});
-        CHECK(count(live.snapshot()) == 0);
+        CHECK(count(snap(live)) == 0);
         REQUIRE(live.status().size() == 1);
         CHECK(live.status()[0].verified_bytes == 0);
         CHECK(live.status()[0].state == LiveFileState::Tail);
         put(gz, m0);
-        CHECK(count(live.snapshot()) == ROWS);
+        CHECK(count(snap(live)) == ROWS);
         CHECK(live.status()[0].state == LiveFileState::Whole);
     }
 
@@ -258,29 +264,29 @@ TEST_SUITE("LiveView") {
         const dstd::String m0 = member(0), m1 = member(100), m2 = member(200);
         put(gz, m0);
         LiveView live({gz});
-        auto first = live.new_rows();
+        auto first = rows(live);
         REQUIRE(first.has_value());
         CHECK(count(*first) == ROWS);
-        CHECK_FALSE(live.new_rows().has_value());
+        CHECK_FALSE(rows(live).has_value());
 
         put(gz, m0 + m1);
-        CHECK(count(live.snapshot()) == 2 * ROWS);
-        auto second = live.new_rows();
+        CHECK(count(snap(live)) == 2 * ROWS);
+        auto second = rows(live);
         REQUIRE(second.has_value());
         CHECK(count(*second) == ROWS);
         CHECK(total_rows(*second) == ROWS);
-        CHECK_FALSE(live.new_rows().has_value());
+        CHECK_FALSE(rows(live).has_value());
 
         put(gz, m0 + m1 + m2.substr(0, m2.size() / 2));
-        CHECK_FALSE(live.new_rows().has_value());
+        CHECK_FALSE(rows(live).has_value());
         put(gz, m0 + m1 + m2);
-        auto third = live.new_rows();
+        auto third = rows(live);
         REQUIRE(third.has_value());
         CHECK(count(*third) == ROWS);
 
         CHECK(count(*first) == ROWS);
         CHECK(count(*second) == ROWS);
-        CHECK(count(live.snapshot()) == 3 * ROWS);
+        CHECK(count(snap(live)) == 3 * ROWS);
     }
 
     TEST_CASE("new rows keep a line that ends in a later member") {
@@ -294,15 +300,15 @@ TEST_SUITE("LiveView") {
         const dstd::String rest = gzip_member(line.substr(20) + "\n");
         put(gz, m0);
         LiveView live({gz});
-        REQUIRE(live.new_rows().has_value());
+        REQUIRE(rows(live).has_value());
 
         put(gz, m0 + open);
-        CHECK_FALSE(live.new_rows().has_value());
+        CHECK_FALSE(rows(live).has_value());
         put(gz, m0 + open + rest);
-        auto later = live.new_rows();
+        auto later = rows(live);
         REQUIRE(later.has_value());
         CHECK(count(*later) == 1);
-        CHECK_FALSE(live.new_rows().has_value());
+        CHECK_FALSE(rows(live).has_value());
     }
 
     TEST_CASE("new rows start over when a new file replaces the old one") {
@@ -313,15 +319,15 @@ TEST_SUITE("LiveView") {
         const dstd::String a = member(300), b = member(400), c = member(500);
         put(gz, m0 + m1);
         LiveView live({gz});
-        REQUIRE(live.new_rows().has_value());
+        REQUIRE(rows(live).has_value());
 
         put(gz, a);
-        auto shorter = live.new_rows();
+        auto shorter = rows(live);
         REQUIRE(shorter.has_value());
         CHECK(count(*shorter) == ROWS);
 
         put(gz, b + c + a);
-        auto longer = live.new_rows();
+        auto longer = rows(live);
         REQUIRE(longer.has_value());
         CHECK(count(*longer) == 3 * ROWS);
     }
@@ -333,10 +339,10 @@ TEST_SUITE("LiveView") {
         REQUIRE(dstd::fs::create_directories(dir).has_value());
         put(dir + "/a.pfw.gz", member(0));
         LiveView live({dir});
-        REQUIRE(live.new_rows().has_value());
+        REQUIRE(rows(live).has_value());
 
         put(dir + "/b.pfw.gz", member(100));
-        auto joined = live.new_rows();
+        auto joined = rows(live);
         REQUIRE(joined.has_value());
         CHECK(count(*joined) == ROWS);
     }
@@ -356,11 +362,11 @@ TEST_SUITE("LiveView") {
         const char* query = "where name in (from data | select name)";
         put(gz, m0);
         LiveView live({gz});
-        REQUIRE(live.new_rows().has_value());
+        REQUIRE(rows(live).has_value());
         put(gz, m0 + gzip_member(std::move(late)));
-        auto fresh = live.new_rows();
+        auto fresh = rows(live);
         REQUIRE(fresh.has_value());
-        const View whole = live.snapshot();
+        const View whole = snap(live);
 
         CHECK(count(fresh->duql(query)) == ROWS);
         CHECK(count(whole.duql(query)) == 2 * ROWS);
@@ -381,9 +387,9 @@ TEST_SUITE("LiveView") {
         }
         put(gz, m0);
         LiveView live({gz});
-        const View old = live.snapshot();
+        const View old = snap(live);
         put(gz, m0 + gzip_member(std::move(late)));
-        const View newest = live.snapshot();
+        const View newest = snap(live);
 
         const auto old_leaves = leaf_counts(old);
         CHECK(old_leaves.at("name") == ROWS);
@@ -420,12 +426,12 @@ fields:
             dftu_utils_test::ok(index::Indexer::open({gz}, options)).build());
 
         LiveView live({gz});
-        const View old = live.snapshot();
+        const View old = snap(live);
         const auto before = bucket_counts(old);
         CHECK(before.begin()->first == 1000);
 
         put(gz, m0 + records(7));
-        const View newest = live.snapshot();
+        const View newest = snap(live);
         CHECK(bucket_counts(old) == before);
         CHECK(bucket_counts(newest).begin()->first == 7);
     }
@@ -436,7 +442,7 @@ fields:
         const dstd::String gz = env.dir() + "/a.pfw.gz";
         put(gz, member(0));
         LiveView live({gz});
-        const View first = live.snapshot();
+        const View first = snap(live);
 
         std::atomic<bool> is_done{false};
         std::atomic<std::int64_t> wrong_rows{ROWS};
@@ -453,7 +459,7 @@ fields:
         // the reader for a moment.
         for (int step = 1; step <= 12; ++step) {
             REQUIRE(dstd::fs::append_file(gz, member(100 * step)).has_value());
-            CHECK(count(live.snapshot()) == (step + 1) * ROWS);
+            CHECK(count(snap(live)) == (step + 1) * ROWS);
         }
         is_done.store(true);
         reader.join();

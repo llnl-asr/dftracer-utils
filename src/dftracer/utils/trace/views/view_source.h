@@ -140,7 +140,8 @@ class ViewSource : public dftracer::utils::dataframe::Source {
     /// phase, group-by, aggregates, select, time bucket) is not part of it.
     /// None for a plan the session cannot run as a branch.
     dstd::Optional<dstd::String> batch_key() const override;
-    coro::CoroTask<dstd::Vector<dftracer::utils::dataframe::DataFrame>>
+    coro::CoroTask<
+        dstd::Result<dstd::Vector<dftracer::utils::dataframe::DataFrame>>>
     collect_batch(
         dstd::Vector<dstd::SharedPtr<const dftracer::utils::dataframe::Source>>
             members) const override;
@@ -166,7 +167,7 @@ class ViewSource : public dftracer::utils::dataframe::Source {
     /// Run `members`, which share one batch_key(), as branches of one
     /// ViewSession: an aggregation as collect(), a row query as
     /// collect_events().
-    static coro::CoroTask<Batch> run_batch(
+    static coro::CoroTask<dstd::Result<Batch>> run_batch(
         dstd::Vector<dstd::SharedPtr<const ViewSource>> members);
 
     /// The plan this source scans.
@@ -179,15 +180,6 @@ class ViewSource : public dftracer::utils::dataframe::Source {
         const dftracer::utils::dataframe::ScanRequest& req) const override;
 
    private:
-    dftracer::utils::dataframe::ScanResult scan_or_throw(
-        const dftracer::utils::dataframe::ScanRequest& req) const;
-    dstd::Optional<
-        dstd::Vector<dstd::UniquePtr<dftracer::utils::dataframe::Cursor>>>
-    open_batch_or_throw(
-        dstd::Vector<dstd::SharedPtr<const dftracer::utils::dataframe::Source>>
-            members,
-        std::uint64_t memory_budget) const;
-
     /// The session every member of a batch shares: their files and scan
     /// settings, with no member's own shape.
     static ViewSession base_session(const detail::ViewPlan& p);
@@ -200,7 +192,7 @@ class ViewSource : public dftracer::utils::dataframe::Source {
                  const dstd::Vector<const ViewSource*>& members,
                  const dstd::Vector<bool>& skip);
 
-    dftracer::utils::dataframe::Schema compute_schema() const;
+    dstd::Result<dftracer::utils::dataframe::Schema> compute_schema() const;
 
     /// A row query with no sort/topk/pagination/select - the post-scan ops
     /// run_collect_rows applies after the fuse, which streaming cannot.
@@ -224,17 +216,23 @@ class ViewSource : public dftracer::utils::dataframe::Source {
         const detail::ScanPlan& v, std::uint64_t memory_budget,
         dstd::Vector<dstd::String> fnames) const;
 
-    dstd::SharedPtr<const dftracer::utils::dataframe::DataFrame> buffer()
-        const {
-        if (!buf_)
+    /// The frame of a scan of this source's own, kept after the first; an
+    /// error is not kept, so the next call runs the scan again.
+    dstd::Result<dstd::SharedPtr<const dftracer::utils::dataframe::DataFrame>>
+    buffer() const {
+        if (!buf_) {
+            auto frame = run_alone().get();
+            if (!frame) return frame.error();
             buf_ =
                 dstd::make_shared<const dftracer::utils::dataframe::DataFrame>(
-                    common::unwrap(run_alone().get()));
+                    std::move(*frame));
+        }
         return buf_;
     }
 
     /// This source's frame from a scan of its own.
-    coro::CoroTask<dftracer::utils::dataframe::DataFrame> run_alone() const;
+    coro::CoroTask<dstd::Result<dftracer::utils::dataframe::DataFrame>>
+    run_alone() const;
 
     detail::ScanPlan plan_;
     TraceOutput output_ = TraceOutput::Events;

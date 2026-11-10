@@ -1105,8 +1105,9 @@ TEST_SUITE("View") {
             for (const Probe& p : probes) {
                 const auto part = dftu_utils_test::ok(
                     view(p.gb).aggregate_partial().collect().get());
-                CHECK(groups(view(p.gb).merge_partials({part}), p.cols) ==
-                      p.want);
+                CHECK(groups(dftu_utils_test::ok(
+                                 view(p.gb).merge_partials({part})),
+                             p.cols) == p.want);
             }
         }
         SUBCASE("rollup: coarsened and same grain") {
@@ -1137,7 +1138,7 @@ TEST_SUITE("View") {
             const dataframe::DataFrame r = dftu_utils_test::ok(
                 view({GroupKey::field("args.s")}).collect().get());
             const dataframe::DataFrame j =
-                join_batches(r, r, 1, JoinType::Inner);
+                dftu_utils_test::ok(join_batches(r, r, 1, JoinType::Inner));
             REQUIRE(j.num_rows() == 3);
             Groups got;
             for (std::int64_t i = 0; i < j.num_rows(); ++i) {

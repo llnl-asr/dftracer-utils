@@ -900,13 +900,13 @@ coro::CoroTask<ProvenanceGraph> extract_provenance_graph(
     // them to whatever event the app relates), so scan everything and let a
     // byte-level prefilter skip lines that cannot hold provenance.
     views::View v = view.phase(views::Phase::Any);
-    auto scan = co_await v.map_batches<Acc>(
+    auto scan = common::unwrap(co_await v.map_batches<Acc>(
         [](Acc& a, const dstd::Vector<dstd::StringView>& events) {
             for (auto ev : events)
                 if (maybe_provenance(ev)) ingest(a, ev);
         },
         [](Acc&& x, Acc&& y) { return merge(std::move(x), std::move(y)); },
-        slot_count, 0);
+        slot_count, 0));
     ProvenanceGraph g = finish(std::move(scan.value));
     if (!options.include_io || g.activities.empty()) co_return g;
 
@@ -917,14 +917,14 @@ coro::CoroTask<ProvenanceGraph> extract_provenance_graph(
         "name == \"SH\" or name == \"start\"");
     if (!io_query) throw duql::DuqlParseError(io_query.error());
     views::View io = view.phase(views::Phase::Any).filter(std::move(*io_query));
-    auto ios = co_await io.map_batches<IoAcc>(
+    auto ios = common::unwrap(co_await io.map_batches<IoAcc>(
         [&spans](IoAcc& a, const dstd::Vector<dstd::StringView>& events) {
             for (auto ev : events) ingest_io(a, spans, ev);
         },
         [](IoAcc&& x, IoAcc&& y) {
             return merge_io(std::move(x), std::move(y));
         },
-        slot_count, 0);
+        slot_count, 0));
     IoAcc& io_acc = ios.value;
     g.stats.io_events = io_acc.events;
     g.stats.io_attributed = io_acc.attributed;

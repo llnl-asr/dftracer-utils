@@ -14,6 +14,7 @@
 #include <dftracer/utils/trace/views/view_scanner_utility.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <doctest/doctest.h>
+#include <generator_ok.h>
 #include <task_result.h>
 #include <testing_utilities.h>
 
@@ -81,7 +82,7 @@ struct CollectedViewOutput {
 static coro::CoroTask<CollectedViewOutput> collect_view_coro(
     ViewScannerUtility* reader, ViewScannerInput input) {
     CollectedViewOutput output;
-    auto gen = (*reader)(input);
+    auto gen = dftu_utils_test::ok_items((*reader)(input));
     while (auto batch = co_await gen.next()) {
         output.events_matched += batch->events_matched;
         output.events_scanned += batch->events_scanned;

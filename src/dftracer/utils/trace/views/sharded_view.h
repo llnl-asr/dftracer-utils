@@ -35,11 +35,11 @@ class ShardedView {
     using Configure = dstd::Function<View(View)>;
 
     /// Discover shards by reading `<root>/shards.json`; each shard's `path`
-    /// resolves relative to `root`. Empty shards are dropped. Throws
-    /// @ref dftracer::utils::common::DFTUtilsException "DFTUtilsException" when
-    /// the manifest is absent, unreadable, or built with a schema version this
-    /// build cannot read.
-    static ShardedView from_manifest(const dstd::String& root);
+    /// resolves relative to `root`. Empty shards are dropped. An Io error
+    /// result when the manifest is absent or unreadable, and an
+    /// InvalidArgument one when it was built with a schema version this build
+    /// cannot read.
+    static dstd::Result<ShardedView> from_manifest(const dstd::String& root);
 
     /// Use an explicit set of shard index directories, bypassing the manifest.
     static ShardedView from_shard_dirs(dstd::Vector<dstd::String> shard_dirs);
@@ -48,22 +48,23 @@ class ShardedView {
 
     /// Aggregate (group_by/agg) across all shards into one table. `configure`
     /// must set an aggregation; a raw-event configuration has no partial to
-    /// merge.
-    coro::CoroTask<dftracer::utils::dataframe::DataFrame> aggregate(
-        Configure configure) const;
+    /// merge. The error of a shard that cannot be read or aggregated is the
+    /// result.
+    coro::CoroTask<dstd::Result<dftracer::utils::dataframe::DataFrame>>
+    aggregate(Configure configure) const;
 
     /// Aggregate a counter query across all shards, emitting the merged rows as
     /// ph="C" counter events into `sink`.
-    coro::CoroTask<ExportStats> aggregate_counters(Configure configure,
-                                                   ExportSink& sink) const;
+    coro::CoroTask<dstd::Result<ExportStats>> aggregate_counters(
+        Configure configure, ExportSink& sink) const;
 
    private:
     explicit ShardedView(dstd::Vector<dstd::String> shard_dirs)
         : shard_dirs_(std::move(shard_dirs)) {}
 
-    dstd::Vector<ViewFile> shard_view_files(
+    dstd::Result<dstd::Vector<ViewFile>> shard_view_files(
         const dstd::String& shard_dir) const;
-    dstd::Vector<View> shards(const Configure& configure) const;
+    dstd::Result<dstd::Vector<View>> shards(const Configure& configure) const;
 
     dstd::Vector<dstd::String> shard_dirs_;
 };
@@ -73,29 +74,31 @@ class ShardedView {
 /// its file count. A shard path is stored relative to `root` when it lives
 /// under it, so a shard under `<root>/shards/` is stored as `shards/<n>`, else
 /// absolute. Overwrites any existing manifest atomically. A later
-/// `ShardedView::from_manifest(root)` reads the set back.
-void write_shard_set(const dstd::String& root,
-                     const dstd::Vector<dstd::String>& shard_dirs);
+/// `ShardedView::from_manifest(root)` reads the set back. The error of a shard
+/// that cannot be opened, or of the manifest write, is the result.
+dstd::Result<void> write_shard_set(
+    const dstd::String& root, const dstd::Vector<dstd::String>& shard_dirs);
 
 /// Merge the shards the root's `shards.json` names into the root's own store,
 /// by moving each shard's data files, and return the number of trace files the
 /// shards indexed. Removes the manifest and the emptied shard directories once
 /// every file moved, so a later query over `root` opens one index.
 ///
-/// Throws @ref dftracer::utils::common::DFTUtilsException "DFTUtilsException"
-/// when the root has no manifest, and when a file cannot move: the files that
-/// did not move stay in their shard, with the manifest and the shard
-/// directories, so a later call retries the merge without a rebuild. Releases
-/// the handles of the root and of every shard.
-std::size_t consolidate_shard_set(const dstd::String& root);
+/// An Io error result when the root has no manifest, and the error of the move
+/// when a file cannot move: the files that did not move stay in their shard,
+/// with the manifest and the shard directories, so a later call retries the
+/// merge without a rebuild. Releases the handles of the root and of every
+/// shard.
+dstd::Result<std::size_t> consolidate_shard_set(const dstd::String& root);
 
 /// Merge a shard set's aggregation tiers into one consolidated tier index at
 /// `out_root` WITHOUT re-reading traces. Each shard's tier is re-keyed into a
 /// unified intern dictionary and combined by the merge operator, so the result
 /// answers tier-covered queries from one index, while the shards stay in place.
-/// Returns the number of files cataloged.
-std::size_t merge_shard_set(const dstd::String& root,
-                            const dstd::String& out_root);
+/// Returns the number of files cataloged, or the error of the manifest, a shard
+/// or the write.
+dstd::Result<std::size_t> merge_shard_set(const dstd::String& root,
+                                          const dstd::String& out_root);
 
 }  // namespace dftracer::utils::trace::views
 

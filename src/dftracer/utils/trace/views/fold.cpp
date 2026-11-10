@@ -3106,8 +3106,10 @@ coro::CoroTask<void> fuse_worker(FuseWorkerCtx ctx, std::size_t w) {
         auto gen = scanner(sin);
         bool complete = true;
         for (;;) {
-            auto b = co_await gen.next();
-            if (!b) break;
+            auto next = co_await gen.next();
+            if (!next) break;
+            auto batch = common::unwrap(std::move(*next));
+            auto* b = &batch;
             if (is_cancelled(ctx.plan)) {
                 complete = false;
                 break;
@@ -3166,7 +3168,7 @@ coro::CoroTask<ExportStats> fuse(const ViewPlan& plan,
         vdef.path_fields.clear();
     }
     std::uint64_t skipped = 0;
-    auto units = co_await gather_units(plan, vdef, skipped);
+    auto units = common::unwrap(co_await gather_units(plan, vdef, skipped));
     for (std::size_t i = 0; i < units.size(); ++i) units[i].seq = i;
     const std::uint64_t cap =
         limit > 0 ? limit : std::numeric_limits<std::uint64_t>::max();

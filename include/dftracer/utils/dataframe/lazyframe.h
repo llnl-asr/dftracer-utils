@@ -320,10 +320,10 @@ class Source {
     /// One frame per member, in order, each what collecting that member alone
     /// would return. Called on members.front(); every member shares its
     /// batch_key(). The default is fatal: a source that returns a batch_key()
-    /// must override it. An override may throw, as next() of a cursor may: the
-    /// engine awaits it through @ref coro::settle and turns an exception into
-    /// an error result.
-    virtual coro::CoroTask<dstd::Vector<DataFrame>> collect_batch(
+    /// must override it. An error result fails the collect. An override may
+    /// also throw, as next() of a cursor may: the engine awaits it through
+    /// @ref coro::settle and turns an exception into an error result.
+    virtual coro::CoroTask<dstd::Result<dstd::Vector<DataFrame>>> collect_batch(
         dstd::Vector<dstd::SharedPtr<const Source>> members) const;
     /// One cursor per member, in order, over one shared read that runs in the
     /// background, each yielding what scanning that member alone would. Each
@@ -847,8 +847,8 @@ coro::CoroTask<dstd::Result<dstd::Vector<DataFrame>>> collect_all(
 /// together, and the step that turns their frames into a `T`. A source-specific
 /// terminal (a trace flamegraph partial, a sink's stats) is one, and
 /// collect_all() batches its plans with every other root's. The finish step is
-/// the caller's code and may throw; collect() runs in the caller's translation
-/// unit.
+/// the caller's code; its error result is the result of collect(), and it may
+/// also throw: collect() runs in the caller's translation unit.
 template <class T>
 class LazyResult {
    public:
@@ -856,15 +856,18 @@ class LazyResult {
     /// A shared, copyable handle on the step that turns frames into a `T`.
     class Finish {
        public:
-        using Fn = dstd::Function<coro::CoroTask<T>(dstd::Vector<DataFrame>)>;
+        using Fn = dstd::Function<coro::CoroTask<dstd::Result<T>>(
+            dstd::Vector<DataFrame>)>;
 
         template <class F>
             requires(!std::is_same_v<std::decay_t<F>, Finish> &&
-                     std::is_invocable_r_v<coro::CoroTask<T>, std::decay_t<F>&,
+                     std::is_invocable_r_v<coro::CoroTask<dstd::Result<T>>,
+                                           std::decay_t<F>&,
                                            dstd::Vector<DataFrame>>)
         Finish(F&& f) : fn_(dstd::make_shared<Fn>(std::forward<F>(f))) {}
 
-        coro::CoroTask<T> operator()(dstd::Vector<DataFrame> frames) const {
+        coro::CoroTask<dstd::Result<T>> operator()(
+            dstd::Vector<DataFrame> frames) const {
             return (*fn_)(std::move(frames));
         }
 
@@ -892,7 +895,7 @@ class LazyResult {
             if (!collected) co_return collected.error();
             frames = std::move(*collected);
         }
-        T value = co_await finish(std::move(frames));
+        auto value = co_await finish(std::move(frames));
         co_return std::move(value);
     }
 
@@ -903,8 +906,8 @@ class LazyResult {
 namespace detail {
 
 template <class T>
-coro::CoroTask<T> ready(T value) {
-    co_return value;
+coro::CoroTask<dstd::Result<T>> ready(T value) {
+    co_return std::move(value);
 }
 
 inline LazyResult<DataFrame> as_result(LazyFrame plan) {
@@ -923,17 +926,22 @@ using ResultOfRoot =
     typename decltype(as_result(std::declval<R>()))::value_type;
 
 template <std::size_t I, class Results, class Out>
-coro::CoroTask<void> finish_roots(Results& results,
-                                  dstd::Vector<DataFrame>& frames,
-                                  std::size_t at, Out& out) {
+coro::CoroTask<dstd::Result<void>> finish_roots(Results& results,
+                                                dstd::Vector<DataFrame>& frames,
+                                                std::size_t at, Out& out) {
     if constexpr (I < std::tuple_size_v<Results>) {
         auto& r = std::get<I>(results);
         const std::size_t n = r.plans().size();
         dstd::Vector<DataFrame> mine(
             std::make_move_iterator(frames.begin() + at),
             std::make_move_iterator(frames.begin() + at + n));
-        std::get<I>(out) = co_await r.finish()(std::move(mine));
-        co_await finish_roots<I + 1>(results, frames, at + n, out);
+        auto value = co_await r.finish()(std::move(mine));
+        if (!value) co_return value.error();
+        std::get<I>(out) = std::move(*value);
+        auto rest = co_await finish_roots<I + 1>(results, frames, at + n, out);
+        co_return rest;
+    } else {
+        co_return dstd::Result<void>{};
     }
 }
 
@@ -961,7 +969,8 @@ collect_all(R... roots) {
         frames = std::move(*collected);
     }
     dstd::Tuple<detail::ResultOfRoot<R>...> out;
-    co_await detail::finish_roots<0>(results, frames, 0, out);
+    auto finished = co_await detail::finish_roots<0>(results, frames, 0, out);
+    if (!finished) co_return finished.error();
     co_return std::move(out);
 }
 

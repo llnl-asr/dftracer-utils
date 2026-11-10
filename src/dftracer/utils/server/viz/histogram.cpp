@@ -104,7 +104,7 @@ coro::CoroTask<HttpResponse> handle_viz_histogram(const HttpRequest& req,
             .cancel_when([&req]() { return req.cancel_token.cancelled(); });
     if (view.query) dv = dv.filter(*view.query);
     if (!single_file || fields.by_path) dv = dv.time_range(begin, end);
-    auto scan = co_await dv.map_batches<DurAcc>(
+    auto scan = common::unwrap(co_await dv.map_batches<DurAcc>(
         [&fields](DurAcc& a, const dstd::Vector<dstd::StringView>& events) {
             fields.for_each_event(events, [&a](dstd::StringView e) {
                 EventScalars s;
@@ -117,7 +117,7 @@ coro::CoroTask<HttpResponse> handle_viz_histogram(const HttpRequest& req,
             for (double d : y.durs) x.durs.push_back(d);
             return std::move(x);
         },
-        slots, limit > 0 ? static_cast<std::uint64_t>(limit) : 0);
+        slots, limit > 0 ? static_cast<std::uint64_t>(limit) : 0));
 
     bool truncated = scan.stats.truncated;
     dstd::Vector<double> all = std::move(scan.value.durs);

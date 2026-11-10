@@ -198,11 +198,12 @@ bool query_matches(json::Value& event, const duql::Query& query,
 
 // A lookup that failed on a record left its error in its slot, since the
 // evaluator returns one value per record; the scan raises it between chunks.
-void check_lookups(const duql::Query& query) {
+dstd::Result<void> check_lookups(const duql::Query& query) {
     if (const auto failure =
             duql::lookup_failure(duql::detail::QueryAccess::root(query)))
-        throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
-                                        failure->message.c_str());
+        return common::make_error(common::ErrorCode::InvalidArgument,
+                                  failure->message);
+    return {};
 }
 
 struct LineScan {
@@ -449,8 +450,8 @@ static EventProbe probe_event(const char* data, std::size_t n,
     return p;
 }
 
-coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
-    const ViewScannerInput& input) {
+coro::AsyncGenerator<dstd::Result<ViewScannerBatch>>
+ViewScannerUtility::operator()(const ViewScannerInput& input) {
     DFTRACER_UTILS_TRACE_SCOPE("read view");
     const dstd::Optional<duql::Query>* query_src =
         input.query ? &input.query : &input.view.query;
@@ -474,12 +475,21 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
     }
     dstd::SharedPtr<utilities::reader::internal::Reader> reader;
     if (input.indexer) {
-        reader = common::unwrap(
-            utilities::reader::internal::ReaderFactory::create(input.indexer));
+        auto made =
+            utilities::reader::internal::ReaderFactory::create(input.indexer);
+        if (!made) {
+            co_yield dstd::Result<ViewScannerBatch>(made.error());
+            co_return;
+        }
+        reader = std::move(*made);
     } else {
         utilities::fileio::IndexedFileReaderUtility reader_utility;
         auto made = co_await reader_utility(reader_input);
-        reader = common::unwrap(std::move(made));
+        if (!made) {
+            co_yield dstd::Result<ViewScannerBatch>(made.error());
+            co_return;
+        }
+        reader = std::move(*made);
     }
 
     // Candidates are gzip-member-aligned byte ranges. A member's last event has
@@ -489,7 +499,7 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
     // straddling event is read here; the next member then opens on that '\n'
     // and skips the resulting empty leading line, so nothing is dropped or
     // doubled.
-    auto stream = common::unwrap(reader->stream(
+    auto opened = reader->stream(
         utilities::reader::internal::StreamConfig()
             .stream_type(
                 utilities::reader::internal::StreamType::MultiLinesBytes)
@@ -497,7 +507,12 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
             .buffer_size(input.batch_size)
             .extend_to_line_boundary(true)
             .from(input.start_byte)
-            .to(input.end_byte)));
+            .to(input.end_byte));
+    if (!opened) {
+        co_yield dstd::Result<ViewScannerBatch>(opened.error());
+        co_return;
+    }
+    auto stream = std::move(*opened);
 
     ViewScannerBatch batch;
     detail::FoldEventBuffer local_pool;
@@ -522,7 +537,11 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
 
     while (!stream->done()) {
         auto read = co_await stream->read_async();
-        const auto chunk = common::unwrap(std::move(read));
+        if (!read) {
+            co_yield dstd::Result<ViewScannerBatch>(read.error());
+            co_return;
+        }
+        const auto chunk = *read;
         if (chunk.empty()) break;
 
         const char* data = chunk.data();
@@ -586,13 +605,17 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
             pos = (newline - data) + 1;
         }
 
-        if (use_query) check_lookups(*query);
+        if (use_query)
+            if (auto looked_up = check_lookups(*query); !looked_up) {
+                co_yield dstd::Result<ViewScannerBatch>(looked_up.error());
+                co_return;
+            }
 
         // Yield at end of each chunk, string_view events point into
         // chunk data which is valid until the next co_await read_async().
         if (!batch.events.empty() || !pool.empty() || batch.lines_invalid > 0) {
             batch.fold_events = pool.events();
-            co_yield std::move(batch);
+            co_yield dstd::Result<ViewScannerBatch>(std::move(batch));
             batch = ViewScannerBatch{};
             pool.clear();
         }
@@ -601,7 +624,7 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
     // Final batch: normally empty since batches are yielded per chunk above.
     if (!batch.events.empty() || !pool.empty() || batch.lines_invalid > 0) {
         batch.fold_events = pool.events();
-        co_yield std::move(batch);
+        co_yield dstd::Result<ViewScannerBatch>(std::move(batch));
     }
 }
 
@@ -619,12 +642,12 @@ using utilities::arrow::ArrowExportResult;
 using utilities::arrow::ColumnType;
 using utilities::arrow::RecordBatchBuilder;
 
-ArrowExportResult ViewScannerBatch::to_arrow() const {
+dstd::Result<ArrowExportResult> ViewScannerBatch::to_arrow() const {
     RecordBatchBuilder builder;
     return to_arrow(builder);
 }
 
-ArrowExportResult ViewScannerBatch::to_arrow(
+dstd::Result<ArrowExportResult> ViewScannerBatch::to_arrow(
     RecordBatchBuilder& builder) const {
     builder.reserve(events.size());
     dftracer::utils::json::RecordParser parser;
@@ -669,7 +692,7 @@ ArrowExportResult ViewScannerBatch::to_arrow(
         builder.end_row();
     }
 
-    return common::unwrap(builder.finish());
+    return builder.finish();
 }
 
 }  // namespace dftracer::utils::trace::views

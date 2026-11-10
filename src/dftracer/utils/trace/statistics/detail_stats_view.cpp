@@ -155,8 +155,8 @@ coro::CoroTask<DetailedStatistics> DetailStatsView::collect(
 
     views::View v = view();
     if (needs.query) v = v.filter(*needs.query);
-    auto res = co_await v.map_batches<DetailedStatistics>(
-        std::move(fold), std::move(combine), slots);
+    auto res = common::unwrap(co_await v.map_batches<DetailedStatistics>(
+        std::move(fold), std::move(combine), slots));
     res.value.chunks_scanned = res.stats.chunks_scanned;
     res.value.chunks_skipped = res.stats.chunks_skipped;
     co_return std::move(res.value);

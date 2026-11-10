@@ -107,8 +107,9 @@ TEST_SUITE("Row set arrows") {
         const auto gz = write_trace(env);
         const dstd::String narrow =
             R"(where fhash -> files.path == "/data/f10")";
-        CHECK(view_of(gz).explain_duql(narrow).find(
-                  "fhash in (keys of files) (pushed)") != dstd::String::npos);
+        CHECK(dftu_utils_test::ok(view_of(gz).explain_duql(narrow))
+                  .find("fhash in (keys of files) (pushed)") !=
+              dstd::String::npos);
 
         const dstd::String wide =
             R"(where fhash -> files.path like "/data/f%")";
@@ -120,17 +121,14 @@ TEST_SUITE("Row set arrows") {
     TEST_CASE("a resolved name fails and names the arrow") {
         TestEnvironment env(10);
         const auto gz = write_trace(env);
-        try {
-            dftu_utils_test::ok(
-                view_of(gz)
-                    .duql(R"(where resolved.fhash.path == "/data/f10")")
-                    .collect()
-                    .get());
-            FAIL("no error");
-        } catch (const std::exception& e) {
-            CAPTURE(e.what());
-            CHECK(dstd::String(e.what()).find("fhash -> files.path") !=
-                  dstd::String::npos);
-        }
+        const auto result =
+            view_of(gz)
+                .duql(R"(where resolved.fhash.path == "/data/f10")")
+                .collect()
+                .get();
+        REQUIRE_FALSE(result.has_value());
+        const dstd::String message(result.error().message());
+        CAPTURE(message);
+        CHECK(message.find("fhash -> files.path") != dstd::String::npos);
     }
 }

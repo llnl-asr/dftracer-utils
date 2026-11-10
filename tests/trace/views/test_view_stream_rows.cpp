@@ -16,6 +16,7 @@
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <dftracer/utils/trace/views/view_source.h>
 #include <doctest/doctest.h>
+#include <generator_ok.h>
 #include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
@@ -246,7 +247,8 @@ TEST_SUITE("trace scan - streaming row query") {
                                 dstd::Tuple<dstd::String, double, double>>> {
                     dstd::Vector<dstd::Tuple<dstd::String, double, double>>
                         rows;
-                    auto gen = views::detail::scan::stream(vv);
+                    auto gen = dftu_utils_test::ok_items(
+                        views::detail::scan::stream(vv));
                     while (auto chunk = co_await gen.next()) {
                         auto part = row_key_set(*chunk);
                         rows.insert(rows.end(), part.begin(), part.end());
@@ -299,7 +301,8 @@ TEST_SUITE("trace scan - streaming row query") {
                                 dstd::Pair<std::size_t, std::int64_t>> {
                     std::size_t n = 0;
                     std::int64_t nrows = 0;
-                    auto gen = views::detail::scan::stream(vv, 10);
+                    auto gen = dftu_utils_test::ok_items(
+                        views::detail::scan::stream(vv, 10));
                     while (auto chunk = co_await gen.next()) {
                         ++n;
                         nrows += chunk->num_rows();
@@ -334,7 +337,8 @@ TEST_SUITE("trace scan - streaming row query") {
                                 dstd::Pair<std::size_t, std::int64_t>> {
                     std::size_t n = 0;
                     std::int64_t nrows = 0;
-                    auto gen = views::detail::scan::stream(vv, 5);
+                    auto gen = dftu_utils_test::ok_items(
+                        views::detail::scan::stream(vv, 5));
                     while (auto chunk = co_await gen.next()) {
                         ++n;
                         nrows += chunk->num_rows();
@@ -853,8 +857,8 @@ TEST_SUITE("trace scan - streaming row query") {
             {"run", "metric"});
         {
             const auto& plan = *v;
-            auto vdef = dftracer::utils::trace::views::detail::make_vdef(
-                plan, /*for_aggregation=*/false);
+            auto vdef = ok(dftracer::utils::trace::views::detail::make_vdef(
+                plan, /*for_aggregation=*/false));
             std::uint64_t skipped = 0;
             auto units =
                 run(dftracer::utils::trace::views::detail::gather_units(

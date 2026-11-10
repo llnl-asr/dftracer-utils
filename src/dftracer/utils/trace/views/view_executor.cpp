@@ -502,8 +502,10 @@ namespace {
 // one exists. The predicate/window/phase are kept so the scan re-applies them
 // on the (smaller) MV rows - the compensation that makes reuse correct even
 // when the MV is broader than the query.
-ViewPlan redirect_reads(const ViewPlan& plan, bool* redirected = nullptr) {
-    plan_record_schema(plan);
+dstd::Result<ViewPlan> redirect_reads(const ViewPlan& plan,
+                                      bool* redirected = nullptr) {
+    if (auto resolved = resolve_record_schema(plan); !resolved)
+        return resolved.error();
     ViewPlan eff = plan;
     if (auto mv = dftracer::utils::index::cache::find_subsuming_view(plan)) {
         eff.files = std::move(*mv);
@@ -514,16 +516,20 @@ ViewPlan redirect_reads(const ViewPlan& plan, bool* redirected = nullptr) {
 
 }  // namespace
 
-coro::CoroTask<ExportStats> run_export(const ViewPlan& base_plan,
-                                       ExportSink& sink) {
+coro::CoroTask<dstd::Result<ExportStats>> run_export(const ViewPlan& base_plan,
+                                                     ExportSink& sink) {
     bool from_mv = false;
-    const ViewPlan plan = redirect_reads(base_plan, &from_mv);
+    auto redirected = redirect_reads(base_plan, &from_mv);
+    if (!redirected) co_return redirected.error();
+    const ViewPlan plan = std::move(*redirected);
     // First touch: one raw-gzip pass dumps the trace and builds its index.
     // Named, not awaited in the condition; see try_serve_aggregate_no_scan.
     const bool bootstrapped = co_await try_export_bootstrap(plan, sink);
     if (bootstrapped) co_return ExportStats{};
 
-    ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
+    auto made = make_vdef(plan, /*for_aggregation=*/false);
+    if (!made) co_return made.error();
+    ViewDefinition vdef = std::move(*made);
     std::mutex sink_mtx;
     // Pagination: skip `offset` events then write `limit`. The scan cap stops
     // the fan-out once offset+limit events are produced; the offset/limit
@@ -542,7 +548,7 @@ coro::CoroTask<ExportStats> run_export(const ViewPlan& base_plan,
     // (SQL-style), otherwise they are written verbatim. The scan driver owns
     // the gather + fan-out. The projection parser is used under sink_mtx.
     dftracer::utils::json::RecordParser proj_parser;
-    ExportStats stats = co_await for_each_scanned_batch(
+    auto scanned = co_await for_each_scanned_batch(
         plan, vdef, /*slot_count=*/0, cap,
         [&](std::size_t, const dstd::Vector<dstd::StringView>& events) {
             std::lock_guard<std::mutex> lk(sink_mtx);
@@ -560,12 +566,14 @@ coro::CoroTask<ExportStats> run_export(const ViewPlan& base_plan,
             }
         },
         fold_ptrs, &intern);
+    if (!scanned) co_return scanned.error();
+    ExportStats stats = *scanned;
     stats.served_from_mv = from_mv;
     co_return stats;
 }
 
-coro::CoroTask<ExportStats> run_export_trace(const ViewPlan& plan,
-                                             const TraceWriteOptions& opts) {
+coro::CoroTask<dstd::Result<ExportStats>> run_export_trace(
+    const ViewPlan& plan, const TraceWriteOptions& opts) {
     // Member size defaults to the checkpoint granularity (a member == a chunk).
     constexpr std::size_t DEFAULT_FLUSH_BYTES =
         common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
@@ -574,10 +582,14 @@ coro::CoroTask<ExportStats> run_export_trace(const ViewPlan& plan,
     if (opts.build_index)
         co_return co_await run_export_trace_indexed(plan, opts);
 
-    ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
+    auto made = make_vdef(plan, /*for_aggregation=*/false);
+    if (!made) co_return made.error();
+    ViewDefinition vdef = std::move(*made);
 
     std::uint64_t skipped = 0;
-    auto units = co_await gather_units(plan, vdef, skipped);
+    auto gathered = co_await gather_units(plan, vdef, skipped);
+    if (!gathered) co_return gathered.error();
+    auto units = std::move(*gathered);
 
     const std::size_t baseline = std::max<std::size_t>(1, opts.worker_count);
     const auto sizing =
@@ -598,13 +610,13 @@ coro::CoroTask<ExportStats> run_export_trace(const ViewPlan& plan,
     auto opened = co_await utilities::fileio::GzipLineWriter::open(
         dstd::String(opts.output_path), std::move(wopts));
     if (!opened) {
-        throw common::DFTUtilsException(
-            common::ErrorCode::Io,
-            "export_trace failed writing " + opts.output_path);
+        co_return common::make_error<"export_trace failed writing {}">(
+            common::ErrorCode::Io, opts.output_path);
     }
     auto writer = std::move(*opened);
 
     dstd::Vector<ScanCounts> counts_v(worker_count);
+    dstd::Vector<dstd::Optional<dstd::Error>> scan_errors(worker_count);
     bool ok = true;
 
     co_await coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
@@ -624,8 +636,14 @@ coro::CoroTask<ExportStats> run_export_trace(const ViewPlan& plan,
                     ViewScannerUtility scanner;
                     auto gen = scanner(sin);
                     for (;;) {
-                        auto b = co_await gen.next();
-                        if (!b) break;
+                        auto next = co_await gen.next();
+                        if (!next) break;
+                        if (!*next) {
+                            scan_errors[w] = next->error();
+                            stop = true;
+                            break;
+                        }
+                        auto& b = *next;
                         if (is_cancelled(plan)) {
                             stop = true;
                             break;
@@ -661,10 +679,11 @@ coro::CoroTask<ExportStats> run_export_trace(const ViewPlan& plan,
     const auto close_ok = co_await writer.close();
     if (!close_ok) ok = false;
 
+    for (auto& e : scan_errors)
+        if (e) co_return *e;
     if (!ok) {
-        throw common::DFTUtilsException(
-            common::ErrorCode::Io,
-            "export_trace failed writing " + opts.output_path);
+        co_return common::make_error<"export_trace failed writing {}">(
+            common::ErrorCode::Io, opts.output_path);
     }
 
     ExportStats st;
@@ -674,16 +693,20 @@ coro::CoroTask<ExportStats> run_export_trace(const ViewPlan& plan,
     co_return st;
 }
 
-coro::CoroTask<ExportStats> run_folds(
+coro::CoroTask<dstd::Result<ExportStats>> run_folds(
     const ViewPlan& plan, dstd::Span<Fold* const> folds,
     dftracer::utils::dstd::StringIntern& intern, DynamicPrune* dyn_prune,
     coro::AsyncSemaphore* gate) {
-    ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
+    auto made = make_vdef(plan, /*for_aggregation=*/false);
+    if (!made) co_return made.error();
+    ViewDefinition vdef = std::move(*made);
     auto catalog = select_catalog_fold(plan, vdef, intern);
     dstd::Vector<Fold*> all(folds.begin(), folds.end());
     if (catalog) all.push_back(catalog.get());
-    co_return co_await fuse(plan, vdef, all, intern, /*covered=*/nullptr,
-                            /*limit=*/0, dyn_prune, gate);
+    ExportStats stats = co_await fuse(plan, vdef, all, intern,
+                                      /*covered=*/nullptr,
+                                      /*limit=*/0, dyn_prune, gate);
+    co_return stats;
 }
 
 #if DFTRACER_UTILS_TEST_PROBES
@@ -729,7 +752,7 @@ struct BootstrapRun {
     dftracer::utils::index::build::FoldBufferPool buffers;
 };
 
-coro::CoroTask<BootstrapFile> bootstrap_file(
+coro::CoroTask<dstd::Result<BootstrapFile>> bootstrap_file(
     BootstrapRun* run, ViewFile f, BootstrapRoot* root,
     dftracer::utils::index::build::FileGroup* group) {
     const ViewPlan* plan = run->plan;
@@ -752,7 +775,8 @@ coro::CoroTask<BootstrapFile> bootstrap_file(
         dftracer::utils::index::build::FileAdmission::plaintext_estimate(
             f.uncompressed_size, compressed);
     auto admitted = co_await run->admission->admit(plaintext);
-    auto ticket = common::unwrap(std::move(admitted));
+    if (!admitted) co_return admitted.error();
+    auto ticket = std::move(*admitted);
 #if DFTRACER_UTILS_TEST_PROBES
     auto& counters = bootstrap_counters();
     const auto now =
@@ -849,72 +873,72 @@ coro::CoroTask<BootstrapFile> bootstrap_file(
     co_return out;
 }
 
-// False when a file failed. A worker that throws stops the others from taking
+// False when a file failed. A worker that fails stops the others from taking
 // more files.
-coro::CoroTask<bool> bootstrap_worker(BootstrapRun* run) {
-    try {
-        while (!run->failed.load(std::memory_order_relaxed)) {
-            const std::size_t b =
-                run->next_block.fetch_add(1, std::memory_order_relaxed);
-            if (b >= run->blocks.size()) break;
-            const BootstrapBlock block = run->blocks[b];
-            auto& merged = run->states[b];
-            dftracer::utils::index::build::FileGroup group;
-            // The files finished before a failure still publish.
-            std::exception_ptr error;
-            bool stop = false;
-            for (std::size_t k = block.begin; k < block.end && !stop; ++k) {
-                if (run->failed.load(std::memory_order_relaxed)) break;
-                const std::size_t i = block.root->members[k];
-                BootstrapFile file;
-                try {
-                    file = co_await bootstrap_file(run, run->plan->files[i],
-                                                   block.root, &group);
-                } catch (...) {
-                    error = std::current_exception();
-                    break;
-                }
-                if (!file.ok) {
-                    run->failed.store(true, std::memory_order_relaxed);
-                    break;
-                }
-                if (group.full()) {
-                    const bool published = co_await commit_bootstrap(group);
-                    stop = !published;
-                }
-                if (!file.state) continue;
-                if (!merged)
-                    merged = std::move(file.state);
-                else
-                    dataframe::agg_merge(*merged, *file.state);
+coro::CoroTask<dstd::Result<bool>> bootstrap_worker(BootstrapRun* run) {
+    while (!run->failed.load(std::memory_order_relaxed)) {
+        const std::size_t b =
+            run->next_block.fetch_add(1, std::memory_order_relaxed);
+        if (b >= run->blocks.size()) break;
+        const BootstrapBlock block = run->blocks[b];
+        auto& merged = run->states[b];
+        dftracer::utils::index::build::FileGroup group;
+        // The files finished before a failure still publish.
+        dstd::Optional<dstd::Error> error;
+        bool stop = false;
+        for (std::size_t k = block.begin; k < block.end && !stop; ++k) {
+            if (run->failed.load(std::memory_order_relaxed)) break;
+            const std::size_t i = block.root->members[k];
+            auto filed = co_await bootstrap_file(run, run->plan->files[i],
+                                                 block.root, &group);
+            if (!filed) {
+                error = filed.error();
+                break;
             }
-            const bool published = co_await commit_bootstrap(group);
-            if (error) std::rethrow_exception(error);
-            if (stop || !published ||
-                run->failed.load(std::memory_order_relaxed)) {
+            BootstrapFile file = std::move(*filed);
+            if (!file.ok) {
                 run->failed.store(true, std::memory_order_relaxed);
-                co_return false;
+                break;
             }
+            if (group.full()) {
+                const bool published = co_await commit_bootstrap(group);
+                stop = !published;
+            }
+            if (!file.state) continue;
+            if (!merged)
+                merged = std::move(file.state);
+            else
+                dataframe::agg_merge(*merged, *file.state);
         }
-    } catch (...) {
-        run->failed.store(true, std::memory_order_relaxed);
-        throw;
+        const bool published = co_await commit_bootstrap(group);
+        if (error) {
+            run->failed.store(true, std::memory_order_relaxed);
+            co_return *error;
+        }
+        if (stop || !published || run->failed.load(std::memory_order_relaxed)) {
+            run->failed.store(true, std::memory_order_relaxed);
+            co_return false;
+        }
     }
     co_return !run->failed.load(std::memory_order_relaxed);
 }
 
-coro::CoroTask<void> bootstrap_workers(coro::Scope& scope, BootstrapRun* run,
-                                       std::size_t workers) {
-    dstd::Vector<coro::SpawnFuture<bool>> done;
+coro::CoroTask<dstd::Result<void>> bootstrap_workers(coro::Scope& scope,
+                                                     BootstrapRun* run,
+                                                     std::size_t workers) {
+    dstd::Vector<coro::SpawnFuture<dstd::Result<bool>>> done;
     done.reserve(workers);
     for (std::size_t w = 0; w < workers; ++w)
         done.push_back(
             scope.spawn_future([run]() { return bootstrap_worker(run); }));
-    co_await coro::when_all(std::move(done));
+    auto results = co_await coro::when_all(std::move(done));
+    for (auto& r : results)
+        if (!r.has_value()) co_return r.error();
+    co_return dstd::Result<void>{};
 }
 
-coro::CoroTask<bool> try_collect_bootstrap(const ViewPlan& plan,
-                                           dataframe::AggStatePtr& merged) {
+coro::CoroTask<dstd::Result<bool>> try_collect_bootstrap(
+    const ViewPlan& plan, dataframe::AggStatePtr& merged) {
     // A time window still needs the indexed path (the bootstrap has no ts
     // pruning), and a predicate is only applied here when every field it names
     // is POD-evaluable; otherwise defer to the scan, which filters properly.
@@ -970,9 +994,10 @@ coro::CoroTask<bool> try_collect_bootstrap(const ViewPlan& plan,
         budget == memory::NO_SPILL_BUDGET ? 0 : sinks.sink_bytes * active,
         plan.files.size());
     run.admission = &admission;
-    co_await coro::with_scope([&](coro::Scope& scope) {
+    auto worked = co_await coro::with_scope([&](coro::Scope& scope) {
         return bootstrap_workers(scope, &run, active);
     });
+    if (!worked) co_return worked.error();
     if (run.failed.load(std::memory_order_relaxed)) co_return false;
     if (!resolved_transform) {
         // Blocks are runs of consecutive files, so their first files give
@@ -1009,7 +1034,8 @@ coro::CoroTask<bool> try_collect_bootstrap(const ViewPlan& plan,
 }
 
 // Releases an MV directory lock (see lock_view_dir) on scope exit, so the
-// single-flight lock is dropped on every path including a throw from the build.
+// single-flight lock is dropped on every path, including an error from the
+// build.
 class ViewDirLock {
    public:
     explicit ViewDirLock(dstd::File file) noexcept : file_(std::move(file)) {}
@@ -1023,10 +1049,11 @@ class ViewDirLock {
 
 }  // namespace
 
-coro::CoroTask<ExportStats> run_materialize(const ViewPlan& plan,
-                                            const ProgressFn* progress) {
+coro::CoroTask<dstd::Result<ExportStats>> run_materialize(
+    const ViewPlan& plan, const ProgressFn* progress) {
     ensure_schema(plan);
-    plan_record_schema(plan);
+    if (auto resolved = resolve_record_schema(plan); !resolved)
+        co_return resolved.error();
 
     // Row query (no aggregation): materialize a filtered trace + index into a
     // view root under the index root's views, then record its manifest so a
@@ -1060,28 +1087,27 @@ coro::CoroTask<ExportStats> run_materialize(const ViewPlan& plan,
         opts.member_size = plan.mv_checkpoint_size;
         opts.part_size =
             plan.mv_part_size ? plan.mv_part_size : DEFAULT_PART_SIZE;
-        ExportStats stats =
-            co_await run_export_trace_indexed(plan, opts, progress);
+        auto exported = co_await run_export_trace_indexed(plan, opts, progress);
+        if (!exported) co_return exported.error();
         dftracer::utils::index::cache::register_view(dir, plan);
-        co_return stats;
+        co_return *exported;
     }
 
     const dstd::String rdir =
         dftracer::utils::index::cache::rollup_cache_path(plan);
-    if (!rdir.empty()) plan_record_schema(plan);
     // Idempotent prewarm: skip if this view is already materialized.
     if (!rdir.empty() &&
         dftracer::utils::index::cache::CacheStore::exists(rdir)) {
-        try {
-            auto db = dftracer::utils::index::cache::open_rollup_db(
-                rdir,
-                dftracer::utils::index::cache::CacheStore::Mode::ReadOnly);
-            if (db &&
-                common::unwrap(dftracer::utils::index::cache::rollup_exists(
-                    *db, dftracer::utils::index::cache::plan_signature(plan))))
+        auto db = dftracer::utils::index::cache::open_rollup_db(
+            rdir, dftracer::utils::index::cache::CacheStore::Mode::ReadOnly);
+        if (db) {
+            const auto exists = dftracer::utils::index::cache::rollup_exists(
+                *db, dftracer::utils::index::cache::plan_signature(plan));
+            if (!exists.has_value())
+                DFTRACER_UTILS_LOG_WARN("rollup check skipped: {}",
+                                        exists.error().message());
+            else if (*exists)
                 co_return ExportStats{};
-        } catch (const std::exception& e) {
-            DFTRACER_UTILS_LOG_WARN("rollup check skipped: {}", e.what());
         }
     }
 
@@ -1089,17 +1115,17 @@ coro::CoroTask<ExportStats> run_materialize(const ViewPlan& plan,
     const bool from_partials = co_await partials_collect(plan, state);
     if (!from_partials) state = co_await build_engine_agg_state(plan);
     if (!rdir.empty()) {
-        try {
-            auto db = dftracer::utils::index::cache::open_rollup_db(
-                rdir,
-                dftracer::utils::index::cache::CacheStore::Mode::ReadWrite);
-            if (db)
-                common::unwrap(dftracer::utils::index::cache::persist_rollup(
+        auto db = dftracer::utils::index::cache::open_rollup_db(
+            rdir, dftracer::utils::index::cache::CacheStore::Mode::ReadWrite);
+        if (db) {
+            const auto persisted =
+                dftracer::utils::index::cache::persist_rollup(
                     *db, dftracer::utils::index::cache::plan_signature(plan),
                     dftracer::utils::index::cache::rest_signature(plan),
-                    plan.time_bucket_us, plan.group_by, *state));
-        } catch (const std::exception& e) {
-            DFTRACER_UTILS_LOG_WARN("rollup materialize skipped: {}", e.what());
+                    plan.time_bucket_us, plan.group_by, *state);
+            if (!persisted)
+                DFTRACER_UTILS_LOG_WARN("rollup materialize skipped: {}",
+                                        persisted.error().message());
         }
     }
     co_return ExportStats{};
@@ -1112,7 +1138,6 @@ coro::CoroTask<ExportStats> run_materialize(const ViewPlan& plan,
 dstd::Optional<dataframe::DataFrame> try_serve_rollup(const ViewPlan& plan) {
     const dstd::String rdir =
         dftracer::utils::index::cache::rollup_cache_path(plan);
-    if (!rdir.empty()) plan_record_schema(plan);
     if (rdir.empty() ||
         !dftracer::utils::index::cache::CacheStore::exists(rdir))
         return dstd::nullopt;
@@ -1122,29 +1147,29 @@ dstd::Optional<dataframe::DataFrame> try_serve_rollup(const ViewPlan& plan) {
         plan.materialize
             ? dftracer::utils::index::cache::CacheStore::Mode::ReadWrite
             : dftracer::utils::index::cache::CacheStore::Mode::ReadOnly;
-    try {
-        auto db = dftracer::utils::index::cache::open_rollup_db(rdir, mode);
-        if (db)
-            return common::unwrap(
-                dftracer::utils::index::cache::find_subsuming_rollup(*db,
-                                                                     plan));
-    } catch (const std::exception& e) {
+    auto db = dftracer::utils::index::cache::open_rollup_db(rdir, mode);
+    if (db) {
+        auto found =
+            dftracer::utils::index::cache::find_subsuming_rollup(*db, plan);
+        if (found) return std::move(*found);
         // A locked/unreadable rollup just falls through to a normal compute;
         // never fail the query over the cache.
-        DFTRACER_UTILS_LOG_WARN("rollup read skipped: {}", e.what());
+        DFTRACER_UTILS_LOG_WARN("rollup read skipped: {}",
+                                found.error().message());
     }
     return dstd::nullopt;
 }
 
 // On a hit fills `out` (a mergeable engine AggState, finalize with
 // finalize_engine_result) and returns true. False means the query must scan.
-coro::CoroTask<bool> try_serve_aggregate_no_scan(const ViewPlan& plan,
-                                                 dataframe::AggStatePtr& out) {
+coro::CoroTask<dstd::Result<bool>> try_serve_aggregate_no_scan(
+    const ViewPlan& plan, dataframe::AggStatePtr& out) {
     // Named, not awaited in the condition: GCC 12.1 on x86_64 compiled the
     // awaited temporary there into a trap, and every first aggregate of a
     // file died with SIGILL.
-    const bool bootstrapped = co_await try_collect_bootstrap(plan, out);
-    if (bootstrapped) co_return true;
+    auto bootstrapped = co_await try_collect_bootstrap(plan, out);
+    if (!bootstrapped.has_value()) co_return bootstrapped.error();
+    if (*bootstrapped) co_return true;
     // Named for the same reason.
     const bool from_partials = co_await partials_collect(plan, out);
     co_return from_partials;
@@ -1161,66 +1186,74 @@ ViewPlan resolve_bucket_origin(const ViewPlan& plan) {
     const bool by_path = plan_by_path(plan);
     const index::Roles& roles = plan_record_schema(plan).roles;
     dstd::Map<dstd::String, index::Snapshot> snapshots;
+    // The least time of one file; a file whose index cannot be read is left
+    // out, and the origin falls back to 0 if none resolve.
+    auto file_minimum = [&](const ViewFile& f) -> dstd::Result<void> {
+        auto at = snapshots.find(f.index_path);
+        if (at == snapshots.end()) {
+            auto taken = snapshot_of(plan, f.index_path);
+            if (!taken) return taken.error();
+            at = snapshots.emplace(f.index_path, std::move(*taken)).first;
+        }
+        const index::Snapshot& snapshot = at->second;
+        const auto file = snapshot.file(
+            dftracer::utils::index::store::internal::get_logical_path(
+                f.file_path));
+        if (!file) return {};
+        const bool is_past =
+            f.pinned_c_end > 0 &&
+            (f.pinned_uc_begin > 0 || file->stat().size != f.pinned_c_end);
+        dstd::Vector<index::gzip::ChunkSpan> spans;
+        if (is_past) {
+            auto listed = index::spans(snapshot, *file);
+            if (!listed) return listed.error();
+            spans = std::move(*listed);
+        }
+        const auto is_in_view = [&](std::uint64_t chunk) {
+            return !is_past || (chunk < spans.size() &&
+                                spans[chunk].uc_offset < f.pinned_uc_end &&
+                                spans[chunk].uc_offset + spans[chunk].uc_size >
+                                    f.pinned_uc_begin);
+        };
+        if (by_path) {
+            auto ranges = index::extensions::kinds::chunk_value_ranges(
+                snapshot, *file, roles.time);
+            if (!ranges) return ranges.error();
+            dstd::Optional<double> lowest;
+            for (const auto& [chunk, range] : *ranges) {
+                if (is_in_view(chunk))
+                    lowest =
+                        std::min(lowest.value_or(range.first), range.first);
+            }
+            if (lowest && *lowest >= 0)
+                global_min = std::min(
+                    global_min,
+                    static_cast<std::uint64_t>(std::llround(
+                        *lowest * index::micros_per(roles.time_unit))));
+            return {};
+        }
+        if (is_past) {
+            auto bounds =
+                index::extensions::kinds::chunk_time_bounds(snapshot, *file);
+            if (!bounds) return bounds.error();
+            for (const auto& [chunk, range] : *bounds)
+                if (is_in_view(chunk))
+                    global_min = std::min(global_min, range.first);
+            return {};
+        }
+        const auto b =
+            dftracer::utils::index::extensions::kinds::file_time_bounds(
+                snapshot, *file);
+        if (!b) return b.error();
+        if (b->valid && b->min_timestamp_us < global_min)
+            global_min = b->min_timestamp_us;
+        return {};
+    };
     for (const auto& f : plan.files) {
         if (f.index_path.empty() ||
             !common::input_exists(index::store_of(f.index_path)))
             continue;
-        try {
-            auto at = snapshots.find(f.index_path);
-            if (at == snapshots.end())
-                at = snapshots
-                         .emplace(f.index_path, common::unwrap(snapshot_of(
-                                                    plan, f.index_path)))
-                         .first;
-            const index::Snapshot& snapshot = at->second;
-            const auto file = snapshot.file(
-                dftracer::utils::index::store::internal::get_logical_path(
-                    f.file_path));
-            if (!file) continue;
-            const bool is_past =
-                f.pinned_c_end > 0 &&
-                (f.pinned_uc_begin > 0 || file->stat().size != f.pinned_c_end);
-            dstd::Vector<index::gzip::ChunkSpan> spans;
-            if (is_past) spans = common::unwrap(index::spans(snapshot, *file));
-            const auto is_in_view = [&](std::uint64_t chunk) {
-                return !is_past ||
-                       (chunk < spans.size() &&
-                        spans[chunk].uc_offset < f.pinned_uc_end &&
-                        spans[chunk].uc_offset + spans[chunk].uc_size >
-                            f.pinned_uc_begin);
-            };
-            if (by_path) {
-                dstd::Optional<double> lowest;
-                for (const auto& [chunk, range] : common::unwrap(
-                         index::extensions::kinds::chunk_value_ranges(
-                             snapshot, *file, roles.time))) {
-                    if (is_in_view(chunk))
-                        lowest =
-                            std::min(lowest.value_or(range.first), range.first);
-                }
-                if (lowest && *lowest >= 0)
-                    global_min = std::min(
-                        global_min,
-                        static_cast<std::uint64_t>(std::llround(
-                            *lowest * index::micros_per(roles.time_unit))));
-                continue;
-            }
-            if (is_past) {
-                for (const auto& [chunk, bounds] :
-                     common::unwrap(index::extensions::kinds::chunk_time_bounds(
-                         snapshot, *file)))
-                    if (is_in_view(chunk))
-                        global_min = std::min(global_min, bounds.first);
-                continue;
-            }
-            const auto b = common::unwrap(
-                dftracer::utils::index::extensions::kinds::file_time_bounds(
-                    snapshot, *file));
-            if (b.valid && b.min_timestamp_us < global_min)
-                global_min = b.min_timestamp_us;
-        } catch (const std::exception&) {
-            // Leave this file out; origin falls back to 0 if none resolve.
-        }
+        file_minimum(f).discard();
     }
     ViewPlan p = plan;
     p.bucket_origin_min = false;
@@ -1232,9 +1265,9 @@ ViewPlan resolve_bucket_origin(const ViewPlan& plan) {
     return p;
 }
 
-coro::CoroTask<TypedResult> run_collect_typed(const ViewPlan& plan,
-                                              int shard_begin, int shard_end,
-                                              const ProgressFn* progress) {
+coro::CoroTask<dstd::Result<TypedResult>> run_collect_typed(
+    const ViewPlan& plan, int shard_begin, int shard_end,
+    const ProgressFn* progress) {
     ensure_schema(plan);
     TypedResult out;
     const bool from_partials = co_await partials_collect_typed(
@@ -1246,7 +1279,9 @@ coro::CoroTask<TypedResult> run_collect_typed(const ViewPlan& plan,
     }
     // Scan the raw trace, so collect_typed returns rows rather than silently
     // none.
-    ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
+    auto made = make_vdef(plan, /*for_aggregation=*/false);
+    if (!made) co_return made.error();
+    ViewDefinition vdef = std::move(*made);
     dftracer::utils::dstd::StringIntern intern;
     TypedCollectFold fold(intern);
     std::array<Fold*, 1> folds{&fold};
@@ -1532,8 +1567,11 @@ bool distinct_keyable(const ViewPlan& plan,
     return true;
 }
 
-coro::CoroTask<dataframe::DataFrame> run_collect_rows(const ViewPlan& plan) {
-    ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
+coro::CoroTask<dstd::Result<dataframe::DataFrame>> run_collect_rows(
+    const ViewPlan& plan) {
+    auto made = make_vdef(plan, /*for_aggregation=*/false);
+    if (!made) co_return made.error();
+    ViewDefinition vdef = std::move(*made);
     dftracer::utils::dstd::StringIntern intern;
     const bool by_path = plan_by_path(plan);
     NativeRowFold fold(intern, plan.select, plan.time_scale,
@@ -1541,18 +1579,25 @@ coro::CoroTask<dataframe::DataFrame> run_collect_rows(const ViewPlan& plan) {
     dstd::Vector<Fold*> folds{&fold};
     auto catalog = select_catalog_fold(plan, vdef, intern);
     if (catalog) folds.push_back(catalog.get());
-    co_await execute(lower_fused_folds(plan, vdef, folds), intern);
+    auto fused = execute(lower_fused_folds(plan, vdef, folds), intern);
+    auto fused_stats = co_await std::move(fused);
+    if (!fused_stats) co_return fused_stats.error();
     dataframe::DataFrame b = fold.build();
     // sort_col/topk_col name a column the way a caller would select it (bare
     // or "args."-prefixed); canonicalize to match build_row_frame's actual
     // output name before resolving against the built frame.
-    if (!plan.sort_col.empty())
-        b = common::unwrap(b.sort_by(
-            canonical_row_column_name(plan.sort_col, by_path), plan.sort_desc));
-    if (!plan.topk_col.empty())
-        b = common::unwrap(
-            b.topk(canonical_row_column_name(plan.topk_col, by_path),
-                   plan.topk_k, plan.topk_largest));
+    if (!plan.sort_col.empty()) {
+        auto sorted = b.sort_by(
+            canonical_row_column_name(plan.sort_col, by_path), plan.sort_desc);
+        if (!sorted) co_return sorted.error();
+        b = std::move(*sorted);
+    }
+    if (!plan.topk_col.empty()) {
+        auto top = b.topk(canonical_row_column_name(plan.topk_col, by_path),
+                          plan.topk_k, plan.topk_largest);
+        if (!top) co_return top.error();
+        b = std::move(*top);
+    }
     if (plan.offset || plan.limit) {
         const std::int64_t off = static_cast<std::int64_t>(plan.offset);
         const std::int64_t len =
@@ -1562,9 +1607,11 @@ coro::CoroTask<dataframe::DataFrame> run_collect_rows(const ViewPlan& plan) {
     co_return b;
 }
 
-coro::CoroTask<dataframe::DataFrame> run_collect_rows_distinct(
+coro::CoroTask<dstd::Result<dataframe::DataFrame>> run_collect_rows_distinct(
     const ViewPlan& plan, const dstd::Vector<std::int64_t>& key_idx) {
-    ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
+    auto made = make_vdef(plan, /*for_aggregation=*/false);
+    if (!made) co_return made.error();
+    ViewDefinition vdef = std::move(*made);
     dftracer::utils::dstd::StringIntern intern;
     const bool by_path = plan_by_path(plan);
     dstd::Vector<DistinctRowFold::Key> keys;
@@ -1589,7 +1636,9 @@ coro::CoroTask<dataframe::DataFrame> run_collect_rows_distinct(
     dstd::Vector<Fold*> folds{&fold};
     auto catalog = select_catalog_fold(plan, vdef, intern);
     if (catalog) folds.push_back(catalog.get());
-    co_await execute(lower_fused_folds(plan, vdef, folds), intern);
+    auto fused = execute(lower_fused_folds(plan, vdef, folds), intern);
+    auto fused_stats = co_await std::move(fused);
+    if (!fused_stats) co_return fused_stats.error();
     const bool host_pass = fold.needs_host_pass();
     dataframe::DataFrame b = fold.build();
     if (!host_pass) co_return b;
@@ -1600,17 +1649,19 @@ coro::CoroTask<dataframe::DataFrame> run_collect_rows_distinct(
             dstd::make_shared<dataframe::InMemorySource>(std::move(b)))
             .unique(std::move(subset));
     auto collecting = deduped.collect();
-    co_return common::unwrap(co_await std::move(collecting));
+    co_return co_await std::move(collecting);
 }
 
 namespace {
 
 template <class R>
-coro::CoroTask<R> run_containment_terminal(
+coro::CoroTask<dstd::Result<R>> run_containment_terminal(
     const ViewPlan& plan, dstd::Vector<dstd::String> partition,
     dstd::String ts_field, dstd::String dur_field, dstd::String name_field,
     dstd::Vector<dstd::String> group, R (ContainmentFold::*build)() const) {
-    ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
+    auto made = make_vdef(plan, /*for_aggregation=*/false);
+    if (!made) co_return made.error();
+    ViewDefinition vdef = std::move(*made);
     dftracer::utils::dstd::StringIntern intern;
     ContainmentFold fold(
         intern, std::move(partition), std::move(ts_field), std::move(dur_field),
@@ -1623,7 +1674,7 @@ coro::CoroTask<R> run_containment_terminal(
 
 }  // namespace
 
-coro::CoroTask<dataframe::DataFrame> run_call_tree(
+coro::CoroTask<dstd::Result<dataframe::DataFrame>> run_call_tree(
     const ViewPlan& plan, dstd::Vector<dstd::String> partition,
     dstd::String ts_field, dstd::String dur_field, dstd::String name_field) {
     return run_containment_terminal(
@@ -1631,7 +1682,7 @@ coro::CoroTask<dataframe::DataFrame> run_call_tree(
         std::move(name_field), {}, &ContainmentFold::call_tree);
 }
 
-coro::CoroTask<dataframe::DataFrame> run_flamegraph(
+coro::CoroTask<dstd::Result<dataframe::DataFrame>> run_flamegraph(
     const ViewPlan& plan, dstd::Vector<dstd::String> partition,
     dstd::String ts_field, dstd::String dur_field, dstd::String name_field,
     dstd::Vector<dstd::String> group) {
@@ -1640,7 +1691,8 @@ coro::CoroTask<dataframe::DataFrame> run_flamegraph(
         std::move(name_field), std::move(group), &ContainmentFold::flamegraph);
 }
 
-coro::CoroTask<dstd::Pair<dataframe::DataFrame, dataframe::DataFrame>>
+coro::CoroTask<
+    dstd::Result<dstd::Pair<dataframe::DataFrame, dataframe::DataFrame>>>
 run_containment(const ViewPlan& plan, dstd::Vector<dstd::String> partition,
                 dstd::String ts_field, dstd::String dur_field,
                 dstd::String name_field, dstd::Vector<dstd::String> group) {
@@ -1649,7 +1701,7 @@ run_containment(const ViewPlan& plan, dstd::Vector<dstd::String> partition,
         std::move(name_field), std::move(group), &ContainmentFold::containment);
 }
 
-coro::CoroTask<dstd::String> run_flamegraph_partial(
+coro::CoroTask<dstd::Result<dstd::String>> run_flamegraph_partial(
     const ViewPlan& plan, dstd::Vector<dstd::String> partition,
     dstd::String ts_field, dstd::String dur_field, dstd::String name_field,
     dstd::Vector<dstd::String> group) {
@@ -1675,21 +1727,21 @@ dstd::String encode_agg_partial(const dataframe::AggState& st) {
 
 // Merge every partial into one AggState. An empty or unknown-tagged blob is
 // rejected, not misparsed.
-dataframe::AggStatePtr decode_partials(
+dstd::Result<dataframe::AggStatePtr> decode_partials(
     const dstd::Vector<dstd::StringView>& partials) {
     dataframe::AggStatePtr state;
     for (dstd::StringView p : partials) {
         if (p.empty())
-            throw common::DFTUtilsException::cat(
+            return common::make_error(
                 common::ErrorCode::Aggregation,
                 "aggregate partial: empty (missing wire tag)");
         if (static_cast<std::uint8_t>(p[0]) !=
             static_cast<std::uint8_t>(AggWireTag::AggState))
-            throw common::DFTUtilsException::cat(
-                common::ErrorCode::Aggregation,
-                "aggregate partial: unknown wire tag");
-        dataframe::AggStatePtr st = common::unwrap(
-            dataframe::agg_deserialize(dstd::String(p.substr(1))));
+            return common::make_error(common::ErrorCode::Aggregation,
+                                      "aggregate partial: unknown wire tag");
+        auto decoded = dataframe::agg_deserialize(dstd::String(p.substr(1)));
+        if (!decoded) return decoded.error();
+        dataframe::AggStatePtr st = std::move(*decoded);
         if (!state)
             state = std::move(st);
         else
@@ -1717,28 +1769,28 @@ dataframe::AggStatePtr empty_engine_state(const ViewPlan& plan) {
 
 // Distributed materialize: combine the rank-local partials and persist the
 // merged rollup.
-coro::CoroTask<void> run_materialize_partials(
+coro::CoroTask<dstd::Result<void>> run_materialize_partials(
     const ViewPlan& plan, const dstd::Vector<dstd::StringView>& partials) {
     ensure_schema(plan);
     const dstd::String rdir =
         dftracer::utils::index::cache::rollup_cache_path(plan);
-    if (!rdir.empty()) plan_record_schema(plan);
-    if (rdir.empty()) co_return;
-    dataframe::AggStatePtr state = decode_partials(partials);
-    if (!state) co_return;
-    try {
-        auto db = dftracer::utils::index::cache::open_rollup_db(
-            rdir, dftracer::utils::index::cache::CacheStore::Mode::ReadWrite);
-        if (db)
-            common::unwrap(dftracer::utils::index::cache::persist_rollup(
-                *db, dftracer::utils::index::cache::plan_signature(plan),
-                dftracer::utils::index::cache::rest_signature(plan),
-                plan.time_bucket_us, plan.group_by, *state));
-    } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_WARN("rollup materialize (partials) skipped: {}",
-                                e.what());
+    if (rdir.empty()) co_return dstd::Result<void>{};
+    auto decoded = decode_partials(partials);
+    if (!decoded) co_return decoded.error();
+    dataframe::AggStatePtr state = std::move(*decoded);
+    if (!state) co_return dstd::Result<void>{};
+    auto db = dftracer::utils::index::cache::open_rollup_db(
+        rdir, dftracer::utils::index::cache::CacheStore::Mode::ReadWrite);
+    if (db) {
+        const auto persisted = dftracer::utils::index::cache::persist_rollup(
+            *db, dftracer::utils::index::cache::plan_signature(plan),
+            dftracer::utils::index::cache::rest_signature(plan),
+            plan.time_bucket_us, plan.group_by, *state);
+        if (!persisted)
+            DFTRACER_UTILS_LOG_WARN("rollup materialize (partials) skipped: {}",
+                                    persisted.error().message());
     }
-    co_return;
+    co_return dstd::Result<void>{};
 }
 
 dstd::Optional<dataframe::DataFrame> run_reconstruct_if_cached(
@@ -1748,17 +1800,23 @@ dstd::Optional<dataframe::DataFrame> run_reconstruct_if_cached(
     return try_serve_rollup(plan);
 }
 
-coro::CoroTask<ExportStats> run_scan_batches(
+coro::CoroTask<dstd::Result<ExportStats>> run_scan_batches(
     const dstd::SharedPtr<const ViewPlan>& plan_ptr, std::size_t slot_count,
     std::uint64_t limit,
     const dstd::Function<
         void(std::size_t, const dstd::Vector<dstd::StringView>&)>& on_batch) {
     bool from_mv = false;
-    const ViewPlan plan = redirect_reads(*plan_ptr, &from_mv);
-    ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
+    auto redirected = redirect_reads(*plan_ptr, &from_mv);
+    if (!redirected) co_return redirected.error();
+    const ViewPlan plan = std::move(*redirected);
+    auto made = make_vdef(plan, /*for_aggregation=*/false);
+    if (!made) co_return made.error();
+    ViewDefinition vdef = std::move(*made);
     // map_batches wants a fixed slot count; treat 0 as 1.
-    ExportStats stats = co_await for_each_scanned_batch(
+    auto scanned = co_await for_each_scanned_batch(
         plan, vdef, slot_count ? slot_count : 1, limit, on_batch);
+    if (!scanned) co_return scanned.error();
+    ExportStats stats = *scanned;
     stats.served_from_mv = from_mv;
     co_return stats;
 }
@@ -1769,7 +1827,7 @@ coro::CoroTask<ExportStats> run_scan_batches(
 struct FoldFactory {
     dstd::Function<dstd::UniquePtr<Fold>(dftracer::utils::dstd::StringIntern&)>
         make;
-    dstd::Function<void()> finalize;
+    dstd::Function<dstd::Result<void>()> finalize;
 };
 
 struct StreamBranch {
@@ -1789,6 +1847,8 @@ struct ViewSessionState {
     /// branch, so narrowing it for one would starve the rest; whether that
     /// holds is knowable only here, after every branch has been added.
     dstd::Optional<duql::Query> proposed_prune;
+    /// The first error a registration kept; run_session ends with it.
+    dstd::Optional<dstd::Error> error;
 };
 
 dstd::SharedPtr<ViewSessionState> make_view_session_state(
@@ -1819,13 +1879,18 @@ void add_fold_factory(
     ViewSessionState& state,
     dstd::Function<dstd::UniquePtr<Fold>(dftracer::utils::dstd::StringIntern&)>
         make,
-    dstd::Function<void()> finalize) {
+    dstd::Function<dstd::Result<void>()> finalize) {
     state.fold_factories.push_back({std::move(make), std::move(finalize)});
+}
+
+void keep_session_error(ViewSessionState& state, dstd::Error error) {
+    if (!state.error) state.error = std::move(error);
 }
 
 void add_fold_branch(ViewSessionState& state, Query predicate,
                      dstd::Function<BranchConsumer()> make_consumer,
-                     dstd::Function<void()> finalize, bool wants_metadata) {
+                     dstd::Function<dstd::Result<void>()> finalize,
+                     bool wants_metadata) {
     BranchHooks h;
     h.wants_metadata = wants_metadata;
     h.predicate = std::move(predicate);
@@ -1836,7 +1901,8 @@ void add_fold_branch(ViewSessionState& state, Query predicate,
 
 void add_fold_branch(ViewSessionState& state,
                      dstd::Function<BranchConsumer()> make_consumer,
-                     dstd::Function<void()> finalize, bool wants_metadata) {
+                     dstd::Function<dstd::Result<void>()> finalize,
+                     bool wants_metadata) {
     BranchHooks h;  // predicate unset = match all scanned events
     h.wants_metadata = wants_metadata;
     h.make_consumer = std::move(make_consumer);
@@ -1846,9 +1912,14 @@ void add_fold_branch(ViewSessionState& state,
 
 void add_selection_fold_branch(ViewSessionState& state,
                                dstd::Function<BranchConsumer()> make_consumer,
-                               dstd::Function<void()> finalize) {
-    if (auto eq = effective_query(*state.plan))
-        add_fold_branch(state, std::move(*eq), std::move(make_consumer),
+                               dstd::Function<dstd::Result<void>()> finalize) {
+    auto eq = effective_query(*state.plan);
+    if (!eq) {
+        keep_session_error(state, eq.error());
+        return;
+    }
+    if (*eq)
+        add_fold_branch(state, std::move(**eq), std::move(make_consumer),
                         std::move(finalize));
     else
         add_fold_branch(state, std::move(make_consumer), std::move(finalize));
@@ -1871,32 +1942,30 @@ void add_materialize_branch(ViewSessionState& state,
     h.make_consumer = []() -> BranchConsumer {
         return [](json::Value&, dstd::StringView) {};
     };
-    h.finalize = [plan]() {
+    h.finalize = [plan]() -> dstd::Result<void> {
         const dstd::String rdir =
             dftracer::utils::index::cache::rollup_cache_path(*plan);
-        if (!rdir.empty()) plan_record_schema(*plan);
-        if (rdir.empty()) return;
-        try {
-            dataframe::AggStatePtr state_out;
-            const auto ran =
-                dftracer::utils::default_runtime().block_on(coro::named(
-                    "session_materialize", [&]() -> coro::CoroTask<void> {
-                        state_out = co_await build_engine_agg_state(*plan);
-                        co_return;
-                    }()));
-            if (!ran || !state_out) return;
-            auto db = dftracer::utils::index::cache::open_rollup_db(
-                rdir,
-                dftracer::utils::index::cache::CacheStore::Mode::ReadWrite);
-            if (db)
-                common::unwrap(dftracer::utils::index::cache::persist_rollup(
+        if (rdir.empty()) return {};
+        dataframe::AggStatePtr state_out;
+        const auto ran = dftracer::utils::default_runtime().block_on(
+            coro::named("session_materialize", [&]() -> coro::CoroTask<void> {
+                state_out = co_await build_engine_agg_state(*plan);
+                co_return;
+            }()));
+        if (!ran || !state_out) return {};
+        auto db = dftracer::utils::index::cache::open_rollup_db(
+            rdir, dftracer::utils::index::cache::CacheStore::Mode::ReadWrite);
+        if (db) {
+            const auto persisted =
+                dftracer::utils::index::cache::persist_rollup(
                     *db, dftracer::utils::index::cache::plan_signature(*plan),
                     dftracer::utils::index::cache::rest_signature(*plan),
-                    plan->time_bucket_us, plan->group_by, *state_out));
-        } catch (const std::exception& e) {
-            DFTRACER_UTILS_LOG_WARN("fused rollup materialize skipped: {}",
-                                    e.what());
+                    plan->time_bucket_us, plan->group_by, *state_out);
+            if (!persisted)
+                DFTRACER_UTILS_LOG_WARN("fused rollup materialize skipped: {}",
+                                        persisted.error().message());
         }
+        return {};
     };
     add_branch(state, std::move(h));
 }
@@ -1920,10 +1989,11 @@ BranchHooks make_export_branch(ExportSink& sink,
             ++*count;
         };
     };
-    h.finalize = [out, counts]() {
+    h.finalize = [out, counts]() -> dstd::Result<void> {
         std::uint64_t total = 0;
         for (const auto& c : *counts) total += *c;
         out->events_matched = total;
+        return {};
     };
     return h;
 }
@@ -1987,20 +2057,28 @@ class BranchDriverFold : public Fold {
     void merge(Fold&) override {}
 
     coro::CoroTask<bool> finalize(const CoverageSet&) override {
-        for (const auto* br : *branches_)
-            if (br->finalize) br->finalize();
+        for (const auto* br : *branches_) {
+            if (!br->finalize) continue;
+            auto finished = br->finalize();
+            if (!finished && !failure_) failure_ = finished.error();
+        }
         co_return false;
     }
 
+    /// The first error a branch finalize returned, after the scan.
+    const dstd::Optional<dstd::Error>& failure() const { return failure_; }
+
    private:
+    dstd::Optional<dstd::Error> failure_;
     dstd::SharedPtr<dstd::Vector<const BranchHooks*>> branches_;
     bool gate_metadata_;
     dstd::Vector<BranchConsumer> consumers_;
     json::Document doc_;
 };
 
-coro::CoroTask<ExportStats> run_session(
+coro::CoroTask<dstd::Result<ExportStats>> run_session(
     dstd::SharedPtr<ViewSessionState> state) {
+    if (state->error) co_return *state->error;
     const ViewPlan& plan = *state->plan;
 
     // Serve each match-all aggregation branch from a rollup or the aggregation
@@ -2037,7 +2115,9 @@ coro::CoroTask<ExportStats> run_session(
                 dataframe::AggStatePtr served;
                 const auto try_serve_aggregate_no_scan_ok =
                     co_await try_serve_aggregate_no_scan(*full, served);
-                if (try_serve_aggregate_no_scan_ok) {
+                if (!try_serve_aggregate_no_scan_ok.has_value())
+                    co_return try_serve_aggregate_no_scan_ok.error();
+                if (*try_serve_aggregate_no_scan_ok) {
                     *br.agg->out = apply_agg_post_ops(
                         finalize_engine_result(*served, *full), *full);
                     continue;
@@ -2095,10 +2175,13 @@ coro::CoroTask<ExportStats> run_session(
             scan_plan.query = *state->proposed_prune;
         }
     }
-    plan_record_schema(plan);
+    if (auto resolved = resolve_record_schema(plan); !resolved)
+        co_return resolved.error();
     if (auto mv = dftracer::utils::index::cache::find_subsuming_view(plan))
         scan_plan.files = std::move(*mv);
-    ViewDefinition avdef = make_vdef(scan_plan, /*for_aggregation=*/true);
+    auto made = make_vdef(scan_plan, /*for_aggregation=*/true);
+    if (!made) co_return made.error();
+    ViewDefinition avdef = std::move(*made);
     // Streamed morsels hold the intern their ids resolve through, and outlive
     // this scan in their consumers' hands.
     auto intern_owner =
@@ -2163,10 +2246,13 @@ coro::CoroTask<ExportStats> run_session(
     // post-aggregation.
     const std::uint64_t scan_cap =
         (agg_b.empty() && !has_factories && !has_streams) ? plan.limit : 0;
-    ExportStats stats =
-        co_await execute(lower_fused_folds(scan_plan, avdef, fold_ptrs), intern,
+    auto fused = execute(lower_fused_folds(scan_plan, avdef, fold_ptrs), intern,
                          nullptr, scan_cap);
+    auto fused_stats = co_await std::move(fused);
+    if (!fused_stats) co_return fused_stats.error();
+    ExportStats stats = *fused_stats;
 
+    if (raw_fold && raw_fold->failure()) co_return *raw_fold->failure();
     for (std::size_t i = 0; i < agg_b.size(); ++i) {
         dataframe::AggState& branch_state =
             rule_aggs[i] ? rule_aggs[i]->state() : aggs[i]->state();
@@ -2182,8 +2268,11 @@ coro::CoroTask<ExportStats> run_session(
     }
     // Factory folds published their results in Fold::finalize during the fuse;
     // let the caller pull them (while the folds are still alive here).
-    for (auto& ff : state->fold_factories)
-        if (ff.finalize) ff.finalize();
+    for (auto& ff : state->fold_factories) {
+        if (!ff.finalize) continue;
+        auto finished = ff.finalize();
+        if (!finished) co_return finished.error();
+    }
     co_return stats;
 }
 
@@ -2191,10 +2280,12 @@ coro::CoroTask<ExportStats> run_session(
 // into in-memory maps, spilling to sorted runs when over budget; the runs are
 // k-way merged and streamed to the sink, so peak memory stays bounded no matter
 // the group cardinality. memory_budget == 0 keeps it purely in-memory.
-coro::CoroTask<ExportStats> run_export_counters(const ViewPlan& plan,
-                                                ExportSink& sink) {
+coro::CoroTask<dstd::Result<ExportStats>> run_export_counters(
+    const ViewPlan& plan, ExportSink& sink) {
     ensure_schema(plan);
-    ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/true);
+    auto made = make_vdef(plan, /*for_aggregation=*/true);
+    if (!made) co_return made.error();
+    ViewDefinition vdef = std::move(*made);
     dftracer::utils::dstd::StringIntern intern;
     EngineAggFold agg(plan, intern);
     std::array<Fold*, 1> folds{&agg};
@@ -2206,7 +2297,8 @@ coro::CoroTask<ExportStats> run_export_counters(const ViewPlan& plan,
 // Rank-local counter aggregation for distributed runs: aggregate this view's
 // (shard of) files in memory and serialize the groups into an opaque partial
 // buffer. The transport (MPI etc.) lives in the caller; only bytes cross ranks.
-coro::CoroTask<dstd::String> run_aggregate_partial(const ViewPlan& plan) {
+coro::CoroTask<dstd::Result<dstd::String>> run_aggregate_partial(
+    const ViewPlan& plan) {
     // Index-only fast path: the EVENT-only tier answers without reading traces
     // (a sharded reader merges straight from indexes). Everything else scans;
     // both emit the same mergeable AggState wire partial.
@@ -2224,12 +2316,14 @@ coro::CoroTask<dstd::String> run_aggregate_partial(const ViewPlan& plan) {
 }
 
 // Merge partials and emit each combined group as a ph="C" counter event.
-ExportStats merge_counters_partials(
+dstd::Result<ExportStats> merge_counters_partials(
     const ViewPlan& plan, const dstd::Vector<dstd::StringView>& partials,
     ExportSink& sink) {
     const ViewPlan p = resolve_bucket_origin(plan);
     ensure_schema(p);
-    dataframe::AggStatePtr state = decode_partials(partials);
+    auto decoded = decode_partials(partials);
+    if (!decoded) return decoded.error();
+    dataframe::AggStatePtr state = std::move(*decoded);
     ExportStats st;
     if (state) {
         emit_counters_from_state(*state, p, sink);
@@ -2240,11 +2334,13 @@ ExportStats merge_counters_partials(
 }
 
 // Merge partials into a materialized DataFrame (distributed collect()).
-dataframe::DataFrame merge_partials_to_table(
+dstd::Result<dataframe::DataFrame> merge_partials_to_table(
     const ViewPlan& plan, const dstd::Vector<dstd::StringView>& partials) {
     const ViewPlan p = resolve_bucket_origin(plan);
     ensure_schema(p);
-    dataframe::AggStatePtr state = decode_partials(partials);
+    auto decoded = decode_partials(partials);
+    if (!decoded) return decoded.error();
+    dataframe::AggStatePtr state = std::move(*decoded);
     if (!state) state = empty_engine_state(p);
     return finalize_engine_result(*state, p);
 }

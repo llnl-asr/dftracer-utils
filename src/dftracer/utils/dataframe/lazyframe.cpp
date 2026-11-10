@@ -6255,7 +6255,8 @@ coro::CoroTask<dstd::Result<void>> batch_leaves(
         if (settled.stopped) co_await coro::stop_here();
         if (settled.exception)
             co_return common::error_of_exception(settled.exception);
-        dstd::Vector<DataFrame> frames = std::move(*settled.value);
+        if (!*settled.value) co_return settled.value->error();
+        dstd::Vector<DataFrame> frames = std::move(**settled.value);
         if (frames.size() != members.size())
             dstd::fatal(
                 "Source::collect_batch returned a frame count that differs "
@@ -6368,7 +6369,7 @@ coro::CoroTask<dstd::Result<DataFrame>> LazyFrame::collect(
     return collect_owned(*this, memory_budget_, batch_size);
 }
 
-coro::CoroTask<dstd::Vector<DataFrame>> Source::collect_batch(
+coro::CoroTask<dstd::Result<dstd::Vector<DataFrame>>> Source::collect_batch(
     dstd::Vector<dstd::SharedPtr<const Source>>) const {
     dstd::fatal(
         "Source::collect_batch: a source with a batch_key() must override it");
@@ -6728,6 +6729,10 @@ LazyFrame tap(const LazyFrame& lf, dstd::SharedPtr<const Tap> tap) {
         PlanAccess::make(PlanAccess::source_ptr(lf), std::move(ops),
                          PlanAccess::memory_budget(lf)),
         lf);
+}
+
+LazyFrame fail_plan(const LazyFrame& lf, dstd::Error error) {
+    return PlanAccess::failed(lf, std::move(error));
 }
 
 LazyFrame rebase(const LazyFrame& lf, dstd::SharedPtr<const Source> source) {

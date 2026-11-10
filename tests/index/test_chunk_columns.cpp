@@ -984,11 +984,12 @@ TEST_SUITE("ChunkColumns") {
             CHECK_FALSE(columns.empty());
 
         const dstd::String root = env.dir() + "/set";
-        trace::views::write_shard_set(dstd::String(root),
-                                      {dstd::String(ia), dstd::String(ib)});
+        REQUIRE(trace::views::write_shard_set(
+                    dstd::String(root), {dstd::String(ia), dstd::String(ib)})
+                    .has_value());
         const dstd::String out = env.dir() + "/merged";
-        CHECK(trace::views::merge_shard_set(dstd::String(root),
-                                            dstd::String(out)) == 2);
+        CHECK(dftu_utils_test::ok(trace::views::merge_shard_set(
+                  dstd::String(root), dstd::String(out))) == 2);
 
         const dstd::String merged =
             dstd::String(trace::internal::determine_index_path("x", out));

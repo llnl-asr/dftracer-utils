@@ -118,11 +118,13 @@ TEST_SUITE("View unified F filter") {
         CHECK(pos.lines().size() + neg.lines().size() == all.lines().size());
     }
 
-    TEST_CASE("non-pushable F predicate raises at filter") {
+    TEST_CASE("non-pushable F predicate is an error kept at filter") {
         const auto& s = shared_trace();
         View base = View::from_file(dstd::String(s.gz), dstd::String(s.idx));
-        CHECK_THROWS_AS(base.filter((dataframe::field::F("dur") +
-                                     dataframe::field::F("ts")) > 3),
-                        dftracer::utils::common::DFTUtilsException);
+        const View refused = base.filter(
+            (dataframe::field::F("dur") + dataframe::field::F("ts")) > 3);
+        dftu_utils_test::expect_error(
+            refused.status(),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
     }
 }

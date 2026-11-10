@@ -70,7 +70,7 @@ template <class T>
 T run(coro::CoroTask<dstd::Result<T>> t) {
     auto result = default_runtime().submit(std::move(t)).get();
     require_ok(result, "run");
-    return std::move(*result);
+    if constexpr (!std::is_void_v<T>) return std::move(*result);
 }
 
 // POSIX/STDIO reads and writes across pids with a string and a numeric arg,

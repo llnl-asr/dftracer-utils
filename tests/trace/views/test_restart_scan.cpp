@@ -187,7 +187,8 @@ TEST_SUITE("RestartScan") {
         REQUIRE(pieces.size() > 3);
 
         ScanPlan plan = views::detail::scan::from_files({fx.one.file()});
-        ViewDefinition vdef = make_vdef(*plan, /*for_aggregation=*/false);
+        ViewDefinition vdef =
+            dftu_utils_test::ok(make_vdef(*plan, /*for_aggregation=*/false));
         std::uint64_t skipped = 0;
         const auto units = run(gather_units(*plan, vdef, skipped));
         CHECK(units.size() == pieces.size());

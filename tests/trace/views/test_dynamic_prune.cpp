@@ -27,6 +27,7 @@
 #include <dftracer/utils/trace/views/view_scanner_utility.h>
 #include <dftracer/utils/trace/views/view_source.h>
 #include <doctest/doctest.h>
+#include <generator_ok.h>
 #include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
@@ -170,7 +171,7 @@ coro::CoroTask<std::uint64_t> scan_unit_events(ScanUnit unit,
     std::uint64_t matched = 0;
     const ViewScannerInput input =
         make_scanner_input(unit, vdef, dstd::nullopt);
-    auto gen = scanner(input);
+    auto gen = dftu_utils_test::ok_items(scanner(input));
     while (auto batch = co_await gen.next()) matched += batch->events_matched;
     co_return matched;
 }
@@ -191,7 +192,8 @@ TEST_SUITE("Dynamic filter pushdown") {
         views::detail::scan::ScanPlan plan_ptr =
             views::detail::scan::from_file(dstd::String(gz), dstd::String(idx));
         const ViewPlan& plan = *plan_ptr;
-        ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
+        ViewDefinition vdef =
+            dftu_utils_test::ok(make_vdef(plan, /*for_aggregation=*/false));
 
         std::uint64_t static_skipped = 0;
         auto units = run(gather_units(plan, vdef, static_skipped));
@@ -442,7 +444,8 @@ TEST_SUITE("Dynamic filter pushdown") {
                 views::detail::scan::from_file(dstd::String(gz),
                                                dstd::String(idx));
             const ViewPlan& plan = *plan_ptr;
-            ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
+            ViewDefinition vdef =
+                dftu_utils_test::ok(make_vdef(plan, /*for_aggregation=*/false));
             std::uint64_t skipped = 0;
             std::uint64_t matched = 0;
             for (const ScanUnit& u :

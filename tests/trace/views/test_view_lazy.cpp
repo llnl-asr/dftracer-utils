@@ -346,14 +346,12 @@ TEST_SUITE("View - source absorption") {
 TEST_SUITE("View - builder order") {
     TEST_CASE("a trace builder after a non-filter op is refused") {
         View t = base_viewer().sort_by("ts");
-        CHECK_THROWS_WITH_AS(t.phase(Phase::Events),
-                             doctest::Contains("sort_by"),
-                             dftracer::utils::common::DFTUtilsException);
+        test_view_common::expect_refused(t.phase(Phase::Events), "sort_by");
     }
 
     TEST_CASE("a trace builder may follow an Expr filter") {
         View t = base_viewer().filter(dataframe::col(0) > std::int64_t{0});
-        CHECK_NOTHROW(t.phase(Phase::Events));
+        CHECK(t.phase(Phase::Events).status().has_value());
     }
 
     TEST_CASE("the chain keeps the View type") {
@@ -481,11 +479,9 @@ TEST_SUITE("View - collect_all and sessions") {
             t.group_by({GroupKey::cat()}).agg({{AggOp::Count, "", "n"}}));
         Deferred<dataframe::DataFrame> rows =
             s.collect(t.duql(R"(cat == "STDIO")"));
-        CHECK_THROWS(by_cat.get());
         test_view_common::run(s.execute());
         CHECK(by_cat.get().num_rows() == 2);
         CHECK(rows.get().num_rows() == 20);
-        CHECK_THROWS(s.collect(t.lazy()));
     }
 }
 
@@ -923,33 +919,23 @@ TEST_SUITE("View - trace terminals") {
 
     TEST_CASE("rejected prefixes name the first op the terminal cannot take") {
         View t = nested_viewer();
-        CHECK_THROWS_WITH_AS(t.sort_by("ts").flamegraph(),
-                             doctest::Contains("sort_by"),
-                             dftracer::utils::common::DFTUtilsException);
-        CHECK_THROWS_WITH_AS(t.head(3).call_tree(), doctest::Contains("slice"),
-                             dftracer::utils::common::DFTUtilsException);
-        CHECK_THROWS_WITH_AS(
-            t.with_column("d", dataframe::col(column_at(t, "dur")))
-                .flamegraph(),
-            doctest::Contains("with_column"),
-            dftracer::utils::common::DFTUtilsException);
-        CHECK_THROWS_WITH_AS(t.group_by({GroupKey::name()})
-                                 .agg({{AggOp::Count, "", "n"}})
-                                 .flamegraph(),
-                             doctest::Contains("aggregates"),
-                             dftracer::utils::common::DFTUtilsException);
-        CHECK_THROWS_WITH_AS(t.group_by(dstd::Vector<dstd::String>{"name"},
-                                        {{dataframe::Agg::Count, "", "n"}})
-                                 .containment(),
-                             doctest::Contains("aggregates"),
-                             dftracer::utils::common::DFTUtilsException);
-        CHECK_THROWS_WITH_AS(t.aggregate_partial(),
-                             doctest::Contains("group_by or agg"),
-                             dftracer::utils::common::DFTUtilsException);
+        using test_view_common::expect_refused;
+        expect_refused(t.sort_by("ts").flamegraph(), "sort_by");
+        expect_refused(t.head(3).call_tree(), "slice");
+        expect_refused(t.with_column("d", dataframe::col(column_at(t, "dur")))
+                           .flamegraph(),
+                       "with_column");
+        expect_refused(t.group_by({GroupKey::name()})
+                           .agg({{AggOp::Count, "", "n"}})
+                           .flamegraph(),
+                       "aggregates");
+        expect_refused(t.group_by(dstd::Vector<dstd::String>{"name"},
+                                  {{dataframe::Agg::Count, "", "n"}})
+                           .containment(),
+                       "aggregates");
+        expect_refused(t.aggregate_partial(), "group_by or agg");
         StringSink sink;
-        CHECK_THROWS_WITH_AS(t.sort_by("ts").sink_json(sink, LAZY),
-                             doctest::Contains("sort_by"),
-                             dftracer::utils::common::DFTUtilsException);
+        expect_refused(t.sort_by("ts").sink_json(sink, LAZY), "sort_by");
     }
 
     TEST_CASE("containment returns both frames from one collect") {
@@ -977,7 +963,8 @@ TEST_SUITE("View - trace terminals") {
         const dstd::String ap =
             test_view_common::run(agg.aggregate_partial().collect());
         const dstd::Vector<dstd::StringView> aps{ap};
-        CHECK(rows_of(agg.merge_partials(aps), {"name", "n"}) ==
+        CHECK(rows_of(dftu_utils_test::ok(agg.merge_partials(aps)),
+                      {"name", "n"}) ==
               rows_of(test_view_common::run(agg.collect()), {"name", "n"}));
     }
 
@@ -1034,8 +1021,8 @@ TEST_SUITE("View - trace terminals") {
               rows_of(b.frames[0], FLAME_COLS));
         const dstd::String ap = trace::views::detail::partial_of(b.frames[4]);
         const dstd::Vector<dstd::StringView> aps{ap};
-        CHECK(rows_of(agg.merge_partials(aps), {"name", "n"}) ==
-              rows_of(b.frames[6], {"name", "n"}));
+        CHECK(rows_of(dftu_utils_test::ok(agg.merge_partials(aps)),
+                      {"name", "n"}) == rows_of(b.frames[6], {"name", "n"}));
         CHECK(trace::views::detail::stats_of(b.frames[5]).events_matched == 16);
         CHECK(sink.lines().size() == 16);
     }
@@ -1089,7 +1076,6 @@ TEST_SUITE("View - trace terminals") {
             s.sink_json(t.duql(R"(cat == "POSIX")"), sink);
         Deferred<dataframe::DataFrame> fg = s.collect(t.flamegraph());
         Deferred<TypedResult> typed = s.collect(t.typed());
-        CHECK_THROWS(both.get());
         test_view_common::run(s.execute());
         CHECK(both.get().call_tree.num_rows() == 32);
         CHECK(rows_of(fg.get(), FLAME_COLS) ==
@@ -1247,9 +1233,8 @@ TEST_SUITE("View - trace terminals") {
         CHECK(rows_of(posix, {"name", "l_n", "r_n"}) ==
               dstd::Vector<dstd::String>{"decode|8|0|", "read|8|8|",
                                          "step|8|0|", "write|8|8|"});
-        CHECK_THROWS_WITH_AS(nested_viewer().compare(nested_viewer()),
-                             doctest::Contains("group_by or agg"),
-                             dftracer::utils::common::DFTUtilsException);
+        test_view_common::expect_refused(
+            nested_viewer().compare(nested_viewer()), "group_by or agg");
     }
 
     TEST_CASE("sink_counters writes the aggregation as counter events") {
@@ -1311,10 +1296,9 @@ TEST_SUITE("View - trace terminals") {
             dataframe::CmpOp::Gt, dataframe::col(dur) + dataframe::col(ts),
             dftracer::utils::dataframe::i64(1005)));
         CHECK(test_view_common::run(f.collect()).num_rows() > 0);
-        CHECK_THROWS_WITH_AS(f.group_by({GroupKey::name()}),
-                             doctest::Contains("filter"),
-                             dftracer::utils::common::DFTUtilsException);
-        CHECK_NOTHROW(f.phase(Phase::Events));
+        test_view_common::expect_refused(f.group_by({GroupKey::name()}),
+                                         "filter");
+        CHECK(f.phase(Phase::Events).status().has_value());
     }
 }
 
@@ -1351,18 +1335,18 @@ TEST_SUITE("View - low-level scans") {
         StringSink skipped;
         test_view_common::run(t.slice(30, 10).sink_json(skipped));
         CHECK(skipped.lines().size() == 2);
-        CHECK_THROWS_WITH_AS(
-            test_view_common::run(t.slice(2, 5).for_each_batch(
-                [](std::size_t, const dstd::Vector<dstd::StringView>&) {}, 1)),
-            doctest::Contains("head"),
-            dftracer::utils::common::DFTUtilsException);
-        CHECK_THROWS_WITH_AS(t.head(5).flamegraph(), doctest::Contains("slice"),
-                             dftracer::utils::common::DFTUtilsException);
+        test_view_common::expect_refused(
+            dftracer::utils::default_runtime()
+                .submit(t.slice(2, 5).for_each_batch(
+                    [](std::size_t, const dstd::Vector<dstd::StringView>&) {},
+                    1))
+                .get(),
+            "head");
+        test_view_common::expect_refused(t.head(5).flamegraph(), "slice");
         auto part = t.head(5).flamegraph_partial();
         CHECK_FALSE(test_view_common::run(part.collect()).empty());
-        CHECK_THROWS_WITH_AS(t.slice(1, 5).flamegraph_partial(),
-                             doctest::Contains("skips rows"),
-                             dftracer::utils::common::DFTUtilsException);
+        test_view_common::expect_refused(t.slice(1, 5).flamegraph_partial(),
+                                         "skips rows");
     }
 
     TEST_CASE("config reads the trace description without a filter") {

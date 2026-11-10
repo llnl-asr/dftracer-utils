@@ -12,6 +12,8 @@
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
+#include <algorithm>
+
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::internal;
 using namespace dftracer::utils::trace::views;
@@ -149,24 +151,21 @@ TEST_SUITE("GenericView") {
         TestEnvironment env(10);
         const auto gz = write_ndjson(env, "r");
         auto fails_with = [](auto&& fn, const dstd::String& text) {
-            try {
-                fn();
-            } catch (const std::exception& e) {
-                CAPTURE(e.what());
-                CHECK(dstd::String(e.what()).find(text) != dstd::String::npos);
-                return;
-            }
-            FAIL("no error");
+            const auto status = fn().status();
+            REQUIRE_FALSE(status.has_value());
+            const dstd::String what = status.error().c_str();
+            CAPTURE(what);
+            CHECK(what.find(text) != dstd::String::npos);
         };
-        fails_with([&] { view_of(gz).time_bucket(100); },
+        fails_with([&] { return view_of(gz).time_bucket(100); },
                    "time_bucket needs a time role; schema generic");
-        fails_with([&] { view_of(gz).time_range(0, 100); },
+        fails_with([&] { return view_of(gz).time_range(0, 100); },
                    "time_range needs a time role");
-        fails_with([&] { view_of(gz).call_tree(); },
+        fails_with([&] { return view_of(gz).call_tree(); },
                    "call_tree needs a time role");
-        fails_with([&] { view_of(gz).agg({{AggOp::Busy, "", "b"}}); },
+        fails_with([&] { return view_of(gz).agg({{AggOp::Busy, "", "b"}}); },
                    "occupancy aggregate needs a time role");
-        fails_with([&] { view_of(gz).group_by({GroupKey::io_cat()}); },
+        fails_with([&] { return view_of(gz).group_by({GroupKey::io_cat()}); },
                    "group key io_cat needs dftracer events");
     }
 
@@ -189,6 +188,17 @@ TEST_SUITE("GenericView") {
         CAPTURE(what);
         CHECK(what.find("dftracer") != dstd::String::npos);
         CHECK(what.find("generic") != dstd::String::npos);
+
+        const auto status = v.schema_status();
+        REQUIRE_FALSE(status.has_value());
+        CHECK(
+            dstd::String(status.error().message()).find("one record schema") !=
+            dstd::String::npos);
+        CHECK(v.lazy().output_schema().fields.empty());
+        const auto names = v.record_schema("generic").columns();
+        CHECK(v.record_schema("generic").schema_status().has_value());
+        CHECK(std::find(names.begin(), names.end(), "lat") != names.end());
+        CHECK(std::find(names.begin(), names.end(), "dur") == names.end());
     }
 
     TEST_CASE("from_directory finds JSON lines files") {
@@ -243,7 +253,7 @@ TEST_SUITE("GenericView") {
         const auto collected =
             run(View::from_directory(dstd::String(env.dir()))).collect().get();
         REQUIRE_FALSE(collected.has_value());
-        CAPTURE(collected.error().c_str());
+        CAPTURE(dstd::String(collected.error().c_str()));
         CHECK(dstd::String(collected.error().c_str())
                   .find("plain.jsonl.gz is not gzip") != dstd::String::npos);
     }

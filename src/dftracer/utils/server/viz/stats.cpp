@@ -388,8 +388,8 @@ coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
             }
         });
     };
-    auto scan =
-        co_await sv.map_batches<StatMap>(fold_events, merge_stats, slots, 0);
+    auto scan = common::unwrap(
+        co_await sv.map_batches<StatMap>(fold_events, merge_stats, slots, 0));
     StatMap by_key = std::move(scan.value);
 
     // Whole-run enclosers that opened before the scan-back window. The scan's

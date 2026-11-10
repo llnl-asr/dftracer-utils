@@ -82,12 +82,8 @@ void same(const View& v, const dstd::String& wild,
 }
 
 dstd::String error_of(const View& v, const dstd::String& q) {
-    try {
-        (void)v.duql(q);
-    } catch (const std::exception& e) {
-        return e.what();
-    }
-    return {};
+    const auto status = v.duql(q).status();
+    return status ? dstd::String() : dstd::String(status.error().message());
 }
 
 struct NullSink : ExportSink {
@@ -184,7 +180,8 @@ TEST_SUITE("DuqlWildcards") {
         const dstd::String spelled =
             "args.counters.a.p50 > 92 or args.counters.b.p50 > 92 or "
             "args.counters.c.p50 > 92";
-        const dstd::String plan = view_of(gz).explain_duql(wild);
+        const dstd::String plan =
+            dftu_utils_test::ok(view_of(gz).explain_duql(wild));
         CHECK(plan.find("args.counters.a.p50") != dstd::String::npos);
         CHECK(plan.find("args.counters.c.p50") != dstd::String::npos);
         CHECK(plan.find("*") == dstd::String::npos);

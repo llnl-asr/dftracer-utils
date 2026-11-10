@@ -50,25 +50,26 @@ Key key_of(const dataframe::DataFrame& b, std::int64_t n_key,
 
 }  // namespace
 
-dataframe::DataFrame join_batches(const dataframe::DataFrame& left,
-                                  const dataframe::DataFrame& right,
-                                  std::int64_t n_key, JoinType type) {
+dstd::Result<dataframe::DataFrame> join_batches(
+    const dataframe::DataFrame& left, const dataframe::DataFrame& right,
+    std::int64_t n_key, JoinType type) {
     // The key schema is the first n_key column names; they must agree.
-    if (n_key > static_cast<std::int64_t>(right.names.size())) return {};
+    if (n_key > static_cast<std::int64_t>(right.names.size()))
+        return dataframe::DataFrame{};
     for (std::int64_t i = 0; i < n_key; ++i)
         if (left.names[static_cast<std::size_t>(i)] !=
             right.names[static_cast<std::size_t>(i)])
-            return {};
+            return dataframe::DataFrame{};
 
     // Keys are matched via string_at(), which reads the offset buffer a
     // non-string column does not have. Aggregation keys are always strings;
-    // reject a non-string key loudly instead of dereferencing null.
+    // reject a non-string key instead of dereferencing null.
     for (std::int64_t i = 0; i < n_key; ++i)
         if (left.columns[static_cast<std::size_t>(i)].type() !=
                 dataframe::TypeId::String ||
             right.columns[static_cast<std::size_t>(i)].type() !=
                 dataframe::TypeId::String)
-            throw common::DFTUtilsException::cat(
+            return common::make_error(
                 common::ErrorCode::InvalidArgument,
                 "join/compare key columns must be string-typed");
 

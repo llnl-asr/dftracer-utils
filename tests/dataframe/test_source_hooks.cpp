@@ -767,7 +767,7 @@ class KeyedSource final : public Source {
                               .cursor);
         return out;
     }
-    coro::CoroTask<dstd::Vector<DataFrame>> collect_batch(
+    coro::CoroTask<dstd::Result<dstd::Vector<DataFrame>>> collect_batch(
         dstd::Vector<dstd::SharedPtr<const Source>> members) const override {
         ++log_->batches;
         if (log_->throw_batch) throw std::runtime_error("batch boom");
@@ -934,7 +934,7 @@ class FaultBatchSource final : public Source {
         out.push_back(dftu_utils_test::ok(inner_.scan(ScanRequest{})).cursor);
         return out;
     }
-    coro::CoroTask<dstd::Vector<DataFrame>> collect_batch(
+    coro::CoroTask<dstd::Result<dstd::Vector<DataFrame>>> collect_batch(
         dstd::Vector<dstd::SharedPtr<const Source>> members) const override {
         if (fault_ == BatchFault::NoCollect) {
             auto base = Source::collect_batch(std::move(members));

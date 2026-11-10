@@ -260,10 +260,11 @@ coro::CoroTask<HttpResponse> handle_viz_proctree(const HttpRequest& req,
         auto files =
             select_viz_target_files(index, params, static_cast<double>(gmin),
                                     static_cast<double>(gmax));
-        co_await views::View::from_files(to_view_files(files))
-            .phase(views::Phase::Events)
-            .cancel_when([&req]() { return req.cancel_token.cancelled(); })
-            .for_each_batch(on_batch, slots);
+        common::unwrap(
+            co_await views::View::from_files(to_view_files(files))
+                .phase(views::Phase::Events)
+                .cancel_when([&req]() { return req.cancel_token.cancelled(); })
+                .for_each_batch(on_batch, slots));
     }
 
     dstd::HashMap<std::int64_t, std::uint64_t> first_ts;

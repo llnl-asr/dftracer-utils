@@ -32,6 +32,7 @@
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::internal;
 using namespace dftracer::utils::trace::views;
+using test_view_common::expect_refused;
 using namespace dftu_utils_test;
 using namespace test_view_common;
 
@@ -358,9 +359,7 @@ fields:
         CHECK(bhas(gc, "host"));
         CHECK(bhas(gc, "op"));
 
-        CHECK_THROWS_WITH_AS((void)vc.time_scale(2.0),
-                             doctest::Contains("gives its time units"),
-                             dftracer::utils::common::DFTUtilsException);
+        expect_refused(vc.time_scale(2.0), "gives its time units");
 
         // Seconds and milliseconds come back in those units.
         const dataframe::DataFrame tc = run(vc.call_tree().collect());
@@ -632,14 +631,9 @@ fields:
                 dstd::String(gz),
                 dstd::String(dstd::String(determine_index_path(gz, ""))))
                 .record_schema("generic");
-        dstd::String what;
-        try {
-            (void)run(
-                v.duql("select a | group b { n = count() }").lazy().collect());
-        } catch (const std::exception& e) {
-            what = e.what();
-        }
-        CHECK(what.find("has no column 'b'") != dstd::String::npos);
+        expect_refused(
+            v.duql("select a | group b { n = count() }").lazy().collect().get(),
+            "has no column 'b'");
         CHECK(count_of(v, "select a | where a > 1") == 1);
     }
 
@@ -886,15 +880,16 @@ fields:
         const View u = View::from_file(
             dstd::String(plain),
             dstd::String(dstd::String(determine_index_path(plain, ""))));
-        CHECK_THROWS_WITH_AS(
-            (void)counts(u, GroupKey::rank(), "rank"),
-            doctest::Contains(
-                "needs row set ranks (pid, rank); schema unranked_io"),
-            dftracer::utils::common::DFTUtilsException);
-        CHECK_THROWS_WITH_AS(
-            (void)counts(u, GroupKey::file_path(), "file_path"),
-            doctest::Contains("needs row set files"),
-            dftracer::utils::common::DFTUtilsException);
+        expect_refused(u.group_by({GroupKey::rank()})
+                           .agg({{AggOp::Count, "", "n"}})
+                           .collect()
+                           .get(),
+                       "needs row set ranks (pid, rank); schema unranked_io");
+        expect_refused(u.group_by({GroupKey::file_path()})
+                           .agg({{AggOp::Count, "", "n"}})
+                           .collect()
+                           .get(),
+                       "needs row set files");
         // Without a data row set the file records are rows too.
         const Counts by_hash = counts(u, GroupKey::fhash(), "fhash");
         CHECK(by_hash.at("f1") == 5);

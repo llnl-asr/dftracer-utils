@@ -90,57 +90,61 @@ ScanPlan cancel_when(const ScanPlan& plan, dstd::Function<bool()> pred);
 ScanPlan ordered(const ScanPlan& plan);
 ScanPlan rollup_root(const ScanPlan& plan, dstd::String dir);
 ScanPlan views_root(const ScanPlan& plan, dstd::String dir);
-coro::CoroTask<ExportStats> for_each_batch(
+coro::CoroTask<dstd::Result<ExportStats>> for_each_batch(
     ScanPlan plan,
     dstd::Function<void(std::size_t, const dstd::Vector<dstd::StringView>&)>
         on_batch,
     std::size_t slot_count, std::uint64_t limit = 0);
 bool export_would_bootstrap(const ScanPlan& plan);
 bool collect_would_bootstrap(const ScanPlan& plan);
-coro::CoroTask<ExportStats> export_json(ScanPlan plan, ExportSink& sink);
-coro::CoroTask<ExportStats> export_trace(ScanPlan plan, TraceWriteOptions opts);
+coro::CoroTask<dstd::Result<ExportStats>> export_json(ScanPlan plan,
+                                                      ExportSink& sink);
+coro::CoroTask<dstd::Result<ExportStats>> export_trace(ScanPlan plan,
+                                                       TraceWriteOptions opts);
 dataframe::LazyFrame collect(const ScanPlan& plan);
-coro::AsyncGenerator<dataframe::DataFrame> stream(ScanPlan plan,
-                                                  std::int64_t batch_size = 0);
-coro::CoroTask<dataframe::DataFrame> collect_frame(ScanPlan plan);
+coro::AsyncGenerator<dstd::Result<dataframe::DataFrame>> stream(
+    ScanPlan plan, std::int64_t batch_size = 0);
+coro::CoroTask<dstd::Result<dataframe::DataFrame>> collect_frame(ScanPlan plan);
 bool is_row_query(const ScanPlan& plan);
-coro::CoroTask<dataframe::DataFrame> call_tree(
+coro::CoroTask<dstd::Result<dataframe::DataFrame>> call_tree(
     ScanPlan plan, dstd::Vector<dstd::String> partition, dstd::String ts,
     dstd::String dur, dstd::String name);
-coro::CoroTask<dataframe::DataFrame> flamegraph(
+coro::CoroTask<dstd::Result<dataframe::DataFrame>> flamegraph(
     ScanPlan plan, dstd::Vector<dstd::String> partition, dstd::String ts,
     dstd::String dur, dstd::String name, dstd::Vector<dstd::String> group);
-coro::CoroTask<dstd::Pair<dataframe::DataFrame, dataframe::DataFrame>>
+coro::CoroTask<
+    dstd::Result<dstd::Pair<dataframe::DataFrame, dataframe::DataFrame>>>
 containment(ScanPlan plan, dstd::Vector<dstd::String> partition,
             dstd::String ts, dstd::String dur, dstd::String name,
             dstd::Vector<dstd::String> group);
-coro::CoroTask<dstd::String> flamegraph_partial(
+coro::CoroTask<dstd::Result<dstd::String>> flamegraph_partial(
     ScanPlan plan, dstd::Vector<dstd::String> partition, dstd::String ts,
     dstd::String dur, dstd::String name, dstd::Vector<dstd::String> group);
 dataframe::DataFrame merge_flamegraph_partials(
     const dstd::Vector<dstd::StringView>& partials);
-coro::CoroTask<ExportStats> run_folds(
+coro::CoroTask<dstd::Result<ExportStats>> run_folds(
     ScanPlan plan, dstd::Span<detail::Fold* const> folds,
     dftracer::utils::dstd::StringIntern& intern,
     detail::DynamicPrune* dyn_prune = nullptr,
     coro::AsyncSemaphore* gate = nullptr);
-coro::CoroTask<ExportStats> run(ScanPlan plan,
-                                const ProgressFn* progress = nullptr);
+coro::CoroTask<dstd::Result<ExportStats>> run(
+    ScanPlan plan, const ProgressFn* progress = nullptr);
 dstd::String materialize_dir(const ScanPlan& plan);
 void register_materialized(const ScanPlan& plan, const dstd::String& dir);
 dstd::Vector<dstd::String> mv_source(const ScanPlan& plan);
-coro::CoroTask<TypedResult> collect_typed(ScanPlan plan, int shard_begin,
-                                          int shard_end,
-                                          const ProgressFn* progress = nullptr);
-coro::CoroTask<ExportStats> export_counters(ScanPlan plan, ExportSink& sink);
-coro::CoroTask<void> materialize_partials(
+coro::CoroTask<dstd::Result<TypedResult>> collect_typed(
+    ScanPlan plan, int shard_begin, int shard_end,
+    const ProgressFn* progress = nullptr);
+coro::CoroTask<dstd::Result<ExportStats>> export_counters(ScanPlan plan,
+                                                          ExportSink& sink);
+coro::CoroTask<dstd::Result<void>> materialize_partials(
     ScanPlan plan, const dstd::Vector<dstd::StringView>& partials);
 dstd::Optional<dataframe::DataFrame> reconstruct_if_cached(
     const ScanPlan& plan);
-coro::CoroTask<dstd::String> aggregate_partial(ScanPlan plan);
-dataframe::DataFrame merge_partials_to_table(
+coro::CoroTask<dstd::Result<dstd::String>> aggregate_partial(ScanPlan plan);
+dstd::Result<dataframe::DataFrame> merge_partials_to_table(
     const ScanPlan& plan, const dstd::Vector<dstd::StringView>& partials);
-ExportStats merge_counter_partials(
+dstd::Result<ExportStats> merge_counter_partials(
     const ScanPlan& plan, const dstd::Vector<dstd::StringView>& partials,
     ExportSink& sink);
 

@@ -59,7 +59,7 @@ TEST_SUITE("CompareView") {
                                                     dstd::String(var_idx)))
                                     .group_by({GroupKey::cat()})
                                     .agg({AggSpec(AggOp::Count, "", "count")});
-                    result = co_await view.collect();
+                    result = dftu_utils_test::ok(co_await view.collect());
                 }))));
 
         REQUIRE(result.num_rows() == 2);  // posix, stdio

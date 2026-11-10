@@ -568,6 +568,7 @@ dstd::String agg_value_base_field(dstd::StringView value_name) {
 dstd::Optional<dataframe::Schema> aggregated_output_schema(
     const ViewPlan& plan_in) {
     if (plan_in.auto_numeric_metrics) return dstd::nullopt;
+    if (!resolve_record_schema(plan_in)) return dstd::nullopt;
     const ViewPlan plan = resolve_bucket_origin(plan_in);
     ensure_schema(plan);
     AggInputSpec spec = make_agg_input_spec(plan);
@@ -1246,8 +1247,8 @@ coro::CoroTask<dataframe::DataFrame> run_collect_via_engine(
     if (auto df = try_serve_rollup(plan)) co_return std::move(*df);
     {
         dataframe::AggStatePtr served;
-        const auto try_serve_aggregate_no_scan_ok =
-            co_await try_serve_aggregate_no_scan(plan, served);
+        const bool try_serve_aggregate_no_scan_ok =
+            common::unwrap(co_await try_serve_aggregate_no_scan(plan, served));
         if (try_serve_aggregate_no_scan_ok)
             co_return finalize_engine_result(*served, plan);
     }

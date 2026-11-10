@@ -995,8 +995,8 @@ inline dftracer::utils::dataframe::DataFrame groupmap_oracle(
     plan.resolver.reset();
     dftracer::utils::trace::views::detail::ensure_schema(plan);
     dftracer::utils::trace::views::ViewDefinition vdef =
-        dftracer::utils::trace::views::detail::make_vdef(
-            plan, /*for_aggregation=*/true);
+        dftu_utils_test::ok(dftracer::utils::trace::views::detail::make_vdef(
+            plan, /*for_aggregation=*/true));
     // Keep the FH/HH/PR metadata records so the fold can build its own name and
     // rank maps for resolved group keys.
     if (plan_wants_names(plan) ||

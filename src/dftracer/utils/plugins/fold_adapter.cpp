@@ -781,7 +781,7 @@ int host_trace_read(void* h, const char* path, dftu_stream_item_fn on_batch,
                 const index::RecordSchema* declared =
                     schema.fields.empty() ? nullptr : &schema;
                 trace::views::View v = trace::views::View::from_file(p);
-                co_await v.for_each_batch(
+                common::unwrap(co_await v.for_each_batch(
                     [&](std::size_t,
                         const dstd::Vector<dstd::StringView>& events) {
                         batch_events.clear();
@@ -822,7 +822,7 @@ int host_trace_read(void* h, const char* path, dftu_stream_item_fn on_batch,
                         on_batch(cdf, ud);
                         dftu_dataframe_free(cdf);
                     },
-                    /*slot_count=*/1, /*limit=*/0);
+                    /*slot_count=*/1, /*limit=*/0));
             }()));
         return ran ? 0 : -1;
     } catch (...) {

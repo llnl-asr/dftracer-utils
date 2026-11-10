@@ -103,9 +103,21 @@ PyObject* guarded(Fn&& fn) {
     }
 }
 
+// A view or plan that kept an error is that error here: the call that built it
+// raised it before they kept errors.
+LazyFrame checked(LazyFrame lf) {
+    common::unwrap(lf.status());
+    return lf;
+}
+
+View checked(View tv) {
+    common::unwrap(tv.status());
+    return tv;
+}
+
 template <class Fn>
 PyObject* build(PyObject* self, Fn&& fn) {
-    return guarded([&] { return make_viewer(fn(tv_of(self))); });
+    return guarded([&] { return make_viewer(checked(fn(tv_of(self)))); });
 }
 
 PyObject* stats_dict(const ExportStats& s) {
@@ -410,6 +422,7 @@ int tv_init(TraceViewerObject* self, PyObject* args, PyObject* kwds) {
                     python::get_default_runtime()
                         ->submit(View::from_directory(*dir, DS(index_dir)))
                         .get());
+                common::unwrap(tv.status());
             }))
             return -1;
     } else {
@@ -421,7 +434,10 @@ int tv_init(TraceViewerObject* self, PyObject* args, PyObject* kwds) {
                     p, index_dir);
             vfiles.push_back(trace::views::ViewFile{DS(p), index_path});
         }
-        if (!run_blocking([&] { tv = View::from_files(std::move(vfiles)); }))
+        if (!run_blocking([&] {
+                tv = View::from_files(std::move(vfiles));
+                common::unwrap(tv.status());
+            }))
             return -1;
     }
     dftracer::utils::dstd::UniquePtr<View>(self->tv).reset();
@@ -548,7 +564,7 @@ PyObject* tv_explain_duql(PyObject* self, PyObject* args) {
     if (!duql_args(args, text, params)) return nullptr;
     return guarded([&] {
         const dftracer::utils::dstd::String plan =
-            tv_of(self).explain_duql(text, params);
+            common::unwrap(tv_of(self).explain_duql(text, params));
         return PyUnicode_FromStringAndSize(
             plan.data(), static_cast<Py_ssize_t>(plan.size()));
     });
@@ -735,13 +751,20 @@ PyObject* tv_memory_budget(PyObject* self, PyObject* arg) {
 
 PyObject* tv_columns(PyObject* self, PyObject*) {
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> cols;
-    if (!run_blocking([&] { cols = tv_of(self).columns(); })) return nullptr;
+    if (!run_blocking([&] {
+            common::unwrap(tv_of(self).schema_status());
+            cols = tv_of(self).columns();
+        }))
+        return nullptr;
     return str_list_dstd(cols);
 }
 
 PyObject* tv_column_info(PyObject* self, PyObject*) {
     dftracer::utils::dstd::Vector<trace::views::ColumnInfo> info;
-    if (!run_blocking([&] { info = tv_of(self).column_info(); }))
+    if (!run_blocking([&] {
+            common::unwrap(tv_of(self).schema_status());
+            info = tv_of(self).column_info();
+        }))
         return nullptr;
     PyObject* d = PyDict_New();
     if (!d) return nullptr;
@@ -760,6 +783,7 @@ PyObject* tv_column_info(PyObject* self, PyObject*) {
 PyObject* tv_schema_tree(PyObject* self, PyObject*) {
     dftracer::utils::dstd::String json;
     if (!run_blocking([&] {
+            common::unwrap(tv_of(self).schema_status());
             json = trace::views::schema_tree_json(tv_of(self).schema_tree());
         }))
         return nullptr;
@@ -790,7 +814,7 @@ PyObject* tv_call_tree(PyObject* self, PyObject* args, PyObject* kwds) {
     if (!parse_containment(args, kwds, false, a)) return nullptr;
     return guarded([&] {
         return python::wrap_lazyframe(
-            tv_of(self).call_tree(a.partition, a.ts, a.dur, a.name));
+            checked(tv_of(self).call_tree(a.partition, a.ts, a.dur, a.name)));
     });
 }
 
@@ -798,8 +822,8 @@ PyObject* tv_flamegraph(PyObject* self, PyObject* args, PyObject* kwds) {
     trace::views::ContainmentArgs a;
     if (!parse_containment(args, kwds, true, a)) return nullptr;
     return guarded([&] {
-        return python::wrap_lazyframe(
-            tv_of(self).flamegraph(a.partition, a.ts, a.dur, a.name, a.group));
+        return python::wrap_lazyframe(checked(
+            tv_of(self).flamegraph(a.partition, a.ts, a.dur, a.name, a.group)));
     });
 }
 
@@ -809,9 +833,9 @@ PyObject* tv_containment(PyObject* self, PyObject* args, PyObject* kwds) {
     return guarded([&]() -> PyObject* {
         auto r =
             tv_of(self).containment(a.partition, a.ts, a.dur, a.name, a.group);
-        PyObject* ct = python::wrap_lazyframe(LazyFrame(r.plans()[0]));
+        PyObject* ct = python::wrap_lazyframe(checked(LazyFrame(r.plans()[0])));
         if (!ct) return nullptr;
-        PyObject* fg = python::wrap_lazyframe(LazyFrame(r.plans()[1]));
+        PyObject* fg = python::wrap_lazyframe(checked(LazyFrame(r.plans()[1])));
         if (!fg) {
             Py_DECREF(ct);
             return nullptr;
@@ -825,18 +849,18 @@ PyObject* tv_flamegraph_partial(PyObject* self, PyObject* args,
     trace::views::ContainmentArgs a;
     if (!parse_containment(args, kwds, true, a)) return nullptr;
     return guarded([&] {
-        return python::wrap_lazyframe(LazyFrame(
+        return python::wrap_lazyframe(checked(LazyFrame(
             tv_of(self)
                 .flamegraph_partial(a.partition, a.ts, a.dur, a.name, a.group)
                 .plans()
-                .front()));
+                .front())));
     });
 }
 
 PyObject* tv_aggregate_partial(PyObject* self, PyObject*) {
     return guarded([&] {
-        return python::wrap_lazyframe(
-            LazyFrame(tv_of(self).aggregate_partial().plans().front()));
+        return python::wrap_lazyframe(checked(
+            LazyFrame(tv_of(self).aggregate_partial().plans().front())));
     });
 }
 
@@ -850,8 +874,8 @@ PyObject* tv_sink_json(PyObject* self, PyObject* arg) {
     }
     auto sink = dftracer::utils::dstd::make_shared<FileSink>(f);
     return guarded([&] {
-        return python::wrap_lazyframe(LazyFrame(
-            tv_of(self).sink_json(sink, trace::views::LAZY).plans().front()));
+        return python::wrap_lazyframe(checked(LazyFrame(
+            tv_of(self).sink_json(sink, trace::views::LAZY).plans().front())));
     });
 }
 
@@ -999,7 +1023,8 @@ PyObject* tv_merge_partials(PyObject* self, PyObject* arg) {
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> parts(
         owned.begin(), owned.end());
     DataFrame out;
-    if (!run_blocking([&] { out = tv_of(self).merge_partials(parts); }))
+    if (!run_blocking(
+            [&] { out = common::unwrap(tv_of(self).merge_partials(parts)); }))
         return nullptr;
     return python::wrap_dataframe(std::move(out));
 }
@@ -1067,7 +1092,7 @@ PyObject* tv_compare(PyObject* self, PyObject* arg) {
         return nullptr;
     }
     return guarded([&] {
-        return python::wrap_lazyframe(tv_of(self).compare(tv_of(arg)));
+        return python::wrap_lazyframe(checked(tv_of(self).compare(tv_of(arg))));
     });
 }
 
@@ -1100,7 +1125,8 @@ PyObject* tv_plugins(PyObject* self, PyObject* host) {
             });
     };
     return guarded([&] {
-        return python::wrap_lazyframe(tv_of(self).branch(std::move(attach)));
+        return python::wrap_lazyframe(
+            checked(tv_of(self).branch(std::move(attach))));
     });
 }
 
@@ -1289,15 +1315,17 @@ int ltv_init(LiveTraceViewerObject* self, PyObject* args, PyObject* kwds) {
 
 PyObject* ltv_snapshot(PyObject* self, PyObject*) {
     View tv;
-    if (!run_blocking([&] { tv = live_of(self).snapshot(); })) return nullptr;
-    return guarded([&] { return make_viewer(std::move(tv)); });
+    if (!run_blocking([&] { tv = common::unwrap(live_of(self).snapshot()); }))
+        return nullptr;
+    return guarded([&] { return make_viewer(checked(std::move(tv))); });
 }
 
 PyObject* ltv_new_rows(PyObject* self, PyObject*) {
     dstd::Optional<View> tv;
-    if (!run_blocking([&] { tv = live_of(self).new_rows(); })) return nullptr;
+    if (!run_blocking([&] { tv = common::unwrap(live_of(self).new_rows()); }))
+        return nullptr;
     if (!tv) Py_RETURN_NONE;
-    return guarded([&] { return make_viewer(std::move(*tv)); });
+    return guarded([&] { return make_viewer(checked(std::move(*tv))); });
 }
 
 const char* live_state_name(trace::views::LiveFileState state) {

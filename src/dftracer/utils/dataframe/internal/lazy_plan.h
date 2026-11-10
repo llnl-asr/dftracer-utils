@@ -65,6 +65,10 @@ LazyFrame tap(const LazyFrame& lf, dstd::SharedPtr<const Tap> tap);
 // The plan's leaf source.
 const dstd::SharedPtr<const Source>& plan_source(const LazyFrame& lf);
 
+// `lf` with `error` kept as its first error, unless it holds one: what a
+// builder of a type that wraps a LazyFrame returns when it refuses.
+LazyFrame fail_plan(const LazyFrame& lf, dstd::Error error);
+
 // `lf`'s ops and memory budget over `source` instead of its own source.
 LazyFrame rebase(const LazyFrame& lf, dstd::SharedPtr<const Source> source);
 

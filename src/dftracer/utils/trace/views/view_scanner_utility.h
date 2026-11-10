@@ -6,6 +6,7 @@
 #include <dftracer/utils/coro/async_generator.h>
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/intern_cache.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
@@ -113,8 +114,8 @@ struct ViewScannerBatch {
     std::uint64_t values_unconverted = 0;
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-    utilities::arrow::ArrowExportResult to_arrow() const;
-    utilities::arrow::ArrowExportResult to_arrow(
+    dstd::Result<utilities::arrow::ArrowExportResult> to_arrow() const;
+    dstd::Result<utilities::arrow::ArrowExportResult> to_arrow(
         utilities::arrow::RecordBatchBuilder& builder) const;
 #endif
 };
@@ -127,7 +128,9 @@ inline void ScanCounts::add(const ViewScannerBatch& b) {
 }
 
 struct ViewScannerUtility {
-    coro::AsyncGenerator<ViewScannerBatch> operator()(
+    /// The batches of one unit. A failed read, or a lookup that failed on a
+    /// record, is a last error result, after which the generator ends.
+    coro::AsyncGenerator<dstd::Result<ViewScannerBatch>> operator()(
         const ViewScannerInput& input);
 };
 

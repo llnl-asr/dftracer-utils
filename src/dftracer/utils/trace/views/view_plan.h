@@ -189,6 +189,9 @@ struct ViewPlan {
     /// The files' record_schema, memoized by plan_record_schema.
     mutable dstd::SharedPtr<const dftracer::utils::index::RecordSchema>
         record_schema;
+    /// Why the files have no one record_schema, when plan_record_schema fell
+    /// back to dftracer's.
+    mutable dstd::SharedPtr<const dstd::Error> record_schema_error;
 
     /// Index snapshots by index path, taken where the pins of the files were
     /// read. Every read of those indexes goes through them, so a refresh that

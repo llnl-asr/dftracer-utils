@@ -90,6 +90,9 @@ coro::CoroTask<HttpResponse> handle_viz_columns(const HttpRequest& /*req*/,
     all_files.reserve(index.files().size());
     for (const auto& f : index.files()) all_files.push_back(&f);
     views::View v = views::View::from_files(to_view_files(all_files));
+    if (auto status = v.schema_status(); !status)
+        co_return HttpResponse::bad_request(
+            dstd::String(status.error().message()));
     // This endpoint offers groupable columns; the time and duration axis
     // fields, and dftracer's pid/tid lanes, are not group options, so drop
     // them from View::column_info(). A path schema's entity stays groupable.

@@ -269,11 +269,11 @@ TEST_SUITE("View") {
         opts.member_size = 4096;
         opts.worker_count = 4;
         opts.build_index = true;
-        CHECK_THROWS_AS(dftu_utils_test::ok(
-                            View::from_file(dstd::String(gz), dstd::String(idx))
-                                .sink_trace(opts)
-                                .get()),
-                        dftracer::utils::common::DFTUtilsException);
+        dftu_utils_test::expect_error(
+            View::from_file(dstd::String(gz), dstd::String(idx))
+                .sink_trace(opts)
+                .get(),
+            dftracer::utils::common::ErrorCode::Io);
     }
 
     // The index built inline during sink_trace (build_index) must be

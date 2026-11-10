@@ -666,9 +666,11 @@ void ensure_catalog(const ScanPlan& plan) {
     if (only->files.empty()) return;
     dftracer::utils::dstd::StringIntern intern;
     common::unwrap(default_runtime().block_on(
-        coro::named("view_ensure_catalog", [&]() -> coro::CoroTask<void> {
-            co_await detail::run_folds(*only, {}, intern, nullptr, nullptr);
-        }())));
+        coro::named("view_ensure_catalog",
+                    [&]() -> coro::CoroTask<dstd::Result<ExportStats>> {
+                        co_return co_await detail::run_folds(*only, {}, intern,
+                                                             nullptr, nullptr);
+                    }())));
 }
 
 dstd::Vector<SchemaLeaf> schema_tree(const ScanPlan& plan) {
@@ -698,10 +700,11 @@ dstd::Vector<SchemaLeaf> catalog_tree(const ScanPlan& plan) {
         index::extensions::CatalogFold fold(intern, 0, false);
         const dstd::Vector<detail::Fold*> folds{&fold};
         common::unwrap(default_runtime().block_on(
-            coro::named("view_scan_catalog", [&]() -> coro::CoroTask<void> {
-                co_await detail::run_folds(*past_pin, folds, intern, nullptr,
-                                           nullptr);
-            }())));
+            coro::named("view_scan_catalog",
+                        [&]() -> coro::CoroTask<dstd::Result<ExportStats>> {
+                            co_return co_await detail::run_folds(
+                                *past_pin, folds, intern, nullptr, nullptr);
+                        }())));
         for (const auto& [path, stat] : fold.paths())
             index::extensions::add_path_stat(merged, path, stat);
     }
@@ -831,7 +834,7 @@ ScanPlan phase(const ScanPlan& plan, Phase p) {
 }
 
 ScanPlan time_range(const ScanPlan& plan, double begin, double end) {
-    detail::require_role(*plan, "time_range");
+    common::unwrap(detail::require_role(*plan, "time_range"));
     auto next = clone(plan);
     next->timed = true;
     next->time_range = dstd::make_pair(begin, end);
@@ -839,7 +842,7 @@ ScanPlan time_range(const ScanPlan& plan, double begin, double end) {
 }
 
 ScanPlan time_bucket(const ScanPlan& plan, std::uint64_t interval_us) {
-    detail::require_role(*plan, "time_bucket");
+    common::unwrap(detail::require_role(*plan, "time_bucket"));
     auto next = clone(plan);
     next->timed = true;
     next->time_bucket_us = interval_us;
@@ -849,7 +852,7 @@ ScanPlan time_bucket(const ScanPlan& plan, std::uint64_t interval_us) {
 
 ScanPlan time_bucket(const ScanPlan& plan, std::uint64_t interval_us,
                      std::uint64_t origin_us) {
-    detail::require_role(*plan, "time_bucket");
+    common::unwrap(detail::require_role(*plan, "time_bucket"));
     auto next = clone(plan);
     next->timed = true;
     next->time_bucket_us = interval_us;
@@ -860,7 +863,7 @@ ScanPlan time_bucket(const ScanPlan& plan, std::uint64_t interval_us,
 }
 
 ScanPlan time_bucket_min(const ScanPlan& plan, std::uint64_t interval_us) {
-    detail::require_role(*plan, "time_bucket");
+    common::unwrap(detail::require_role(*plan, "time_bucket"));
     auto next = clone(plan);
     next->timed = true;
     next->time_bucket_us = interval_us;
@@ -899,8 +902,8 @@ ScanPlan agg(const ScanPlan& plan, dstd::Vector<AggSpec> specs) {
     bool timed = plan->timed;
     for (const AggSpec& s : specs)
         if (is_occupancy_op(s.op)) {
-            detail::require_role(*plan, "an occupancy aggregate",
-                                 detail::TraceRole::Duration);
+            common::unwrap(detail::require_role(*plan, "an occupancy aggregate",
+                                                detail::TraceRole::Duration));
             timed = true;
         }
     auto next = clone(plan);
@@ -1114,6 +1117,7 @@ ScanPlan record_schema(const ScanPlan& plan, const dstd::String& id) {
     next->record_schema =
         dstd::SharedPtr<const dftracer::utils::index::RecordSchema>(
             dstd::SharedPtr<void>(), &p);
+    next->record_schema_error.reset();
     next->schema.reset();
     next->resolver.reset();
     return next;
@@ -1144,7 +1148,7 @@ ScanPlan views_root(const ScanPlan& plan, dstd::String dir) {
     return next;
 }
 
-coro::CoroTask<ExportStats> for_each_batch(
+coro::CoroTask<dstd::Result<ExportStats>> for_each_batch(
     ScanPlan plan,
     dstd::Function<void(std::size_t, const dstd::Vector<dstd::StringView>&)>
         on_batch,
@@ -1161,12 +1165,13 @@ bool collect_would_bootstrap(const ScanPlan& plan) {
     return detail::collect_bootstrap_eligible(*plan);
 }
 
-coro::CoroTask<ExportStats> export_json(ScanPlan plan, ExportSink& sink) {
+coro::CoroTask<dstd::Result<ExportStats>> export_json(ScanPlan plan,
+                                                      ExportSink& sink) {
     co_return co_await detail::run_export(*plan, sink);
 }
 
-coro::CoroTask<ExportStats> export_trace(ScanPlan plan,
-                                         TraceWriteOptions opts) {
+coro::CoroTask<dstd::Result<ExportStats>> export_trace(ScanPlan plan,
+                                                       TraceWriteOptions opts) {
     co_return co_await detail::run_export_trace(*plan, opts);
 }
 
@@ -1224,30 +1229,38 @@ dataframe::LazyFrame collect(const ScanPlan& plan) {
     return lf;
 }
 
-coro::AsyncGenerator<dataframe::DataFrame> stream(ScanPlan plan,
-                                                  std::int64_t batch_size) {
+coro::AsyncGenerator<dstd::Result<dataframe::DataFrame>> stream(
+    ScanPlan plan, std::int64_t batch_size) {
     dataframe::LazyFrame lf = collect(plan);
     auto gen = lf.stream(batch_size);
     for (;;) {
         auto df = co_await gen.next();
         if (!df) break;
-        co_yield common::unwrap(std::move(*df));
+        co_yield std::move(*df);
     }
 }
 
-coro::CoroTask<dataframe::DataFrame> collect_frame(ScanPlan plan) {
+coro::CoroTask<dstd::Result<dataframe::DataFrame>> collect_frame(
+    ScanPlan plan) {
     // A row query (no group_by/agg) returns the matching events, not a count.
     if (detail::is_row_query(*plan))
         co_return co_await detail::run_collect_rows(*plan);
     // Every aggregation runs through the dataframe engine; materialize() opts
     // in to persisting its AggState partials as the rollup in the same pass.
-    co_return detail::apply_agg_post_ops(
-        co_await detail::run_collect_via_engine(*plan), *plan);
+    if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
+        co_return resolved.error();
+    // The engine path still throws; its exception is the error here.
+    auto engine = detail::run_collect_via_engine(*plan);
+    auto settled = co_await coro::settle(std::move(engine));
+    if (settled.stopped) co_await coro::stop_here();
+    if (settled.exception)
+        co_return common::error_of_exception(settled.exception);
+    co_return detail::apply_agg_post_ops(std::move(*settled.value), *plan);
 }
 
 bool is_row_query(const ScanPlan& plan) { return detail::is_row_query(*plan); }
 
-coro::CoroTask<dataframe::DataFrame> call_tree(
+coro::CoroTask<dstd::Result<dataframe::DataFrame>> call_tree(
     ScanPlan plan, dstd::Vector<dstd::String> partition, dstd::String ts,
     dstd::String dur, dstd::String name) {
     co_return co_await detail::run_call_tree(*plan, std::move(partition),
@@ -1255,7 +1268,7 @@ coro::CoroTask<dataframe::DataFrame> call_tree(
                                              std::move(name));
 }
 
-coro::CoroTask<dataframe::DataFrame> flamegraph(
+coro::CoroTask<dstd::Result<dataframe::DataFrame>> flamegraph(
     ScanPlan plan, dstd::Vector<dstd::String> partition, dstd::String ts,
     dstd::String dur, dstd::String name, dstd::Vector<dstd::String> group) {
     co_return co_await detail::run_flamegraph(
@@ -1263,7 +1276,8 @@ coro::CoroTask<dataframe::DataFrame> flamegraph(
         std::move(name), std::move(group));
 }
 
-coro::CoroTask<dstd::Pair<dataframe::DataFrame, dataframe::DataFrame>>
+coro::CoroTask<
+    dstd::Result<dstd::Pair<dataframe::DataFrame, dataframe::DataFrame>>>
 containment(ScanPlan plan, dstd::Vector<dstd::String> partition,
             dstd::String ts, dstd::String dur, dstd::String name,
             dstd::Vector<dstd::String> group) {
@@ -1272,7 +1286,7 @@ containment(ScanPlan plan, dstd::Vector<dstd::String> partition,
         std::move(name), std::move(group));
 }
 
-coro::CoroTask<dstd::String> flamegraph_partial(
+coro::CoroTask<dstd::Result<dstd::String>> flamegraph_partial(
     ScanPlan plan, dstd::Vector<dstd::String> partition, dstd::String ts,
     dstd::String dur, dstd::String name, dstd::Vector<dstd::String> group) {
     co_return co_await detail::run_flamegraph_partial(
@@ -1285,14 +1299,15 @@ dataframe::DataFrame merge_flamegraph_partials(
     return detail::merge_flamegraph_partials(partials);
 }
 
-coro::CoroTask<ExportStats> run_folds(
+coro::CoroTask<dstd::Result<ExportStats>> run_folds(
     ScanPlan plan, dstd::Span<detail::Fold* const> folds,
     dftracer::utils::dstd::StringIntern& intern,
     detail::DynamicPrune* dyn_prune, coro::AsyncSemaphore* gate) {
     co_return co_await detail::run_folds(*plan, folds, intern, dyn_prune, gate);
 }
 
-coro::CoroTask<ExportStats> run(ScanPlan plan, const ProgressFn* progress) {
+coro::CoroTask<dstd::Result<ExportStats>> run(ScanPlan plan,
+                                              const ProgressFn* progress) {
     co_return co_await detail::run_materialize(*plan, progress);
 }
 
@@ -1316,18 +1331,18 @@ dstd::Vector<dstd::String> mv_source(const ScanPlan& plan) {
     return out;
 }
 
-coro::CoroTask<TypedResult> collect_typed(ScanPlan plan, int shard_begin,
-                                          int shard_end,
-                                          const ProgressFn* progress) {
+coro::CoroTask<dstd::Result<TypedResult>> collect_typed(
+    ScanPlan plan, int shard_begin, int shard_end, const ProgressFn* progress) {
     co_return co_await detail::run_collect_typed(*plan, shard_begin, shard_end,
                                                  progress);
 }
 
-coro::CoroTask<ExportStats> export_counters(ScanPlan plan, ExportSink& sink) {
+coro::CoroTask<dstd::Result<ExportStats>> export_counters(ScanPlan plan,
+                                                          ExportSink& sink) {
     co_return co_await detail::run_export_counters(*plan, sink);
 }
 
-coro::CoroTask<void> materialize_partials(
+coro::CoroTask<dstd::Result<void>> materialize_partials(
     ScanPlan plan, const dstd::Vector<dstd::StringView>& partials) {
     co_return co_await detail::run_materialize_partials(*plan, partials);
 }
@@ -1337,16 +1352,16 @@ dstd::Optional<dataframe::DataFrame> reconstruct_if_cached(
     return detail::run_reconstruct_if_cached(*plan);
 }
 
-coro::CoroTask<dstd::String> aggregate_partial(ScanPlan plan) {
+coro::CoroTask<dstd::Result<dstd::String>> aggregate_partial(ScanPlan plan) {
     co_return co_await detail::run_aggregate_partial(*plan);
 }
 
-dataframe::DataFrame merge_partials_to_table(
+dstd::Result<dataframe::DataFrame> merge_partials_to_table(
     const ScanPlan& plan, const dstd::Vector<dstd::StringView>& partials) {
     return detail::merge_partials_to_table(*plan, partials);
 }
 
-ExportStats merge_counter_partials(
+dstd::Result<ExportStats> merge_counter_partials(
     const ScanPlan& plan, const dstd::Vector<dstd::StringView>& partials,
     ExportSink& sink) {
     return detail::merge_counters_partials(*plan, partials, sink);

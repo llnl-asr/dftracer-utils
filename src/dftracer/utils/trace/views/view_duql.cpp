@@ -17,6 +17,7 @@
 #include <dftracer/utils/index/source.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/trace/internal/utils.h>
+#include <dftracer/utils/trace/views/interim_guard.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_duql_internal.h>
 #include <dftracer/utils/trace/views/view_plan.h>
@@ -241,7 +242,18 @@ View detail::with_named_columns(const View& v,
     });
 }
 
-dstd::Pair<View, dstd::Vector<dstd::String>> View::duql_plan(
+dstd::Result<dstd::Pair<View, dstd::Vector<dstd::String>>> View::duql_plan(
+    dstd::StringView text, const duql::Params& params) const {
+    if (auto kept = lf_.status(); !kept) return kept.error();
+    auto planned = detail::guard_exceptions(
+        [&] { return duql_plan_or_throw(text, params); });
+    if (!planned) return planned;
+    // A step that refused left its error on the view it returned.
+    if (auto kept = planned->first.status(); !kept) return kept.error();
+    return planned;
+}
+
+dstd::Pair<View, dstd::Vector<dstd::String>> View::duql_plan_or_throw(
     dstd::StringView text, const duql::Params& params) const {
     const index::RecordSchema& schema = detail::plan_record_schema(*plan_);
     Ctx ctx;
@@ -400,22 +412,26 @@ dstd::Pair<View, dstd::Vector<dstd::String>> View::duql_plan(
 }
 
 View View::duql(dstd::StringView text, const duql::Params& params) const {
-    return duql_plan(text, params).first;
+    auto planned = duql_plan(text, params);
+    if (!planned) return failed(planned.error());
+    return std::move(planned->first);
 }
 
 View View::duql(const duql::Pipe& pipe) const {
     if (!pipe.error().empty())
-        common::throw_error(
+        return failed(
             dstd::Error{common::ErrorCode::InvalidArgument, pipe.error()});
     duql::Params params;
     for (const auto& [name, value] : pipe.bound()) params.emplace(name, value);
     return duql(pipe.raw(), params);
 }
 
-dstd::String View::explain_duql(dstd::StringView text,
-                                const duql::Params& params) const {
+dstd::Result<dstd::String> View::explain_duql(
+    dstd::StringView text, const duql::Params& params) const {
+    auto planned = duql_plan(text, params);
+    if (!planned) return planned.error();
     dstd::String out;
-    for (const auto& l : duql_plan(text, params).second) {
+    for (const auto& l : planned->second) {
         out += l;
         out += '\n';
     }

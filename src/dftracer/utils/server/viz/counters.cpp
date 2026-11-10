@@ -170,7 +170,7 @@ coro::CoroTask<HttpResponse> handle_viz_counters(const HttpRequest& req,
             fold_counter(ev, begin, bucket_us, nb, acc);
         });
     };
-    auto r = co_await v.map_batches<CounterAcc>(
+    auto r = common::unwrap(co_await v.map_batches<CounterAcc>(
         fold_events,
         [](CounterAcc&& x, CounterAcc&& y) {
             if (y.ops.empty()) return std::move(x);
@@ -178,7 +178,7 @@ coro::CoroTask<HttpResponse> handle_viz_counters(const HttpRequest& req,
             x.merge_from(y);
             return std::move(x);
         },
-        slots, limit > 0 ? static_cast<std::uint64_t>(limit) : 0);
+        slots, limit > 0 ? static_cast<std::uint64_t>(limit) : 0));
 
     bool truncated = r.stats.truncated;
     CounterAcc total = std::move(r.value);

@@ -57,14 +57,16 @@ class LiveView {
     /// Adds the members written since the last call to the index, once each,
     /// and returns a View of every whole member. Each file stops at its first
     /// short or bad member. The View does not change after this call and stays
-    /// valid after later calls. Throws when a named file does not exist.
-    View snapshot();
+    /// valid after later calls. An Io error result when a named file does not
+    /// exist or its index cannot be built or read.
+    dstd::Result<View> snapshot();
 
     /// As @ref snapshot, and returns a View of only the rows that no earlier
     /// call of this function returned, or nullopt when there are none. A file
     /// that a new file replaced starts over. A file whose last whole member
-    /// ends inside a line is held back until a later member ends that line.
-    dstd::Optional<View> new_rows();
+    /// ends inside a line is held back until a later member ends that line. The
+    /// errors are those of @ref snapshot.
+    dstd::Result<dstd::Optional<View>> new_rows();
 
     /// One entry per file, from the last @ref snapshot.
     const dstd::Vector<LiveFileStatus>& status() const { return status_; }
@@ -86,7 +88,7 @@ class LiveView {
         bool has_open_line = false;
     };
 
-    dstd::Vector<PinnedFile> refresh();
+    dstd::Result<dstd::Vector<PinnedFile>> refresh();
 
     dstd::Vector<dstd::String> paths_;
     dstd::String index_path_;

@@ -195,11 +195,11 @@ ViewCounts view_counts(const dstd::String& gz, const duql::Query& q) {
         {dstd::String(gz),
          dftracer::utils::trace::internal::determine_index_path(gz, "")});
     vp.query = q;
-    auto vdef = trace::views::detail::make_vdef(vp, false);
+    auto vdef = dftu_utils_test::ok(trace::views::detail::make_vdef(vp, false));
     auto run = [&]() -> dftracer::utils::coro::CoroTask<ViewCounts> {
         std::uint64_t skipped = 0;
-        auto units =
-            co_await trace::views::detail::gather_units(vp, vdef, skipped);
+        auto units = dftu_utils_test::ok(
+            co_await trace::views::detail::gather_units(vp, vdef, skipped));
         ViewCounts out;
         for (const bool prefilter : {true, false}) {
             vdef.prefilter = prefilter;
@@ -209,7 +209,7 @@ ViewCounts view_counts(const dstd::String& gz, const duql::Query& q) {
                                                                     vdef.query);
                 sin.with_batch_size(READ_BUFFER_BYTES);
                 trace::views::ViewScannerUtility scanner;
-                auto gen = scanner(sin);
+                auto gen = dftu_utils_test::ok_items(scanner(sin));
                 while (auto b = co_await gen.next())
                     matched += b->events_matched;
             }

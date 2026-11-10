@@ -4,10 +4,9 @@
 #include <dftracer/utils/trace/views/pipeline.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <doctest/doctest.h>
+#include <memory/fresh_process.h>
 #include <task_result.h>
 #include <trace/views/test_view_common.h>
-
-#include <stdexcept>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::internal;
@@ -17,24 +16,49 @@ using namespace test_view_common;
 using namespace dftracer::utils::trace;
 
 TEST_SUITE("Pipeline plan") {
-    TEST_CASE("execute rejects a shape no lowering handles") {
+    TEST_CASE("execute of a pipeline with streaming ops ends the process" *
+              doctest::skip()) {
+        fresh_process::announce_abort();
         dstd::StringIntern intern;
-
         views::detail::Pipeline with_ops;
         with_ops.ops.push_back(
             {views::detail::NodeKind::StreamOp, nullptr, nullptr, nullptr});
-        CHECK_THROWS_AS(run(views::detail::execute(with_ops, intern)),
-                        std::logic_error);
+        (void)views::detail::execute(with_ops, intern).get();
+    }
 
+    TEST_CASE("execute of an incomplete pipeline ends the process" *
+              doctest::skip()) {
+        fresh_process::announce_abort();
+        dstd::StringIntern intern;
         views::detail::Pipeline incomplete;
-        CHECK_THROWS_AS(run(views::detail::execute(incomplete, intern)),
-                        std::logic_error);
+        (void)views::detail::execute(incomplete, intern).get();
+    }
 
+    TEST_CASE("execute of a sink without a fold ends the process" *
+              doctest::skip()) {
+        fresh_process::announce_abort();
+        dstd::StringIntern intern;
+        views::detail::ViewPlan plan;
+        views::ViewDefinition vdef;
         views::detail::Pipeline null_sink;
+        null_sink.source.plan = &plan;
+        null_sink.source.vdef = &vdef;
         null_sink.sinks.push_back(
             {views::detail::NodeKind::Sink, nullptr, nullptr, nullptr});
-        CHECK_THROWS_AS(run(views::detail::execute(null_sink, intern)),
-                        std::logic_error);
+        (void)views::detail::execute(null_sink, intern).get();
+    }
+
+    TEST_CASE("execute rejects a shape no lowering handles") {
+        CHECK(
+            fresh_process::run(
+                "execute of a pipeline with streaming ops ends the process")
+                .aborted_with("pipeline: streaming ops need the pull driver"));
+        CHECK(fresh_process::run(
+                  "execute of an incomplete pipeline ends the process")
+                  .aborted_with("pipeline: incomplete source or no sink"));
+        CHECK(fresh_process::run(
+                  "execute of a sink without a fold ends the process")
+                  .aborted_with("pipeline: sink node carries no fold"));
     }
 
     TEST_CASE("a row query lowered to the identity pipeline returns its rows") {

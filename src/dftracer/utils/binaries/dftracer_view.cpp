@@ -308,7 +308,7 @@ static coro::CoroTask<void> verify_output(const dstd::String& final_output,
         checkpoint_size);
     NullSink ns;
     View v = configure(View::from_files({ovf}));
-    ExportStats vs = co_await v.sink_json(ns);
+    ExportStats vs = common::unwrap(co_await v.sink_json(ns));
     if (vs.events_matched != expected_events) {
         DFTRACER_UTILS_LOG_ERROR(
             "Verify failed: wrote {} events but re-scan found {}",
@@ -850,7 +850,7 @@ dstd::Optional<int> ViewRun::probe_duql() {
         View probe = View::from_files(view_files);
         if (!cli->record_schema.empty())
             probe = probe.record_schema(dstd::String(cli->record_schema));
-        plan = probe.explain_duql(duql_str, duql_params);
+        plan = common::unwrap(probe.explain_duql(duql_str, duql_params));
     } catch (const std::exception& e) {
         DFTRACER_UTILS_LOG_ERROR("Invalid --duql: {}", e.what());
         return 1;
@@ -903,7 +903,7 @@ coro::CoroTask<void> ViewRun::run_distributed_aggregate(
     dataframe::LazyResult<dstd::String> partial_plan =
         fg_mode ? shard_view.flamegraph_partial(ct_partition)
                 : shard_view.aggregate_partial();
-    dstd::String partial = co_await partial_plan.collect();
+    dstd::String partial = common::unwrap(co_await partial_plan.collect());
     auto partials = transport.all_gather(partial);
     if (transport.rank() == 0) {
         // Every rank published its shard before the gather, so the set is
@@ -922,8 +922,8 @@ coro::CoroTask<void> ViewRun::run_distributed_aggregate(
             }
             if (!shard_dirs.empty()) {
                 try {
-                    write_shard_set(idx_root, shard_dirs);
-                    consolidate_shard_set(idx_root);
+                    common::unwrap(write_shard_set(idx_root, shard_dirs));
+                    common::unwrap(consolidate_shard_set(idx_root));
                 } catch (const std::exception& e) {
                     index_merge_failed = true;
                     DFTRACER_UTILS_LOG_ERROR("shards not merged into {}: {}",
@@ -939,9 +939,10 @@ coro::CoroTask<void> ViewRun::run_distributed_aggregate(
             print_table(out_target, table);
             stats.events_matched = table.num_rows();
         } else if (counters) {
-            stats = merger.merge_counter_partials(pv, *sink);
+            stats = common::unwrap(merger.merge_counter_partials(pv, *sink));
         } else {
-            dataframe::DataFrame merged = merger.merge_partials(pv);
+            dataframe::DataFrame merged =
+                common::unwrap(merger.merge_partials(pv));
             dataframe::DataFrame table =
                 co_await windowed_table(std::move(merged));
             print_table(out_target, table);
@@ -977,7 +978,7 @@ coro::CoroTask<void> ViewRun::run_distributed_write(
     topts.compress = true;
     View shard_view =
         windowed(configure(View::from_files(std::move(shard_vf))));
-    stats = co_await shard_view.sink_trace(topts);
+    stats = common::unwrap(co_await shard_view.sink_trace(topts));
     auto rank_outs = transport.all_gather(rank_out);
     if (transport.rank() == 0) {
         const auto merge_rc =
@@ -1001,11 +1002,13 @@ coro::CoroTask<void> ViewRun::run_distributed_write(
 // trace-file scan when each shard's aggregation tier covers it.
 coro::CoroTask<void> ViewRun::run_shard_set() {
     const auto configure_view = [this](View v) { return configure(v); };
-    ShardedView sv = ShardedView::from_manifest(shard_set_root);
+    ShardedView sv = common::unwrap(ShardedView::from_manifest(shard_set_root));
     if (counters) {
-        stats = co_await sv.aggregate_counters(configure_view, *sink);
+        stats = common::unwrap(
+            co_await sv.aggregate_counters(configure_view, *sink));
     } else {
-        dataframe::DataFrame merged = co_await sv.aggregate(configure_view);
+        dataframe::DataFrame merged =
+            common::unwrap(co_await sv.aggregate(configure_view));
         dataframe::DataFrame table = co_await windowed_table(std::move(merged));
         print_table(out_target, table);
         stats.events_matched = table.num_rows();
@@ -1039,17 +1042,17 @@ coro::CoroTask<void> ViewRun::run_local() {
     } else if (mv_mode) {
         // Build-only terminal: compute the aggregation and persist it as a
         // rollup so a later matching query hits the fast path.
-        stats = co_await base.materialize();
+        stats = common::unwrap(co_await base.materialize());
         std::fprintf(stderr, "Materialized rollup (%llu events).\n",
                      (unsigned long long)stats.events_matched);
     } else if (typed_mode) {
-        auto tr = co_await base.collect_typed();
+        auto tr = common::unwrap(co_await base.collect_typed());
         emit_typed(out_target, tr.regular, tr.aggregated, tr.counters);
         stats.events_matched = static_cast<std::uint64_t>(
             tr.regular.num_rows() + tr.aggregated.num_rows() +
             tr.counters.num_rows());
     } else if (counters) {
-        stats = co_await base.sink_counters(*sink);
+        stats = common::unwrap(co_await base.sink_counters(*sink));
     } else if (aggregate || duql_rows) {
         dataframe::DataFrame table = common::unwrap(co_await v.collect());
         print_table(out_target, table);
@@ -1067,9 +1070,9 @@ coro::CoroTask<void> ViewRun::run_local() {
         topts.compress = true;
         topts.build_index = !no_index;
         topts.index_path = index_dir;
-        stats = co_await v.sink_trace(topts);
+        stats = common::unwrap(co_await v.sink_trace(topts));
     } else {
-        stats = co_await v.sink_json(*sink);
+        stats = common::unwrap(co_await v.sink_json(*sink));
     }
 
     if (out_file) std::fflush(out_file);

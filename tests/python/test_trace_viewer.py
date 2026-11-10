@@ -1339,6 +1339,9 @@ class TestTraceViewerSchema:
                 tv.columns
             with pytest.raises(Exception, match="one record schema"):
                 tv.schema
+            generic_only = TraceViewer([generic, events], record_schema="generic")
+            assert "a" in generic_only.columns
+            assert "dur" not in generic_only.columns
 
     def test_schema_reports_types(self):
         with Environment() as env:

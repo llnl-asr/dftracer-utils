@@ -656,7 +656,9 @@ coro::CoroTask<dstd::Result<PluginRun>> Plugins::run(const View& view) const {
     }
 
     const View pruned = prune(view);
-    out.stats = co_await pruned.run_folds(folds, intern);
+    auto ran = co_await pruned.run_folds(folds, intern);
+    if (!ran) co_return ran.error();
+    out.stats = *ran;
     co_return out;
 }
 
@@ -694,9 +696,12 @@ trace::views::Deferred<PluginRun> Plugins::attach(
             },
             // The fused scan finalizes every attached fold together, so the
             // last one to finalize marks the handle resolved.
-            idx + 1 == n
-                ? dstd::Function<void()>([executed]() { *executed = true; })
-                : dstd::Function<void()>([]() {}));
+            idx + 1 == n ? dstd::Function<dstd::Result<void>()>([executed]() {
+                *executed = true;
+                return dstd::Result<void>{};
+            })
+                         : dstd::Function<dstd::Result<void>()>(
+                               []() { return dstd::Result<void>{}; }));
     }
     return {out, executed};
 }

@@ -217,10 +217,10 @@ class StatsView {
             needs.names && !name_agg().reconstruct_if_cached().has_value();
         if (!want_cat && !want_name) co_return;
 
-        if (want_cat) co_await cat.materialize();
+        if (want_cat) common::unwrap(co_await cat.materialize());
         if (want_name) {
             const views::View agg = name_agg();
-            co_await agg.materialize();
+            common::unwrap(co_await agg.materialize());
         }
     }
 

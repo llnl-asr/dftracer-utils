@@ -49,18 +49,22 @@ struct BootstrapCounters {
 BootstrapCounters& bootstrap_counters();
 #endif
 
-coro::CoroTask<ExportStats> run_export(const ViewPlan& plan, ExportSink& sink);
+// The run_* terminals below end with the first error of the plan's record
+// schema, a read, a write or a fold. The ones that serve a rollup or an index
+// artifact leave a failure of that cache out: it only means a scan.
+coro::CoroTask<dstd::Result<ExportStats>> run_export(const ViewPlan& plan,
+                                                     ExportSink& sink);
 
 // Write matching events as a new multi-member trace via the parallel writer
 // (PFS-aware); sharded output is concatenated on close.
-coro::CoroTask<ExportStats> run_export_trace(const ViewPlan& plan,
-                                             const TraceWriteOptions& opts);
+coro::CoroTask<dstd::Result<ExportStats>> run_export_trace(
+    const ViewPlan& plan, const TraceWriteOptions& opts);
 
 // Fused variant of run_export_trace that builds the member+bloom+stats index
 // during the write, avoiding a re-inflate. A single in-order consumer writes
 // members so member_idx == checkpoint_idx and no offset remap is needed.
 // Reached when TraceWriteOptions::build_index is set.
-coro::CoroTask<ExportStats> run_export_trace_indexed(
+coro::CoroTask<dstd::Result<ExportStats>> run_export_trace_indexed(
     const ViewPlan& plan, const TraceWriteOptions& opts,
     const ProgressFn* progress = nullptr);
 
@@ -74,8 +78,9 @@ ViewPlan resolve_bucket_origin(const ViewPlan& plan);
 /// the aggregation tier. On a hit fills `out` (a mergeable engine AggState,
 /// finalize with finalize_engine_result) and returns true; false means the
 /// query must scan. The AggState rollup is served separately by
-/// try_serve_rollup (it returns a finalized DataFrame).
-coro::CoroTask<bool> try_serve_aggregate_no_scan(
+/// try_serve_rollup (it returns a finalized DataFrame). A bootstrap that fails
+/// is an error result.
+coro::CoroTask<dstd::Result<bool>> try_serve_aggregate_no_scan(
     const ViewPlan& plan, dftracer::utils::dataframe::AggStatePtr& out);
 
 /// Serve `plan` from a subsuming persisted rollup with no scan: re-aggregate
@@ -91,7 +96,8 @@ bool is_row_query(const ViewPlan& plan);
 /// Row-query collect: scan the matching events into one native DataFrame (via
 /// NativeRowFold), applying select/sort/topk/offset/limit. Assumes
 /// is_row_query(plan).
-coro::CoroTask<dataframe::DataFrame> run_collect_rows(const ViewPlan& plan);
+coro::CoroTask<dstd::Result<dataframe::DataFrame>> run_collect_rows(
+    const ViewPlan& plan);
 
 /// Whether every key column (positions of `key_idx` in plan.select) is a plain
 /// field or arg the distinct scan can key from the event. False for a computed
@@ -103,25 +109,26 @@ bool distinct_keyable(const ViewPlan& plan,
 /// the first row of each key and the rows come out in first-occurrence order,
 /// matching the host unique(). Assumes is_row_query(plan) and
 /// distinct_keyable(plan, key_idx).
-coro::CoroTask<dataframe::DataFrame> run_collect_rows_distinct(
+coro::CoroTask<dstd::Result<dataframe::DataFrame>> run_collect_rows_distinct(
     const ViewPlan& plan, const dstd::Vector<std::int64_t>& key_idx);
 
 /// Scan, buffer the lean containment tuples in a ContainmentFold, then build
 /// the call-tree / flamegraph frame. `partition` names the lane keys;
 /// ts/dur/name name the interval and label fields (any field, POD scalar or
 /// arg/nested).
-coro::CoroTask<dataframe::DataFrame> run_call_tree(
+coro::CoroTask<dstd::Result<dataframe::DataFrame>> run_call_tree(
     const ViewPlan& plan, dstd::Vector<dstd::String> partition,
     dstd::String ts_field, dstd::String dur_field, dstd::String name_field);
-coro::CoroTask<dataframe::DataFrame> run_flamegraph(
+coro::CoroTask<dstd::Result<dataframe::DataFrame>> run_flamegraph(
     const ViewPlan& plan, dstd::Vector<dstd::String> partition,
     dstd::String ts_field, dstd::String dur_field, dstd::String name_field,
     dstd::Vector<dstd::String> group = {});
-coro::CoroTask<dstd::Pair<dataframe::DataFrame, dataframe::DataFrame>>
+coro::CoroTask<
+    dstd::Result<dstd::Pair<dataframe::DataFrame, dataframe::DataFrame>>>
 run_containment(const ViewPlan& plan, dstd::Vector<dstd::String> partition,
                 dstd::String ts_field, dstd::String dur_field,
                 dstd::String name_field, dstd::Vector<dstd::String> group = {});
-coro::CoroTask<dstd::String> run_flamegraph_partial(
+coro::CoroTask<dstd::Result<dstd::String>> run_flamegraph_partial(
     const ViewPlan& plan, dstd::Vector<dstd::String> partition,
     dstd::String ts_field, dstd::String dur_field, dstd::String name_field,
     dstd::Vector<dstd::String> group = {});
@@ -130,7 +137,7 @@ coro::CoroTask<dstd::String> run_flamegraph_partial(
 // their ids agree and per-worker slices merge. `dyn_prune` (optional) is
 // forwarded to fuse() so a cursor's narrow() can still prune units not yet
 // claimed.
-coro::CoroTask<ExportStats> run_folds(
+coro::CoroTask<dstd::Result<ExportStats>> run_folds(
     const ViewPlan& plan, dstd::Span<Fold* const> folds,
     dftracer::utils::dstd::StringIntern& intern,
     DynamicPrune* dyn_prune = nullptr, coro::AsyncSemaphore* gate = nullptr);
@@ -138,18 +145,18 @@ coro::CoroTask<ExportStats> run_folds(
 // Build-only terminal: materialize the filtered-trace MV (row query) or the
 // rollup (aggregation) and return scan stats. A no-op when the MV already
 // exists, so it is an idempotent prewarm. `progress` gets (done, total) units.
-coro::CoroTask<ExportStats> run_materialize(
+coro::CoroTask<dstd::Result<ExportStats>> run_materialize(
     const ViewPlan& plan, const ProgressFn* progress = nullptr);
 
 // Distributed materialize: reduce rank-local partials (from aggregate_partial)
 // app-side and persist the rollup, without re-scanning.
-coro::CoroTask<void> run_materialize_partials(
+coro::CoroTask<dstd::Result<void>> run_materialize_partials(
     const ViewPlan& plan, const dstd::Vector<dstd::StringView>& partials);
 
 // Read the aggregation index's three record families (regular events,
 // aggregated records, counters) from shard range [shard_begin, shard_end).
 // Empty tables when the index has no aggregation tier.
-coro::CoroTask<TypedResult> run_collect_typed(
+coro::CoroTask<dstd::Result<TypedResult>> run_collect_typed(
     const ViewPlan& plan, int shard_begin = 0, int shard_end = 4096,
     const ProgressFn* progress = nullptr);
 
@@ -161,23 +168,26 @@ dstd::Optional<dataframe::DataFrame> run_reconstruct_if_cached(
 // Streaming, out-of-core counter aggregation under a per-worker memory budget
 // (plan.memory_budget): spill to sorted runs, k-way merge, and emit each group
 // as a ph="C" event. Peak memory is bounded; budget 0 stays purely in-memory.
-coro::CoroTask<ExportStats> run_export_counters(const ViewPlan& plan,
-                                                ExportSink& sink);
+coro::CoroTask<dstd::Result<ExportStats>> run_export_counters(
+    const ViewPlan& plan, ExportSink& sink);
 
 // Distributed building blocks: rank-local aggregate -> opaque serialized
 // partial, and merge partials -> emit. The MPI (or other) transport lives in
 // the caller so the View core stays transport-free.
-coro::CoroTask<dstd::String> run_aggregate_partial(const ViewPlan& plan);
-ExportStats merge_counters_partials(
+coro::CoroTask<dstd::Result<dstd::String>> run_aggregate_partial(
+    const ViewPlan& plan);
+/// An Aggregation error for a partial that is empty or has a foreign wire tag,
+/// and the error of decoding it.
+dstd::Result<ExportStats> merge_counters_partials(
     const ViewPlan& plan, const dstd::Vector<dstd::StringView>& partials,
     ExportSink& sink);
-dataframe::DataFrame merge_partials_to_table(
+dstd::Result<dataframe::DataFrame> merge_partials_to_table(
     const ViewPlan& plan, const dstd::Vector<dstd::StringView>& partials);
 
 // Drive the plan's index-pruned parallel scan; invoke `on_batch(slot, events)`
 // per decoded batch on worker slots in [0, slot_count), stopping at `limit`
 // (0 = unlimited).
-coro::CoroTask<ExportStats> run_scan_batches(
+coro::CoroTask<dstd::Result<ExportStats>> run_scan_batches(
     const dstd::SharedPtr<const ViewPlan>& plan, std::size_t slot_count,
     std::uint64_t limit,
     const dstd::Function<
@@ -222,27 +232,28 @@ using BranchConsumer = dstd::Function<void(json::Value&, dstd::StringView)>;
 struct BranchHooks {
     dstd::Optional<duql::Query> predicate;  // nullopt = match all
     dstd::Function<BranchConsumer()> make_consumer;
-    dstd::Function<void()> finalize;
+    dstd::Function<dstd::Result<void>()> finalize;
     dstd::Optional<AggBranch> agg;
     bool wants_metadata = false;  // the consumer reads metadata records as rows
 };
 
 void add_fold_branch(ViewSessionState& state, Query predicate,
                      dstd::Function<BranchConsumer()> make_consumer,
-                     dstd::Function<void()> finalize,
+                     dstd::Function<dstd::Result<void>()> finalize,
                      bool wants_metadata = false);
 
 // Match-all fold branch (no per-branch predicate): consume every scanned event.
 void add_fold_branch(ViewSessionState& state,
                      dstd::Function<BranchConsumer()> make_consumer,
-                     dstd::Function<void()> finalize,
+                     dstd::Function<dstd::Result<void>()> finalize,
                      bool wants_metadata = false);
 
 // Fold branch over the events the session's base plan selects (its query and
-// phase), as collect_events reads them.
+// phase), as collect_events reads them. An error of the plan's effective query
+// is kept in the state and ends run_session.
 void add_selection_fold_branch(ViewSessionState& state,
                                dstd::Function<BranchConsumer()> make_consumer,
-                               dstd::Function<void()> finalize);
+                               dstd::Function<dstd::Result<void>()> finalize);
 
 // Attach a match-all branch that aggregates (group_by + agg) and, on finalize,
 // persists the result as a rollup under the session's base plan overlaid with
@@ -275,8 +286,13 @@ void add_fold_factory(
     ViewSessionState& state,
     dstd::Function<dstd::UniquePtr<Fold>(dftracer::utils::dstd::StringIntern&)>
         make,
-    dstd::Function<void()> finalize);
-coro::CoroTask<ExportStats> run_session(
+    dstd::Function<dstd::Result<void>()> finalize);
+
+/// Keeps `error` as the first error of the session, unless it holds one; the
+/// session's execute ends with it before it scans.
+void keep_session_error(ViewSessionState& state, dstd::Error error);
+
+coro::CoroTask<dstd::Result<ExportStats>> run_session(
     dstd::SharedPtr<ViewSessionState> state);
 
 // Built-in branch terminals; the caller sets `predicate` on the returned hooks.

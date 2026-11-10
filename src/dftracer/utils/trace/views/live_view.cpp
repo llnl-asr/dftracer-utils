@@ -32,11 +32,8 @@ namespace dftracer::utils::trace::views {
 
 namespace {
 
-[[noreturn]] void throw_error(const dstd::Error& error) {
-    throw common::DFTUtilsException(error);
-}
-
-dstd::Vector<dstd::String> trace_files_under(const dstd::String& dir) {
+dstd::Result<dstd::Vector<dstd::String>> trace_files_under(
+    const dstd::String& dir) {
     runtime::fs::FindOptions options;
     options.patterns =
         runtime::fs::names_of(common::constants::indexer::INPUT_FILE_PATTERNS);
@@ -47,7 +44,7 @@ dstd::Vector<dstd::String> trace_files_under(const dstd::String& dir) {
         return runtime::fs::find_all(scope, dstd::PathView(dir), options);
     });
     auto found = default_runtime().block_on(std::move(scoped));
-    if (!found) throw_error(found.error());
+    if (!found) return found.error();
 
     dstd::Vector<dstd::String> out;
     out.reserve(found->size());
@@ -56,12 +53,15 @@ dstd::Vector<dstd::String> trace_files_under(const dstd::String& dir) {
     return out;
 }
 
-dstd::Vector<dstd::String> files_of(const dstd::Vector<dstd::String>& paths) {
+dstd::Result<dstd::Vector<dstd::String>> files_of(
+    const dstd::Vector<dstd::String>& paths) {
     dstd::HashSet<dstd::String> seen;
     dstd::Vector<dstd::String> out;
     for (const dstd::String& p : paths) {
         if (dstd::fs::is_directory(p).value_or(false)) {
-            for (dstd::String& f : trace_files_under(p))
+            auto under = trace_files_under(p);
+            if (!under) return under.error();
+            for (dstd::String& f : *under)
                 if (seen.insert(f).second) out.push_back(std::move(f));
         } else if (seen.insert(p).second) {
             out.push_back(p);
@@ -92,8 +92,10 @@ View pinned_view(
 LiveView::LiveView(dstd::Vector<dstd::String> paths, dstd::String index_path)
     : paths_(std::move(paths)), index_path_(std::move(index_path)) {}
 
-View LiveView::snapshot() {
-    dstd::Vector<PinnedFile> refreshed = refresh();
+dstd::Result<View> LiveView::snapshot() {
+    auto fresh_files = refresh();
+    if (!fresh_files) return fresh_files.error();
+    dstd::Vector<PinnedFile> refreshed = std::move(*fresh_files);
     if (refreshed.empty()) return View();
     dstd::Vector<ViewFile> pinned;
     dstd::Vector<dstd::SharedPtr<const index::Snapshot>> snapshots;
@@ -106,8 +108,10 @@ View LiveView::snapshot() {
     return pinned_view(std::move(pinned), snapshots);
 }
 
-dstd::Optional<View> LiveView::new_rows() {
-    dstd::Vector<PinnedFile> refreshed = refresh();
+dstd::Result<dstd::Optional<View>> LiveView::new_rows() {
+    auto fresh_files = refresh();
+    if (!fresh_files) return fresh_files.error();
+    dstd::Vector<PinnedFile> refreshed = std::move(*fresh_files);
     dstd::Vector<ViewFile> fresh;
     dstd::Vector<dstd::SharedPtr<const index::Snapshot>> snapshots;
     for (PinnedFile& p : refreshed) {
@@ -131,17 +135,19 @@ dstd::Optional<View> LiveView::new_rows() {
             snapshots.push_back(std::move(p.index));
         }
     }
-    if (fresh.empty()) return dstd::nullopt;
-    return pinned_view(std::move(fresh), snapshots);
+    if (fresh.empty()) return dstd::Optional<View>{};
+    return dstd::Optional<View>(pinned_view(std::move(fresh), snapshots));
 }
 
-dstd::Vector<LiveView::PinnedFile> LiveView::refresh() {
-    const dstd::Vector<dstd::String> files = files_of(paths_);
+dstd::Result<dstd::Vector<LiveView::PinnedFile>> LiveView::refresh() {
+    auto listed = files_of(paths_);
+    if (!listed) return listed.error();
+    const dstd::Vector<dstd::String> files = std::move(*listed);
     dstd::Vector<common::InputFileStat> stats(files.size());
     for (std::size_t i = 0; i < files.size(); ++i) {
         if (!common::stat_input(files[i], stats[i]))
-            throw common::DFTUtilsException::cat(common::ErrorCode::Io,
-                                                 "cannot stat ", files[i]);
+            return common::make_error<"cannot stat {}">(common::ErrorCode::Io,
+                                                        files[i]);
     }
 
     index::build::ResolveAndBuildInput in;
@@ -151,22 +157,23 @@ dstd::Vector<LiveView::PinnedFile> LiveView::refresh() {
     in.whole_members = true;
     index::build::ResolverResult built;
     if (!files.empty()) {
-        built = common::unwrap(default_runtime().block_on(
+        auto resolved = default_runtime().block_on(
             coro::named("live_view_snapshot",
-                        index::build::resolve_and_build_index(std::move(in)))));
+                        index::build::resolve_and_build_index(std::move(in))));
+        if (!resolved) return resolved.error();
+        built = std::move(*resolved);
     }
     if (!built.failures.empty())
-        throw common::DFTUtilsException::cat(common::ErrorCode::Io, "index of ",
-                                             built.failures.front().file_path,
-                                             ": ",
-                                             built.failures.front().message);
+        return common::make_error<"index of {}: {}">(
+            common::ErrorCode::Io, built.failures.front().file_path,
+            built.failures.front().message);
 
     // The build reads the file again, so a size from before it can be behind
     // what the index holds.
     for (std::size_t i = 0; i < files.size(); ++i) {
         if (!common::stat_input(files[i], stats[i]))
-            throw common::DFTUtilsException::cat(common::ErrorCode::Io,
-                                                 "cannot stat ", files[i]);
+            return common::make_error<"cannot stat {}">(common::ErrorCode::Io,
+                                                        files[i]);
     }
 
     status_.clear();
@@ -191,8 +198,10 @@ dstd::Vector<LiveView::PinnedFile> LiveView::refresh() {
             for (const auto& [r, s] : opened)
                 if (r == root) held = s;
             if (!held) {
-                held = dstd::make_shared<const index::Snapshot>(
-                    common::unwrap(index::plan::open_snapshot(root)));
+                auto taken = index::plan::open_snapshot(root);
+                if (!taken) return taken.error();
+                held =
+                    dstd::make_shared<const index::Snapshot>(std::move(*taken));
                 opened.emplace_back(root, held);
             }
             const index::Snapshot& snap = *held;
@@ -205,24 +214,27 @@ dstd::Vector<LiveView::PinnedFile> LiveView::refresh() {
                  index::is_append_of(path, stats[i].size, ref->stat()))) {
                 st.verified_bytes = ref->stat().size;
                 hash = ref->stat().hash;
-                const auto meta =
-                    common::unwrap(index::file_metadata(snap, *ref));
-                if (meta) {
-                    uc_end = meta->max_bytes;
-                    has_open_line = meta->has_open_line;
+                const auto meta = index::file_metadata(snap, *ref);
+                if (!meta) return meta.error();
+                if (*meta) {
+                    uc_end = (*meta)->max_bytes;
+                    has_open_line = (*meta)->has_open_line;
                 }
-                members = common::unwrap(index::members(snap, *ref)).size();
+                const auto listed_members = index::members(snap, *ref);
+                if (!listed_members) return listed_members.error();
+                members = listed_members->size();
             }
         }
         st.skipped_bytes = stats[i].size - st.verified_bytes;
         if (st.skipped_bytes > 0) {
             st.state = LiveFileState::Tail;
             auto file = dstd::File::open(dstd::PathView(path), {});
-            if (!file) throw_error(file.error());
+            if (!file) return file.error();
             auto scan = index::build::find_member_after_hole(
                 file->native_handle(), st.verified_bytes, stats[i].size);
-            const dstd::Optional<std::uint64_t> after =
-                common::unwrap(default_runtime().block_on(std::move(scan)));
+            auto searched = default_runtime().block_on(std::move(scan));
+            if (!searched) return searched.error();
+            const dstd::Optional<std::uint64_t> after = *searched;
             if (after) {
                 st.state = LiveFileState::Hole;
                 st.hole_bytes = *after - st.verified_bytes;

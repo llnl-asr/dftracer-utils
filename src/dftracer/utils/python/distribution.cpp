@@ -400,8 +400,9 @@ static PyObject *write_shard_set_fn(PyObject * /*self*/, PyObject *args) {
         dirs.reserve(shard_dirs.size());
         for (const auto &d : shard_dirs)
             dirs.emplace_back(dftracer::utils::dstd::StringView(d));
-        dftracer::utils::trace::views::write_shard_set(
-            dftracer::utils::dstd::String(normalized_root), dirs);
+        dftracer::utils::common::unwrap(
+            dftracer::utils::trace::views::write_shard_set(
+                dftracer::utils::dstd::String(normalized_root), dirs));
     } catch (const std::exception &e) {
         dftracer::utils::python::set_typed_py_error(e);
         return NULL;
@@ -416,8 +417,9 @@ static PyObject *consolidate_shard_set_fn(PyObject * /*self*/, PyObject *args) {
     try {
         const auto normalized_root =
             dftracer::utils::index::normalize_index_root(root);
-        files = dftracer::utils::trace::views::consolidate_shard_set(
-            dftracer::utils::dstd::String(normalized_root));
+        files = dftracer::utils::common::unwrap(
+            dftracer::utils::trace::views::consolidate_shard_set(
+                dftracer::utils::dstd::String(normalized_root)));
     } catch (const std::exception &e) {
         dftracer::utils::python::set_typed_py_error(e);
         return NULL;

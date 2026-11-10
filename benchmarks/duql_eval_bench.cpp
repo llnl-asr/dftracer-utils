@@ -8,6 +8,7 @@
 //   duql_eval_bench [records] [rounds]
 
 #include <dftracer/utils/dataframe/expr.h>
+#include <dftracer/utils/dataframe/kernels/string_match.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_arena.h>
@@ -114,6 +115,12 @@ int main(int argc, char** argv) {
               : (argc > 1 ? static_cast<std::size_t>(std::atoll(argv[1]))
                           : 200000);
     const int rounds = smoke ? 1 : (argc > 2 ? std::atoi(argv[2]) : 7);
+    std::printf("string kernel: %s\n",
+                &dataframe::kernels::string_match() ==
+                        dataframe::kernels::string_match_variant(
+                            dataframe::kernels::StringKernel::Jcc)
+                    ? "jcc"
+                    : "plain");
 
     simdjson::dom::parser parser;
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> texts;

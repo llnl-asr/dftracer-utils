@@ -31,7 +31,7 @@ set(DATAFRAME_TEST_SOURCES test_mask.cpp test_series.cpp test_methods.cpp
                            test_join_null_keys.cpp test_join_contract.cpp
                            test_concat_large_string.cpp
                            test_groupby_scale.cpp
-                           test_string_simd.cpp test_expr_string_methods.cpp
+                           test_string_simd.cpp test_string_match.cpp test_expr_string_methods.cpp
                            test_concat_text.cpp test_struct_concat_by_name.cpp
                            test_rest_column.cpp
                            test_string_view.cpp

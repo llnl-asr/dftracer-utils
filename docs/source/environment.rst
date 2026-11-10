@@ -106,6 +106,16 @@ Memory and kernels
        run can take longer, because freed pages must be mapped again. A higher
        value is more relaxed: runs can be a little faster and peak memory
        rises. Tune it when the default does not fit your memory limit.
+   * - ``DFTRACER_UTILS_STRING_KERNEL``
+     - ``auto``
+     - ``plain``, ``jcc`` or ``auto``. Picks the build of the string-match
+       kernels (equals, contains, starts with, ends with, like, search and
+       matches), read once at the first call. ``jcc`` is the same code
+       assembled with branch padding against the Intel Jump Conditional Code
+       erratum, on x86-64 builds whose compiler supports it. ``auto`` uses it
+       on an affected Intel CPU and ``plain`` elsewhere. ``jcc`` on a build
+       without it, or any other value, logs a warning and falls back to
+       ``plain`` or ``auto``.
    * - ``DFTRACER_UTILS_MEM_BUDGET``
      - a third of the available memory
      - The sum of reservations that the memory manager accepts, in bytes or

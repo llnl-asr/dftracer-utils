@@ -106,6 +106,7 @@ set(DFTRACER_UTILS_COMMON_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/spill_dir.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/spill_file.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/env.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/cpu_features.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/intern_table.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/timer.cpp)
 
@@ -933,6 +934,8 @@ set(DFTRACER_UTILS_VEC_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/logical.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/reduce.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/string_ops.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/string_match.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/string_match_dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/string_simd.cpp
 )
 
@@ -1240,6 +1243,36 @@ set(DFTRACER_UTILS_DATAFRAME_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/duql/group_fold.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/plan.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/mask_abi.cpp)
+
+# A second build of the string-match kernels with branch padding against the
+# Intel JCC erratum (string_match_jcc.cpp); the dispatch file picks one at run
+# time. It is the same source compiled by the same target, so every setting of
+# the dataframe objects applies to it.
+set(DFTU_HAS_JCC_VARIANT 0)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+  include(CheckCXXCompilerFlag)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    set(DFTU_JCC_FLAG "-mbranches-within-32B-boundaries")
+  elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    set(DFTU_JCC_FLAG "-Wa,-mbranches-within-32B-boundaries")
+  endif()
+  if(DFTU_JCC_FLAG)
+    check_cxx_compiler_flag("${DFTU_JCC_FLAG}" DFTU_COMPILER_HAS_JCC_FLAG)
+    if(DFTU_COMPILER_HAS_JCC_FLAG)
+      set(DFTU_HAS_JCC_VARIANT 1)
+      set(DFTU_JCC_SOURCE
+          ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/string_match_jcc.cpp
+      )
+      list(APPEND DFTRACER_UTILS_DATAFRAME_SOURCES ${DFTU_JCC_SOURCE})
+      set_source_files_properties(${DFTU_JCC_SOURCE}
+                                  PROPERTIES COMPILE_OPTIONS "${DFTU_JCC_FLAG}")
+    endif()
+  endif()
+endif()
+set_source_files_properties(
+  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/string_match_dispatch.cpp
+  PROPERTIES COMPILE_DEFINITIONS
+             DFTRACER_UTILS_HAS_JCC_VARIANT=${DFTU_HAS_JCC_VARIANT})
 
 create_library(
   NAME

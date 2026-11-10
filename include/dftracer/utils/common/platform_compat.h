@@ -78,6 +78,7 @@
 #include <dftracer/utils/dstd/thread.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 
 #if defined(__linux__)
@@ -167,5 +168,40 @@ extern "C" void __tsan_release(void *);
 /// coroutine's get_return_object.
 #define DFTRACER_UTILS_CALLER_FILE() __builtin_FILE()
 #define DFTRACER_UTILS_CALLER_LINE() __builtin_LINE()
+
+#if defined(__x86_64__) && (defined(__GNUC__) || defined(__clang__))
+#define DFTRACER_UTILS_HAS_CPUID 1
+#else
+#define DFTRACER_UTILS_HAS_CPUID 0
+#endif
+
+namespace dftracer::utils::common {
+
+/// Runs CPUID `leaf` and stores EAX, EBX, ECX and EDX in `regs`. False, with
+/// `regs` untouched, on a CPU that is not x86-64 or when `leaf` is above the
+/// highest leaf the CPU supports.
+inline bool cpuid_leaf(std::uint32_t leaf, std::uint32_t (&regs)[4]) {
+#if DFTRACER_UTILS_HAS_CPUID
+    std::uint32_t eax, ebx, ecx, edx;
+    __asm__ volatile("cpuid"
+                     : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
+                     : "a"(0u), "c"(0u));
+    if (leaf > eax) return false;
+    __asm__ volatile("cpuid"
+                     : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
+                     : "a"(leaf), "c"(0u));
+    regs[0] = eax;
+    regs[1] = ebx;
+    regs[2] = ecx;
+    regs[3] = edx;
+    return true;
+#else
+    (void)leaf;
+    (void)regs;
+    return false;
+#endif
+}
+
+}  // namespace dftracer::utils::common
 
 #endif  // DFTRACER_UTILS_COMMON_PLATFORM_COMPAT_H

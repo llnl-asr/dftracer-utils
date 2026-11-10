@@ -152,7 +152,7 @@ void Error::finish_context(Context* context, std::size_t length) noexcept {
 
 Error::Context* Error::make_static_context(
     const StaticMessage* message) noexcept {
-    static_assert(alignof(Context) >= 2 && alignof(StaticMessage) >= 2,
+    static_assert(alignof(Context) >= 2,
                   "the low pointer bit must be free for the static tag");
     return reinterpret_cast<Context*>(
         reinterpret_cast<std::uintptr_t>(message) | STATIC_TAG);

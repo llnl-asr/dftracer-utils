@@ -90,10 +90,12 @@ concept ErrorEnum = std::is_enum_v<E> && requires(E value) {
 
 /// A message that lives for the whole program: `text` has `length` bytes and a
 /// terminating NUL. An @ref Error points at one without allocating.
-struct alignas(8) StaticMessage {
+struct StaticMessage {
     std::size_t length;
     const char* text;
 };
+static_assert(alignof(StaticMessage) >= 2,
+              "an Error tags a static message in the low pointer bit");
 
 /// The text of the format `S` when it has no holes, with `{{}}` unescaped.
 template <FixedString S>

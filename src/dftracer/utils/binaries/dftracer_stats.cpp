@@ -38,7 +38,6 @@
 #include <dftracer/utils/trace/statistics/detailed_statistics.h>
 #include <dftracer/utils/trace/statistics/statistics_query_utility.h>
 #include <dftracer/utils/trace/statistics/stats_view.h>
-#include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
 
 #include <algorithm>
 #include <array>

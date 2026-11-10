@@ -190,7 +190,8 @@ coro::CoroTask<std::size_t> hash_events(const dstd::String& path) {
     for (;;) {
         auto line_opt = co_await line_gen.next();
         if (!line_opt) break;
-        const auto& line = *line_opt;
+        if (!*line_opt) common::throw_error(line_opt->error());
+        const auto& line = **line_opt;
         const dstd::StringView event = trace::event_of_line(
             dstd::StringView(line.content.data(), line.content.length()));
         if (!event.empty()) {

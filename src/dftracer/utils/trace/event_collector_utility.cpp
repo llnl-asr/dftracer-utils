@@ -105,8 +105,10 @@ EventCollectorFromMetadataUtility::operator()(
             for (;;) {
                 auto line_opt = co_await line_gen.next();
                 if (!line_opt) break;
-                co_await collector.process(line_opt->content.data(),
-                                           line_opt->content.length());
+                if (!*line_opt) common::throw_error(line_opt->error());
+                const auto& line = **line_opt;
+                co_await collector.process(line.content.data(),
+                                           line.content.length());
             }
         }
 

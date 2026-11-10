@@ -203,8 +203,9 @@ coro::CoroTask<QuerySet> sample_queries(dstd::String file) {
     auto gen = utilities::fileio::lines::sources::async_streaming_gz_lines(
         std::move(file));
     int seen = 0;
-    while (auto line = co_await gen.next()) {
-        dstd::StringView l = line->content;
+    while (auto next = co_await gen.next()) {
+        if (!*next) dftracer::utils::common::throw_error(next->error());
+        dstd::StringView l = (*next)->content;
         while (!l.empty() && (l.back() == ',' || l.back() == ' '))
             l.remove_suffix(1);
         if (l.empty() || l.front() != '{') continue;
@@ -281,8 +282,9 @@ coro::CoroTask<dstd::Map<dstd::String, dstd::String>> sample_genesis(
     auto gen = utilities::fileio::lines::sources::async_streaming_gz_lines(
         std::move(file));
     int seen = 0;
-    while (auto line = co_await gen.next()) {
-        dstd::StringView l = line->content;
+    while (auto next = co_await gen.next()) {
+        if (!*next) dftracer::utils::common::throw_error(next->error());
+        dstd::StringView l = (*next)->content;
         simdjson::dom::object o;
         if (l.empty() || l.front() != '{' ||
             parser.parse(l.data(), l.size()).get(o) != simdjson::SUCCESS)

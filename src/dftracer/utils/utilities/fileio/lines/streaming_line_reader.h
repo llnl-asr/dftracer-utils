@@ -18,25 +18,6 @@ namespace dftracer::utils::utilities::fileio::lines {
 
 namespace detail {
 
-/// @p source as items of a Result. The source reports a failure as an
-/// exception; that failure is yielded as an error item, after which the
-/// generator ends.
-inline coro::AsyncGenerator<dstd::Result<Line>> lines_as_results(
-    coro::AsyncGenerator<Line> source) {
-    for (;;) {
-        auto settled = co_await source.settled_next();
-        if (settled.stopped) co_return;
-        if (settled.exception) {
-            co_yield dstd::Result<Line>(
-                common::error_of_exception(settled.exception));
-            co_return;
-        }
-        auto& next = *settled.value;
-        if (!next) co_return;
-        co_yield Line(*next);
-    }
-}
-
 /// A generator that yields @p error and ends.
 inline coro::AsyncGenerator<dstd::Result<Line>> failed_lines(
     dstd::Error error) {
@@ -145,9 +126,9 @@ class StreamingLineReader {
             }
             return sources::async_indexed_file_lines(iter_config);
         }
-        return detail::lines_as_results(sources::async_streaming_gz_lines(
-            dstd::String(file_path.view()), config.start_line(),
-            config.end_line()));
+        return sources::async_streaming_gz_lines(dstd::String(file_path.view()),
+                                                 config.start_line(),
+                                                 config.end_line());
     }
 
    private:

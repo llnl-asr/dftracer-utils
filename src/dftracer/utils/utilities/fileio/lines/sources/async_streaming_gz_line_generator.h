@@ -3,7 +3,6 @@
 #define DFTRACER_UTILS_UTILITIES_FILEIO_LINES_SOURCES_ASYNC_STREAMING_GZ_LINE_GENERATOR_H
 
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/exception_helpers.h>
 #include <dftracer/utils/coro/async_generator.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fmt.h>
@@ -22,10 +21,14 @@ namespace dftracer::utils::utilities::fileio::lines::sources {
  *
  * Decodes the file a gzip member at a time (peak memory one member). A member
  * too large to hold whole is streamed by lines. A last member cut short yields
- * its complete lines, or throws when `recover_truncated` is false. `open_file`,
- * when given, replaces `file_path` and closes with its last owner.
+ * its complete lines, or is an error when `recover_truncated` is false.
+ * `open_file`, when given, replaces `file_path` and closes with its last owner.
+ *
+ * A failure (open, stat, read or a corrupt or cut member) is yielded as an
+ * error item, after which the generator ends. The lines before it were
+ * yielded first.
  */
-inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
+inline coro::AsyncGenerator<dstd::Result<Line>> async_streaming_gz_lines(
     dstd::String file_path, std::size_t start_line = 0,
     std::size_t end_line = 0, bool recover_truncated = true,
     dftracer::utils::dstd::SharedPtr<dftracer::utils::dstd::File> open_file =
@@ -35,12 +38,12 @@ inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
         ssize_t fd_result = co_await ::dftracer::utils::runtime::io::open(
             file_path.c_str(), O_RDONLY);
         if (fd_result < 0) {
-            throw common::DFTUtilsException(
+            co_yield dstd::Result<Line>(
                 common::make_error<
                     "Cannot open compressed file: {} (errno={})">(
                     common::ErrorCode::Io, file_path,
-                    static_cast<int>(-fd_result))
-                    .error());
+                    static_cast<int>(-fd_result)));
+            co_return;
         }
         owned = dftracer::utils::dstd::File::from_native_handle(
             static_cast<int>(fd_result));
@@ -49,26 +52,29 @@ inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
 
     const auto st = fd.stat();
     if (!st) {
-        throw common::DFTUtilsException(
+        co_yield dstd::Result<Line>(
             common::make_error<"Cannot stat compressed file: {}">(
-                common::ErrorCode::Io, file_path)
-                .error());
+                common::ErrorCode::Io, file_path));
+        co_return;
     }
     const std::uint64_t file_size = st->size;
 
     dstd::String line_buffer;
     std::size_t current_line = 0;
-    std::exception_ptr ex;
 
-    try {
+    {
         auto bytes = compress::decode_gzip_members(
             fd.native_handle(), file_size, std::size_t{32} << 20,
             recover_truncated);
         for (;;) {
             auto chunk = co_await bytes.next();
             if (!chunk) break;
-            const char* data = chunk->data();
-            const std::size_t remaining = chunk->size();
+            if (!*chunk) {
+                co_yield dstd::Result<Line>(chunk->error());
+                co_return;
+            }
+            const char* data = (*chunk)->data();
+            const std::size_t remaining = (*chunk)->size();
             std::size_t pos = 0;
             while (pos < remaining) {
                 const void* nl = std::memchr(data + pos, '\n', remaining - pos);
@@ -85,7 +91,7 @@ inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
                     current_line++;
                     if ((start_line == 0 || current_line >= start_line) &&
                         (end_line == 0 || current_line <= end_line)) {
-                        co_yield Line(line, current_line);
+                        co_yield dstd::Result<Line>(Line(line, current_line));
                     }
                     if (end_line > 0 && current_line >= end_line) {
                         owned.close().discard();
@@ -103,14 +109,11 @@ inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
             current_line++;
             if ((start_line == 0 || current_line >= start_line) &&
                 (end_line == 0 || current_line <= end_line)) {
-                co_yield Line(dstd::StringView(line_buffer), current_line);
+                co_yield dstd::Result<Line>(
+                    Line(dstd::StringView(line_buffer), current_line));
             }
         }
-    } catch (...) {
-        ex = std::current_exception();
     }
-
-    if (ex) common::rethrow_and_clear(ex);
 }
 
 }  // namespace dftracer::utils::utilities::fileio::lines::sources

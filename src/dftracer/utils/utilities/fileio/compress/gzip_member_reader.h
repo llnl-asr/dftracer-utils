@@ -3,7 +3,6 @@
 #define DFTRACER_UTILS_UTILITIES_FILEIO_COMPRESS_GZIP_MEMBER_READER_H
 
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/exception_helpers.h>
 #include <dftracer/utils/coro/async_generator.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -24,8 +23,9 @@ namespace dftracer::utils::utilities::fileio::compress {
 /// a reused buffer valid until the next step. A member over `stream_above`
 /// bytes is streamed in steps of whole lines, losing at most that much work. A
 /// last member cut short yields its complete lines when `recover_truncated` is
-/// set, else it throws.
-inline coro::AsyncGenerator<dstd::StringView> decode_gzip_members(
+/// set, else it yields an error. A failure is yielded as an error item
+/// (Compression or Io), after which the generator ends.
+inline coro::AsyncGenerator<dstd::Result<dstd::StringView>> decode_gzip_members(
     int fd, std::uint64_t file_size,
     std::size_t stream_above = std::size_t{32} << 20,
     bool recover_truncated = true) {
@@ -35,9 +35,12 @@ inline coro::AsyncGenerator<dstd::StringView> decode_gzip_members(
 
     GzipMemberDecompressor dec;
     if (!dec.valid()) {
-        throw common::DFTUtilsException(
-            common::ErrorCode::Compression,
-            "failed to allocate libdeflate decompressor");
+        {
+            co_yield dstd::Result<dstd::StringView>(common::make_error(
+                common::ErrorCode::Compression,
+                "failed to allocate libdeflate decompressor"));
+            co_return;
+        }
     }
 
     // Both buffers grow without zero-filling: every byte is written by pread
@@ -108,13 +111,17 @@ inline coro::AsyncGenerator<dstd::StringView> decode_gzip_members(
                                                           tail - head, rest)
                                 : dstd::nullopt;
                 if (!keep) {
-                    throw common::DFTUtilsException(
-                        common::ErrorCode::Compression,
-                        "gzip member failed to decompress");
+                    {
+                        co_yield dstd::Result<dstd::StringView>(
+                            common::make_error(
+                                common::ErrorCode::Compression,
+                                "gzip member failed to decompress"));
+                        co_return;
+                    }
                 }
                 if (*keep > 0) {
-                    co_yield dstd::StringView(
-                        reinterpret_cast<const char*>(rest.data()), *keep);
+                    co_yield dstd::Result<dstd::StringView>(dstd::StringView(
+                        reinterpret_cast<const char*>(rest.data()), *keep));
                 }
                 co_return;
             }
@@ -142,9 +149,12 @@ inline coro::AsyncGenerator<dstd::StringView> decode_gzip_members(
             const ssize_t n = co_await dftracer::utils::runtime::io::pread(
                 fd, comp.get() + tail, want, next_read);
             if (n <= 0) {
-                throw common::DFTUtilsException(
-                    common::ErrorCode::Io,
-                    "read error while decoding gzip member");
+                {
+                    co_yield dstd::Result<dstd::StringView>(common::make_error(
+                        common::ErrorCode::Io,
+                        "read error while decoding gzip member"));
+                    co_return;
+                }
             }
             tail += static_cast<std::size_t>(n);
             next_read += static_cast<std::uint64_t>(n);
@@ -155,9 +165,12 @@ inline coro::AsyncGenerator<dstd::StringView> decode_gzip_members(
             // one.
             GzipStreamInflater zs;
             if (!zs.init(31)) {
-                throw common::DFTUtilsException(
-                    common::ErrorCode::Compression,
-                    "failed to start a gzip stream");
+                {
+                    co_yield dstd::Result<dstd::StringView>(
+                        common::make_error(common::ErrorCode::Compression,
+                                           "failed to start a gzip stream"));
+                    co_return;
+                }
             }
             auto in =
                 dstd::make_unique_for_overwrite<unsigned char[]>(READ_CHUNK);
@@ -175,9 +188,13 @@ inline coro::AsyncGenerator<dstd::StringView> decode_gzip_members(
                         co_await dftracer::utils::runtime::io::pread(
                             fd, in.get(), want, stream_read);
                     if (n <= 0) {
-                        throw common::DFTUtilsException(
-                            common::ErrorCode::Io,
-                            "read error while decoding gzip member");
+                        {
+                            co_yield dstd::Result<dstd::StringView>(
+                                common::make_error(
+                                    common::ErrorCode::Io,
+                                    "read error while decoding gzip member"));
+                            co_return;
+                        }
                     }
                     zs.set_input(in.get(), static_cast<std::size_t>(n));
                     stream_read += static_cast<std::uint64_t>(n);
@@ -189,9 +206,13 @@ inline coro::AsyncGenerator<dstd::StringView> decode_gzip_members(
                     ended = true;
                 } else if (rc != InflateStatus::Ok &&
                            rc != InflateStatus::BufError) {
-                    throw common::DFTUtilsException(
-                        common::ErrorCode::Compression,
-                        "gzip member failed to decompress");
+                    {
+                        co_yield dstd::Result<dstd::StringView>(
+                            common::make_error(
+                                common::ErrorCode::Compression,
+                                "gzip member failed to decompress"));
+                        co_return;
+                    }
                 } else if (zs.avail_in() == 0 && stream_read >= file_size &&
                            zs.avail_out() != 0) {
                     cut = true;
@@ -202,28 +223,36 @@ inline coro::AsyncGenerator<dstd::StringView> decode_gzip_members(
                     if (!ended) {
                         while (keep > 0 && out[keep - 1] != '\n') --keep;
                         if (keep == 0) {
-                            throw common::DFTUtilsException(
-                                common::ErrorCode::Compression,
-                                "a line is longer than the stream buffer");
+                            {
+                                co_yield dstd::Result<
+                                    dstd::StringView>(common::make_error(
+                                    common::ErrorCode::Compression,
+                                    "a line is longer than the stream buffer"));
+                                co_return;
+                            }
                         }
                     }
-                    co_yield dstd::StringView(
-                        reinterpret_cast<const char*>(out.get()), keep);
+                    co_yield dstd::Result<dstd::StringView>(dstd::StringView(
+                        reinterpret_cast<const char*>(out.get()), keep));
                     std::memmove(out.get(), out.get() + keep, filled - keep);
                     filled -= keep;
                 }
             }
             if (cut) {
                 if (!recover_truncated) {
-                    throw common::DFTUtilsException(
-                        common::ErrorCode::Compression,
-                        "gzip member failed to decompress");
+                    {
+                        co_yield dstd::Result<dstd::StringView>(
+                            common::make_error(
+                                common::ErrorCode::Compression,
+                                "gzip member failed to decompress"));
+                        co_return;
+                    }
                 }
                 std::size_t keep = filled;
                 while (keep > 0 && out[keep - 1] != '\n') --keep;
                 if (keep > 0) {
-                    co_yield dstd::StringView(
-                        reinterpret_cast<const char*>(out.get()), keep);
+                    co_yield dstd::Result<dstd::StringView>(dstd::StringView(
+                        reinterpret_cast<const char*>(out.get()), keep));
                 }
                 co_return;
             }
@@ -233,8 +262,8 @@ inline coro::AsyncGenerator<dstd::StringView> decode_gzip_members(
             continue;
         }
 
-        co_yield dstd::StringView(reinterpret_cast<const char*>(out.get()),
-                                  res.out_bytes);
+        co_yield dstd::Result<dstd::StringView>(dstd::StringView(
+            reinterpret_cast<const char*>(out.get()), res.out_bytes));
 
         comp_off += res.in_bytes;
         head += res.in_bytes;

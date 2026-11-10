@@ -540,23 +540,19 @@ class GroupReader {
     explicit GroupReader(GroupMem& mem) : mem_(&mem), charge_(mem) {}
 
     coro::CoroTask<GResult<void>> read(dstd::String file) {
-        dstd::Optional<dstd::String> error;
-        try {
-            // An unfinished run is skipped, not counted from a recovered tail.
-            auto gen = async_streaming_gz_lines(dstd::String(file), 0, 0,
-                                                /*recover_truncated=*/false);
-            std::size_t n = 0;
-            for (;;) {
-                auto line = co_await gen.next();
-                if (!line) break;
-                auto st = handle_line(file, line->content);
-                if (!st) co_return st;
-                if (++n % 4096 == 0) co_await coro::maybe_yield();
-            }
-        } catch (const std::exception& e) {
-            error = e.what();
+        // An unfinished run is skipped, not counted from a recovered tail.
+        auto gen = async_streaming_gz_lines(dstd::String(file), 0, 0,
+                                            /*recover_truncated=*/false);
+        std::size_t n = 0;
+        for (;;) {
+            auto line = co_await gen.next();
+            if (!line) break;
+            if (!*line)
+                co_return fail(file, dstd::String(line->error().message()));
+            auto st = handle_line(file, (*line)->content);
+            if (!st) co_return st;
+            if (++n % 4096 == 0) co_await coro::maybe_yield();
         }
-        if (error) co_return fail(file, *error);
         co_return seal(true);
     }
 

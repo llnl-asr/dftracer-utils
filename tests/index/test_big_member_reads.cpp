@@ -221,9 +221,11 @@ std::size_t members_lines(const dstd::String& path) {
     dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         auto gen = utilities::fileio::compress::decode_gzip_members(
             fd, size, BOUND_BYTES);
-        while (auto part = co_await gen.next())
+        while (auto part = co_await gen.next()) {
+            REQUIRE(*part);
             lines += static_cast<std::size_t>(
-                std::count(part->begin(), part->end(), '\n'));
+                std::count((*part)->begin(), (*part)->end(), '\n'));
+        }
     });
     return lines;
 }
@@ -464,7 +466,10 @@ TEST_SUITE("BigMemberReads") {
                 auto lines =
                     utilities::fileio::lines::sources::async_streaming_gz_lines(
                         dstd::String(path));
-                while (auto line = co_await lines.next()) ++n;
+                while (auto line = co_await lines.next()) {
+                    REQUIRE(*line);
+                    ++n;
+                }
             });
             return n;
         };

@@ -92,7 +92,8 @@ coro::CoroTask<void> validate_file(dstd::String path, FileValResult* result) {
         for (;;) {
             auto line_opt = co_await gen.next();
             if (!line_opt) break;
-            const auto& line = *line_opt;
+            if (!*line_opt) common::throw_error(line_opt->error());
+            const auto& line = **line_opt;
             const char* start = nullptr;
             std::size_t trimmed = 0;
             if (!trim_and_validate(line.content.data(), line.content.size(),

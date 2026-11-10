@@ -343,26 +343,23 @@ coro::AsyncGenerator<dstd::Result<Line>> read_lines_gz(
     auto gen =
         fileio::lines::sources::async_streaming_gz_lines(file_path, start, end);
     for (;;) {
-        // The line source is built with exceptions and may still throw.
-        auto settled = co_await gen.settled_next();
-        if (settled.stopped) co_return;
-        if (settled.exception) {
-            co_yield dstd::Result<Line>(
-                common::error_of_exception(settled.exception));
+        auto next = co_await gen.next();
+        if (!next) break;
+        if (!*next) {
+            co_yield dstd::Result<Line>(next->error());
             co_return;
         }
-        auto& opt = *settled.value;
-        if (!opt) break;
+        const Line& line = **next;
         const std::size_t line_start = byte_pos;
-        byte_pos += opt->content.size() + 1;
+        byte_pos += line.content.size() + 1;
 
         if (byte_range) {
             if (line_start < config.start_byte) continue;
             if (config.end_byte > 0 && line_start >= config.end_byte) break;
         }
         if (chunk_prune_only || !query ||
-            line_matches_query(*query, opt->content)) {
-            co_yield Line(*opt);
+            line_matches_query(*query, line.content)) {
+            co_yield Line(line);
         }
     }
 }
@@ -1036,16 +1033,13 @@ TraceReader::read_raw(ReadConfig config) {
             fileio::lines::sources::async_streaming_gz_lines(config_.file_path);
         std::size_t byte_pos = 0;
         for (;;) {
-            // The line source is built with exceptions and may still throw.
-            auto settled = co_await gen.settled_next();
-            if (settled.stopped) co_return;
-            if (settled.exception) {
-                co_yield Chunk(common::error_of_exception(settled.exception));
+            auto next = co_await gen.next();
+            if (!next) break;
+            if (!*next) {
+                co_yield Chunk(next->error());
                 co_return;
             }
-            auto& opt = *settled.value;
-            if (!opt) break;
-            const auto& line = *opt;
+            const auto& line = **next;
             std::size_t line_end = byte_pos + line.content.size() + 1;
             if (config.end_byte > 0 && byte_pos >= config.end_byte) break;
             if (line_end > config.start_byte) {

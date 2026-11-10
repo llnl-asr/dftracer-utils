@@ -94,7 +94,10 @@ dstd::String read_members(const dstd::String& path) {
     dstd::String out;
     dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         auto gen = fileio::compress::decode_gzip_members(fd, size);
-        while (auto part = co_await gen.next()) out.append(*part);
+        while (auto part = co_await gen.next()) {
+            REQUIRE(*part);
+            out.append(**part);
+        }
     });
     return out;
 }

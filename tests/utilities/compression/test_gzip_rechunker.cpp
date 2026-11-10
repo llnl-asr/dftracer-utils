@@ -59,8 +59,10 @@ dstd::Pair<dstd::String, dstd::Vector<char>> decode_members(
     dftu_utils_test::ok([&]() -> dftracer::utils::coro::CoroTask<void> {
         auto gen = fileio::compress::decode_gzip_members(fd, size);
         while (auto chunk = co_await gen.next()) {
-            last_bytes.push_back(chunk->empty() ? '\0' : chunk->back());
-            out.append(chunk->data(), chunk->size());
+            REQUIRE(*chunk);
+            const dstd::StringView bytes = **chunk;
+            last_bytes.push_back(bytes.empty() ? '\0' : bytes.back());
+            out.append(bytes.data(), bytes.size());
         }
     }()
                                      .get());

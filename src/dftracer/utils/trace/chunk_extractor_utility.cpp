@@ -119,7 +119,8 @@ ChunkExtractorUtility::extract_and_write(
         for (;;) {
             auto line_opt = co_await line_gen.next();
             if (!line_opt) break;
-            const auto& line = *line_opt;
+            if (!*line_opt) co_return fail(line_opt->error());
+            const auto& line = **line_opt;
             const dstd::StringView event = event_of_line(
                 dstd::StringView(line.content.data(), line.content.length()));
             if (!event.empty()) {

@@ -193,7 +193,8 @@ coro::CoroTask<std::size_t> stream_count(dstd::String path) {
         for (;;) {
             auto chunk = co_await members.next();
             if (!chunk) break;
-            counter.feed(*chunk);
+            if (!*chunk) common::throw_error(chunk->error());
+            counter.feed(**chunk);
         }
     } else {
         dstd::String buf(PLAIN_READ_BYTES, '\0');

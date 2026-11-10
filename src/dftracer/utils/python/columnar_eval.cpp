@@ -404,7 +404,7 @@ bool build_expr_from_ast(PyObject* ast, dataframe::Expr* out) {
 }
 
 // vec_eval(ast, [Series, ...]) -> Series
-PyObject* vec_eval(PyObject* /*self*/, PyObject* args) {
+static PyObject* vec_eval(PyObject* /*self*/, PyObject* args) {
     PyObject* ast = nullptr;
     PyObject* cols_obj = nullptr;
     if (!PyArg_ParseTuple(args, "OO", &ast, &cols_obj)) return nullptr;
@@ -441,7 +441,7 @@ PyObject* vec_eval(PyObject* /*self*/, PyObject* args) {
 // vec_eval_many([ast, ...], [Series, ...]) -> [Series, ...]
 // Compiles all roots into one program so CSE spans them (a subexpression shared
 // across outputs is computed once), sharing the same input column list.
-PyObject* vec_eval_many(PyObject* /*self*/, PyObject* args) {
+static PyObject* vec_eval_many(PyObject* /*self*/, PyObject* args) {
     PyObject* asts_obj = nullptr;
     PyObject* cols_obj = nullptr;
     if (!PyArg_ParseTuple(args, "OO", &asts_obj, &cols_obj)) return nullptr;

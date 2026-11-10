@@ -5,7 +5,10 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/fileio/lines/iterator.h>
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
@@ -16,7 +19,6 @@
 
 #include <cstring>
 #include <iterator>
-#include <stdexcept>
 
 namespace dftracer::utils::utilities::fileio::lines::sources {
 
@@ -40,7 +42,7 @@ namespace dftracer::utils::utilities::fileio::lines::sources {
  *     .with_reader(reader)
  *     .with_line_range(1, 100);
  *
- * IndexedFileLineIterator iter(config);
+ * auto iter = IndexedFileLineIterator::open(config);
  * @endcode
  */
 class IndexedFileLineIteratorConfig {
@@ -52,15 +54,25 @@ class IndexedFileLineIteratorConfig {
     std::size_t start_ = 1;
     std::size_t end_ = 0;
     std::size_t buffer_size_ = 1024 * 1024;  ///< 1MB default buffer
+    dstd::Optional<dstd::Error> error_;
 
    public:
     IndexedFileLineIteratorConfig() = default;
 
+    /// Opens a reader over @p file_path. When that fails, the config holds the
+    /// error, which @ref error gives, and no reader.
     IndexedFileLineIteratorConfig& with_file(dstd::CStringView file_path,
                                              dstd::StringView index_path = "") {
-        reader_ =
+        auto created =
             dftracer::utils::utilities::reader::internal::ReaderFactory::create(
                 file_path, index_path);
+        if (created.has_value()) {
+            reader_ = std::move(*created);
+            error_.reset();
+        } else {
+            reader_ = nullptr;
+            error_ = created.error();
+        }
         return *this;
     }
 
@@ -104,6 +116,8 @@ class IndexedFileLineIteratorConfig {
     std::size_t start() const { return start_; }
     std::size_t end() const { return end_; }
     std::size_t buffer_size() const { return buffer_size_; }
+    /// The error of a failed @ref with_file, if any.
+    const dstd::Optional<dstd::Error>& error() const { return error_; }
 };
 
 /**
@@ -119,19 +133,22 @@ class IndexedFileLineIteratorConfig {
  *
  * Usage:
  * @code
- * auto reader =
+ * auto created =
  * dftracer::utils::utilities::reader::internal::ReaderFactory::create("file.gz",
  * "file.gz.idx");
+ * if (!created) return created.error();
  *
  * auto config = IndexedFileLineIteratorConfig()
- *     .with_reader(reader)
+ *     .with_reader(*created)
  *     .with_line_range(1, 100);
- * IndexedFileLineIterator lines(config);
+ * auto lines = IndexedFileLineIterator::open(config);
+ * if (!lines) return lines.error();
  *
- * // Iterate
- * for (const auto& line : lines) {
+ * // Iterate; a failed read ends the loop, so check error() after it
+ * for (const auto& line : *lines) {
  *     std::cout << line.content << "\n";
  * }
+ * if (lines->error()) return *lines->error();
  * @endcode
  */
 class IndexedFileLineIterator {
@@ -147,15 +164,8 @@ class IndexedFileLineIterator {
         has_buffered_line_;  ///< True if line_buffer_ contains a valid line
     mutable bool
         attempted_read_;     ///< True if we've tried to read the first line
+    mutable dstd::Optional<dstd::Error> error_;  ///< The failure that ended it
 
-   public:
-    using Iterator = LineIterator<IndexedFileLineIterator>;
-
-    /**
-     * @brief Construct iterator from config object.
-     *
-     * @param config Configuration object with builder pattern
-     */
     explicit IndexedFileLineIterator(
         const IndexedFileLineIteratorConfig& config)
         : config_(config),
@@ -167,14 +177,34 @@ class IndexedFileLineIterator {
         // Resize (not reserve) to allocate the buffer with the correct size
         // This gives us a buffer of the right size without filling it with '\0'
         stream_buffer_.resize(config.buffer_size());
-        validate_and_initialize();
+    }
+
+   public:
+    using Iterator = LineIterator<IndexedFileLineIterator>;
+
+    /**
+     * @brief Make an iterator from a config object.
+     *
+     * @param config Configuration object with builder pattern
+     * @return The iterator, or the error that @ref
+     *         IndexedFileLineIteratorConfig::with_file stored, or an
+     *         InvalidArgument error for a missing reader or an invalid range,
+     *         or the error of a stream that cannot be created
+     */
+    static dstd::Result<IndexedFileLineIterator> open(
+        const IndexedFileLineIteratorConfig& config) {
+        IndexedFileLineIterator iterator(config);
+        auto ready = iterator.validate_and_initialize();
+        if (!ready.has_value()) return ready.error();
+        return std::move(iterator);
     }
 
    private:
-    void validate_and_initialize() {
+    dstd::Result<void> validate_and_initialize() {
+        if (config_.error()) return *config_.error();
         if (!config_.reader()) {
-            throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
-                                            "Reader cannot be null");
+            return common::make_error(common::ErrorCode::InvalidArgument,
+                                      "Reader cannot be null");
         }
 
         // Validate range based on type
@@ -193,15 +223,14 @@ class IndexedFileLineIterator {
                 config_.end());
 
             if (config_.start() < 1 || config_.end() < config_.start()) {
-                throw common::DFTUtilsException(
+                return common::make_error(
                     common::ErrorCode::InvalidArgument,
                     "Invalid line range (must be 1-based and start <= end)");
             }
         } else {
             if (config_.end() < config_.start()) {
-                throw common::DFTUtilsException(
-                    common::ErrorCode::InvalidArgument,
-                    "Invalid byte range (start <= end)");
+                return common::make_error(common::ErrorCode::InvalidArgument,
+                                          "Invalid byte range (start <= end)");
             }
         }
 
@@ -226,16 +255,17 @@ class IndexedFileLineIterator {
                 .to(config_.end());
         }
 
-        stream_ = config_.reader()->stream(stream_config);
-        if (!stream_) {
-            throw common::DFTUtilsException(common::ErrorCode::Io,
-                                            "Failed to create stream");
-        }
+        auto opened = config_.reader()->stream(stream_config);
+        if (!opened.has_value()) return opened.error();
+        stream_ = std::move(*opened);
+        return {};
     }
 
    public:
     /**
      * @brief Check if more lines are available.
+     *
+     * Returns false when a read fails; @ref error then gives the failure.
      */
     bool has_next() const {
         // Check if we've already determined the stream is done
@@ -276,8 +306,14 @@ class IndexedFileLineIterator {
         }
 
         // LINE and LINE_BYTES streams return one complete line per read()
-        std::size_t bytes_read = common::unwrap(stream_->read(
-            const_cast<char*>(stream_buffer_.data()), stream_buffer_.size()));
+        auto read = stream_->read(const_cast<char*>(stream_buffer_.data()),
+                                  stream_buffer_.size());
+        if (!read.has_value()) {
+            error_ = read.error();
+            stream_done_ = true;
+            return false;
+        }
+        std::size_t bytes_read = *read;
 
         if (bytes_read == 0) {
             stream_done_ = true;
@@ -298,13 +334,12 @@ class IndexedFileLineIterator {
     /**
      * @brief Get the next line (zero-copy).
      *
-     * @return Line object with string_view content (valid until next call)
-     * @throws std::runtime_error if no more lines available
+     * @return Line object with string_view content (valid until next call).
+     *         Call it only after @ref has_next gave true.
      */
     Line next() {
         if (!has_next()) {
-            throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
-                                            "No more lines available");
+            dstd::fatal("IndexedFileLineIterator::next: no more lines");
         }
 
         // Return the buffered line
@@ -319,6 +354,14 @@ class IndexedFileLineIterator {
 
         return result;
     }
+
+    /**
+     * @brief The failure of a stream read that ended the iteration, if any.
+     *
+     * Check it after the loop: a failed read ends the iteration as a normal
+     * end does.
+     */
+    const dstd::Optional<dstd::Error>& error() const { return error_; }
 
     /**
      * @brief Get the current position.

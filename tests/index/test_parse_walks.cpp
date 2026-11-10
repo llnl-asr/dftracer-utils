@@ -22,6 +22,7 @@
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
+#include <generator_ok.h>
 #include <sys/stat.h>
 #include <task_result.h>
 #include <testing_utilities.h>
@@ -409,7 +410,9 @@ TEST_SUITE("IndexParseWalks") {
                     utilities::reader::ReadConfig rc;
                     rc.query = query;
                     return dftu_utils_test::ok(
-                        count_json(reader.read_json(rc)).get());
+                        count_json(
+                            dftu_utils_test::ok_items(reader.read_json(rc)))
+                            .get());
                 };
                 CHECK(found(common::str_cat(where, "tag == \"", odd.needle,
                                             '"')) == 1);
@@ -536,8 +539,9 @@ TEST_SUITE("IndexParseWalks") {
             utilities::reader::ReadConfig rc;
             rc.query = common::str_cat("args.tag == \"", tag, '"');
             INFO(tag);
-            CHECK(dftu_utils_test::ok(count_json(reader.read_json(rc)).get()) ==
-                  1);
+            CHECK(dftu_utils_test::ok(count_json(dftu_utils_test::ok_items(
+                                                     reader.read_json(rc)))
+                                          .get()) == 1);
         }
     }
 
@@ -580,8 +584,9 @@ TEST_SUITE("IndexParseWalks") {
             utilities::reader::ReadConfig rc;
             rc.query = common::str_cat("args.tag == \"", tag, '"');
             INFO(tag);
-            CHECK(dftu_utils_test::ok(count_json(reader.read_json(rc)).get()) ==
-                  1);
+            CHECK(dftu_utils_test::ok(count_json(dftu_utils_test::ok_items(
+                                                     reader.read_json(rc)))
+                                          .get()) == 1);
         }
     }
 

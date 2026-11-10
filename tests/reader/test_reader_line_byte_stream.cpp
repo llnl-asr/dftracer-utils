@@ -95,16 +95,18 @@ TEST_CASE("LINE_BYTES Stream - Sequential Read Tests") {
             indexer->build();
         }
 
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
         REQUIRE(reader->is_valid());
 
         std::size_t max_bytes = reader->max_bytes();
-        auto stream = reader->stream(StreamConfig()
-                                         .stream_type(StreamType::LineBytes)
-                                         .range_type(RangeType::ByteRange)
-                                         .from(0)
-                                         .to(max_bytes));
+        auto stream = dftu_utils_test::ok(
+            reader->stream(StreamConfig()
+                               .stream_type(StreamType::LineBytes)
+                               .range_type(RangeType::ByteRange)
+                               .from(0)
+                               .to(max_bytes)));
         REQUIRE(stream != nullptr);
 
         // Read entire file
@@ -144,18 +146,20 @@ TEST_CASE("LINE_BYTES Stream - Sequential Read Tests") {
             indexer->build();
         }
 
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         std::size_t max_bytes = reader->max_bytes();
         std::size_t chunk_size = max_bytes / 2;  // Split file in half
 
         // Read first chunk
-        auto stream1 = reader->stream(StreamConfig()
-                                          .stream_type(StreamType::LineBytes)
-                                          .range_type(RangeType::ByteRange)
-                                          .from(0)
-                                          .to(chunk_size));
+        auto stream1 = dftu_utils_test::ok(
+            reader->stream(StreamConfig()
+                               .stream_type(StreamType::LineBytes)
+                               .range_type(RangeType::ByteRange)
+                               .from(0)
+                               .to(chunk_size)));
         REQUIRE(stream1 != nullptr);
 
         dstd::Vector<char> buffer(1024 * 1024);
@@ -169,11 +173,12 @@ TEST_CASE("LINE_BYTES Stream - Sequential Read Tests") {
         }
 
         // Read second chunk
-        auto stream2 = reader->stream(StreamConfig()
-                                          .stream_type(StreamType::LineBytes)
-                                          .range_type(RangeType::ByteRange)
-                                          .from(chunk_size)
-                                          .to(max_bytes));
+        auto stream2 = dftu_utils_test::ok(
+            reader->stream(StreamConfig()
+                               .stream_type(StreamType::LineBytes)
+                               .range_type(RangeType::ByteRange)
+                               .from(chunk_size)
+                               .to(max_bytes)));
         REQUIRE(stream2 != nullptr);
 
         dstd::String chunk2;
@@ -220,7 +225,8 @@ TEST_CASE("LINE_BYTES Stream - Sequential Read Tests") {
             indexer->build();
         }
 
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         std::size_t max_bytes = reader->max_bytes();
@@ -229,11 +235,12 @@ TEST_CASE("LINE_BYTES Stream - Sequential Read Tests") {
         dstd::Vector<char> buffer(512 * 1024);
 
         // Read first half
-        auto stream1 = reader->stream(StreamConfig()
-                                          .stream_type(StreamType::LineBytes)
-                                          .range_type(RangeType::ByteRange)
-                                          .from(0)
-                                          .to(mid_point));
+        auto stream1 = dftu_utils_test::ok(
+            reader->stream(StreamConfig()
+                               .stream_type(StreamType::LineBytes)
+                               .range_type(RangeType::ByteRange)
+                               .from(0)
+                               .to(mid_point)));
         dstd::String chunk1;
         while (!stream1->done()) {
             std::size_t bytes_read = dftu_utils_test::ok(
@@ -244,11 +251,12 @@ TEST_CASE("LINE_BYTES Stream - Sequential Read Tests") {
         }
 
         // Read second half
-        auto stream2 = reader->stream(StreamConfig()
-                                          .stream_type(StreamType::LineBytes)
-                                          .range_type(RangeType::ByteRange)
-                                          .from(mid_point)
-                                          .to(max_bytes));
+        auto stream2 = dftu_utils_test::ok(
+            reader->stream(StreamConfig()
+                               .stream_type(StreamType::LineBytes)
+                               .range_type(RangeType::ByteRange)
+                               .from(mid_point)
+                               .to(max_bytes)));
         dstd::String chunk2;
         while (!stream2->done()) {
             std::size_t bytes_read = dftu_utils_test::ok(
@@ -259,12 +267,12 @@ TEST_CASE("LINE_BYTES Stream - Sequential Read Tests") {
         }
 
         // Read full file
-        auto stream_full =
+        auto stream_full = dftu_utils_test::ok(
             reader->stream(StreamConfig()
                                .stream_type(StreamType::LineBytes)
                                .range_type(RangeType::ByteRange)
                                .from(0)
-                               .to(max_bytes));
+                               .to(max_bytes)));
         dstd::String full;
         while (!stream_full->done()) {
             std::size_t bytes_read = dftu_utils_test::ok(
@@ -319,7 +327,8 @@ TEST_CASE("LINE_BYTES Stream - Sequential Read Tests") {
             indexer->build();
         }
 
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         std::size_t max_bytes = reader->max_bytes();
@@ -335,11 +344,12 @@ TEST_CASE("LINE_BYTES Stream - Sequential Read Tests") {
             std::size_t end =
                 (i == chunk_count - 1) ? max_bytes : (i + 1) * chunk_size;
 
-            auto stream = reader->stream(StreamConfig()
-                                             .stream_type(StreamType::LineBytes)
-                                             .range_type(RangeType::ByteRange)
-                                             .from(start)
-                                             .to(end));
+            auto stream = dftu_utils_test::ok(
+                reader->stream(StreamConfig()
+                                   .stream_type(StreamType::LineBytes)
+                                   .range_type(RangeType::ByteRange)
+                                   .from(start)
+                                   .to(end)));
             REQUIRE(stream != nullptr);
 
             dstd::String chunk;
@@ -402,7 +412,8 @@ TEST_CASE("LINE_BYTES Stream - Parallel/Threaded Read Tests" *
 
         std::size_t max_bytes;
         {
-            auto reader = ReaderFactory::create(gz_file, idx_file);
+            auto reader =
+                dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
             REQUIRE(reader != nullptr);
             max_bytes = reader->max_bytes();
         }
@@ -420,7 +431,8 @@ TEST_CASE("LINE_BYTES Stream - Parallel/Threaded Read Tests" *
             threads.emplace_back([&, i]() {
                 try {
                     // Create separate reader per thread
-                    auto reader = ReaderFactory::create(gz_file, idx_file);
+                    auto reader = dftu_utils_test::ok(
+                        ReaderFactory::create(gz_file, idx_file));
                     if (!reader) {
                         error_occurred = true;
                         return;
@@ -431,12 +443,12 @@ TEST_CASE("LINE_BYTES Stream - Parallel/Threaded Read Tests" *
                                           ? max_bytes
                                           : (i + 1) * chunk_size;
 
-                    auto stream =
+                    auto stream = dftu_utils_test::ok(
                         reader->stream(StreamConfig()
                                            .stream_type(StreamType::LineBytes)
                                            .range_type(RangeType::ByteRange)
                                            .from(start)
-                                           .to(end));
+                                           .to(end)));
                     if (!stream) {
                         error_occurred = true;
                         return;
@@ -514,7 +526,8 @@ TEST_CASE("LINE_BYTES Stream - Parallel/Threaded Read Tests" *
 
         std::size_t max_bytes;
         {
-            auto reader = ReaderFactory::create(gz_file, idx_file);
+            auto reader =
+                dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
             REQUIRE(reader != nullptr);
             max_bytes = reader->max_bytes();
         }
@@ -531,7 +544,8 @@ TEST_CASE("LINE_BYTES Stream - Parallel/Threaded Read Tests" *
             threads.emplace_back([&, i]() {
                 try {
                     // Create separate reader per thread
-                    auto reader = ReaderFactory::create(gz_file, idx_file);
+                    auto reader = dftu_utils_test::ok(
+                        ReaderFactory::create(gz_file, idx_file));
                     if (!reader) {
                         errors++;
                         return;
@@ -542,12 +556,12 @@ TEST_CASE("LINE_BYTES Stream - Parallel/Threaded Read Tests" *
                                           ? max_bytes
                                           : (i + 1) * chunk_size;
 
-                    auto stream =
+                    auto stream = dftu_utils_test::ok(
                         reader->stream(StreamConfig()
                                            .stream_type(StreamType::LineBytes)
                                            .range_type(RangeType::ByteRange)
                                            .from(start)
-                                           .to(end));
+                                           .to(end)));
                     if (!stream) {
                         errors++;
                         return;
@@ -619,7 +633,8 @@ TEST_CASE("LINE_BYTES Stream - Parallel/Threaded Read Tests" *
 
         std::size_t max_bytes;
         {
-            auto reader = ReaderFactory::create(gz_file, idx_file);
+            auto reader =
+                dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
             REQUIRE(reader != nullptr);
             max_bytes = reader->max_bytes();
         }
@@ -635,18 +650,19 @@ TEST_CASE("LINE_BYTES Stream - Parallel/Threaded Read Tests" *
             threads.emplace_back([&, i]() {
                 try {
                     // Create separate reader per thread
-                    auto reader = ReaderFactory::create(gz_file, idx_file);
+                    auto reader = dftu_utils_test::ok(
+                        ReaderFactory::create(gz_file, idx_file));
                     if (!reader) {
                         error_occurred = true;
                         return;
                     }
 
-                    auto stream =
+                    auto stream = dftu_utils_test::ok(
                         reader->stream(StreamConfig()
                                            .stream_type(StreamType::LineBytes)
                                            .range_type(RangeType::ByteRange)
                                            .from(0)
-                                           .to(max_bytes));
+                                           .to(max_bytes)));
                     if (!stream) {
                         error_occurred = true;
                         return;
@@ -720,15 +736,17 @@ TEST_CASE("LINE_BYTES Stream - Edge Cases") {
             indexer->build();
         }
 
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         std::size_t max_bytes = reader->max_bytes();
-        auto stream = reader->stream(StreamConfig()
-                                         .stream_type(StreamType::LineBytes)
-                                         .range_type(RangeType::ByteRange)
-                                         .from(0)
-                                         .to(max_bytes));
+        auto stream = dftu_utils_test::ok(
+            reader->stream(StreamConfig()
+                               .stream_type(StreamType::LineBytes)
+                               .range_type(RangeType::ByteRange)
+                               .from(0)
+                               .to(max_bytes)));
         REQUIRE(stream != nullptr);
 
         dstd::Vector<char> buffer(1024);
@@ -774,23 +792,26 @@ TEST_CASE("LINE_BYTES Stream - Edge Cases") {
             indexer->build();
         }
 
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         // Read in chunks that might align with line boundaries
         std::size_t max_bytes = reader->max_bytes();
         std::size_t mid = max_bytes / 2;
 
-        auto stream1 = reader->stream(StreamConfig()
-                                          .stream_type(StreamType::LineBytes)
-                                          .range_type(RangeType::ByteRange)
-                                          .from(0)
-                                          .to(mid));
-        auto stream2 = reader->stream(StreamConfig()
-                                          .stream_type(StreamType::LineBytes)
-                                          .range_type(RangeType::ByteRange)
-                                          .from(mid)
-                                          .to(max_bytes));
+        auto stream1 = dftu_utils_test::ok(
+            reader->stream(StreamConfig()
+                               .stream_type(StreamType::LineBytes)
+                               .range_type(RangeType::ByteRange)
+                               .from(0)
+                               .to(mid)));
+        auto stream2 = dftu_utils_test::ok(
+            reader->stream(StreamConfig()
+                               .stream_type(StreamType::LineBytes)
+                               .range_type(RangeType::ByteRange)
+                               .from(mid)
+                               .to(max_bytes)));
 
         dstd::Vector<char> buffer(1024);
         dstd::String chunk1, chunk2;
@@ -834,15 +855,17 @@ TEST_CASE("LINE_BYTES Stream - Edge Cases") {
             indexer->build();
         }
 
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         // Request empty range
-        auto stream = reader->stream(StreamConfig()
-                                         .stream_type(StreamType::LineBytes)
-                                         .range_type(RangeType::ByteRange)
-                                         .from(100)
-                                         .to(100));
+        auto stream = dftu_utils_test::ok(
+            reader->stream(StreamConfig()
+                               .stream_type(StreamType::LineBytes)
+                               .range_type(RangeType::ByteRange)
+                               .from(100)
+                               .to(100)));
         REQUIRE(stream != nullptr);
 
         dstd::Vector<char> buffer(1024);
@@ -882,7 +905,8 @@ TEST_CASE("LINE_BYTES Stream - Arbitrary Boundary Tests" *
             indexer->build();
         }
 
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         std::size_t max_bytes = reader->max_bytes();
@@ -894,12 +918,12 @@ TEST_CASE("LINE_BYTES Stream - Arbitrary Boundary Tests" *
             dstd::Vector<char> buffer(512 * 1024);
 
             // Read chunk 1: [0, 4194304)
-            auto stream1 =
+            auto stream1 = dftu_utils_test::ok(
                 reader->stream(StreamConfig()
                                    .stream_type(StreamType::LineBytes)
                                    .range_type(RangeType::ByteRange)
                                    .from(0)
-                                   .to(boundary));
+                                   .to(boundary)));
             dstd::String chunk1;
             while (!stream1->done()) {
                 std::size_t bytes_read = dftu_utils_test::ok(
@@ -910,12 +934,12 @@ TEST_CASE("LINE_BYTES Stream - Arbitrary Boundary Tests" *
             }
 
             // Read chunk 2: [4194304, end)
-            auto stream2 =
+            auto stream2 = dftu_utils_test::ok(
                 reader->stream(StreamConfig()
                                    .stream_type(StreamType::LineBytes)
                                    .range_type(RangeType::ByteRange)
                                    .from(boundary)
-                                   .to(max_bytes));
+                                   .to(max_bytes)));
             dstd::String chunk2;
             while (!stream2->done()) {
                 std::size_t bytes_read = dftu_utils_test::ok(
@@ -964,7 +988,8 @@ TEST_CASE("LINE_BYTES Stream - Arbitrary Boundary Tests" *
             indexer->build();
         }
 
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         std::size_t max_bytes = reader->max_bytes();
@@ -974,18 +999,18 @@ TEST_CASE("LINE_BYTES Stream - Arbitrary Boundary Tests" *
         if (max_bytes > boundary) {
             dstd::Vector<char> buffer(256 * 1024);
 
-            auto stream1 =
+            auto stream1 = dftu_utils_test::ok(
                 reader->stream(StreamConfig()
                                    .stream_type(StreamType::LineBytes)
                                    .range_type(RangeType::ByteRange)
                                    .from(0)
-                                   .to(boundary));
-            auto stream2 =
+                                   .to(boundary)));
+            auto stream2 = dftu_utils_test::ok(
                 reader->stream(StreamConfig()
                                    .stream_type(StreamType::LineBytes)
                                    .range_type(RangeType::ByteRange)
                                    .from(boundary)
-                                   .to(max_bytes));
+                                   .to(max_bytes)));
             dstd::String chunk1, chunk2;
 
             while (!stream1->done()) {
@@ -1004,12 +1029,12 @@ TEST_CASE("LINE_BYTES Stream - Arbitrary Boundary Tests" *
             dstd::String concat = chunk1 + chunk2;
 
             // Read full file for comparison
-            auto stream_full =
+            auto stream_full = dftu_utils_test::ok(
                 reader->stream(StreamConfig()
                                    .stream_type(StreamType::LineBytes)
                                    .range_type(RangeType::ByteRange)
                                    .from(0)
-                                   .to(max_bytes));
+                                   .to(max_bytes)));
             dstd::String full;
             while (!stream_full->done()) {
                 std::size_t bytes_read = dftu_utils_test::ok(
@@ -1053,7 +1078,8 @@ TEST_CASE("LINE_BYTES Stream - Arbitrary Boundary Tests" *
             indexer->build();
         }
 
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         std::size_t max_bytes = reader->max_bytes();
@@ -1066,16 +1092,18 @@ TEST_CASE("LINE_BYTES Stream - Arbitrary Boundary Tests" *
             std::size_t boundary = mid + offset;
             if (boundary == 0 || boundary >= max_bytes) continue;
 
-            auto s1 = reader->stream(StreamConfig()
-                                         .stream_type(StreamType::LineBytes)
-                                         .range_type(RangeType::ByteRange)
-                                         .from(0)
-                                         .to(boundary));
-            auto s2 = reader->stream(StreamConfig()
-                                         .stream_type(StreamType::LineBytes)
-                                         .range_type(RangeType::ByteRange)
-                                         .from(boundary)
-                                         .to(max_bytes));
+            auto s1 = dftu_utils_test::ok(
+                reader->stream(StreamConfig()
+                                   .stream_type(StreamType::LineBytes)
+                                   .range_type(RangeType::ByteRange)
+                                   .from(0)
+                                   .to(boundary)));
+            auto s2 = dftu_utils_test::ok(
+                reader->stream(StreamConfig()
+                                   .stream_type(StreamType::LineBytes)
+                                   .range_type(RangeType::ByteRange)
+                                   .from(boundary)
+                                   .to(max_bytes)));
 
             dstd::String c1, c2;
             while (!s1->done()) {
@@ -1126,17 +1154,19 @@ TEST_CASE("LINE_BYTES Stream - Multiple Worker Counts") {
             indexer->build();
         }
 
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         std::size_t max_bytes = reader->max_bytes();
 
         // Read full file once for reference
-        auto stream_ref = reader->stream(StreamConfig()
-                                             .stream_type(StreamType::LineBytes)
-                                             .range_type(RangeType::ByteRange)
-                                             .from(0)
-                                             .to(max_bytes));
+        auto stream_ref = dftu_utils_test::ok(
+            reader->stream(StreamConfig()
+                               .stream_type(StreamType::LineBytes)
+                               .range_type(RangeType::ByteRange)
+                               .from(0)
+                               .to(max_bytes)));
         dstd::Vector<char> buffer(512 * 1024);
         dstd::String full_content;
         while (!stream_ref->done()) {
@@ -1166,8 +1196,8 @@ TEST_CASE("LINE_BYTES Stream - Multiple Worker Counts") {
             for (int i = 0; i < worker_count; ++i) {
                 threads.emplace_back([&, i]() {
                     // Create separate reader per thread
-                    auto thread_reader =
-                        ReaderFactory::create(gz_file, idx_file);
+                    auto thread_reader = dftu_utils_test::ok(
+                        ReaderFactory::create(gz_file, idx_file));
                     if (!thread_reader) return;
 
                     std::size_t start = i * chunk_size;
@@ -1175,12 +1205,12 @@ TEST_CASE("LINE_BYTES Stream - Multiple Worker Counts") {
                                           ? max_bytes
                                           : (i + 1) * chunk_size;
 
-                    auto stream = thread_reader->stream(
+                    auto stream = dftu_utils_test::ok(thread_reader->stream(
                         StreamConfig()
                             .stream_type(StreamType::LineBytes)
                             .range_type(RangeType::ByteRange)
                             .from(start)
-                            .to(end));
+                            .to(end)));
                     if (!stream) return;
 
                     dstd::Vector<char> buf(256 * 1024);
@@ -1240,7 +1270,8 @@ TEST_CASE("LINE_BYTES Stream - Event Ordering Verification") {
             indexer->build();
         }
 
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         std::size_t max_bytes = reader->max_bytes();
@@ -1254,11 +1285,12 @@ TEST_CASE("LINE_BYTES Stream - Event Ordering Verification") {
             std::size_t start = i * chunk_size;
             std::size_t end = (i == 7) ? max_bytes : (i + 1) * chunk_size;
 
-            auto stream = reader->stream(StreamConfig()
-                                             .stream_type(StreamType::LineBytes)
-                                             .range_type(RangeType::ByteRange)
-                                             .from(start)
-                                             .to(end));
+            auto stream = dftu_utils_test::ok(
+                reader->stream(StreamConfig()
+                                   .stream_type(StreamType::LineBytes)
+                                   .range_type(RangeType::ByteRange)
+                                   .from(start)
+                                   .to(end)));
             dstd::String chunk;
             while (!stream->done()) {
                 std::size_t bytes_read = dftu_utils_test::ok(
@@ -1271,11 +1303,12 @@ TEST_CASE("LINE_BYTES Stream - Event Ordering Verification") {
         }
 
         // Read sequentially
-        auto stream_seq = reader->stream(StreamConfig()
-                                             .stream_type(StreamType::LineBytes)
-                                             .range_type(RangeType::ByteRange)
-                                             .from(0)
-                                             .to(max_bytes));
+        auto stream_seq = dftu_utils_test::ok(
+            reader->stream(StreamConfig()
+                               .stream_type(StreamType::LineBytes)
+                               .range_type(RangeType::ByteRange)
+                               .from(0)
+                               .to(max_bytes)));
         dstd::String sequential;
         while (!stream_seq->done()) {
             std::size_t bytes_read = dftu_utils_test::ok(
@@ -1343,19 +1376,20 @@ TEST_CASE("LINE_BYTES Stream - Buffer Size Tests") {
             indexer->build();
         }
 
-        auto reference_reader = ReaderFactory::create(gz_file, idx_file);
+        auto reference_reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reference_reader != nullptr);
 
         std::size_t max_bytes = reference_reader->max_bytes();
 
         // Read full file with default buffer to get reference
-        auto ref_stream =
+        auto ref_stream = dftu_utils_test::ok(
             reference_reader->stream(StreamConfig()
                                          .stream_type(StreamType::LineBytes)
                                          .range_type(RangeType::ByteRange)
                                          .from(0)
                                          .to(max_bytes)
-                                         .buffer_size(0));  // Use default
+                                         .buffer_size(0)));  // Use default
 
         dstd::Vector<char> buffer(512 * 1024);
         dstd::String reference_content;
@@ -1390,16 +1424,18 @@ TEST_CASE("LINE_BYTES Stream - Buffer Size Tests") {
         for (std::size_t buf_size : buffer_sizes) {
             INFO("Testing buffer size: ", buf_size, " bytes");
 
-            auto reader = ReaderFactory::create(gz_file, idx_file);
+            auto reader =
+                dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
             REQUIRE(reader != nullptr);
 
             // Test reading full file with this buffer size
-            auto stream = reader->stream(StreamConfig()
-                                             .stream_type(StreamType::LineBytes)
-                                             .range_type(RangeType::ByteRange)
-                                             .from(0)
-                                             .to(max_bytes)
-                                             .buffer_size(buf_size));
+            auto stream = dftu_utils_test::ok(
+                reader->stream(StreamConfig()
+                                   .stream_type(StreamType::LineBytes)
+                                   .range_type(RangeType::ByteRange)
+                                   .from(0)
+                                   .to(max_bytes)
+                                   .buffer_size(buf_size)));
 
             dstd::String content;
             while (!stream->done()) {
@@ -1441,7 +1477,8 @@ TEST_CASE("LINE_BYTES Stream - Buffer Size Tests") {
 
         std::size_t max_bytes;
         {
-            auto reader = ReaderFactory::create(gz_file, idx_file);
+            auto reader =
+                dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
             max_bytes = reader->max_bytes();
         }
 
@@ -1461,14 +1498,15 @@ TEST_CASE("LINE_BYTES Stream - Buffer Size Tests") {
 
             // Read first half
             {
-                auto reader = ReaderFactory::create(gz_file, idx_file);
-                auto stream1 =
+                auto reader = dftu_utils_test::ok(
+                    ReaderFactory::create(gz_file, idx_file));
+                auto stream1 = dftu_utils_test::ok(
                     reader->stream(StreamConfig()
                                        .stream_type(StreamType::LineBytes)
                                        .range_type(RangeType::ByteRange)
                                        .from(0)
                                        .to(mid_point)
-                                       .buffer_size(buf_size));
+                                       .buffer_size(buf_size)));
 
                 dstd::String chunk1;
                 while (!stream1->done()) {
@@ -1483,14 +1521,15 @@ TEST_CASE("LINE_BYTES Stream - Buffer Size Tests") {
 
             // Read second half
             {
-                auto reader = ReaderFactory::create(gz_file, idx_file);
-                auto stream2 =
+                auto reader = dftu_utils_test::ok(
+                    ReaderFactory::create(gz_file, idx_file));
+                auto stream2 = dftu_utils_test::ok(
                     reader->stream(StreamConfig()
                                        .stream_type(StreamType::LineBytes)
                                        .range_type(RangeType::ByteRange)
                                        .from(mid_point)
                                        .to(max_bytes)
-                                       .buffer_size(buf_size));
+                                       .buffer_size(buf_size)));
 
                 dstd::String chunk2;
                 while (!stream2->done()) {
@@ -1505,14 +1544,15 @@ TEST_CASE("LINE_BYTES Stream - Buffer Size Tests") {
 
             // Read full file
             {
-                auto reader = ReaderFactory::create(gz_file, idx_file);
-                auto stream_full =
+                auto reader = dftu_utils_test::ok(
+                    ReaderFactory::create(gz_file, idx_file));
+                auto stream_full = dftu_utils_test::ok(
                     reader->stream(StreamConfig()
                                        .stream_type(StreamType::LineBytes)
                                        .range_type(RangeType::ByteRange)
                                        .from(0)
                                        .to(max_bytes)
-                                       .buffer_size(buf_size));
+                                       .buffer_size(buf_size)));
 
                 dstd::String full;
                 while (!stream_full->done()) {

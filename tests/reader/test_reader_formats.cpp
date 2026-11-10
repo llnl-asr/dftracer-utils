@@ -126,14 +126,14 @@ TEST_CASE_TEMPLATE("Reader creation and basic functionality", FormatType,
     indexer->build();
 
     SUBCASE("Reader creation with indexer") {
-        auto reader = ReaderFactory::create(indexer);
+        auto reader = dftu_utils_test::ok(ReaderFactory::create(indexer));
         CHECK(reader != nullptr);
         CHECK(reader->is_valid());
     }
 
     SUBCASE("Reader creation from files") {
-        auto reader = ReaderFactory::create(fixture.test_file(),
-                                            fixture.index_file(), 1024 * 1024);
+        auto reader = dftu_utils_test::ok(ReaderFactory::create(
+            fixture.test_file(), fixture.index_file(), 1024 * 1024));
         CHECK(reader != nullptr);
         CHECK(reader->is_valid());
     }
@@ -147,7 +147,7 @@ TEST_CASE_TEMPLATE("Data reading operations", FormatType, GZIPFormat) {
     REQUIRE(indexer != nullptr);
     indexer->build();
 
-    auto reader = ReaderFactory::create(indexer);
+    auto reader = dftu_utils_test::ok(ReaderFactory::create(indexer));
     REQUIRE(reader != nullptr);
 
     SUBCASE("Basic data reading") {
@@ -228,13 +228,13 @@ TEST_CASE_TEMPLATE("JSON boundary detection", FormatType, GZIPFormat) {
     REQUIRE(indexer != nullptr);
     indexer->build();
 
-    auto reader = ReaderFactory::create(indexer);
+    auto reader = dftu_utils_test::ok(ReaderFactory::create(indexer));
     REQUIRE(reader != nullptr);
 
     SUBCASE("JSON boundary vs raw reading comparison") {
         // Create two readers - one for raw reading, one for JSON boundary
         // detection
-        auto raw_reader = ReaderFactory::create(indexer);
+        auto raw_reader = dftu_utils_test::ok(ReaderFactory::create(indexer));
         REQUIRE(raw_reader != nullptr);
 
         const std::size_t buffer_size = 1024;
@@ -284,7 +284,7 @@ TEST_CASE_TEMPLATE("Line-based reading", FormatType, GZIPFormat) {
     uint64_t total_lines = indexer->line_count();
     CHECK(total_lines > 0);
 
-    auto reader = ReaderFactory::create(indexer);
+    auto reader = dftu_utils_test::ok(ReaderFactory::create(indexer));
     REQUIRE(reader != nullptr);
 
     SUBCASE("Basic line reading") {

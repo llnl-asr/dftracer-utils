@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -208,8 +209,10 @@ class RecordBatchBuilder {
     void reserve(std::size_t num_rows);
 
     /// Bulk-convert internal vectors to Arrow and return a self-contained
-    /// result. Builder is in an undefined state until reset() is called.
-    ArrowExportResult finish();
+    /// result, or an Internal error when nanoarrow refuses to build the
+    /// batch. Builder is in an undefined state until
+    /// reset() is called.
+    dstd::Result<ArrowExportResult> finish();
 
     /// Clear data. If keep_schema is true, column structure is preserved
     /// for the next batch (requires schema to be locked first).

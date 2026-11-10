@@ -892,7 +892,8 @@ Task::open_reader(const dstd::String& path) {
         utilities::fileio::IndexedReadInput::from_file(path).with_index(
             src_.path);
     utilities::fileio::IndexedFileReaderUtility utility;
-    co_return co_await utility(input);
+    auto opened = co_await utility(input);
+    co_return common::unwrap(std::move(opened));
 }
 
 coro::CoroTask<dstd::String> Task::tail_before(
@@ -901,17 +902,18 @@ coro::CoroTask<dstd::String> Task::tail_before(
     auto reader = co_await open_reader(path);
     dstd::String tail;
     for (std::uint32_t k = chunk; k-- > 0;) {
-        auto stream = reader->stream(
+        auto stream = common::unwrap(reader->stream(
             utilities::reader::internal::StreamConfig()
                 .stream_type(utilities::reader::internal::StreamType::Bytes)
                 .range_type(utilities::reader::internal::RangeType::ByteRange)
                 .buffer_size(STREAM_BUFFER_BYTES)
                 .from(spans[k].uc_offset)
-                .to(spans[k].uc_offset + spans[k].uc_size));
+                .to(spans[k].uc_offset + spans[k].uc_size)));
         dstd::String after;  // bytes after the last newline seen in chunk k
         bool found = false;
         while (!stream->done()) {
-            auto piece = co_await stream->read_async();
+            auto read = co_await stream->read_async();
+            const auto piece = common::unwrap(std::move(read));
             if (piece.empty()) break;
             const dstd::StringView data(piece.data(), piece.size());
             const std::size_t nl = data.rfind('\n');
@@ -984,18 +986,19 @@ coro::CoroTask<void> Task::read_chunk(const dstd::String& path,
     const std::uint64_t to =
         job.whole_file ? reader->max_bytes() : span.uc_offset + span.uc_size;
     if (from >= to) co_return;
-    auto stream = reader->stream(
+    auto stream = common::unwrap(reader->stream(
         utilities::reader::internal::StreamConfig()
             .stream_type(utilities::reader::internal::StreamType::Bytes)
             .range_type(utilities::reader::internal::RangeType::ByteRange)
             .buffer_size(STREAM_BUFFER_BYTES)
             .from(from)
-            .to(to));
+            .to(to)));
     dstd::String pending;
     bool decided = job.chunk == 0;
     while (!stream->done()) {
         if (r_.cancelled()) co_return;
-        auto piece = co_await stream->read_async();
+        auto read = co_await stream->read_async();
+        const auto piece = common::unwrap(std::move(read));
         if (piece.empty()) break;
         pending.append(piece.data(), piece.size());
         if (!decided) {

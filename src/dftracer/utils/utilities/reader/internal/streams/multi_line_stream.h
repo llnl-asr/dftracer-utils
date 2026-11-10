@@ -58,7 +58,7 @@ class MultiLineStream : public ReaderStream {
 
     ~MultiLineStream() override { reset(); }
 
-    coro::CoroTask<dstd::Span<const char>> read_async() override {
+    coro::CoroTask<dstd::Result<dstd::Span<const char>>> read_async() override {
         if (!underlying_stream_) {
             co_return {};
         }
@@ -73,7 +73,10 @@ class MultiLineStream : public ReaderStream {
         // Read and accumulate multiple lines into output_buffer_
         while (!reached_end_of_range() && !reached_max_lines(max_lines)) {
             const auto refill_if_needed_ok = co_await refill_if_needed();
-            if (!refill_if_needed_ok) {
+            if (!refill_if_needed_ok.has_value()) {
+                co_return refill_if_needed_ok.error();
+            }
+            if (!*refill_if_needed_ok) {
                 break;
             }
 
@@ -96,10 +99,10 @@ class MultiLineStream : public ReaderStream {
                                          output_buffer_.size());
     }
 
-    coro::CoroTask<std::size_t> read_async(char* buffer,
-                                           std::size_t buffer_size) override {
+    coro::CoroTask<dstd::Result<std::size_t>> read_async(
+        char* buffer, std::size_t buffer_size) override {
         if (!underlying_stream_) {
-            co_return 0;
+            co_return std::size_t{0};
         }
 
         // Check if we have unconsumed data from previous read
@@ -114,13 +117,17 @@ class MultiLineStream : public ReaderStream {
 
         // Buffer exhausted
         if (is_finished_) {
-            co_return 0;
+            co_return std::size_t{0};
         }
 
         // Get new chunk via zero-copy read
-        auto span = co_await read_async();
+        auto chunk = co_await read_async();
+        if (!chunk.has_value()) {
+            co_return chunk.error();
+        }
+        const dstd::Span<const char> span = *chunk;
         if (span.empty()) {
-            co_return 0;
+            co_return std::size_t{0};
         }
 
         // Reset position for new buffer
@@ -189,7 +196,7 @@ class MultiLineStream : public ReaderStream {
                (end_line_ == 0 || current_line_ <= end_line_);
     }
 
-    coro::CoroTask<bool> refill_if_needed() {
+    coro::CoroTask<dstd::Result<bool>> refill_if_needed() {
         if (span_pos_ < current_span_.size()) {
             co_return true;
         }
@@ -198,7 +205,11 @@ class MultiLineStream : public ReaderStream {
             co_return false;
         }
 
-        current_span_ = co_await underlying_stream_->read_async();
+        auto chunk = co_await underlying_stream_->read_async();
+        if (!chunk.has_value()) {
+            co_return chunk.error();
+        }
+        current_span_ = *chunk;
         span_pos_ = 0;
         co_return !current_span_.empty();
     }

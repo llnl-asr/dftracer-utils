@@ -55,7 +55,7 @@ class LineStream : public ReaderStream {
 
     ~LineStream() override { reset(); }
 
-    coro::CoroTask<dstd::Span<const char>> read_async() override {
+    coro::CoroTask<dstd::Result<dstd::Span<const char>>> read_async() override {
         if (!underlying_stream_ || is_finished_) {
             co_return {};
         }
@@ -80,19 +80,23 @@ class LineStream : public ReaderStream {
                 co_return {};
             }
 
-            current_span_ = co_await underlying_stream_->read_async();
+            auto chunk = co_await underlying_stream_->read_async();
+            if (!chunk.has_value()) {
+                co_return chunk.error();
+            }
+            current_span_ = *chunk;
             span_pos_ = 0;
             if (current_span_.empty()) {
                 is_finished_ = true;
-                co_return {};
+                co_return dstd::Span<const char>{};
             }
         }
     }
 
-    coro::CoroTask<std::size_t> read_async(char* buffer,
-                                           std::size_t buffer_size) override {
+    coro::CoroTask<dstd::Result<std::size_t>> read_async(
+        char* buffer, std::size_t buffer_size) override {
         if (!underlying_stream_) {
-            co_return 0;
+            co_return std::size_t{0};
         }
 
         if (has_pending_line_) {
@@ -100,7 +104,7 @@ class LineStream : public ReaderStream {
         }
 
         if (is_finished_) {
-            co_return 0;
+            co_return std::size_t{0};
         }
 
         while (true) {
@@ -109,7 +113,7 @@ class LineStream : public ReaderStream {
                 co_return direct.bytes_written;
             }
             if (direct.finished) {
-                co_return 0;
+                co_return std::size_t{0};
             }
 
             if (!direct.need_more_data) {
@@ -118,7 +122,7 @@ class LineStream : public ReaderStream {
                     co_return output_pending_line(buffer, buffer_size);
                 }
                 if (result == ParseResult::Finished) {
-                    co_return 0;
+                    co_return std::size_t{0};
                 }
             }
 
@@ -127,14 +131,18 @@ class LineStream : public ReaderStream {
                     co_return output_pending_line(buffer, buffer_size);
                 }
                 is_finished_ = true;
-                co_return 0;
+                co_return std::size_t{0};
             }
 
-            current_span_ = co_await underlying_stream_->read_async();
+            auto chunk = co_await underlying_stream_->read_async();
+            if (!chunk.has_value()) {
+                co_return chunk.error();
+            }
+            current_span_ = *chunk;
             span_pos_ = 0;
             if (current_span_.empty()) {
                 is_finished_ = true;
-                co_return 0;
+                co_return std::size_t{0};
             }
         }
     }

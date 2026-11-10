@@ -4,7 +4,10 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/fileio/lines/iterator.h>
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
@@ -14,7 +17,6 @@
 
 #include <cstring>
 #include <iterator>
-#include <stdexcept>
 
 namespace dftracer::utils::utilities::fileio::lines::sources {
 
@@ -29,11 +31,14 @@ namespace dftracer::utils::utilities::fileio::lines::sources {
  * Usage:
  * @code
  * auto reader = ReaderFactory::create("file.gz", "file.gz.idx");
- * IndexedFileBytesIterator it(reader, 1000, 5000);  // Bytes 1000-5000
- * while (it.has_next()) {
- *     Line line = it.next();  // Zero-copy string_view
+ * if (!reader) return reader.error();
+ * auto it = IndexedFileBytesIterator::open(*reader, 1000, 5000);  // 1000-5000
+ * if (!it) return it.error();
+ * while (it->has_next()) {
+ *     Line line = it->next();  // Zero-copy string_view
  *     // Use line.content immediately
  * }
+ * if (it->error()) return *it->error();  // a failed read ends the loop
  * @endcode
  */
 class IndexedFileBytesIterator {
@@ -42,8 +47,6 @@ class IndexedFileBytesIterator {
         reader_;
     dstd::UniquePtr<dftracer::utils::utilities::reader::internal::ReaderStream>
         stream_;
-    std::size_t start_byte_;
-    std::size_t end_byte_;
     std::size_t current_line_num_;
     std::size_t buffer_size_;
     mutable dstd::String line_buffer_;    ///< Buffer to hold current line data
@@ -53,65 +56,74 @@ class IndexedFileBytesIterator {
         has_buffered_line_;  ///< True if line_buffer_ contains a valid line
     mutable bool
         attempted_read_;     ///< True if we've tried to read the first line
+    mutable dstd::Optional<dstd::Error> error_;  ///< The failure that ended it
 
-   public:
-    using Iterator = LineIterator<IndexedFileBytesIterator>;
-
-    /**
-     * @brief Construct iterator from existing Reader.
-     *
-     * @param reader Shared pointer to Reader
-     * @param start_byte Starting byte offset (0-based, inclusive)
-     * @param end_byte Ending byte offset (0-based, exclusive)
-     * @param buffer_size Size of buffer for reading (default 1MB)
-     */
     IndexedFileBytesIterator(
         dstd::SharedPtr<dftracer::utils::utilities::reader::internal::Reader>
             reader,
-        std::size_t start_byte, std::size_t end_byte,
-        std::size_t buffer_size = 1024 * 1024)
+        std::size_t buffer_size)
         : reader_(reader),
-          start_byte_(start_byte),
-          end_byte_(end_byte),
           current_line_num_(1),
           buffer_size_(buffer_size),
           stream_buffer_(),
           stream_done_(false),
           has_buffered_line_(false),
           attempted_read_(false) {
-        if (!reader_) {
-            throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
-                                            "Reader cannot be null");
-        }
-        if (start_byte_ >= end_byte_) {
-            throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
-                                            "Invalid byte range");
-        }
-
         // Resize (not reserve) to allocate the buffer with the correct size
         stream_buffer_.resize(buffer_size_);
+    }
+
+   public:
+    using Iterator = LineIterator<IndexedFileBytesIterator>;
+
+    /**
+     * @brief Make an iterator from an existing Reader.
+     *
+     * @param reader Shared pointer to Reader
+     * @param start_byte Starting byte offset (0-based, inclusive)
+     * @param end_byte Ending byte offset (0-based, exclusive)
+     * @param buffer_size Size of buffer for reading (default 1MB)
+     * @return The iterator, or an InvalidArgument error for a null reader or
+     *         an empty range, or the error of a stream that cannot be created
+     */
+    static dstd::Result<IndexedFileBytesIterator> open(
+        dstd::SharedPtr<dftracer::utils::utilities::reader::internal::Reader>
+            reader,
+        std::size_t start_byte, std::size_t end_byte,
+        std::size_t buffer_size = 1024 * 1024) {
+        if (!reader) {
+            return common::make_error(common::ErrorCode::InvalidArgument,
+                                      "Reader cannot be null");
+        }
+        if (start_byte >= end_byte) {
+            return common::make_error(common::ErrorCode::InvalidArgument,
+                                      "Invalid byte range");
+        }
 
         DFTRACER_UTILS_LOG_DEBUG(
-            "IndexedFileBytesIterator: byte range {} to {}", start_byte_,
-            end_byte_);
+            "IndexedFileBytesIterator: byte range {} to {}", start_byte,
+            end_byte);
+
+        IndexedFileBytesIterator iterator(std::move(reader), buffer_size);
 
         // Create a LINE_BYTES stream for byte-range iteration
-        stream_ = reader_->stream(
+        auto opened = iterator.reader_->stream(
             dftracer::utils::utilities::reader::internal::StreamConfig()
                 .stream_type(dftracer::utils::utilities::reader::internal::
                                  StreamType::LineBytes)
                 .range_type(dftracer::utils::utilities::reader::internal::
                                 RangeType::ByteRange)
-                .from(start_byte_)
-                .to(end_byte_));
-        if (!stream_) {
-            throw common::DFTUtilsException(common::ErrorCode::Io,
-                                            "Failed to create stream");
-        }
+                .from(start_byte)
+                .to(end_byte));
+        if (!opened.has_value()) return opened.error();
+        iterator.stream_ = std::move(*opened);
+        return std::move(iterator);
     }
 
     /**
      * @brief Check if more lines are available.
+     *
+     * Returns false when a read fails; @ref error then gives the failure.
      */
     bool has_next() const {
         // Check if we've already determined the stream is done
@@ -148,8 +160,14 @@ class IndexedFileBytesIterator {
         }
 
         // LINE_BYTES stream returns one complete line per read()
-        std::size_t bytes_read = common::unwrap(stream_->read(
-            const_cast<char*>(stream_buffer_.data()), stream_buffer_.size()));
+        auto read = stream_->read(const_cast<char*>(stream_buffer_.data()),
+                                  stream_buffer_.size());
+        if (!read.has_value()) {
+            error_ = read.error();
+            stream_done_ = true;
+            return false;
+        }
+        std::size_t bytes_read = *read;
 
         if (bytes_read == 0) {
             stream_done_ = true;
@@ -170,13 +188,12 @@ class IndexedFileBytesIterator {
     /**
      * @brief Get the next line (zero-copy).
      *
-     * @return Line object with string_view content (valid until next call)
-     * @throws std::runtime_error if no more lines available
+     * @return Line object with string_view content (valid until next call).
+     *         Call it only after @ref has_next gave true.
      */
     Line next() {
         if (!has_next()) {
-            throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
-                                            "No more lines available");
+            dstd::fatal("IndexedFileBytesIterator::next: no more lines");
         }
 
         // Return the buffered line
@@ -191,6 +208,14 @@ class IndexedFileBytesIterator {
 
         return result;
     }
+
+    /**
+     * @brief The failure of a stream read that ended the iteration, if any.
+     *
+     * Check it after the loop: a failed read ends the iteration as a normal
+     * end does.
+     */
+    const dstd::Optional<dstd::Error>& error() const { return error_; }
 
     /**
      * @brief Get the current line number.

@@ -11,6 +11,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/utilities/arrow/arrow.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <cstdio>
@@ -48,7 +49,7 @@ static void write_test_file(const dstd::String& path, int batch_count,
                 builder.append_double(2, row_id * 1.5);
                 builder.end_row();
             }
-            auto batch = builder.finish();
+            auto batch = dftu_utils_test::ok(builder.finish());
             co_await writer.write_batch(batch);
             builder.reset(true);
         }
@@ -279,7 +280,7 @@ TEST_CASE("IpcReader - roundtrip with all column types") {
                 builder.append_bool(4, i % 2 == 0);
                 builder.end_row();
             }
-            auto batch = builder.finish();
+            auto batch = dftu_utils_test::ok(builder.finish());
             co_await writer.write_batch(batch);
             co_await writer.close();
         };

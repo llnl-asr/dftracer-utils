@@ -58,12 +58,12 @@ thread_local dftracer::utils::json::RecordParser t_parser;
 /// Traces must be gzip. A bare .pfw is rejected rather than read, so a file
 /// that was never compressed fails at the reader instead of silently taking
 /// a path with no index, no pruning and no random access.
-void reject_unless_gzip(common::ArchiveFormat format,
-                        const dstd::String& file_path) {
-    if (format == common::ArchiveFormat::Gzip) return;
-    throw ReaderError(ReaderError::InvalidArgument,
-                      "Not a gzip trace: " + file_path +
-                          " (dftracer traces must be gzip-compressed)");
+dstd::Result<void> reject_unless_gzip(common::ArchiveFormat format,
+                                      const dstd::String& file_path) {
+    if (format == common::ArchiveFormat::Gzip) return {};
+    return reader_error<ReaderErrorType::InvalidArgument,
+                        "Not a gzip trace: {} (dftracer traces must be "
+                        "gzip-compressed)">(file_path);
 }
 
 bool line_matches_query(const Query& q, dstd::StringView content) {
@@ -81,13 +81,18 @@ struct LineRange {
     std::size_t end_line;
 };
 
-coro::AsyncGenerator<Line> yield_lines_from_stream(
+coro::AsyncGenerator<dstd::Result<Line>> yield_lines_from_stream(
     dstd::UniquePtr<internal::ReaderStream> stream, std::size_t start_line_num,
     const Query* query, bool chunk_prune_only = false,
     const index::plan::Prefilter* prefilter = nullptr) {
     std::size_t line_num = start_line_num;
     while (!stream->done()) {
-        auto chunk = co_await stream->read_async();
+        auto read = co_await stream->read_async();
+        if (!read.has_value()) {
+            co_yield dstd::Result<Line>(read.error());
+            co_return;
+        }
+        const auto chunk = *read;
         if (chunk.empty()) break;
         const char* data = chunk.data();
         std::size_t len = chunk.size();
@@ -126,7 +131,7 @@ coro::AsyncGenerator<Line> yield_lines_from_stream(
     }
 }
 
-coro::AsyncGenerator<Line> yield_lines_from_ranges(
+coro::AsyncGenerator<dstd::Result<Line>> yield_lines_from_ranges(
     dstd::SharedPtr<internal::Reader> reader, dstd::Vector<LineRange> ranges,
     std::size_t buffer_size, Query query, bool chunk_prune_only = false,
     index::plan::Prefilter prefilter = {}) {
@@ -138,13 +143,19 @@ coro::AsyncGenerator<Line> yield_lines_from_ranges(
                                .from(range.start_line)
                                .to(range.end_line)
                                .buffer_size(buffer_size));
+        if (!stream.has_value()) {
+            co_yield dstd::Result<Line>(stream.error());
+            co_return;
+        }
         auto gen =
-            yield_lines_from_stream(std::move(stream), range.start_line, &query,
-                                    chunk_prune_only, &prefilter);
+            yield_lines_from_stream(std::move(*stream), range.start_line,
+                                    &query, chunk_prune_only, &prefilter);
         for (;;) {
             auto line = co_await gen.next();
             if (!line) break;
-            co_yield *line;
+            const bool failed = !line->has_value();
+            co_yield std::move(*line);
+            if (failed) co_return;
         }
     }
 }
@@ -153,11 +164,16 @@ coro::AsyncGenerator<Line> yield_lines_from_ranges(
 // line-yielding flavors but emit dstd::Span<const char> buffers untouched
 // (multi-line boundary respected by stream type). Used by read_json to run
 // parse each line of a chunk in place instead of reading line by line.
-coro::AsyncGenerator<dstd::Span<const char>> yield_chunks_from_stream(
-    dstd::UniquePtr<internal::ReaderStream> stream,
-    const index::plan::Prefilter* prefilter = nullptr) {
+coro::AsyncGenerator<dstd::Result<dstd::Span<const char>>>
+yield_chunks_from_stream(dstd::UniquePtr<internal::ReaderStream> stream,
+                         const index::plan::Prefilter* prefilter = nullptr) {
     while (!stream->done()) {
-        auto chunk = co_await stream->read_async();
+        auto read = co_await stream->read_async();
+        if (!read.has_value()) {
+            co_yield dstd::Result<dstd::Span<const char>>(read.error());
+            co_return;
+        }
+        const auto chunk = *read;
         if (chunk.empty()) break;
         if (prefilter && !prefilter->empty() &&
             !prefilter->may_match(
@@ -168,9 +184,11 @@ coro::AsyncGenerator<dstd::Span<const char>> yield_chunks_from_stream(
     }
 }
 
-coro::AsyncGenerator<dstd::Span<const char>> yield_chunks_from_ranges(
-    dstd::SharedPtr<internal::Reader> reader, dstd::Vector<LineRange> ranges,
-    std::size_t buffer_size, index::plan::Prefilter prefilter = {}) {
+coro::AsyncGenerator<dstd::Result<dstd::Span<const char>>>
+yield_chunks_from_ranges(dstd::SharedPtr<internal::Reader> reader,
+                         dstd::Vector<LineRange> ranges,
+                         std::size_t buffer_size,
+                         index::plan::Prefilter prefilter = {}) {
     for (const auto& range : ranges) {
         auto stream =
             reader->stream(internal::StreamConfig()
@@ -179,16 +197,22 @@ coro::AsyncGenerator<dstd::Span<const char>> yield_chunks_from_ranges(
                                .from(range.start_line)
                                .to(range.end_line)
                                .buffer_size(buffer_size));
-        auto gen = yield_chunks_from_stream(std::move(stream), &prefilter);
+        if (!stream.has_value()) {
+            co_yield dstd::Result<dstd::Span<const char>>(stream.error());
+            co_return;
+        }
+        auto gen = yield_chunks_from_stream(std::move(*stream), &prefilter);
         for (;;) {
             auto chunk = co_await gen.next();
             if (!chunk) break;
-            co_yield *chunk;
+            const bool failed = !chunk->has_value();
+            co_yield std::move(*chunk);
+            if (failed) co_return;
         }
     }
 }
 
-coro::AsyncGenerator<Line> read_lines_indexed(
+coro::AsyncGenerator<dstd::Result<Line>> read_lines_indexed(
     dstd::SharedPtr<internal::Reader> reader, dstd::String index_path,
     dstd::String file_path, ReadConfig config, dstd::Optional<Query> query,
     bool chunk_prune_only = false) {
@@ -214,8 +238,12 @@ coro::AsyncGenerator<Line> read_lines_indexed(
 
     if (query && !index_path.empty() &&
         range_type == internal::RangeType::ByteRange) {
-        auto snapshot = common::unwrap(
-            dftracer::utils::index::plan::open_snapshot(index_path));
+        auto opened = dftracer::utils::index::plan::open_snapshot(index_path);
+        if (!opened.has_value()) {
+            co_yield dstd::Result<Line>(opened.error());
+            co_return;
+        }
+        auto snapshot = std::move(*opened);
         // GCC 12 destroys a temporary built inside co_await twice.
         dftracer::utils::index::plan::PruneRequest prune_req{
             .index_path = index_path,
@@ -225,6 +253,10 @@ coro::AsyncGenerator<Line> read_lines_indexed(
             .metadata = dftracer::utils::index::plan::MetadataUse::All};
         auto pruned = co_await dftracer::utils::index::plan::prune_file(
             std::move(prune_req));
+        if (!pruned.has_value()) {
+            co_yield dstd::Result<Line>(pruned.error());
+            co_return;
+        }
         if (!pruned->file_may_match) co_return;
 
         if (!pruned->all_chunks &&
@@ -235,8 +267,13 @@ coro::AsyncGenerator<Line> read_lines_indexed(
             const auto file = snapshot.file(logical);
 
             if (file) {
-                auto spans = common::unwrap(
-                    dftracer::utils::index::spans(snapshot, *file));
+                auto spans_result =
+                    dftracer::utils::index::spans(snapshot, *file);
+                if (!spans_result.has_value()) {
+                    co_yield dstd::Result<Line>(spans_result.error());
+                    co_return;
+                }
+                const auto& spans = *spans_result;
 
                 dstd::Vector<LineRange> ranges;
                 std::uint64_t prev_idx = UINT64_MAX;
@@ -260,7 +297,9 @@ coro::AsyncGenerator<Line> read_lines_indexed(
                 for (;;) {
                     auto line = co_await gen.next();
                     if (!line) break;
-                    co_yield *line;
+                    const bool failed = !line->has_value();
+                    co_yield std::move(*line);
+                    if (failed) co_return;
                 }
                 co_return;
             }
@@ -274,21 +313,26 @@ coro::AsyncGenerator<Line> read_lines_indexed(
                            .from(start)
                            .to(end)
                            .buffer_size(config.buffer_size));
+    if (!stream.has_value()) {
+        co_yield dstd::Result<Line>(stream.error());
+        co_return;
+    }
 
-    auto gen = yield_lines_from_stream(std::move(stream), start,
+    auto gen = yield_lines_from_stream(std::move(*stream), start,
                                        query ? &*query : nullptr,
                                        chunk_prune_only, &prefilter);
     for (;;) {
         auto line = co_await gen.next();
         if (!line) break;
-        co_yield *line;
+        const bool failed = !line->has_value();
+        co_yield std::move(*line);
+        if (failed) co_return;
     }
 }
 
-coro::AsyncGenerator<Line> read_lines_gz(dstd::String file_path,
-                                         ReadConfig config,
-                                         dstd::Optional<Query> query,
-                                         bool chunk_prune_only = false) {
+coro::AsyncGenerator<dstd::Result<Line>> read_lines_gz(
+    dstd::String file_path, ReadConfig config, dstd::Optional<Query> query,
+    bool chunk_prune_only = false) {
     std::size_t start = config.has_line_range() ? config.start_line : 0;
     std::size_t end = config.has_line_range() ? config.end_line : 0;
     const bool byte_range = config.has_byte_range();
@@ -300,7 +344,15 @@ coro::AsyncGenerator<Line> read_lines_gz(dstd::String file_path,
     auto gen =
         fileio::lines::sources::async_streaming_gz_lines(file_path, start, end);
     for (;;) {
-        auto opt = co_await gen.next();
+        // The line source is built with exceptions and may still throw.
+        auto settled = co_await gen.settled_next();
+        if (settled.stopped) co_return;
+        if (settled.exception) {
+            co_yield dstd::Result<Line>(
+                common::error_of_exception(settled.exception));
+            co_return;
+        }
+        auto& opt = *settled.value;
         if (!opt) break;
         const std::size_t line_start = byte_pos;
         byte_pos += opt->content.size() + 1;
@@ -311,7 +363,7 @@ coro::AsyncGenerator<Line> read_lines_gz(dstd::String file_path,
         }
         if (chunk_prune_only || !query ||
             line_matches_query(*query, opt->content)) {
-            co_yield *opt;
+            co_yield Line(*opt);
         }
     }
 }
@@ -320,7 +372,7 @@ coro::AsyncGenerator<Line> read_lines_gz(dstd::String file_path,
 
 namespace internal {
 
-coro::AsyncGenerator<dstd::Span<const char>> read_chunks_indexed(
+coro::AsyncGenerator<dstd::Result<dstd::Span<const char>>> read_chunks_indexed(
     dstd::SharedPtr<internal::Reader> reader, dstd::String index_path,
     dstd::String file_path, ReadConfig config, dstd::Optional<Query> query,
     bool extend_to_line_boundary) {
@@ -345,8 +397,12 @@ coro::AsyncGenerator<dstd::Span<const char>> read_chunks_indexed(
     }
 
     if (query && !index_path.empty() && !config.skip_pruning) {
-        auto snapshot = common::unwrap(
-            dftracer::utils::index::plan::open_snapshot(index_path));
+        auto opened = dftracer::utils::index::plan::open_snapshot(index_path);
+        if (!opened.has_value()) {
+            co_yield dstd::Result<dstd::Span<const char>>(opened.error());
+            co_return;
+        }
+        auto snapshot = std::move(*opened);
         // GCC 12 destroys a temporary built inside co_await twice.
         dftracer::utils::index::plan::PruneRequest prune_req{
             .index_path = index_path,
@@ -356,6 +412,10 @@ coro::AsyncGenerator<dstd::Span<const char>> read_chunks_indexed(
             .metadata = dftracer::utils::index::plan::MetadataUse::All};
         auto pruned = co_await dftracer::utils::index::plan::prune_file(
             std::move(prune_req));
+        if (!pruned.has_value()) {
+            co_yield dstd::Result<dstd::Span<const char>>(pruned.error());
+            co_return;
+        }
         if (!pruned->file_may_match) co_return;
 
         if (!pruned->all_chunks &&
@@ -366,8 +426,14 @@ coro::AsyncGenerator<dstd::Span<const char>> read_chunks_indexed(
             const auto file = snapshot.file(logical);
 
             if (file) {
-                auto spans = common::unwrap(
-                    dftracer::utils::index::spans(snapshot, *file));
+                auto spans_result =
+                    dftracer::utils::index::spans(snapshot, *file);
+                if (!spans_result.has_value()) {
+                    co_yield dstd::Result<dstd::Span<const char>>(
+                        spans_result.error());
+                    co_return;
+                }
+                const auto& spans = *spans_result;
 
                 dstd::Vector<LineRange> ranges;
                 std::uint64_t prev_idx = UINT64_MAX;
@@ -403,7 +469,9 @@ coro::AsyncGenerator<dstd::Span<const char>> read_chunks_indexed(
                 for (;;) {
                     auto chunk = co_await gen.next();
                     if (!chunk) break;
-                    co_yield *chunk;
+                    const bool failed = !chunk->has_value();
+                    co_yield std::move(*chunk);
+                    if (failed) co_return;
                 }
                 co_return;
             }
@@ -423,12 +491,18 @@ coro::AsyncGenerator<dstd::Span<const char>> read_chunks_indexed(
                            .extend_to_line_boundary(
                                extend_to_line_boundary &&
                                range_type == internal::RangeType::ByteRange));
+    if (!stream.has_value()) {
+        co_yield dstd::Result<dstd::Span<const char>>(stream.error());
+        co_return;
+    }
 
-    auto gen = yield_chunks_from_stream(std::move(stream), &prefilter);
+    auto gen = yield_chunks_from_stream(std::move(*stream), &prefilter);
     for (;;) {
         auto chunk = co_await gen.next();
         if (!chunk) break;
-        co_yield *chunk;
+        const bool failed = !chunk->has_value();
+        co_yield std::move(*chunk);
+        if (failed) co_return;
     }
 }
 
@@ -443,9 +517,15 @@ void TraceReader::probe_index() {
     format_ = CheckpointIndexerFactory::detect_format(config_.file_path);
     index_path_ = trace::internal::determine_index_path(config_.file_path,
                                                         config_.index_dir);
-    has_index_ = format_ == common::ArchiveFormat::Gzip &&
-                 common::unwrap(dstd::fs::exists(dstd::PathView(
-                     dftracer::utils::index::store_dir(index_path_))));
+    if (format_ == common::ArchiveFormat::Gzip) {
+        auto exists = dstd::fs::exists(
+            dstd::PathView(dftracer::utils::index::store_dir(index_path_)));
+        if (exists.has_value()) {
+            has_index_ = *exists;
+        } else {
+            probe_error_ = exists.error();
+        }
+    }
     // Do not trust an index whose source changed since it was built; fall back
     // to a raw read rather than serving stale data. Uses the shared stat-based
     // freshness predicate, so a record with no stored stat is treated as stale
@@ -472,21 +552,24 @@ void TraceReader::probe_index() {
 
 bool TraceReader::has_index() const { return has_index_; }
 
-void TraceReader::ensure_metadata_cached() {
-    if (metadata_cached_) return;
+dstd::Result<void> TraceReader::ensure_metadata_cached() {
+    if (probe_error_) return *probe_error_;
+    if (metadata_cached_) return {};
 
     if (has_index_) {
         auto reader = make_indexed_reader();
-        cached_max_bytes_ = reader->max_bytes();
-        cached_line_count_ = reader->line_count();
+        if (!reader.has_value()) return reader.error();
+        cached_max_bytes_ = (*reader)->max_bytes();
+        cached_line_count_ = (*reader)->line_count();
     } else {
         cached_max_bytes_ = 0;
         cached_line_count_ = 0;
     }
     metadata_cached_ = true;
+    return {};
 }
 
-coro::CoroTask<trace::TimeMetric> TraceReader::read_time_metric(
+coro::CoroTask<dstd::Result<trace::TimeMetric>> TraceReader::read_time_metric(
     std::size_t max_lines) {
     using trace::DFTracerEvent;
     using trace::TimeMetric;
@@ -499,17 +582,19 @@ coro::CoroTask<trace::TimeMetric> TraceReader::read_time_metric(
     for (;;) {
         auto line_opt = co_await gen.next();
         if (!line_opt) break;
+        if (!line_opt->has_value()) co_return line_opt->error();
+        const Line& line = **line_opt;
         const char* start = nullptr;
         std::size_t len = 0;
-        if (!json::trim_and_validate(line_opt->content.data(),
-                                     line_opt->content.size(), start, len))
+        if (!json::trim_and_validate(line.content.data(), line.content.size(),
+                                     start, len))
             continue;
         auto doc = parser.parse(start, len);
         if (doc.error())
             doc = json::parse_refused(parser, dstd::StringView(start, len));
         if (doc.error()) continue;
         DFTracerEvent event;
-        if (!DFTracerEvent::parse(json::JsonValue(doc.value()), event))
+        if (!DFTracerEvent::parse(json::JsonValue(doc.value_unsafe()), event))
             continue;
         if (trace::extract_time_metric(event, metric)) break;
         // CM precedes timeline events; stop once past the metadata header.
@@ -518,13 +603,15 @@ coro::CoroTask<trace::TimeMetric> TraceReader::read_time_metric(
     co_return metric;
 }
 
-std::size_t TraceReader::max_bytes() {
-    ensure_metadata_cached();
+dstd::Result<std::size_t> TraceReader::max_bytes() {
+    auto cached = ensure_metadata_cached();
+    if (!cached.has_value()) return cached.error();
     return cached_max_bytes_;
 }
 
-std::size_t TraceReader::line_count() {
-    ensure_metadata_cached();
+dstd::Result<std::size_t> TraceReader::line_count() {
+    auto cached = ensure_metadata_cached();
+    if (!cached.has_value()) return cached.error();
     return cached_line_count_;
 }
 
@@ -544,10 +631,17 @@ void TraceReader::warn_dropped(std::size_t local) const {
                             config_.file_path, local);
 }
 
-dstd::SharedPtr<internal::Reader> TraceReader::make_indexed_reader() {
-    auto indexer = CheckpointIndexerFactory::create(
-        config_.file_path, index_path_, config_.checkpoint_size, false);
-    return internal::ReaderFactory::create(indexer);
+dstd::Result<dstd::SharedPtr<internal::Reader>>
+TraceReader::make_indexed_reader() {
+    dstd::SharedPtr<index::gzip::CheckpointIndexer> indexer;
+    // The indexer factory still reports a failure as an exception.
+    try {
+        indexer = CheckpointIndexerFactory::create(
+            config_.file_path, index_path_, config_.checkpoint_size, false);
+    } catch (...) {
+        return common::error_of_exception(std::current_exception());
+    }
+    return internal::ReaderFactory::create(std::move(indexer));
 }
 
 internal::StreamType TraceReader::resolve_raw_stream_type(
@@ -563,31 +657,49 @@ internal::RangeType TraceReader::resolve_range_type(
     return internal::RangeType::ByteRange;
 }
 
-coro::AsyncGenerator<Line> TraceReader::read_lines(ReadConfig config) {
+coro::AsyncGenerator<dstd::Result<Line>> TraceReader::read_lines(
+    ReadConfig config) {
+    if (probe_error_) return internal::failed_generator<Line>(*probe_error_);
     dstd::Optional<Query> query;
     if (!config.query.empty()) {
         auto parsed = Query::from_string(config.query);
-        if (!parsed) throw duql::DuqlParseError(parsed.error());
+        if (!parsed)
+            return internal::failed_generator<Line>(
+                internal::query_parse_error(parsed.error()));
         query = std::move(*parsed);
     }
 
     bool cpo = config.chunk_prune_only;
 
     if (has_index_) {
-        return read_lines_indexed(make_indexed_reader(), index_path_,
+        auto reader = make_indexed_reader();
+        if (!reader.has_value())
+            return internal::failed_generator<Line>(reader.error());
+        return read_lines_indexed(std::move(*reader), index_path_,
                                   config_.file_path, std::move(config),
                                   std::move(query), cpo);
     }
-    reject_unless_gzip(format_, config_.file_path);
+    auto gzip = reject_unless_gzip(format_, config_.file_path);
+    if (!gzip.has_value())
+        return internal::failed_generator<Line>(gzip.error());
     return read_lines_gz(config_.file_path, std::move(config), std::move(query),
                          cpo);
 }
 
-coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
+coro::AsyncGenerator<dstd::Result<JsonLine>> TraceReader::read_json(
+    ReadConfig config) {
+    if (probe_error_) {
+        co_yield dstd::Result<JsonLine>(*probe_error_);
+        co_return;
+    }
     dstd::Optional<Query> query;
     if (!config.query.empty()) {
         auto parsed = Query::from_string(config.query);
-        if (!parsed) throw duql::DuqlParseError(parsed.error());
+        if (!parsed) {
+            co_yield dstd::Result<JsonLine>(
+                internal::query_parse_error(parsed.error()));
+            co_return;
+        }
         query = std::move(*parsed);
     }
 
@@ -610,7 +722,12 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
     // per-line in-place parsing. Query is evaluated on the ondemand document
     // directly, so non-matching docs never hit the yield_parser.
     if (has_index_) {
-        auto reader = make_indexed_reader();
+        auto made = make_indexed_reader();
+        if (!made.has_value()) {
+            co_yield dstd::Result<JsonLine>(made.error());
+            co_return;
+        }
+        auto reader = std::move(*made);
         auto chunk_gen = read_chunks_indexed(reader, index_path_,
                                              config_.file_path, config, query);
 
@@ -624,7 +741,12 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
         for (;;) {
             auto chunk_opt = co_await chunk_gen.next();
             if (!chunk_opt) break;
-            auto chunk = *chunk_opt;
+            if (!chunk_opt->has_value()) {
+                warn_dropped(dropped);
+                co_yield dstd::Result<JsonLine>(chunk_opt->error());
+                co_return;
+            }
+            auto chunk = **chunk_opt;
             if (chunk.empty()) continue;
             auto trimmed = strip_ndjson_bookends(
                 dstd::StringView(chunk.data(), chunk.size()));
@@ -668,7 +790,7 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
                             count_dropped(dropped);
                         continue;
                     }
-                    for (auto field : obj.value()) {
+                    for (auto field : obj.value_unsafe()) {
                         if (field.error()) {
                             readable = false;
                             break;
@@ -684,20 +806,20 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
                             break;
                         }
                         auto key = *key_r;
-                        auto val = val_r.value();
+                        auto val = val_r.value_unsafe();
                         auto type_r = val.type();
                         if (type_r.error()) {
                             readable = false;
                             break;
                         }
-                        auto type = type_r.value();
+                        auto type = type_r.value_unsafe();
                         if (type == simdjson::ondemand::json_type::object) {
                             auto nested = val.get_object();
                             if (nested.error()) {
                                 readable = false;
                                 break;
                             }
-                            for (auto nf : nested.value()) {
+                            for (auto nf : nested.value_unsafe()) {
                                 if (nf.error()) {
                                     readable = false;
                                     break;
@@ -711,7 +833,7 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
                                 }
                                 if (!internal::store_referenced_nested(
                                         fields, *query, query_has_dotted, key,
-                                        *nk_r, nv_r.value())) {
+                                        *nk_r, nv_r.value_unsafe())) {
                                     readable = false;
                                     break;
                                 }
@@ -757,12 +879,18 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
     std::size_t dropped = 0;
 
     for (;;) {
-        auto opt = co_await line_gen.next();
-        if (!opt) break;
+        auto line_opt = co_await line_gen.next();
+        if (!line_opt) break;
+        if (!line_opt->has_value()) {
+            warn_dropped(dropped);
+            co_yield dstd::Result<JsonLine>(line_opt->error());
+            co_return;
+        }
+        const Line& line = **line_opt;
         const char* trimmed;
         std::size_t trimmed_size;
         if (!dftracer::utils::json::trim_and_validate_with_comma(
-                opt->content.data(), opt->content.size(), trimmed,
+                line.content.data(), line.content.size(), trimmed,
                 trimmed_size))
             continue;
         if (!parser.parse(dstd::StringView(trimmed, trimmed_size))) {
@@ -823,15 +951,25 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
         if (internal::is_cropped_object(
                 dstd::StringView(trimmed, trimmed_size)))
             count_dropped(dropped);
-        co_yield JsonLine{opt->content, opt->line_number, &parser};
+        co_yield JsonLine{line.content, line.line_number, &parser};
     }
     warn_dropped(dropped);
 }
 
-coro::AsyncGenerator<dstd::Span<const char>> TraceReader::read_raw(
-    ReadConfig config) {
+coro::AsyncGenerator<dstd::Result<dstd::Span<const char>>>
+TraceReader::read_raw(ReadConfig config) {
+    using Chunk = dstd::Result<dstd::Span<const char>>;
+    if (probe_error_) {
+        co_yield Chunk(*probe_error_);
+        co_return;
+    }
     if (has_index_) {
-        auto reader = make_indexed_reader();
+        auto made = make_indexed_reader();
+        if (!made.has_value()) {
+            co_yield Chunk(made.error());
+            co_return;
+        }
+        auto reader = std::move(*made);
         auto stream_type = resolve_raw_stream_type(config);
         auto range_type = resolve_range_type(config);
         std::size_t start =
@@ -853,9 +991,17 @@ coro::AsyncGenerator<dstd::Span<const char>> TraceReader::read_raw(
         if (!config.query.empty() && !index_path_.empty() &&
             range_type == internal::RangeType::ByteRange) {
             auto parsed = Query::from_string(config.query);
-            if (!parsed) throw duql::DuqlParseError(parsed.error());
-            auto snapshot = common::unwrap(
-                dftracer::utils::index::plan::open_snapshot(index_path_));
+            if (!parsed) {
+                co_yield Chunk(internal::query_parse_error(parsed.error()));
+                co_return;
+            }
+            auto opened =
+                dftracer::utils::index::plan::open_snapshot(index_path_);
+            if (!opened.has_value()) {
+                co_yield Chunk(opened.error());
+                co_return;
+            }
+            auto snapshot = std::move(*opened);
             // GCC 12 destroys a temporary built inside co_await twice.
             dftracer::utils::index::plan::PruneRequest prune_req{
                 .index_path = index_path_,
@@ -865,6 +1011,10 @@ coro::AsyncGenerator<dstd::Span<const char>> TraceReader::read_raw(
                 .metadata = dftracer::utils::index::plan::MetadataUse::All};
             auto pruned = co_await dftracer::utils::index::plan::prune_file(
                 std::move(prune_req));
+            if (!pruned.has_value()) {
+                co_yield Chunk(pruned.error());
+                co_return;
+            }
             if (!pruned->file_may_match) co_return;
         }
 
@@ -874,25 +1024,41 @@ coro::AsyncGenerator<dstd::Span<const char>> TraceReader::read_raw(
                                          .from(start)
                                          .to(end)
                                          .buffer_size(config.buffer_size));
+        if (!stream.has_value()) {
+            co_yield Chunk(stream.error());
+            co_return;
+        }
 
-        while (!stream->done()) {
-            auto chunk = co_await stream->read_async();
+        while (!(*stream)->done()) {
+            auto read = co_await (*stream)->read_async();
+            if (!read.has_value()) {
+                co_yield Chunk(read.error());
+                co_return;
+            }
+            const auto chunk = *read;
             if (chunk.empty()) break;
-            co_yield chunk;
+            co_yield Chunk(chunk);
         }
     } else if (format_ == common::ArchiveFormat::Gzip) {
         auto gen =
             fileio::lines::sources::async_streaming_gz_lines(config_.file_path);
         std::size_t byte_pos = 0;
         for (;;) {
-            auto opt = co_await gen.next();
+            // The line source is built with exceptions and may still throw.
+            auto settled = co_await gen.settled_next();
+            if (settled.stopped) co_return;
+            if (settled.exception) {
+                co_yield Chunk(common::error_of_exception(settled.exception));
+                co_return;
+            }
+            auto& opt = *settled.value;
             if (!opt) break;
             const auto& line = *opt;
             std::size_t line_end = byte_pos + line.content.size() + 1;
             if (config.end_byte > 0 && byte_pos >= config.end_byte) break;
             if (line_end > config.start_byte) {
-                co_yield dstd::Span<const char>(line.content.data(),
-                                                line.content.size());
+                co_yield Chunk(dstd::Span<const char>(line.content.data(),
+                                                      line.content.size()));
             }
             byte_pos = line_end;
         }

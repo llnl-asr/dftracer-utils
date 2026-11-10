@@ -10,6 +10,7 @@
 #include <dftracer/utils/utilities/fileio/lines/sources/indexed_file_bytes_iterator.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 #include <doctest/doctest.h>
+#include <generator_ok.h>
 #include <task_result.h>
 #include <testing_utilities.h>
 
@@ -20,6 +21,17 @@ using namespace dftracer::utils::coro;
 using namespace dftracer::utils::index::gzip;
 using namespace dftracer::utils::utilities::reader::internal;
 using namespace dftu_utils_test;
+
+// The first item of a generator of Results.
+static CoroTask<dstd::Result<Line>> first_item(
+    AsyncGenerator<dstd::Result<Line>> gen) {
+    auto item = co_await gen.next();
+    if (!item) {
+        co_return common::make_error(common::ErrorCode::Unknown,
+                                     "the generator ended without an item");
+    }
+    co_return std::move(*item);
+}
 
 // Helper: consume an AsyncGenerator<Line> into a vector of strings
 static CoroTask<dstd::Vector<dstd::String>> collect_lines(
@@ -58,13 +70,14 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
             std::size_t file_size = reader->max_bytes();
 
-            auto gen = async_indexed_file_bytes(reader, 0, file_size);
+            auto gen = dftu_utils_test::ok_items(
+                async_indexed_file_bytes(reader, 0, file_size));
             auto task = collect_lines(std::move(gen));
             auto lines = dftu_utils_test::ok(task.get());
 
@@ -82,12 +95,13 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
             // Read first 300 bytes
-            auto gen = async_indexed_file_bytes(reader, 0, 300);
+            auto gen = dftu_utils_test::ok_items(
+                async_indexed_file_bytes(reader, 0, 300));
             auto task = collect_lines(std::move(gen));
             auto lines = dftu_utils_test::ok(task.get());
 
@@ -105,12 +119,13 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
             // Read bytes 200-400 (should skip some initial lines)
-            auto gen = async_indexed_file_bytes(reader, 200, 400);
+            auto gen = dftu_utils_test::ok_items(
+                async_indexed_file_bytes(reader, 200, 400));
             auto task = collect_lines(std::move(gen));
             auto lines = dftu_utils_test::ok(task.get());
 
@@ -128,13 +143,14 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
             std::size_t file_size = reader->max_bytes();
 
-            auto gen = async_indexed_file_bytes(reader, 0, file_size);
+            auto gen = dftu_utils_test::ok_items(
+                async_indexed_file_bytes(reader, 0, file_size));
             auto task = collect_line_copies(std::move(gen));
             auto lines = dftu_utils_test::ok(task.get());
 
@@ -155,13 +171,14 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
             std::size_t file_size = reader->max_bytes();
 
-            auto gen = async_indexed_file_bytes(reader, 0, file_size, 256);
+            auto gen = dftu_utils_test::ok_items(
+                async_indexed_file_bytes(reader, 0, file_size, 256));
             auto task = collect_lines(std::move(gen));
             auto lines = dftu_utils_test::ok(task.get());
 
@@ -177,14 +194,14 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
             std::size_t file_size = reader->max_bytes();
 
-            auto gen =
-                async_indexed_file_bytes(reader, 0, file_size, 1024 * 1024);
+            auto gen = dftu_utils_test::ok_items(
+                async_indexed_file_bytes(reader, 0, file_size, 1024 * 1024));
             auto task = collect_lines(std::move(gen));
             auto lines = dftu_utils_test::ok(task.get());
 
@@ -193,19 +210,15 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
     }
 
     TEST_CASE("Error Handling") {
-        SUBCASE("Null reader throws on first next()") {
-            auto gen = async_indexed_file_bytes(nullptr, 0, 100);
+        SUBCASE("Null reader is an error item") {
+            auto task = first_item(async_indexed_file_bytes(nullptr, 0, 100));
 
-            auto task = [](AsyncGenerator<Line> g) -> CoroTask<void> {
-                co_await g.next();
-                co_return;
-            }(std::move(gen));
-
-            CHECK_THROWS_AS(dftu_utils_test::ok(task.get()),
-                            common::DFTUtilsException);
+            dftu_utils_test::expect_error(task.get(),
+                                          common::ErrorCode::InvalidArgument,
+                                          "Reader cannot be null");
         }
 
-        SUBCASE("Invalid byte range throws on first next()") {
+        SUBCASE("Invalid byte range is an error item") {
             TestEnvironment env(5);
             dstd::String gz_path = env.create_test_gzip_file();
 
@@ -214,20 +227,16 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
             // start >= end
-            auto gen = async_indexed_file_bytes(reader, 100, 100);
+            auto task = first_item(async_indexed_file_bytes(reader, 100, 100));
 
-            auto task = [](AsyncGenerator<Line> g) -> CoroTask<void> {
-                co_await g.next();
-                co_return;
-            }(std::move(gen));
-
-            CHECK_THROWS_AS(dftu_utils_test::ok(task.get()),
-                            common::DFTUtilsException);
+            dftu_utils_test::expect_error(task.get(),
+                                          common::ErrorCode::InvalidArgument,
+                                          "Invalid byte range");
         }
 
         SUBCASE("Byte range beyond file size handles gracefully") {
@@ -239,13 +248,14 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
             std::size_t file_size = reader->max_bytes();
 
-            auto gen = async_indexed_file_bytes(reader, 0, file_size * 2);
+            auto gen = dftu_utils_test::ok_items(
+                async_indexed_file_bytes(reader, 0, file_size * 2));
             auto task = collect_lines(std::move(gen));
             auto lines = dftu_utils_test::ok(task.get());
 
@@ -263,12 +273,13 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
             // Read bytes 5000-10000
-            auto gen = async_indexed_file_bytes(reader, 5000, 10000);
+            auto gen = dftu_utils_test::ok_items(
+                async_indexed_file_bytes(reader, 5000, 10000));
             auto task = collect_lines(std::move(gen));
             auto lines = dftu_utils_test::ok(task.get());
 
@@ -287,14 +298,15 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
             std::size_t file_size = reader->max_bytes();
 
             // Sync path
-            IndexedFileBytesIterator sync_iter(reader, 0, file_size);
+            auto sync_iter = dftu_utils_test::ok(
+                IndexedFileBytesIterator::open(reader, 0, file_size));
             dstd::Vector<dstd::String> sync_lines;
             while (sync_iter.has_next()) {
                 Line line = sync_iter.next();
@@ -302,12 +314,13 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
             }
 
             // Need a fresh reader for async path (stream state)
-            auto reader2 =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader2 = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader2 != nullptr);
 
             // Async path
-            auto gen = async_indexed_file_bytes(reader2, 0, file_size);
+            auto gen = dftu_utils_test::ok_items(
+                async_indexed_file_bytes(reader2, 0, file_size));
             auto task = collect_lines(std::move(gen));
             auto async_lines = dftu_utils_test::ok(task.get());
 
@@ -328,13 +341,14 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
             std::size_t file_size = reader->max_bytes();
 
-            auto gen = async_indexed_file_bytes(reader, 0, file_size);
+            auto gen = dftu_utils_test::ok_items(
+                async_indexed_file_bytes(reader, 0, file_size));
 
             auto task = [](AsyncGenerator<Line> g) -> CoroTask<void> {
                 // Consume all lines
@@ -367,13 +381,14 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
             std::size_t file_size = reader->max_bytes();
 
-            auto gen1 = async_indexed_file_bytes(reader, 0, file_size);
+            auto gen1 = dftu_utils_test::ok_items(
+                async_indexed_file_bytes(reader, 0, file_size));
             auto gen2 = std::move(gen1);  // Move construct
 
             auto task = collect_lines(std::move(gen2));
@@ -393,12 +408,13 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
             // Read just 50 bytes
-            auto gen = async_indexed_file_bytes(reader, 0, 50);
+            auto gen = dftu_utils_test::ok_items(
+                async_indexed_file_bytes(reader, 0, 50));
             auto task = collect_lines(std::move(gen));
             auto lines = dftu_utils_test::ok(task.get());
 
@@ -415,14 +431,15 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
             std::size_t file_size = reader->max_bytes();
 
             // Start at byte 50 (likely mid-line)
-            auto gen = async_indexed_file_bytes(reader, 50, file_size);
+            auto gen = dftu_utils_test::ok_items(
+                async_indexed_file_bytes(reader, 50, file_size));
             auto task = collect_lines(std::move(gen));
             auto lines = dftu_utils_test::ok(task.get());
 

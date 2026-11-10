@@ -366,27 +366,24 @@ class ReaderInflater {
         const std::uint64_t off = comp_off_;
         const std::uint64_t fsize = file_size_;
         const std::size_t bound = bound_;
-        MemberDecodeCache::Producer produce =
-            [fd, off, fsize,
-             bound]() -> coro::CoroTask<MemberDecodeCache::Bytes> {
+        MemberDecodeCache::Producer produce = [fd, off, fsize, bound]()
+            -> coro::CoroTask<dstd::Result<MemberDecodeCache::Bytes>> {
             bool too_big = false;
             auto decoded =
                 co_await decode_member_at(fd, off, fsize, bound, too_big);
-            if (too_big) co_return nullptr;
+            if (too_big) co_return MemberDecodeCache::Bytes{};
             if (!decoded) {
-                throw common::DFTUtilsException(common::ErrorCode::Compression,
-                                                "gzip member decode failed");
+                co_return common::make_error(common::ErrorCode::Compression,
+                                             "gzip member decode failed");
             }
-            co_return dstd::make_shared<const DecodedMember>(
-                std::move(*decoded));
+            co_return MemberDecodeCache::Bytes(
+                dstd::make_shared<const DecodedMember>(std::move(*decoded)));
         };
 
-        try {
-            member_shared_ = co_await cache_->get_or_decode(file_token_, off,
-                                                            std::move(produce));
-        } catch (...) {
-            co_return false;
-        }
+        auto fetched = co_await cache_->get_or_decode(file_token_, off,
+                                                      std::move(produce));
+        if (!fetched) co_return false;
+        member_shared_ = std::move(*fetched);
         if (!member_shared_) {
             if (!begin_member_stream()) co_return false;
             co_return co_await decode_next_stream(fd, offset);

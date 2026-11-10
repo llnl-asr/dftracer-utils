@@ -8,6 +8,7 @@
 #include <dftracer/utils/utilities/arrow/arrow.h>
 #include <doctest/doctest.h>
 #include <nanoarrow/nanoarrow.h>
+#include <task_result.h>
 
 #include <limits>
 
@@ -51,7 +52,7 @@ TEST_CASE("RecordBatchBuilder - Static schema mode") {
         b.append_string(2, s2);
         b.end_row();
 
-        auto result = b.finish();
+        auto result = dftu_utils_test::ok(b.finish());
 
         REQUIRE(result.valid());
         CHECK(result.num_rows() == 3);
@@ -79,7 +80,7 @@ TEST_CASE("RecordBatchBuilder - Static schema mode") {
             b.end_row();
         }
 
-        auto first = b.finish();
+        auto first = dftu_utils_test::ok(b.finish());
         REQUIRE(first.valid());
         CHECK(first.num_rows() == 5);
 
@@ -91,7 +92,7 @@ TEST_CASE("RecordBatchBuilder - Static schema mode") {
             b.end_row();
         }
 
-        auto second = b.finish();
+        auto second = dftu_utils_test::ok(b.finish());
         REQUIRE(second.valid());
         CHECK(second.num_rows() == 3);
         CHECK(second.num_columns() == 2);
@@ -116,7 +117,7 @@ TEST_CASE("RecordBatchBuilder - Dynamic schema mode") {
         b.append_string(y, hello);
         b.end_row();
 
-        auto result = b.finish();
+        auto result = dftu_utils_test::ok(b.finish());
         REQUIRE(result.valid());
         CHECK(result.num_rows() == 2);
         CHECK(result.num_columns() == 2);
@@ -137,7 +138,7 @@ TEST_CASE("RecordBatchBuilder - Dynamic schema mode") {
         b.append_double(bv, 3.14);
         b.end_row();  // row 1: a=2, b=3.14
 
-        auto result = b.finish();
+        auto result = dftu_utils_test::ok(b.finish());
         REQUIRE(result.valid());
         CHECK(result.num_rows() == 2);
         CHECK(result.num_columns() == 2);
@@ -160,7 +161,7 @@ TEST_CASE("RecordBatchBuilder - Null handling") {
     b.append_int64(0, 30);
     b.end_row();
 
-    auto result = b.finish();
+    auto result = dftu_utils_test::ok(b.finish());
     REQUIRE(result.valid());
     CHECK(result.num_rows() == 3);
     CHECK(child_null_count(result, 0) == 1);
@@ -185,7 +186,7 @@ TEST_CASE("RecordBatchBuilder - append_null under a locked schema") {
     b.append_int64(1, 3);
     b.end_row();
 
-    auto result = b.finish();
+    auto result = dftu_utils_test::ok(b.finish());
     REQUIRE(result.valid());
     CHECK(result.num_rows() == 2);
     CHECK(result.num_columns() == 2);
@@ -197,7 +198,7 @@ TEST_CASE("RecordBatchBuilder - Empty batch") {
     RecordBatchBuilder b;
     b.declare_schema({{"a", ColumnType::Int64}, {"b", ColumnType::String}});
 
-    auto result = b.finish();
+    auto result = dftu_utils_test::ok(b.finish());
     REQUIRE(result.valid());
     CHECK(result.num_rows() == 0);
     CHECK(result.num_columns() == 2);
@@ -214,7 +215,7 @@ TEST_CASE("RecordBatchBuilder - Bool column") {
     b.append_bool(0, true);
     b.end_row();
 
-    auto result = b.finish();
+    auto result = dftu_utils_test::ok(b.finish());
     REQUIRE(result.valid());
     CHECK(result.num_rows() == 3);
     CHECK(result.num_columns() == 1);
@@ -232,7 +233,7 @@ TEST_CASE("RecordBatchBuilder - HIST list<struct> column") {
     b.append_hist(1, {});  // empty histogram
     b.end_row();
 
-    auto result = b.finish();
+    auto result = dftu_utils_test::ok(b.finish());
     REQUIRE(result.valid());
     CHECK(result.num_rows() == 2);
     CHECK(result.num_columns() == 2);
@@ -280,7 +281,7 @@ TEST_CASE("RecordBatchBuilder - mixed numbers promote the column to Double") {
         x = b.add_or_get_column("x", ColumnType::Double);
         b.append_double(x, 1.5);
         b.end_row();
-        auto result = b.finish();
+        auto result = dftu_utils_test::ok(b.finish());
         REQUIRE(result.valid());
         CHECK(child_schema_format(result, 0) == dstd::String("g"));
         Cells c(result);
@@ -295,7 +296,7 @@ TEST_CASE("RecordBatchBuilder - mixed numbers promote the column to Double") {
         x = b.add_or_get_column("x", ColumnType::Int64);
         b.append_int64(x, 7);
         b.end_row();
-        auto result = b.finish();
+        auto result = dftu_utils_test::ok(b.finish());
         REQUIRE(result.valid());
         CHECK(child_schema_format(result, 0) == dstd::String("g"));
         Cells c(result);
@@ -319,7 +320,7 @@ TEST_CASE("RecordBatchBuilder - mixed numbers promote the column to Double") {
             else
                 b.append_int64(x, -3);
             b.end_row();
-            auto result = b.finish();
+            auto result = dftu_utils_test::ok(b.finish());
             REQUIRE(result.valid());
             CHECK(child_schema_format(result, 0) == dstd::String("g"));
             Cells c(result);
@@ -344,7 +345,7 @@ TEST_CASE("RecordBatchBuilder - mixed numbers promote the column to Double") {
         b.append_int64(y, 4);
         b.append_double(x, 2.5);
         b.end_row();
-        auto result = b.finish();
+        auto result = dftu_utils_test::ok(b.finish());
         REQUIRE(result.valid());
         Cells c(result);
         CHECK(c.is_null(1, 0));
@@ -362,7 +363,7 @@ TEST_CASE("RecordBatchBuilder - mixed numbers promote the column to Double") {
         b.end_row();
         b.append_uint64(x, 3);
         b.end_row();
-        auto result = b.finish();
+        auto result = dftu_utils_test::ok(b.finish());
         REQUIRE(result.valid());
         Cells c(result);
         CHECK(c.f64(0, 0) == 1.0);
@@ -383,7 +384,7 @@ TEST_CASE(
         x = b.add_or_get_column("x", ColumnType::String);
         b.append_string(x, "abc");
         b.end_row();
-        auto result = b.finish();
+        auto result = dftu_utils_test::ok(b.finish());
         REQUIRE(result.valid());
         CHECK(child_schema_format(result, 0) == dstd::String("u"));
         Cells c(result);
@@ -410,7 +411,7 @@ TEST_CASE(
         x = b.add_or_get_column("x", ColumnType::Bool);
         b.append_bool(x, true);
         b.end_row();
-        auto result = b.finish();
+        auto result = dftu_utils_test::ok(b.finish());
         REQUIRE(result.valid());
         Cells c(result);
         CHECK(c.str(0, 0) == "abc");
@@ -435,7 +436,7 @@ TEST_CASE(
             x = b.add_or_get_column("x", ColumnType::String);
             b.append_string(x, "s");
             b.end_row();
-            auto result = b.finish();
+            auto result = dftu_utils_test::ok(b.finish());
             REQUIRE(result.valid());
             Cells c(result);
             CHECK(c.str(0, 0) == texts[k]);
@@ -459,7 +460,7 @@ TEST_CASE(
             else
                 b.append_bool(x, true);
             b.end_row();
-            auto result = b.finish();
+            auto result = dftu_utils_test::ok(b.finish());
             REQUIRE(result.valid());
             Cells c(result);
             CHECK(c.str(0, bool_first ? 0 : 1) == "true");
@@ -476,7 +477,7 @@ TEST_CASE(
         x = b.add_or_get_column("x", ColumnType::Int64);
         b.append_int64(x, 5);
         b.end_row();
-        auto result = b.finish();
+        auto result = dftu_utils_test::ok(b.finish());
         REQUIRE(result.valid());
         CHECK(child_schema_format(result, 0) == dstd::String("u"));
         Cells c(result);
@@ -496,7 +497,7 @@ TEST_CASE(
         b.end_row();
         b.append_double(x, 0.5);
         b.end_row();
-        auto result = b.finish();
+        auto result = dftu_utils_test::ok(b.finish());
         REQUIRE(result.valid());
         CHECK(child_schema_format(result, 0) == dstd::String("g"));
         Cells c(result);
@@ -519,7 +520,7 @@ TEST_CASE(
         b.append_bool(x, true);
         b.end_row();
         {
-            auto result = b.finish();
+            auto result = dftu_utils_test::ok(b.finish());
             REQUIRE(result.valid());
             CHECK(child_schema_format(result, 0) == dstd::String("u"));
             Cells c(result);
@@ -532,7 +533,7 @@ TEST_CASE(
         x = b.add_or_get_column("x", ColumnType::Int64);
         b.append_int64(x, 5);
         b.end_row();
-        auto next = b.finish();
+        auto next = dftu_utils_test::ok(b.finish());
         REQUIRE(next.valid());
         CHECK(child_schema_format(next, 0) == dstd::String("u"));
         Cells c(next);
@@ -550,7 +551,7 @@ TEST_CASE(
         b.append_double(x, 1.5);
         b.end_row();
         {
-            auto result = b.finish();
+            auto result = dftu_utils_test::ok(b.finish());
             REQUIRE(result.valid());
             CHECK(child_schema_format(result, 0) == dstd::String("g"));
             Cells c(result);
@@ -561,7 +562,7 @@ TEST_CASE(
         x = b.add_or_get_column("x", ColumnType::Int64);
         b.append_int64(x, 5);
         b.end_row();
-        auto next = b.finish();
+        auto next = dftu_utils_test::ok(b.finish());
         REQUIRE(next.valid());
         CHECK(child_schema_format(next, 0) == dstd::String("g"));
         Cells c(next);
@@ -578,7 +579,7 @@ TEST_CASE(
         b.end_row();
         b.append_int64(0, 8);
         b.end_row();
-        auto result = b.finish();
+        auto result = dftu_utils_test::ok(b.finish());
         REQUIRE(result.valid());
         CHECK(child_schema_format(result, 0) == dstd::String("l"));
         Cells c(result);
@@ -594,7 +595,7 @@ TEST_CASE(
         b.end_row();
         b.append_string(0, "z");
         b.end_row();
-        auto result = b.finish();
+        auto result = dftu_utils_test::ok(b.finish());
         REQUIRE(result.valid());
         Cells c(result);
         CHECK(c.str(0, 0) == "12");
@@ -607,7 +608,7 @@ TEST_CASE(
         b.end_row();
         b.append_bool(0, true);
         b.end_row();
-        auto result = b.finish();
+        auto result = dftu_utils_test::ok(b.finish());
         REQUIRE(result.valid());
         Cells c(result);
         CHECK(c.is_null(0, 0));
@@ -634,7 +635,7 @@ TEST_CASE("RecordBatchBuilder - a number promoted to text is normalized") {
     x = b.add_or_get_column("x", ColumnType::String);
     b.append_string(x, "s");
     b.end_row();
-    auto result = b.finish();
+    auto result = dftu_utils_test::ok(b.finish());
     REQUIRE(result.valid());
     Cells c(result);
     CHECK(c.str(0, 0) == "1.5");
@@ -657,7 +658,7 @@ TEST_CASE(
     x = b.add_or_get_column("x", ColumnType::Double);
     b.append_double(x, 0.5);
     b.end_row();
-    auto result = b.finish();
+    auto result = dftu_utils_test::ok(b.finish());
     REQUIRE(result.valid());
     Cells c(result);
     CHECK(c.f64(0, 0) == 9007199254740992.0);

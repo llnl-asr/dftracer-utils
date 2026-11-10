@@ -6,7 +6,9 @@
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/arrow/column_builder.h>
@@ -97,10 +99,12 @@ struct ValueCol {
 /// Supports scalars, list<struct<...>>, list<utf8/binary>, and list of any
 /// integer-family scalar (int8/16/32/64, uint8/16/32/64, bool); an integer-list
 /// element normalizes to list<int64> since the builder has no other list-of-
-/// scalar element type. A floating-point list element is unsupported and
-/// throws.
-inline ValueCol plan_value_col(const ArrowArrayView* v, const ArrowSchema* s,
-                               const char* name, ColumnSpec& spec) {
+/// scalar element type. A floating-point list element is unsupported and gives
+/// an InvalidArgument error.
+inline dstd::Result<ValueCol> plan_value_col(const ArrowArrayView* v,
+                                             const ArrowSchema* s,
+                                             const char* name,
+                                             ColumnSpec& spec) {
     ValueCol vc;
     vc.view = v;
     if (auto st = scalar_type_from_storage(v->storage_type)) {
@@ -119,7 +123,7 @@ inline ValueCol plan_value_col(const ArrowArrayView* v, const ArrowSchema* s,
                 auto ft =
                     scalar_type_from_storage(elem->children[f]->storage_type);
                 if (!ft) {
-                    throw common::DFTUtilsException(
+                    return common::make_error(
                         common::ErrorCode::InvalidArgument,
                         "arrow: unsupported struct-list field type");
                 }
@@ -144,11 +148,11 @@ inline ValueCol plan_value_col(const ArrowArrayView* v, const ArrowSchema* s,
                 return vc;
             }
         }
-        throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
-                                        "arrow: unsupported list element type");
+        return common::make_error(common::ErrorCode::InvalidArgument,
+                                  "arrow: unsupported list element type");
     }
-    throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
-                                    "arrow: unsupported value column type");
+    return common::make_error(common::ErrorCode::InvalidArgument,
+                              "arrow: unsupported value column type");
 }
 
 inline void append_scalar(RecordBatchBuilder& b, std::size_t out, ColumnType ct,
@@ -188,9 +192,7 @@ inline void append_scalar(RecordBatchBuilder& b, std::size_t out, ColumnType ct,
             break;
         }
         default:
-            throw common::DFTUtilsException(
-                common::ErrorCode::Internal,
-                "arrow: unhandled scalar column type");
+            dstd::fatal("arrow: unhandled scalar column type");
     }
 }
 

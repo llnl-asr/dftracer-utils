@@ -5,6 +5,7 @@
 #include <dftracer/utils/common/format_detector.h>
 #include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
@@ -18,17 +19,19 @@ namespace dftracer::utils::utilities::reader::internal {
 class ReaderFactory {
    public:
     /**
-     * Create a reader for any supported archive format (returns Reader)
+     * Create a reader for any supported archive format (returns Reader), or
+     * the error of an unsupported format or an index that cannot be opened
      */
-    static dstd::SharedPtr<Reader> create(
+    static dstd::Result<dstd::SharedPtr<Reader>> create(
         dstd::CStringView archive_path, dstd::StringView index_path,
         std::size_t index_ckpt_size = dftracer::utils::index::gzip::
             CheckpointIndexer::DEFAULT_CHECKPOINT_SIZE);
 
     /**
-     * Create a reader using an existing indexer (works with any indexer type)
+     * Create a reader using an existing indexer (works with any indexer type),
+     * or the error of a null indexer
      */
-    static dstd::SharedPtr<Reader> create(
+    static dstd::Result<dstd::SharedPtr<Reader>> create(
         dstd::SharedPtr<dftracer::utils::index::gzip::CheckpointIndexer>
             indexer);
 

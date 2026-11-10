@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/string.h>
@@ -90,15 +91,12 @@ EventCollectorFromMetadataUtility::operator()(
         EventIdCollector collector(events, input.trim_commas);
 
         if (!file.index_path.empty()) {
-            auto reader = utilities::reader::internal::ReaderFactory::create(
-                file.file_path, file.index_path);
-            if (!reader) {
-                DFTRACER_UTILS_LOG_ERROR("Failed to create reader for file: {}",
-                                         file.file_path);
-                continue;
-            }
-            co_await reader->read_lines_with_processor_async(
+            auto reader = common::unwrap(
+                utilities::reader::internal::ReaderFactory::create(
+                    file.file_path, file.index_path));
+            auto processed = co_await reader->read_lines_with_processor_async(
                 file.start_line, file.end_line, collector);
+            common::unwrap(std::move(processed));
         } else {
             auto line_gen =
                 utilities::fileio::lines::sources::async_streaming_gz_lines(

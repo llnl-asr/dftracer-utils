@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/detail/coro.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
@@ -9,6 +10,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/utilities/reader/internal/member_decode_cache.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_runtime.h>
 
 #include <atomic>
@@ -24,14 +26,14 @@ namespace {
 // callers pile up on the in-flight entry before it completes.
 reader::internal::MemberDecodeCache::Producer counting_producer(
     std::atomic<int>& calls, std::uint8_t fill, std::size_t size) {
-    return [&calls, fill, size]() -> coro::CoroTask<Bytes> {
+    return [&calls, fill, size]() -> coro::CoroTask<dstd::Result<Bytes>> {
         calls.fetch_add(1, std::memory_order_relaxed);
         for (int i = 0; i < 4; ++i) co_await coro::yield();
         auto m = dstd::make_shared<
             dftracer::utils::utilities::reader::internal::DecodedMember>();
         m->data.assign(size, fill);
         m->compressed_size = size / 2;
-        co_return m;
+        co_return Bytes(m);
     };
 }
 
@@ -45,7 +47,7 @@ TEST_SUITE("MemberDecodeCache") {
 
         dstd::Vector<Bytes> results(n);
         dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
-            dstd::Vector<coro::CoroTask<Bytes>> tasks;
+            dstd::Vector<coro::CoroTask<dstd::Result<Bytes>>> tasks;
             tasks.reserve(n);
             for (int i = 0; i < n; ++i) {
                 tasks.push_back(cache.get_or_decode(
@@ -53,7 +55,7 @@ TEST_SUITE("MemberDecodeCache") {
                     counting_producer(calls, 0xAB, 1024)));
             }
             auto out = co_await coro::when_all(std::move(tasks));
-            for (int i = 0; i < n; ++i) results[i] = out[i];
+            for (int i = 0; i < n; ++i) results[i] = *out[i];
             co_return;
         });
 
@@ -75,7 +77,7 @@ TEST_SUITE("MemberDecodeCache") {
         const int n = 8;
 
         dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
-            dstd::Vector<coro::CoroTask<Bytes>> tasks;
+            dstd::Vector<coro::CoroTask<dstd::Result<Bytes>>> tasks;
             for (int i = 0; i < n; ++i) {
                 tasks.push_back(cache.get_or_decode(
                     1, static_cast<std::uint64_t>(i),
@@ -99,12 +101,42 @@ TEST_SUITE("MemberDecodeCache") {
                 2, 3, counting_producer(calls, 0x11, 512));
             auto b = co_await cache.get_or_decode(
                 2, 3, counting_producer(calls, 0x11, 512));
-            CHECK(a == b);
+            REQUIRE(a.has_value());
+            REQUIRE(b.has_value());
+            CHECK(*a == *b);
             co_return;
         });
 
         CHECK(calls.load() == 1);
         CHECK(cache.stats().hits >= 1);
+    }
+
+    TEST_CASE("a failed decode is returned and not cached") {
+        reader::internal::MemberDecodeCache cache(64 * 1024 * 1024);
+        std::atomic<int> calls{0};
+
+        dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+            reader::internal::MemberDecodeCache::Producer failing =
+                [&calls]() -> coro::CoroTask<dstd::Result<Bytes>> {
+                calls.fetch_add(1, std::memory_order_relaxed);
+                co_return common::make_error(common::ErrorCode::Compression,
+                                             "gzip member decode failed");
+            };
+            auto failed =
+                co_await cache.get_or_decode(4, 1, std::move(failing));
+            dftu_utils_test::expect_error(failed,
+                                          common::ErrorCode::Compression,
+                                          "gzip member decode failed");
+
+            auto again = co_await cache.get_or_decode(
+                4, 1, counting_producer(calls, 0x33, 64));
+            REQUIRE(again.has_value());
+            CHECK((*again)->data.size() == 64);
+            co_return;
+        });
+
+        CHECK(calls.load() == 2);
+        CHECK(cache.stats().decodes == 1);
     }
 
     TEST_CASE("members stay while the whole cache has room") {
@@ -116,7 +148,7 @@ TEST_SUITE("MemberDecodeCache") {
             dftu_utils_test::run_coro(
                 [&](coro::Scope&) -> coro::CoroTask<void> {
                     for (std::uint64_t m = first; m < last; ++m)
-                        co_await cache.get_or_decode(
+                        (void)co_await cache.get_or_decode(
                             5, m, counting_producer(calls, 0x22, 60));
                     co_return;
                 });
@@ -141,7 +173,7 @@ TEST_SUITE("MemberDecodeCache") {
 
         dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             for (int m = 0; m < members; ++m) {
-                co_await cache.get_or_decode(
+                (void)co_await cache.get_or_decode(
                     9, static_cast<std::uint64_t>(m),
                     counting_producer(calls, static_cast<std::uint8_t>(m),
                                       256));

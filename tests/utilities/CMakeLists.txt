@@ -70,6 +70,7 @@ set(UTILITIES_TEST_SOURCES
     reader/test_member_decode_cache.cpp
     reader/test_member_cache_integration.cpp
     reader/test_member_cache_exit.cpp
+    reader/test_reader_fatal.cpp
     reader/test_large_gzip_members.cpp
     reader/test_gzip_restart_points.cpp
     reader/test_sigill_regression.cpp

@@ -32,6 +32,7 @@
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
+#include <generator_ok.h>
 #include <index_test_helpers.h>
 #include <mmix_lcg.h>
 #include <task_result.h>
@@ -317,7 +318,7 @@ std::size_t count_json(const dstd::String& trace, const dstd::String& index_dir,
         cfg.query = text;
         cfg.skip_pruning = skip_pruning;
         cfg.buffer_size = SCAN_BUFFER_BYTES;
-        auto gen = reader.read_json(cfg);
+        auto gen = dftu_utils_test::ok_items(reader.read_json(cfg));
         std::size_t n = 0;
         while (auto line = co_await gen.next()) ++n;
         co_return n;

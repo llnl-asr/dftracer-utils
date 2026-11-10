@@ -17,6 +17,7 @@
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
+#include <generator_ok.h>
 #include <index_test_helpers.h>
 #include <task_result.h>
 #include <testing_utilities.h>
@@ -99,7 +100,7 @@ std::size_t count_rows(const dstd::String& trace, const dstd::String& index_dir,
         utilities::reader::ReadConfig cfg;
         cfg.query = query;
         cfg.skip_pruning = skip_pruning;
-        auto gen = reader.read_json(cfg);
+        auto gen = dftu_utils_test::ok_items(reader.read_json(cfg));
         std::size_t n = 0;
         while (auto line = co_await gen.next()) ++n;
         co_return n;

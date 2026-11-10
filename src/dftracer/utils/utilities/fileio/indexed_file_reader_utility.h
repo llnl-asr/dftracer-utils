@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/utilities/fileio/file_process_types.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
 
@@ -36,10 +37,12 @@ class IndexedFileReaderUtility {
      * Reader over @p input.file_path.
      *
      * @param input Index configuration
-     * @return Shared pointer to Reader ready for use
+     * @return Shared pointer to Reader ready for use, or the error of a
+     *         missing input file (NotFound), an index that cannot be removed
+     *         or built, or a reader that cannot be opened
      */
-    coro::CoroTask<dstd::SharedPtr<reader::internal::Reader>> operator()(
-        const IndexedReadInput& input) const;
+    coro::CoroTask<dstd::Result<dstd::SharedPtr<reader::internal::Reader>>>
+    operator()(const IndexedReadInput& input) const;
 };
 
 }  // namespace dftracer::utils::utilities::fileio

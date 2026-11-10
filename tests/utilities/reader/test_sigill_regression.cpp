@@ -12,6 +12,7 @@
 #include <dftracer/utils/utilities/reader/internal/gzip_reader.h>
 #include <dftracer/utils/utilities/reader/internal/stream_config.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_runtime.h>
 #include <testing_utilities.h>
 
@@ -81,18 +82,18 @@ TEST_SUITE("sigill_regression") {
         dirty_frame_pool();
 
         reader::internal::GzipReader reader(indexer);
-        auto stream = reader.stream(
+        auto stream = dftu_utils_test::ok(reader.stream(
             reader::internal::StreamConfig()
                 .stream_type(reader::internal::StreamType::MultiLinesBytes)
                 .range_type(reader::internal::RangeType::ByteRange)
                 .from(start)
-                .to(reader.max_bytes()));
+                .to(reader.max_bytes())));
         dstd::String out;
         dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             dstd::Vector<char> buf(1u << 20);
             while (true) {
-                const auto got =
-                    co_await stream->read_async(buf.data(), buf.size());
+                const auto got = dftu_utils_test::ok(
+                    co_await stream->read_async(buf.data(), buf.size()));
                 if (got == 0) break;
                 out.append(buf.data(), got);
             }

@@ -3,11 +3,14 @@
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_TRACE_READER_SHARED_H
 
 #include <dftracer/utils/coro/async_generator.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/duql/errc.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/json/canonical.h>
 #include <dftracer/utils/json/line.h>
@@ -21,6 +24,18 @@
 #include <cstring>
 
 namespace dftracer::utils::utilities::reader::internal {
+
+// The error a query that does not parse stands for.
+inline dstd::Error query_parse_error(const duql::DuqlError& error) {
+    return dstd::Error{duql::DuqlErrc::Parse, error.format()};
+}
+
+// A generator that yields `error` and ends, for a read that fails before it
+// can start.
+template <typename T>
+coro::AsyncGenerator<dstd::Result<T>> failed_generator(dstd::Error error) {
+    co_yield dstd::Result<T>(std::move(error));
+}
 
 // Strip a leading `[` and trailing `]` (plus surrounding whitespace) from a
 // chunk buffer. These bookends appear in `.pfw.gz` files to keep them
@@ -223,8 +238,7 @@ inline bool store_positions(duql::ValueMap& fields, dstd::StringView key,
                 dstd::Optional<duql::Cell> cell;
                 if (!ondemand_to_cell(v, cell)) return false;
                 if (cell)
-                    fields[dstd::String(key) + "." + dstd::to_string(pos)] =
-                        std::move(*cell);
+                    fields[dstd::fmt<"{}.{}">(key, pos)] = std::move(*cell);
                 break;
             }
             default:
@@ -304,7 +318,7 @@ inline bool store_referenced_nested(duql::ValueMap& fields,
 
 // Chunk generator with index-driven pruning. Defined in trace_reader.cpp;
 // shared by read_json (core) and read_arrow (Arrow export).
-coro::AsyncGenerator<dstd::Span<const char>> read_chunks_indexed(
+coro::AsyncGenerator<dstd::Result<dstd::Span<const char>>> read_chunks_indexed(
     dstd::SharedPtr<Reader> reader, dstd::String index_path,
     dstd::String file_path, ReadConfig config,
     dstd::Optional<duql::Query> query, bool extend_to_line_boundary = false);

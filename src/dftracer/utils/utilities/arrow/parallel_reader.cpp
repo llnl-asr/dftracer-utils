@@ -5,11 +5,10 @@
 
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/arrow/ipc_reader.h>
 #include <dftracer/utils/utilities/arrow/parallel_reader.h>
-
-#include <exception>
 
 using namespace dftracer::utils;
 
@@ -19,26 +18,20 @@ coro::CoroTask<ArrowFileReadResult> read_arrow_file_async(dstd::String path) {
     ArrowFileReadResult result;
     result.path = path;
 
-    try {
-        IpcReader reader;
-        int rc = reader.open(path);
-        if (rc != 0) {
-            result.success = false;
-            result.error = "Failed to open file: " + path;
-            co_return result;
-        }
-
-        *result.batches = reader.read_all();
-        for (const auto& batch : *result.batches) {
-            result.total_rows += batch.num_rows();
-        }
-
-        result.success = true;
-    } catch (const std::exception& e) {
+    IpcReader reader;
+    int rc = reader.open(path);
+    if (rc != 0) {
         result.success = false;
-        result.error = e.what();
+        result.error = dstd::fmt<"Failed to open file: {}">(path);
+        co_return result;
     }
 
+    *result.batches = reader.read_all();
+    for (const auto& batch : *result.batches) {
+        result.total_rows += batch.num_rows();
+    }
+
+    result.success = true;
     co_return result;
 }
 

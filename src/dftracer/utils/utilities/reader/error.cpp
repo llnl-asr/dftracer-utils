@@ -1,35 +1,35 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/reader/error.h>
 
 namespace dftracer::utils::utilities::reader {
-dstd::String ReaderError::format_message(Type type,
-                                         const dstd::String &message) {
-    const char *prefix = "";
+
+const char *reader_error_prefix(ReaderErrorType type) {
     switch (type) {
-        case ReaderError::DatabaseError:
-            prefix = "Database error";
-            break;
-        case ReaderError::FileIoError:
-            prefix = "File I/O error";
-            break;
-        case ReaderError::CompressionError:
-            prefix = "Compression error";
-            break;
-        case ReaderError::InvalidArgument:
-            prefix = "Invalid argument";
-            break;
-        case ReaderError::InitializationError:
-            prefix = "Initialization error";
-            break;
-        case ReaderError::ReadError:
-            prefix = "Read error";
-            break;
-        case ReaderError::UnknownError:
-            prefix = "Unknown error";
-            break;
+        case ReaderErrorType::DatabaseError:
+            return "Database error";
+        case ReaderErrorType::FileIoError:
+            return "File I/O error";
+        case ReaderErrorType::CompressionError:
+            return "Compression error";
+        case ReaderErrorType::InvalidArgument:
+            return "Invalid argument";
+        case ReaderErrorType::InitializationError:
+            return "Initialization error";
+        case ReaderErrorType::ReadError:
+            return "Read error";
+        case ReaderErrorType::UnknownError:
+            return "Unknown error";
     }
-    return dstd::String(prefix) + ": " + message;
+    return "";
+}
+
+dstd::Unexpected<dstd::Error> reader_error(ReaderErrorType type,
+                                           dstd::StringView message) {
+    return common::make_error<"{}: {}">(
+        common::ErrorCode::Reader, dstd::StringView(reader_error_prefix(type)),
+        message);
 }
 
 }  // namespace dftracer::utils::utilities::reader

@@ -9,6 +9,7 @@
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
+#include <generator_ok.h>
 #include <simdjson.h>
 #include <task_result.h>
 #include <testing_utilities.h>
@@ -208,8 +209,10 @@ TEST_SUITE("duql paths") {
 
             utilities::reader::ReadConfig rc;
             rc.query = c.filter;
-            CHECK(run(reader_lines(tr.read_lines(rc))) == c.expected);
-            CHECK(run(reader_json(tr.read_json(rc))) == c.expected);
+            CHECK(run(reader_lines(dftu_utils_test::ok_items(
+                      tr.read_lines(rc)))) == c.expected);
+            CHECK(run(reader_json(dftu_utils_test::ok_items(
+                      tr.read_json(rc)))) == c.expected);
 
             const dataframe::DataFrame df = frame_of(c.numeric_x);
             const auto q = duql::Query::from_string(c.filter);
@@ -309,8 +312,10 @@ TEST_SUITE("duql paths") {
             CHECK(sunk == c.expected);
             utilities::reader::ReadConfig rc;
             rc.query = c.filter;
-            CHECK(run(reader_lines(tr.read_lines(rc))) == c.expected);
-            CHECK(run(reader_json(tr.read_json(rc))) == c.expected);
+            CHECK(run(reader_lines(dftu_utils_test::ok_items(
+                      tr.read_lines(rc)))) == c.expected);
+            CHECK(run(reader_json(dftu_utils_test::ok_items(
+                      tr.read_json(rc)))) == c.expected);
             if (c.frame) {
                 const auto q = duql::Query::from_string(c.filter);
                 REQUIRE(q.has_value());

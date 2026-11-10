@@ -15,14 +15,12 @@
 
 namespace dftracer::utils::utilities::fileio {
 
-coro::CoroTask<dstd::SharedPtr<reader::internal::Reader>>
+coro::CoroTask<dstd::Result<dstd::SharedPtr<reader::internal::Reader>>>
 IndexedFileReaderUtility::operator()(const IndexedReadInput& input) const {
     // Validate input
     if (!dftracer::utils::common::input_exists(input.file_path)) {
-        throw common::DFTUtilsException(
-            common::make_error<"File does not exist: {}">(
-                common::ErrorCode::NotFound, input.file_path)
-                .error());
+        co_return common::make_error<"File does not exist: {}">(
+            common::ErrorCode::NotFound, input.file_path);
     }
 
     const dstd::String normalized_index_path =
@@ -47,15 +45,33 @@ IndexedFileReaderUtility::operator()(const IndexedReadInput& input) const {
             const dstd::String store =
                 dftracer::utils::index::store_of(normalized_index_path);
             dftracer::utils::index::release_root(normalized_index_path);
-            common::unwrap(dstd::fs::remove_all(dstd::PathView(store)));
+            auto removed = dstd::fs::remove_all(dstd::PathView(store));
+            if (!removed.has_value()) co_return removed.error();
             common::forget_input(store);
         }
 
-        // Build new index
-        auto indexer =
-            dftracer::utils::index::gzip::CheckpointIndexerFactory::create(
-                input.file_path, input.index_path, input.checkpoint_size, true);
-        co_await indexer->build_async();
+        // Build new index. The indexer still reports a failure as an
+        // exception.
+        dstd::SharedPtr<dftracer::utils::index::gzip::CheckpointIndexer>
+            indexer;
+        try {
+            indexer =
+                dftracer::utils::index::gzip::CheckpointIndexerFactory::create(
+                    input.file_path, input.index_path, input.checkpoint_size,
+                    true);
+        } catch (...) {
+            co_return common::error_of_exception(std::current_exception());
+        }
+        if (!indexer) {
+            co_return common::make_error<"No indexer for file: {}">(
+                common::ErrorCode::InvalidArgument, input.file_path);
+        }
+        auto building = indexer->build_async();
+        auto built = co_await coro::settle(std::move(building));
+        if (built.stopped) co_await coro::stop_here();
+        if (built.exception) {
+            co_return common::error_of_exception(built.exception);
+        }
     }
 
     // Step 2: Create and return Reader

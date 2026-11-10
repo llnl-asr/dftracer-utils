@@ -31,24 +31,27 @@ class GzipByteStream : public GzipStream {
         current_position_ = start_bytes;
     }
 
-    coro::CoroTask<void> on_initialized() override {
-        if (is_finished_) co_return;
+    coro::CoroTask<dstd::Result<void>> on_initialized() override {
+        if (is_finished_) co_return dstd::Result<void>{};
         const std::size_t anchor = seek_anchor_offset();
         if (start_bytes_ > anchor) {
             co_await skip(start_bytes_);
         }
+        co_return dstd::Result<void>{};
     }
 
-    coro::CoroTask<dstd::Span<const char>> read_async() override {
-        co_await ensure_initialized();
+    coro::CoroTask<dstd::Result<dstd::Span<const char>>> read_async() override {
+        auto initialized = co_await ensure_initialized();
+        if (!initialized.has_value()) co_return initialized.error();
         if (!decompression_initialized_) {
-            throw ReaderError(ReaderError::InitializationError,
-                              "Streaming session not properly initialized");
+            co_return reader_error(
+                ReaderErrorType::InitializationError,
+                "Streaming session not properly initialized");
         }
 
         if (is_at_target_end()) {
             is_finished_ = true;
-            co_return {};
+            co_return dstd::Span<const char>{};
         }
 
         size_t max_read = target_end_bytes_ - current_position_;
@@ -73,13 +76,13 @@ class GzipByteStream : public GzipStream {
         // A decode failure must not pass for clean EOF (which would silently
         // drop the rest of the file).
         if (!result) {
-            throw ReaderError(ReaderError::CompressionError,
-                              "gzip decode failed mid-stream at position " +
-                                  dstd::to_string(current_position_));
+            co_return reader_error<ReaderErrorType::CompressionError,
+                                   "gzip decode failed mid-stream at "
+                                   "position {}">(current_position_);
         }
         if (bytes_read == 0) {
             is_finished_ = true;
-            co_return {};
+            co_return dstd::Span<const char>{};
         }
 
         current_position_ += bytes_read;

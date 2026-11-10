@@ -17,6 +17,35 @@
 
 namespace dftracer::utils::utilities::fileio::lines {
 
+namespace detail {
+
+/// @p source as items of a Result. The source reports a failure as an
+/// exception; that failure is yielded as an error item, after which the
+/// generator ends.
+inline coro::AsyncGenerator<dstd::Result<Line>> lines_as_results(
+    coro::AsyncGenerator<Line> source) {
+    for (;;) {
+        auto settled = co_await source.settled_next();
+        if (settled.stopped) co_return;
+        if (settled.exception) {
+            co_yield dstd::Result<Line>(
+                common::error_of_exception(settled.exception));
+            co_return;
+        }
+        auto& next = *settled.value;
+        if (!next) co_return;
+        co_yield Line(*next);
+    }
+}
+
+/// A generator that yields @p error and ends.
+inline coro::AsyncGenerator<dstd::Result<Line>> failed_lines(
+    dstd::Error error) {
+    co_yield dstd::Result<Line>(std::move(error));
+}
+
+}  // namespace detail
+
 /**
  * @brief Configuration for @ref StreamingLineReader with fluent API.
  *
@@ -73,17 +102,21 @@ class StreamingLineReader {
     /**
      * @brief Async read lines from a file, auto-detecting format.
      *
-     * Returns an AsyncGenerator<Line> for non-blocking iteration:
+     * Returns an AsyncGenerator of Result<Line> for non-blocking iteration. A
+     * failure, such as an index path that cannot be checked, a reader that
+     * cannot be opened or data that cannot be read, is yielded as an error
+     * item, after which the generator ends:
      * @code
      * auto gen = StreamingLineReader::read_async(config);
      * for (;;) {
      *     auto line = co_await gen.next();
      *     if (!line) break;
-     *     co_await process(*line);
+     *     if (!*line) return line->error();
+     *     co_await process(**line);
      * }
      * @endcode
      */
-    static coro::AsyncGenerator<Line> read_async(
+    static coro::AsyncGenerator<dstd::Result<Line>> read_async(
         const StreamingLineReaderConfig& config) {
         dstd::CStringView file_path = config.file_path();
         dstd::CStringView index_path = config.index_path();
@@ -99,8 +132,7 @@ class StreamingLineReader {
             actual_index_path = index_path;
             const auto found =
                 dstd::fs::exists(dstd::PathView(actual_index_path));
-            if (!found.has_value())
-                throw common::DFTUtilsException(found.error());
+            if (!found.has_value()) return detail::failed_lines(found.error());
             has_index = *found;
         }
 
@@ -114,9 +146,9 @@ class StreamingLineReader {
             }
             return sources::async_indexed_file_lines(iter_config);
         }
-        return sources::async_streaming_gz_lines(dstd::String(file_path.view()),
-                                                 config.start_line(),
-                                                 config.end_line());
+        return detail::lines_as_results(sources::async_streaming_gz_lines(
+            dstd::String(file_path.view()), config.start_line(),
+            config.end_line()));
     }
 
    private:

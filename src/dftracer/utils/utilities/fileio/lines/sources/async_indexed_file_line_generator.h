@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/async_generator.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/indexed_file_line_iterator.h>
@@ -29,15 +30,24 @@ namespace dftracer::utils::utilities::fileio::lines::sources {
  * for (;;) {
  *     auto line = co_await gen.next();
  *     if (!line) break;
- *     process(*line);
+ *     if (!*line) return handle(line->error());
+ *     process(**line);
  * }
  * @endcode
+ *
+ * A configuration that holds an error, a null reader or a failed read is
+ * yielded as an error item, after which the generator ends.
  */
-inline coro::AsyncGenerator<Line> async_indexed_file_lines(
+inline coro::AsyncGenerator<dstd::Result<Line>> async_indexed_file_lines(
     IndexedFileLineIteratorConfig config) {
+    if (config.error()) {
+        co_yield dstd::Result<Line>(*config.error());
+        co_return;
+    }
     if (!config.reader()) {
-        throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
-                                        "Reader cannot be null");
+        co_yield dstd::Result<Line>(common::make_error(
+            common::ErrorCode::InvalidArgument, "Reader cannot be null"));
+        co_return;
     }
 
     // Resolve end if needed
@@ -61,11 +71,12 @@ inline coro::AsyncGenerator<Line> async_indexed_file_lines(
             .to(config.end());
     }
 
-    auto stream = config.reader()->stream(stream_config);
-    if (!stream) {
-        throw common::DFTUtilsException(common::ErrorCode::Io,
-                                        "Failed to create stream");
+    auto opened = config.reader()->stream(stream_config);
+    if (!opened.has_value()) {
+        co_yield dstd::Result<Line>(opened.error());
+        co_return;
     }
+    auto stream = std::move(*opened);
 
     dstd::String stream_buffer;
     stream_buffer.resize(config.buffer_size());
@@ -77,8 +88,13 @@ inline coro::AsyncGenerator<Line> async_indexed_file_lines(
     while (!stream->done() &&
            (!is_line_range || current_position <= config.end())) {
         // Async read - this is the key difference from sync version
-        std::size_t bytes_read = co_await stream->read_async(
-            stream_buffer.data(), stream_buffer.size());
+        auto read = co_await stream->read_async(stream_buffer.data(),
+                                                stream_buffer.size());
+        if (!read.has_value()) {
+            co_yield dstd::Result<Line>(read.error());
+            co_return;
+        }
+        std::size_t bytes_read = *read;
 
         if (bytes_read == 0) break;
 

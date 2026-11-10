@@ -49,12 +49,12 @@ TEST_SUITE("IndexedFileReader") {
             CHECK(dstd::fs::exists(db_root).value());
 
             // Verify reader can read lines
-            auto stream =
+            auto stream = dftu_utils_test::ok(
                 reader->stream(StreamConfig()
                                    .stream_type(StreamType::MultiLines)
                                    .range_type(RangeType::LineRange)
                                    .from(1)
-                                   .to(10));
+                                   .to(10)));
             CHECK(stream != nullptr);
 
             dstd::Vector<char> buffer(1024);
@@ -188,8 +188,9 @@ TEST_SUITE("IndexedFileReader") {
                 IndexedReadInput::from_file("non_existent.gz")
                     .with_index("non_existent.gz.dftindex");
 
-            CHECK_THROWS_AS(dftu_utils_test::ok(reader_utility(input).get()),
-                            dftracer::utils::common::DFTUtilsException);
+            dftu_utils_test::expect_error(
+                reader_utility(input).get(),
+                dftracer::utils::common::ErrorCode::NotFound);
         }
 
         SUBCASE("Invalid file path") {
@@ -198,8 +199,9 @@ TEST_SUITE("IndexedFileReader") {
                 IndexedReadInput::from_file("/invalid/path/file.gz")
                     .with_index("/invalid/path/.dftindex");
 
-            CHECK_THROWS_AS(dftu_utils_test::ok(reader_utility(input).get()),
-                            dftracer::utils::common::DFTUtilsException);
+            dftu_utils_test::expect_error(
+                reader_utility(input).get(),
+                dftracer::utils::common::ErrorCode::NotFound);
         }
 
         SUBCASE("Empty file path") {
@@ -207,8 +209,9 @@ TEST_SUITE("IndexedFileReader") {
             IndexedReadInput input =
                 IndexedReadInput::from_file("").with_index(".dftindex");
 
-            CHECK_THROWS_AS(dftu_utils_test::ok(reader_utility(input).get()),
-                            dftracer::utils::common::DFTUtilsException);
+            dftu_utils_test::expect_error(
+                reader_utility(input).get(),
+                dftracer::utils::common::ErrorCode::NotFound);
         }
     }
 
@@ -317,12 +320,12 @@ TEST_SUITE("IndexedFileReader") {
             REQUIRE(reader != nullptr);
 
             // Create line stream to read specific lines
-            auto stream =
+            auto stream = dftu_utils_test::ok(
                 reader->stream(StreamConfig()
                                    .stream_type(StreamType::MultiLines)
                                    .range_type(RangeType::LineRange)
                                    .from(5)
-                                   .to(10));
+                                   .to(10)));
             CHECK(stream != nullptr);
 
             dstd::Vector<char> buffer(1024);

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/coro/detail/resumption_helper.h>
@@ -100,9 +101,10 @@ coro::AsyncGenerator<Trace> ReplayEngine::stream_traces(dstd::String file) {
     for (;;) {
         auto opt = co_await gen.next();
         if (!opt) break;
-        if (!opt->parser) continue;
+        const auto line = common::unwrap(std::move(*opt));
+        if (!line.parser) continue;
         Trace trace;
-        if (parse_trace_json(*opt->parser, trace)) {
+        if (parse_trace_json(*line.parser, trace)) {
             co_yield std::move(trace);
         }
     }
@@ -204,8 +206,9 @@ coro::CoroTask<void> read_file_events(dstd::String trace_file,
     for (;;) {
         auto opt = co_await gen.next();
         if (!opt) break;
-        if (!opt->parser) continue;
-        on_event(*opt->parser);
+        const auto line = common::unwrap(std::move(*opt));
+        if (!line.parser) continue;
+        on_event(*line.parser);
     }
     co_return;
 }

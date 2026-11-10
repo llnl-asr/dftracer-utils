@@ -7,6 +7,8 @@
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/indexed_file_line_iterator.h>
 #include <doctest/doctest.h>
+#include <memory/fresh_process.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <string>
@@ -38,7 +40,8 @@ TEST_SUITE("IndexedFileLineIterator") {
                               .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                               .with_line_range(1, 10);
 
-            IndexedFileLineIterator iter(config);
+            auto iter =
+                dftu_utils_test::ok(IndexedFileLineIterator::open(config));
 
             dstd::Vector<dstd::String> lines;
             while (iter.has_next()) {
@@ -64,7 +67,8 @@ TEST_SUITE("IndexedFileLineIterator") {
                               .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                               .with_line_range(5, 10);
 
-            IndexedFileLineIterator iter(config);
+            auto iter =
+                dftu_utils_test::ok(IndexedFileLineIterator::open(config));
 
             dstd::Vector<dstd::String> lines;
             while (iter.has_next()) {
@@ -90,7 +94,8 @@ TEST_SUITE("IndexedFileLineIterator") {
                               .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                               .with_line_range(7, 7);
 
-            IndexedFileLineIterator iter(config);
+            auto iter =
+                dftu_utils_test::ok(IndexedFileLineIterator::open(config));
 
             CHECK(iter.has_next());
             Line line = iter.next();
@@ -115,7 +120,8 @@ TEST_SUITE("IndexedFileLineIterator") {
                               .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                               .with_line_range(10, 0);
 
-            IndexedFileLineIterator iter(config);
+            auto iter =
+                dftu_utils_test::ok(IndexedFileLineIterator::open(config));
 
             dstd::Vector<dstd::String> lines;
             while (iter.has_next()) {
@@ -140,8 +146,8 @@ TEST_SUITE("IndexedFileLineIterator") {
             indexer->build();
 
             // Create reader first
-            auto reader =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
             // Configure with existing reader
@@ -156,7 +162,8 @@ TEST_SUITE("IndexedFileLineIterator") {
             CHECK(config.end() == 4);
             CHECK(config.buffer_size() == 4096);
 
-            IndexedFileLineIterator iter(config);
+            auto iter =
+                dftu_utils_test::ok(IndexedFileLineIterator::open(config));
 
             int count = 0;
             while (iter.has_next()) {
@@ -185,7 +192,8 @@ TEST_SUITE("IndexedFileLineIterator") {
             CHECK(config.start() == 0);
             CHECK(config.end() == 200);
 
-            IndexedFileLineIterator iter(config);
+            auto iter =
+                dftu_utils_test::ok(IndexedFileLineIterator::open(config));
 
             // Should read some lines within the byte range
             int count = 0;
@@ -222,7 +230,8 @@ TEST_SUITE("IndexedFileLineIterator") {
                               .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                               .with_line_range(3, 6);
 
-            IndexedFileLineIterator iter(config);
+            auto iter =
+                dftu_utils_test::ok(IndexedFileLineIterator::open(config));
 
             dstd::Vector<dstd::String> lines;
             for (const auto& line : iter) {
@@ -246,7 +255,8 @@ TEST_SUITE("IndexedFileLineIterator") {
             auto config = IndexedFileLineIteratorConfig().with_file(
                 gz_path, dstd::fmt<"{}.idx">(gz_path));
 
-            IndexedFileLineIterator iter(config);
+            auto iter =
+                dftu_utils_test::ok(IndexedFileLineIterator::open(config));
 
             auto begin = iter.begin();
             auto end = iter.end();
@@ -278,7 +288,8 @@ TEST_SUITE("IndexedFileLineIterator") {
                               .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                               .with_line_range(3, 7);
 
-            IndexedFileLineIterator iter(config);
+            auto iter =
+                dftu_utils_test::ok(IndexedFileLineIterator::open(config));
 
             CHECK(iter.current_position() == 3);
 
@@ -308,7 +319,8 @@ TEST_SUITE("IndexedFileLineIterator") {
                               .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                               .with_line_range(5, 15);
 
-            IndexedFileLineIterator iter(config);
+            auto iter =
+                dftu_utils_test::ok(IndexedFileLineIterator::open(config));
 
             CHECK(iter.total_count() == 11);  // Lines 5-15 inclusive
             CHECK(iter.range_type() == RangeType::LineRange);
@@ -330,16 +342,18 @@ TEST_SUITE("IndexedFileLineIterator") {
                                .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                                .with_line_range(0, 5);
 
-            CHECK_THROWS_AS((IndexedFileLineIterator{config1}),
-                            common::DFTUtilsException);
+            dftu_utils_test::expect_error(
+                IndexedFileLineIterator::open(config1),
+                common::ErrorCode::InvalidArgument);
 
             // End < Start
             auto config2 = IndexedFileLineIteratorConfig()
                                .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                                .with_line_range(10, 5);
 
-            CHECK_THROWS_AS((IndexedFileLineIterator{config2}),
-                            common::DFTUtilsException);
+            dftu_utils_test::expect_error(
+                IndexedFileLineIterator::open(config2),
+                common::ErrorCode::InvalidArgument);
         }
 
         SUBCASE("Invalid byte range") {
@@ -356,56 +370,56 @@ TEST_SUITE("IndexedFileLineIterator") {
                               .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                               .with_byte_range(1000, 500);
 
-            CHECK_THROWS_AS((IndexedFileLineIterator{config}),
-                            common::DFTUtilsException);
+            dftu_utils_test::expect_error(IndexedFileLineIterator::open(config),
+                                          common::ErrorCode::InvalidArgument);
         }
 
         SUBCASE("Null reader") {
             auto config =
                 IndexedFileLineIteratorConfig().with_line_range(1, 10);
 
-            CHECK_THROWS_AS((IndexedFileLineIterator{config}),
-                            common::DFTUtilsException);
-        }
-
-        SUBCASE("Calling next() when no more lines") {
-            TestEnvironment env(3);
-            dstd::String gz_path = env.create_test_gzip_file();
-
-            auto indexer =
-                CheckpointIndexerFactory::create(gz_path, "", 1024, true);
-            REQUIRE(indexer != nullptr);
-            indexer->build();
-
-            auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
-                              .with_line_range(1, 2);
-
-            IndexedFileLineIterator iter(config);
-
-            iter.next();
-            iter.next();
-            CHECK_FALSE(iter.has_next());
-
-            CHECK_THROWS_AS(iter.next(),
-                            dftracer::utils::common::DFTUtilsException);
+            dftu_utils_test::expect_error(IndexedFileLineIterator::open(config),
+                                          common::ErrorCode::InvalidArgument,
+                                          "Reader cannot be null");
         }
 
         SUBCASE("Non-existent file") {
-            // ReaderFactory::create should throw when file doesn't exist
-            bool exception_thrown = false;
-            try {
-                auto config = IndexedFileLineIteratorConfig().with_file(
-                    "non_existent.gz", "non_existent.gz.idx");
-                IndexedFileLineIterator iter(config);
-            } catch (const std::exception& e) {
-                exception_thrown = true;
-                // Check that the exception message contains expected text
-                dstd::String msg = e.what();
-                CHECK(msg.find("does not exist") != dstd::String::npos);
-            }
-            CHECK(exception_thrown);
+            // ReaderFactory::create fails when the file doesn't exist, and the
+            // config keeps the error for open() to give.
+            auto config = IndexedFileLineIteratorConfig().with_file(
+                "non_existent.gz", "non_existent.gz.idx");
+            REQUIRE(config.error().has_value());
+            CHECK(dstd::StringView(config.error()->c_str())
+                      .find("does not exist") != dstd::StringView::npos);
+
+            auto opened = IndexedFileLineIterator::open(config);
+            REQUIRE(!opened.has_value());
+            CHECK(dstd::StringView(opened.error().c_str())
+                      .find("does not exist") != dstd::StringView::npos);
         }
+    }
+
+    TEST_CASE("next() with no more lines ends the process" * doctest::skip()) {
+        fresh_process::announce_abort();
+        TestEnvironment env(3);
+        dstd::String gz_path = env.create_test_gzip_file();
+        auto indexer =
+            CheckpointIndexerFactory::create(gz_path, "", 1024, true);
+        indexer->build();
+        auto config = IndexedFileLineIteratorConfig()
+                          .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
+                          .with_line_range(1, 2);
+        auto iter = dftu_utils_test::ok(IndexedFileLineIterator::open(config));
+        iter.next();
+        iter.next();
+        iter.next();
+    }
+
+    TEST_CASE("next() with no more lines aborts with its message") {
+        auto result =
+            fresh_process::run("next() with no more lines ends the process");
+        CHECK(result.aborted_with(
+            "IndexedFileLineIterator::next: no more lines"));
     }
 
     TEST_CASE("IndexedFileLineIterator - Large Files" *
@@ -424,7 +438,8 @@ TEST_SUITE("IndexedFileLineIterator") {
                               .with_line_range(100, 200)
                               .with_buffer_size(16384);
 
-            IndexedFileLineIterator iter(config);
+            auto iter =
+                dftu_utils_test::ok(IndexedFileLineIterator::open(config));
 
             dstd::Vector<dstd::String> lines;
             while (iter.has_next()) {
@@ -456,7 +471,8 @@ TEST_SUITE("IndexedFileLineIterator") {
                         .with_line_range(1, 10)
                         .with_buffer_size(256);
 
-                IndexedFileLineIterator iter(config);
+                auto iter =
+                    dftu_utils_test::ok(IndexedFileLineIterator::open(config));
 
                 int count = 0;
                 while (iter.has_next()) {
@@ -474,7 +490,8 @@ TEST_SUITE("IndexedFileLineIterator") {
                         .with_line_range(1, 10)
                         .with_buffer_size(1024 * 1024);  // 1MB
 
-                IndexedFileLineIterator iter(config);
+                auto iter =
+                    dftu_utils_test::ok(IndexedFileLineIterator::open(config));
 
                 int count = 0;
                 while (iter.has_next()) {
@@ -499,7 +516,8 @@ TEST_SUITE("IndexedFileLineIterator") {
             auto config = IndexedFileLineIteratorConfig().with_file(
                 gz_path, dstd::fmt<"{}.idx">(gz_path));
 
-            IndexedFileLineIterator iter(config);
+            auto iter =
+                dftu_utils_test::ok(IndexedFileLineIterator::open(config));
 
             // Get first line
             CHECK(iter.has_next());
@@ -555,13 +573,14 @@ TEST_SUITE("IndexedFileLineIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
             auto config = IndexedFileLineIteratorConfig().with_reader(reader);
 
-            IndexedFileLineIterator iter(config);
+            auto iter =
+                dftu_utils_test::ok(IndexedFileLineIterator::open(config));
 
             CHECK(iter.reader() == reader);
             CHECK(iter.reader() != nullptr);

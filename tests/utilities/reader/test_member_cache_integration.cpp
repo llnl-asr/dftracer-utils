@@ -15,6 +15,7 @@
 #include <dftracer/utils/utilities/reader/internal/member_decode_cache.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
+#include <generator_ok.h>
 #include <testing_runtime.h>
 #include <testing_utilities.h>
 
@@ -51,7 +52,8 @@ std::int64_t read_line_count(const dstd::String& gz, const dstd::String& idx) {
     dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         reader::TraceReader reader(
             reader::TraceReaderConfig{dstd::String(gz), dstd::String(idx)});
-        auto gen = reader.read_lines(reader::ReadConfig{});
+        auto gen =
+            dftu_utils_test::ok_items(reader.read_lines(reader::ReadConfig{}));
         while (co_await gen.next()) ++count;
         co_return;
     });
@@ -111,7 +113,8 @@ TEST_SUITE("member_cache_integration") {
                        dstd::String idxp) -> coro::CoroTask<std::int64_t> {
                         reader::TraceReader reader(reader::TraceReaderConfig{
                             dstd::String(gzp), dstd::String(idxp)});
-                        auto gen = reader.read_lines(reader::ReadConfig{});
+                        auto gen = dftu_utils_test::ok_items(
+                            reader.read_lines(reader::ReadConfig{}));
                         std::int64_t c = 0;
                         while (co_await gen.next()) ++c;
                         co_return c;

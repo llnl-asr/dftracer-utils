@@ -8,8 +8,11 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/utilities/arrow/array_view.h>
 #include <dftracer/utils/utilities/arrow/arrow.h>
+#include <dftracer/utils/utilities/arrow/join_internal.h>
 #include <doctest/doctest.h>
+#include <memory/fresh_process.h>
 #include <nanoarrow/nanoarrow.h>
+#include <task_result.h>
 
 using namespace dftracer::utils;
 
@@ -62,13 +65,14 @@ ArrowExportResult make_batch(const dstd::Vector<OptB>& sel,
             b.append_null(2);
         b.end_row();
     }
-    return b.finish();
+    return dftu_utils_test::ok(b.finish());
 }
 
 ArrowExportResult attr(ArrowExportResult& in, dstd::Vector<std::uint32_t> dims,
                        std::uint32_t top_k) {
-    return attribute(in.schema(), in.array(), 0, dims.data(),
-                     static_cast<std::uint32_t>(dims.size()), top_k);
+    return dftu_utils_test::ok(
+        attribute(in.schema(), in.array(), 0, dims.data(),
+                  static_cast<std::uint32_t>(dims.size()), top_k));
 }
 
 dstd::String name_of(ArrowExportResult& r, int c) {
@@ -241,6 +245,52 @@ TEST_CASE("attribute - null dim value and null select skipped") {
     CHECK(rd.str(1, 0) == "a");
     CHECK(rd.i64(2, 0) == 1);
     CHECK(rd.i64(3, 0) == 1);
+}
+
+TEST_CASE("attribute - a bad column is an error result") {
+    dstd::Vector<OptB> sel = {true, false};
+    dstd::Vector<OptS> file = {dstd::String("a"), dstd::String("b")};
+    dstd::Vector<OptI> rk(2, OptI(0));
+    auto in = make_batch(sel, file, rk);
+    const std::uint32_t dims[] = {1};
+    const std::uint32_t out_of_range[] = {9};
+    const std::uint32_t bool_dim[] = {0};
+
+    SUBCASE("select column index out of range") {
+        dftu_utils_test::expect_error(
+            attribute(in.schema(), in.array(), 7, dims, 1, 0),
+            common::ErrorCode::InvalidArgument,
+            "attribute: select column index out of range");
+    }
+    SUBCASE("select column is not boolean") {
+        dftu_utils_test::expect_error(
+            attribute(in.schema(), in.array(), 1, dims, 1, 0),
+            common::ErrorCode::InvalidArgument,
+            "attribute: select column must be boolean");
+    }
+    SUBCASE("dimension column index out of range") {
+        dftu_utils_test::expect_error(
+            attribute(in.schema(), in.array(), 0, out_of_range, 1, 0),
+            common::ErrorCode::InvalidArgument,
+            "attribute: dimension column index out of range");
+    }
+    SUBCASE("a boolean dimension is a supported type") {
+        CHECK(
+            attribute(in.schema(), in.array(), 0, bool_dim, 1, 0).has_value());
+    }
+}
+
+TEST_CASE("appending a list column type as a scalar ends the process" *
+          doctest::skip()) {
+    fresh_process::announce_abort();
+    RecordBatchBuilder b;
+    append_scalar(b, 0, ColumnType::Hist, nullptr, 0);
+}
+
+TEST_CASE("appending a list column type as a scalar aborts with its message") {
+    auto result = fresh_process::run(
+        "appending a list column type as a scalar ends the process");
+    CHECK(result.aborted_with("arrow: unhandled scalar column type"));
 }
 
 #endif  // DFTRACER_UTILS_ENABLE_ARROW

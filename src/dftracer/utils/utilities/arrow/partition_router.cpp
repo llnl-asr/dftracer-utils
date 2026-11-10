@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/hash/xxh3.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
@@ -308,7 +309,14 @@ coro::CoroTask<int> PartitionRouter::route_column(ArrowExportResult& batch) {
             builder.end_row();
         }
 
-        auto sub_batch = builder.finish();
+        auto finished = builder.finish();
+        if (!finished.has_value()) {
+            DFTRACER_UTILS_LOG_ERROR("partition batch: {}",
+                                     finished.error().c_str());
+            ArrowArrayViewReset(&view);
+            co_return -1;
+        }
+        auto sub_batch = std::move(*finished);
         PartitionWriter* writer = co_await get_or_create_writer(partition_key);
         if (!writer) {
             ArrowArrayViewReset(&view);
@@ -378,7 +386,14 @@ coro::CoroTask<int> PartitionRouter::route_bucketed(ArrowExportResult& batch) {
             builder.end_row();
         }
 
-        auto sub_batch = builder.finish();
+        auto finished = builder.finish();
+        if (!finished.has_value()) {
+            DFTRACER_UTILS_LOG_ERROR("partition batch: {}",
+                                     finished.error().c_str());
+            ArrowArrayViewReset(&view);
+            co_return -1;
+        }
+        auto sub_batch = std::move(*finished);
         PartitionWriter* writer =
             co_await get_or_create_writer(bucket_key(bucket));
         if (!writer) {
@@ -456,7 +471,14 @@ coro::CoroTask<int> PartitionRouter::route_view(ArrowExportResult& batch) {
             builder.end_row();
         }
 
-        auto sub_batch = builder.finish();
+        auto finished = builder.finish();
+        if (!finished.has_value()) {
+            DFTRACER_UTILS_LOG_ERROR("partition batch: {}",
+                                     finished.error().c_str());
+            ArrowArrayViewReset(&view);
+            co_return -1;
+        }
+        auto sub_batch = std::move(*finished);
         PartitionWriter* writer = co_await get_or_create_writer(view_name);
         if (!writer) {
             ArrowArrayViewReset(&view);

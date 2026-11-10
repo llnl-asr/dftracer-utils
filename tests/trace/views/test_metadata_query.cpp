@@ -10,6 +10,7 @@
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
+#include <generator_ok.h>
 #include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
@@ -320,7 +321,7 @@ TEST_SUITE("View - metadata under pruning") {
                 dftracer::utils::utilities::reader::ReadConfig cfg;
                 cfg.query = text;
                 cfg.skip_pruning = skip;
-                auto gen = reader.read_json(cfg);
+                auto gen = dftu_utils_test::ok_items(reader.read_json(cfg));
                 std::size_t n = 0;
                 while (auto line = co_await gen.next()) ++n;
                 co_return n;

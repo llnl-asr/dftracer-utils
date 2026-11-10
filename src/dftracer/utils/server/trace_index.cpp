@@ -807,7 +807,8 @@ coro::CoroTask<void> TraceIndex::initialize() {
             cfg.file_path = files_.front().path;
             cfg.index_dir = index_dir_;
             utilities::reader::TraceReader reader(cfg);
-            time_metric_ = co_await reader.read_time_metric();
+            auto metric = co_await reader.read_time_metric();
+            time_metric_ = common::unwrap(std::move(metric));
         } catch (const std::exception& e) {
             DFTRACER_UTILS_LOG_WARN(
                 "TraceIndex: failed to resolve time_metric: {}", e.what());

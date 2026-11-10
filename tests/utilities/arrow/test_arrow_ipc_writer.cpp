@@ -10,6 +10,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/utilities/arrow/arrow.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <cstdio>
@@ -44,7 +45,7 @@ TEST_CASE("IpcWriter - basic write and close") {
         builder.append_double(2, 2.72);
         builder.end_row();
 
-        auto batch = builder.finish();
+        auto batch = dftu_utils_test::ok(builder.finish());
 
         IpcWriter writer;
         if (co_await writer.open(path) != 0) co_return 1;
@@ -80,7 +81,7 @@ TEST_CASE("IpcWriter - multiple batches") {
                 builder.append_int64(0, b * 10 + i);
                 builder.end_row();
             }
-            auto batch = builder.finish();
+            auto batch = dftu_utils_test::ok(builder.finish());
             if (co_await writer.write_batch(batch) != 0) co_return 2;
             builder.reset(true);
         }
@@ -135,7 +136,7 @@ TEST_CASE("IpcWriter - batches without a pooled slot match the pooled file") {
                     builder.append_double(1, i * 0.5);
                     builder.end_row();
                 }
-                auto batch = builder.finish();
+                auto batch = dftu_utils_test::ok(builder.finish());
                 if (co_await writer.write_batch(batch) != 0) co_return 2;
                 builder.reset(true);
             }
@@ -173,7 +174,7 @@ TEST_CASE("IpcWriter - explicit ZSTD compression") {
             builder.append_double(1, i * 1.5);
             builder.end_row();
         }
-        auto batch = builder.finish();
+        auto batch = dftu_utils_test::ok(builder.finish());
 
         IpcWriter writer;
         if (co_await writer.open(path, IpcCompression::Zstd) != 0) co_return 1;
@@ -208,7 +209,7 @@ TEST_CASE("PartitionWriter - basic single file") {
             builder.append_int64(0, i);
             builder.end_row();
         }
-        auto batch = builder.finish();
+        auto batch = dftu_utils_test::ok(builder.finish());
 
         if (co_await writer.write_batch(batch) != 0) co_return 3;
         stats = co_await writer.close();
@@ -250,7 +251,7 @@ TEST_CASE("PartitionRouter - NONE mode pass-through") {
             builder.append_string(1, "POSIX");
             builder.end_row();
         }
-        auto batch = builder.finish();
+        auto batch = dftu_utils_test::ok(builder.finish());
 
         if (co_await router.write_batch(batch) != 0) co_return 2;
         stats = co_await router.close();
@@ -296,7 +297,7 @@ TEST_CASE("PartitionRouter - COLUMN mode single column") {
             builder.append_string(1, "APP");
             builder.end_row();
         }
-        auto batch = builder.finish();
+        auto batch = dftu_utils_test::ok(builder.finish());
 
         if (co_await router.write_batch(batch) != 0) co_return 2;
         stats = co_await router.close();

@@ -5,6 +5,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/async_generator.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
@@ -19,38 +20,45 @@ namespace dftracer::utils::utilities::fileio::lines::sources {
  *
  * Usage:
  * @code
- * auto reader = ReaderFactory::create("file.gz", "file.gz.idx");
+ * auto reader = ok(ReaderFactory::create("file.gz", "file.gz.idx"));
  * auto gen = async_indexed_file_bytes(reader, 1000, 5000);
  * for (;;) {
  *     auto line = co_await gen.next();
  *     if (!line) break;
- *     process(*line);
+ *     if (!*line) return handle(line->error());
+ *     process(**line);
  * }
  * @endcode
+ *
+ * A null reader, an empty byte range or a failed read is yielded as an error
+ * item, after which the generator ends.
  */
-inline coro::AsyncGenerator<Line> async_indexed_file_bytes(
+inline coro::AsyncGenerator<dstd::Result<Line>> async_indexed_file_bytes(
     dstd::SharedPtr<reader::internal::Reader> reader, std::size_t start_byte,
     std::size_t end_byte, std::size_t buffer_size = 1024 * 1024) {
     if (!reader) {
-        throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
-                                        "Reader cannot be null");
+        co_yield dstd::Result<Line>(common::make_error(
+            common::ErrorCode::InvalidArgument, "Reader cannot be null"));
+        co_return;
     }
     if (start_byte >= end_byte) {
-        throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
-                                        "Invalid byte range");
+        co_yield dstd::Result<Line>(common::make_error(
+            common::ErrorCode::InvalidArgument, "Invalid byte range"));
+        co_return;
     }
 
-    auto stream =
+    auto opened =
         reader->stream(reader::internal::StreamConfig()
                            .stream_type(reader::internal::StreamType::LineBytes)
                            .range_type(reader::internal::RangeType::ByteRange)
                            .from(start_byte)
                            .to(end_byte));
 
-    if (!stream) {
-        throw common::DFTUtilsException(common::ErrorCode::Io,
-                                        "Failed to create stream");
+    if (!opened.has_value()) {
+        co_yield dstd::Result<Line>(opened.error());
+        co_return;
     }
+    auto stream = std::move(*opened);
 
     dstd::String stream_buffer;
     stream_buffer.resize(buffer_size);
@@ -58,8 +66,13 @@ inline coro::AsyncGenerator<Line> async_indexed_file_bytes(
     std::size_t current_line = 1;
 
     while (!stream->done()) {
-        std::size_t bytes_read = co_await stream->read_async(
-            stream_buffer.data(), stream_buffer.size());
+        auto read = co_await stream->read_async(stream_buffer.data(),
+                                                stream_buffer.size());
+        if (!read.has_value()) {
+            co_yield dstd::Result<Line>(read.error());
+            co_return;
+        }
+        std::size_t bytes_read = *read;
 
         if (bytes_read == 0) break;
 

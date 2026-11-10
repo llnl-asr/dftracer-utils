@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -309,7 +310,7 @@ ArrowExportResult ComparisonOutput::to_arrow() const {
         flatten_node(builder, node, "");
     }
 
-    return builder.finish();
+    return common::unwrap(builder.finish());
 }
 #endif  // DFTRACER_UTILS_ENABLE_ARROW
 

@@ -12,6 +12,7 @@
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
+#include <generator_ok.h>
 #include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
@@ -403,8 +404,9 @@ TEST_SUITE("ViewIndexGrow") {
         utilities::reader::TraceReader reader({.file_path = gz});
         utilities::reader::ReadConfig config;
         config.query = R"(name == "split")";
-        CHECK(dftu_utils_test::ok(count_json(reader.read_json(config)).get()) ==
-              1);
+        CHECK(dftu_utils_test::ok(count_json(dftu_utils_test::ok_items(
+                                                 reader.read_json(config)))
+                                      .get()) == 1);
         CHECK(rows(dir, R"(ts >= 1000)") == MEMBER_EVENTS + 1);
         const Rebuilt fresh(gz);
         CHECK(all_lines(dir) == all_lines(fresh.dir));
@@ -475,8 +477,9 @@ TEST_SUITE("ViewIndexGrow") {
             utilities::reader::TraceReader reader({.file_path = gz});
             utilities::reader::ReadConfig config;
             config.query = dstd::String(R"(name == "n_)") + name + R"(")";
-            CHECK(dftu_utils_test::ok(
-                      count_json(reader.read_json(config)).get()) == 1);
+            CHECK(dftu_utils_test::ok(count_json(dftu_utils_test::ok_items(
+                                                     reader.read_json(config)))
+                                          .get()) == 1);
         }
         CHECK(split_lines > 0);
     }

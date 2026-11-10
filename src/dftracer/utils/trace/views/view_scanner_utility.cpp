@@ -474,12 +474,12 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
     }
     dstd::SharedPtr<utilities::reader::internal::Reader> reader;
     if (input.indexer) {
-        reader =
-            utilities::reader::internal::ReaderFactory::create(input.indexer);
+        reader = common::unwrap(
+            utilities::reader::internal::ReaderFactory::create(input.indexer));
     } else {
         utilities::fileio::IndexedFileReaderUtility reader_utility;
         auto made = co_await reader_utility(reader_input);
-        reader = std::move(made);
+        reader = common::unwrap(std::move(made));
     }
 
     // Candidates are gzip-member-aligned byte ranges. A member's last event has
@@ -489,7 +489,7 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
     // straddling event is read here; the next member then opens on that '\n'
     // and skips the resulting empty leading line, so nothing is dropped or
     // doubled.
-    auto stream = reader->stream(
+    auto stream = common::unwrap(reader->stream(
         utilities::reader::internal::StreamConfig()
             .stream_type(
                 utilities::reader::internal::StreamType::MultiLinesBytes)
@@ -497,7 +497,7 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
             .buffer_size(input.batch_size)
             .extend_to_line_boundary(true)
             .from(input.start_byte)
-            .to(input.end_byte));
+            .to(input.end_byte)));
 
     ViewScannerBatch batch;
     detail::FoldEventBuffer local_pool;
@@ -521,7 +521,8 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
                   hints, cache,     document,  parser};
 
     while (!stream->done()) {
-        auto chunk = co_await stream->read_async();
+        auto read = co_await stream->read_async();
+        const auto chunk = common::unwrap(std::move(read));
         if (chunk.empty()) break;
 
         const char* data = chunk.data();
@@ -668,7 +669,7 @@ ArrowExportResult ViewScannerBatch::to_arrow(
         builder.end_row();
     }
 
-    return builder.finish();
+    return common::unwrap(builder.finish());
 }
 
 }  // namespace dftracer::utils::trace::views

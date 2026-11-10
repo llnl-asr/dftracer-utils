@@ -13,6 +13,7 @@
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
 #include <duql/eval_json.h>
+#include <generator_ok.h>
 #include <simdjson.h>
 #include <task_result.h>
 #include <testing_utilities.h>
@@ -225,7 +226,7 @@ std::size_t reader_count(dstd::StringView gz, const dstd::String& text) {
         utilities::reader::ReadConfig cfg;
         cfg.query = text;
         cfg.buffer_size = READ_BUFFER_BYTES;
-        auto gen = r.read_json(cfg);
+        auto gen = dftu_utils_test::ok_items(r.read_json(cfg));
         std::size_t n = 0;
         while (auto line = co_await gen.next()) ++n;
         co_return n;
@@ -240,7 +241,7 @@ std::int64_t arrow_count(dstd::StringView gz, const dstd::String& text) {
         utilities::reader::ReadConfig cfg;
         cfg.query = text;
         cfg.buffer_size = READ_BUFFER_BYTES;
-        auto gen = r.read_arrow(cfg);
+        auto gen = dftu_utils_test::ok_items(r.read_arrow(cfg));
         std::int64_t n = 0;
         while (auto b = co_await gen.next()) n += b->num_rows();
         co_return n;

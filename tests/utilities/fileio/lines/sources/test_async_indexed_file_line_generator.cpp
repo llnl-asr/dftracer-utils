@@ -9,6 +9,7 @@
 #include <dftracer/utils/utilities/fileio/lines/sources/async_indexed_file_line_generator.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 #include <doctest/doctest.h>
+#include <generator_ok.h>
 #include <task_result.h>
 #include <testing_utilities.h>
 
@@ -19,6 +20,17 @@ using namespace dftracer::utils::coro;
 using namespace dftracer::utils::index::gzip;
 using namespace dftracer::utils::utilities::reader::internal;
 using namespace dftu_utils_test;
+
+// The first item of a generator of Results.
+static CoroTask<dstd::Result<Line>> first_item(
+    AsyncGenerator<dstd::Result<Line>> gen) {
+    auto item = co_await gen.next();
+    if (!item) {
+        co_return common::make_error(common::ErrorCode::Unknown,
+                                     "the generator ended without an item");
+    }
+    co_return std::move(*item);
+}
 
 // Helper: consume an AsyncGenerator<Line> into a vector of strings
 static CoroTask<dstd::Vector<dstd::String>> collect_lines(
@@ -61,7 +73,8 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
                               .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                               .with_line_range(1, 10);
 
-            auto gen = async_indexed_file_lines(config);
+            auto gen =
+                dftu_utils_test::ok_items(async_indexed_file_lines(config));
             auto task = collect_lines(std::move(gen));
             auto lines = dftu_utils_test::ok(task.get());
 
@@ -83,7 +96,8 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
                               .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                               .with_line_range(5, 10);
 
-            auto gen = async_indexed_file_lines(config);
+            auto gen =
+                dftu_utils_test::ok_items(async_indexed_file_lines(config));
             auto task = collect_lines(std::move(gen));
             auto lines = dftu_utils_test::ok(task.get());
 
@@ -105,7 +119,8 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
                               .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                               .with_line_range(7, 7);
 
-            auto gen = async_indexed_file_lines(config);
+            auto gen =
+                dftu_utils_test::ok_items(async_indexed_file_lines(config));
             auto task = collect_line_copies(std::move(gen));
             auto lines = dftu_utils_test::ok(task.get());
 
@@ -129,7 +144,8 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
                               .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                               .with_line_range(10, 0);
 
-            auto gen = async_indexed_file_lines(config);
+            auto gen =
+                dftu_utils_test::ok_items(async_indexed_file_lines(config));
             auto task = collect_lines(std::move(gen));
             auto lines = dftu_utils_test::ok(task.get());
 
@@ -149,8 +165,8 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
             auto config = IndexedFileLineIteratorConfig()
@@ -158,7 +174,8 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
                               .with_line_range(2, 4)
                               .with_buffer_size(4096);
 
-            auto gen = async_indexed_file_lines(config);
+            auto gen =
+                dftu_utils_test::ok_items(async_indexed_file_lines(config));
             auto task = collect_lines(std::move(gen));
             auto lines = dftu_utils_test::ok(task.get());
 
@@ -182,7 +199,8 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
                               .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                               .with_byte_range(0, 200);
 
-            auto gen = async_indexed_file_lines(config);
+            auto gen =
+                dftu_utils_test::ok_items(async_indexed_file_lines(config));
             auto task = collect_lines(std::move(gen));
             auto lines = dftu_utils_test::ok(task.get());
 
@@ -204,7 +222,8 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
                               .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                               .with_line_range(3, 7);
 
-            auto gen = async_indexed_file_lines(config);
+            auto gen =
+                dftu_utils_test::ok_items(async_indexed_file_lines(config));
             auto task = collect_line_copies(std::move(gen));
             auto lines = dftu_utils_test::ok(task.get());
 
@@ -218,36 +237,27 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
     }
 
     TEST_CASE("Error Handling") {
-        SUBCASE("Null reader throws on first next()") {
+        SUBCASE("Null reader is an error item") {
             auto config =
                 IndexedFileLineIteratorConfig().with_line_range(1, 10);
 
-            auto gen = async_indexed_file_lines(config);
+            auto task = first_item(async_indexed_file_lines(config));
 
-            // Exception is thrown inside the coroutine body,
-            // which executes on the first co_await gen.next()
-            auto task = [](AsyncGenerator<Line> g) -> CoroTask<void> {
-                co_await g.next();
-                co_return;
-            }(std::move(gen));
-
-            CHECK_THROWS_AS(dftu_utils_test::ok(task.get()),
-                            common::DFTUtilsException);
+            dftu_utils_test::expect_error(task.get(),
+                                          common::ErrorCode::InvalidArgument,
+                                          "Reader cannot be null");
         }
 
-        SUBCASE("Non-existent file throws") {
-            bool exception_thrown = false;
-            try {
-                auto config = IndexedFileLineIteratorConfig().with_file(
-                    "non_existent.gz", "non_existent.gz.idx");
-                auto gen = async_indexed_file_lines(config);
-                // Consume to trigger the coroutine body
-                auto task = collect_lines(std::move(gen));
-                dftu_utils_test::ok(task.get());
-            } catch (const std::exception&) {
-                exception_thrown = true;
-            }
-            CHECK(exception_thrown);
+        SUBCASE("Non-existent file is an error item") {
+            auto config = IndexedFileLineIteratorConfig().with_file(
+                "non_existent.gz", "non_existent.gz.idx");
+            REQUIRE(config.error().has_value());
+
+            auto task = first_item(async_indexed_file_lines(config));
+            auto first = task.get();
+            REQUIRE(!first.has_value());
+            CHECK(dstd::StringView(first.error().c_str())
+                      .find("does not exist") != dstd::StringView::npos);
         }
     }
 
@@ -266,7 +276,8 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
                               .with_line_range(100, 200)
                               .with_buffer_size(16384);
 
-            auto gen = async_indexed_file_lines(config);
+            auto gen =
+                dftu_utils_test::ok_items(async_indexed_file_lines(config));
             auto task = collect_lines(std::move(gen));
             auto lines = dftu_utils_test::ok(task.get());
 
@@ -293,7 +304,8 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
                               .with_line_range(5, 15);
 
             // Sync path
-            IndexedFileLineIterator sync_iter(config);
+            auto sync_iter =
+                dftu_utils_test::ok(IndexedFileLineIterator::open(config));
             dstd::Vector<dstd::String> sync_lines;
             while (sync_iter.has_next()) {
                 Line line = sync_iter.next();
@@ -301,7 +313,8 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             }
 
             // Async path
-            auto gen = async_indexed_file_lines(config);
+            auto gen =
+                dftu_utils_test::ok_items(async_indexed_file_lines(config));
             auto task = collect_lines(std::move(gen));
             auto async_lines = dftu_utils_test::ok(task.get());
 
@@ -326,7 +339,8 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
                               .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                               .with_line_range(1, 3);
 
-            auto gen = async_indexed_file_lines(config);
+            auto gen =
+                dftu_utils_test::ok_items(async_indexed_file_lines(config));
 
             auto task = [](AsyncGenerator<Line> g) -> CoroTask<void> {
                 // Consume all lines
@@ -363,7 +377,8 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
                               .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
                               .with_line_range(1, 5);
 
-            auto gen1 = async_indexed_file_lines(config);
+            auto gen1 =
+                dftu_utils_test::ok_items(async_indexed_file_lines(config));
             auto gen2 = std::move(gen1);  // Move construct
 
             auto task = collect_lines(std::move(gen2));

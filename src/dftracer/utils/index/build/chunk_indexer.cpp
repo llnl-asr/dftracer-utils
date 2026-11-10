@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
@@ -126,7 +127,8 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexer::operator()(
                 .with_index(input.index_path);
 
         utilities::fileio::IndexedFileReaderUtility reader_utility;
-        reader = co_await reader_utility(reader_input);
+        auto opened = co_await reader_utility(reader_input);
+        reader = common::unwrap(std::move(opened));
 
         if (!reader) {
             DFTRACER_UTILS_LOG_ERROR(
@@ -148,7 +150,7 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexer::operator()(
         co_return output;
     }
 
-    auto stream = reader->stream(
+    auto opened_stream = reader->stream(
         utilities::reader::internal::StreamConfig()
             .stream_type(
                 utilities::reader::internal::StreamType::MultiLinesBytes)
@@ -157,13 +159,14 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexer::operator()(
             .from(input.start_byte)
             .to(input.end_byte));
 
-    if (!stream) {
+    if (!opened_stream) {
         DFTRACER_UTILS_LOG_ERROR(
             "ChunkIndexer: Failed to create stream for {} checkpoint {}",
             input.file_path,
             static_cast<unsigned long long>(input.checkpoint_idx));
         co_return output;
     }
+    auto stream = std::move(*opened_stream);
 
     JsonParser parser;
 
@@ -176,7 +179,7 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexer::operator()(
     const bool need_shash = output.bloom_filters.count(DIM_SHASH) > 0;
     const bool has_extra_dims = !input.config.extra_dimensions.empty();
 
-    co_await dftracer::utils::trace::internal::scan_chunk_lines(
+    auto scanned = co_await dftracer::utils::trace::internal::scan_chunk_lines(
         *stream, [&](dstd::StringView line_sv,
                      [[maybe_unused]] std::uint32_t line_number) {
             if (!parser.parse(line_sv)) {
@@ -305,6 +308,7 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexer::operator()(
                 output.events_processed++;
             }
         });
+    common::unwrap(std::move(scanned));
 
     output.success = true;
     co_return output;

@@ -10,6 +10,7 @@
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/vector.h>
 
 #include <array>
@@ -76,7 +77,7 @@ namespace dftracer::utils::utilities::reader::internal {
 class MemberDecodeCache {
    public:
     using Bytes = dstd::SharedPtr<const DecodedMember>;
-    using Producer = dstd::Function<coro::CoroTask<Bytes>()>;
+    using Producer = dstd::Function<coro::CoroTask<dstd::Result<Bytes>>()>;
 
     static constexpr std::size_t NSHARDS = 16;
     static_assert((NSHARDS & (NSHARDS - 1)) == 0,
@@ -101,10 +102,12 @@ class MemberDecodeCache {
     };
 
     /// `produce` is taken by value: this is a coroutine, so a by-reference
-    /// parameter bound to a temporary would dangle before the body runs.
-    coro::CoroTask<Bytes> get_or_decode(std::uint64_t file_token,
-                                        std::uint64_t member_idx,
-                                        Producer produce) {
+    /// parameter bound to a temporary would dangle before the body runs. When
+    /// `produce` fails, the error is returned and nothing is cached, so the
+    /// next request decodes again.
+    coro::CoroTask<dstd::Result<Bytes>> get_or_decode(std::uint64_t file_token,
+                                                      std::uint64_t member_idx,
+                                                      Producer produce) {
         const MemberKey key{file_token, member_idx};
         const std::size_t h = dstd::Hash<MemberKey>{}(key);
         Shard& shard = shards_[(h >> 32) & (NSHARDS - 1)];
@@ -131,7 +134,9 @@ class MemberDecodeCache {
         co_await entry->mutex.lock();
         coro::AsyncMutexGuard guard(entry->mutex);
         if (!entry->ready.load(std::memory_order_relaxed)) {
-            entry->bytes = co_await produce();
+            auto produced = co_await produce();
+            if (!produced) co_return produced.error();
+            entry->bytes = std::move(*produced);
             entry->size = entry->bytes ? entry->bytes->data.size() : 0;
             entry->ready.store(true, std::memory_order_release);
             decodes_.fetch_add(1, std::memory_order_relaxed);

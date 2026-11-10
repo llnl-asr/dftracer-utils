@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -21,42 +23,55 @@
 #include <cstring>
 #include <limits>
 
-static void validate_parameters(
+using dftracer::utils::utilities::reader::reader_error;
+using dftracer::utils::utilities::reader::ReaderErrorType;
+
+static dftracer::utils::dstd::Result<void> validate_parameters(
     const char *buffer, std::size_t buffer_size, std::size_t start_bytes,
     std::size_t end_bytes,
     std::size_t max_bytes = std::numeric_limits<std::size_t>::max()) {
     if (!buffer || buffer_size == 0) {
-        throw dftracer::utils::utilities::reader::ReaderError(
-            dftracer::utils::utilities::reader::ReaderError::InvalidArgument,
-            "Invalid buffer parameters");
+        return reader_error(ReaderErrorType::InvalidArgument,
+                            "Invalid buffer parameters");
     }
     if (start_bytes >= end_bytes) {
-        throw dftracer::utils::utilities::reader::ReaderError(
-            dftracer::utils::utilities::reader::ReaderError::InvalidArgument,
-            "start_bytes must be less than end_bytes");
+        return reader_error(ReaderErrorType::InvalidArgument,
+                            "start_bytes must be less than end_bytes");
     }
     if (max_bytes != SIZE_MAX) {
         if (end_bytes > max_bytes) {
-            throw dftracer::utils::utilities::reader::ReaderError(
-                dftracer::utils::utilities::reader::ReaderError::
-                    InvalidArgument,
-                "end_bytes exceeds maximum available bytes");
+            return reader_error(ReaderErrorType::InvalidArgument,
+                                "end_bytes exceeds maximum available bytes");
         }
         if (start_bytes > max_bytes) {
-            throw dftracer::utils::utilities::reader::ReaderError(
-                dftracer::utils::utilities::reader::ReaderError::
-                    InvalidArgument,
-                "start_bytes exceeds maximum available bytes");
+            return reader_error(ReaderErrorType::InvalidArgument,
+                                "start_bytes exceeds maximum available bytes");
         }
     }
+    return {};
+}
+
+static dftracer::utils::dstd::Result<void> validate_line_range(
+    std::size_t start_line, std::size_t end_line, std::size_t total_lines) {
+    if (start_line == 0 || end_line == 0) {
+        return reader_error(ReaderErrorType::InvalidArgument,
+                            "Line numbers must be 1-based (start from 1)");
+    }
+    if (start_line > end_line) {
+        return reader_error(ReaderErrorType::InvalidArgument,
+                            "Start line must be <= end line");
+    }
+    if (start_line > total_lines || end_line > total_lines) {
+        return reader_error<ReaderErrorType::InvalidArgument,
+                            "Line numbers exceed total lines in file ({})">(
+            total_lines);
+    }
+    return {};
 }
 
 static void check_reader_state(bool is_open, const void *indexer) {
     if (!is_open || !indexer) {
-        throw dftracer::utils::utilities::reader::ReaderError(
-            dftracer::utils::utilities::reader::ReaderError::
-                InitializationError,
-            "Reader is not open");
+        dftracer::utils::dstd::fatal("GzipReader used after it was moved from");
     }
 }
 
@@ -64,36 +79,12 @@ static constexpr std::size_t DEFAULT_READER_BUFFER_SIZE = 1 * 1024 * 1024;
 
 namespace dftracer::utils::utilities::reader::internal {
 
-GzipReader::GzipReader(dstd::StringView gz_path, dstd::StringView idx_path,
-                       std::size_t index_ckpt_size)
-    : gz_path_(gz_path),
-      index_path_(idx_path),
-      is_open_(false),
-      default_buffer_size_(DEFAULT_READER_BUFFER_SIZE),
-      indexer_(nullptr) {
-    try {
-        indexer_ =
-            dftracer::utils::index::gzip::CheckpointIndexerFactory::create(
-                gz_path_, index_path_, index_ckpt_size, false);
-        is_open_ = true;
-
-        DFTRACER_UTILS_LOG_DEBUG(
-            "Successfully created GZIP reader for gz: {} and index: {}",
-            gz_path_, index_path_);
-    } catch (const std::exception &e) {
-        throw ReaderError(ReaderError::InitializationError,
-                          "Failed to initialize reader with indexer: " +
-                              dstd::String(e.what()));
-    }
-}
-
 GzipReader::GzipReader(
     dstd::SharedPtr<dftracer::utils::index::gzip::CheckpointIndexer> indexer)
     : default_buffer_size_(DEFAULT_READER_BUFFER_SIZE),
       indexer_(std::move(indexer)) {
     if (!indexer_) {
-        throw ReaderError(ReaderError::InitializationError,
-                          "Invalid indexer provided");
+        dstd::fatal("GzipReader needs an indexer");
     }
     is_open_ = true;
     gz_path_ = dstd::String(indexer_->archive_path());
@@ -103,7 +94,7 @@ GzipReader::GzipReader(
 GzipReader::~GzipReader() {
     DFTRACER_UTILS_LOG_DEBUG("Destroying GZIP reader for gz: {} and index: {}",
                              gz_path_, index_path_);
-    reset();
+    stream_cache_.clear();
     is_open_ = false;
 }
 
@@ -156,13 +147,13 @@ void GzipReader::reset() {
     stream_cache_.clear();
 }
 
-coro::CoroTask<std::size_t> GzipReader::read_async(std::size_t start_bytes,
-                                                   std::size_t end_bytes,
-                                                   char *buffer,
-                                                   std::size_t buffer_size) {
+coro::CoroTask<dstd::Result<std::size_t>> GzipReader::read_async(
+    std::size_t start_bytes, std::size_t end_bytes, char *buffer,
+    std::size_t buffer_size) {
     check_reader_state(is_open_, indexer_.get());
-    validate_parameters(buffer, buffer_size, start_bytes, end_bytes,
-                        indexer_.get()->max_bytes());
+    auto valid = validate_parameters(buffer, buffer_size, start_bytes,
+                                     end_bytes, indexer_.get()->max_bytes());
+    if (!valid.has_value()) co_return valid.error();
 
     DFTRACER_UTILS_LOG_DEBUG(
         "GzipReader::read - request: start_bytes={}, end_bytes={}, "
@@ -179,15 +170,17 @@ coro::CoroTask<std::size_t> GzipReader::read_async(std::size_t start_bytes,
                                      .range_type(RangeType::ByteRange)
                                      .from(start_bytes)
                                      .to(end_bytes));
-        stream_cache_.update(std::move(new_stream), StreamType::Bytes, gz_path_,
-                             start_bytes, end_bytes);
+        if (!new_stream.has_value()) co_return new_stream.error();
+        stream_cache_.update(std::move(*new_stream), StreamType::Bytes,
+                             gz_path_, start_bytes, end_bytes);
     } else {
         DFTRACER_UTILS_LOG_DEBUG(
             "{}", "GzipReader::read - reusing cached byte stream");
     }
 
-    std::size_t result =
-        co_await stream_cache_.get()->read_async(buffer, buffer_size);
+    auto read = co_await stream_cache_.get()->read_async(buffer, buffer_size);
+    if (!read.has_value()) co_return read.error();
+    const std::size_t result = *read;
     DFTRACER_UTILS_LOG_DEBUG("GzipReader::read - returned {} bytes", result);
 
     // Update position for next potential read
@@ -196,7 +189,7 @@ coro::CoroTask<std::size_t> GzipReader::read_async(std::size_t start_bytes,
     co_return result;
 }
 
-coro::CoroTask<std::size_t> GzipReader::read_line_bytes_async(
+coro::CoroTask<dstd::Result<std::size_t>> GzipReader::read_line_bytes_async(
     std::size_t start_bytes, std::size_t end_bytes, char *buffer,
     std::size_t buffer_size) {
     check_reader_state(is_open_, indexer_.get());
@@ -205,8 +198,9 @@ coro::CoroTask<std::size_t> GzipReader::read_line_bytes_async(
         end_bytes = indexer_.get()->max_bytes();
     }
 
-    validate_parameters(buffer, buffer_size, start_bytes, end_bytes,
-                        indexer_.get()->max_bytes());
+    auto valid = validate_parameters(buffer, buffer_size, start_bytes,
+                                     end_bytes, indexer_.get()->max_bytes());
+    if (!valid.has_value()) co_return valid.error();
 
     // Check if we can reuse cached stream
     if (!stream_cache_.can_continue(StreamType::MultiLinesBytes, gz_path_,
@@ -216,12 +210,15 @@ coro::CoroTask<std::size_t> GzipReader::read_line_bytes_async(
                                      .range_type(RangeType::ByteRange)
                                      .from(start_bytes)
                                      .to(end_bytes));
-        stream_cache_.update(std::move(new_stream), StreamType::MultiLinesBytes,
-                             gz_path_, start_bytes, end_bytes);
+        if (!new_stream.has_value()) co_return new_stream.error();
+        stream_cache_.update(std::move(*new_stream),
+                             StreamType::MultiLinesBytes, gz_path_, start_bytes,
+                             end_bytes);
     }
 
-    std::size_t result =
-        co_await stream_cache_.get()->read_async(buffer, buffer_size);
+    auto read = co_await stream_cache_.get()->read_async(buffer, buffer_size);
+    if (!read.has_value()) co_return read.error();
+    const std::size_t result = *read;
 
     // Update position for next potential read
     stream_cache_.update_position(start_bytes + result);
@@ -229,26 +226,13 @@ coro::CoroTask<std::size_t> GzipReader::read_line_bytes_async(
     co_return result;
 }
 
-coro::CoroTask<dstd::String> GzipReader::read_lines_async(
+coro::CoroTask<dstd::Result<dstd::String>> GzipReader::read_lines_async(
     std::size_t start_line, std::size_t end_line) {
     check_reader_state(is_open_, indexer_.get());
 
-    if (start_line == 0 || end_line == 0) {
-        throw ReaderError(ReaderError::InvalidArgument,
-                          "Line numbers must be 1-based (start from 1)");
-    }
-
-    if (start_line > end_line) {
-        throw ReaderError(ReaderError::InvalidArgument,
-                          "Start line must be <= end line");
-    }
-
-    std::size_t total_lines = indexer_.get()->line_count();
-    if (start_line > total_lines || end_line > total_lines) {
-        throw ReaderError(ReaderError::InvalidArgument,
-                          "Line numbers exceed total lines in file (" +
-                              dstd::to_string(total_lines) + ")");
-    }
+    auto valid =
+        validate_line_range(start_line, end_line, indexer_.get()->line_count());
+    if (!valid.has_value()) co_return valid.error();
 
     // Check if we can reuse cached stream
     if (!stream_cache_.can_continue(StreamType::MultiLines, gz_path_,
@@ -258,7 +242,8 @@ coro::CoroTask<dstd::String> GzipReader::read_lines_async(
                                      .range_type(RangeType::LineRange)
                                      .from(start_line)
                                      .to(end_line));
-        stream_cache_.update(std::move(new_stream), StreamType::MultiLines,
+        if (!new_stream.has_value()) co_return new_stream.error();
+        stream_cache_.update(std::move(*new_stream), StreamType::MultiLines,
                              gz_path_, start_line, end_line);
     }
 
@@ -270,8 +255,10 @@ coro::CoroTask<dstd::String> GzipReader::read_lines_async(
     dstd::Vector<char> buffer(default_buffer_size_);
 
     while (!stream_cache_.get()->done()) {
-        std::size_t bytes_read = co_await stream_cache_.get()->read_async(
-            buffer.data(), buffer.size());
+        auto read = co_await stream_cache_.get()->read_async(buffer.data(),
+                                                             buffer.size());
+        if (!read.has_value()) co_return read.error();
+        const std::size_t bytes_read = *read;
         if (bytes_read == 0) break;
 
         result.append(buffer.data(), bytes_read);
@@ -280,41 +267,32 @@ coro::CoroTask<dstd::String> GzipReader::read_lines_async(
     co_return result;
 }
 
-coro::CoroTask<void> GzipReader::read_lines_with_processor_async(
+coro::CoroTask<dstd::Result<void>> GzipReader::read_lines_with_processor_async(
     std::size_t start_line, std::size_t end_line, LineProcessor &processor) {
     check_reader_state(is_open_, indexer_.get());
 
-    if (start_line == 0 || end_line == 0) {
-        throw ReaderError(ReaderError::InvalidArgument,
-                          "Line numbers must be 1-based (start from 1)");
-    }
-
-    if (start_line > end_line) {
-        throw ReaderError(ReaderError::InvalidArgument,
-                          "Start line must be <= end line");
-    }
-
-    std::size_t total_lines = indexer_.get()->line_count();
-    if (start_line > total_lines || end_line > total_lines) {
-        throw ReaderError(ReaderError::InvalidArgument,
-                          "Line numbers exceed total lines in file (" +
-                              dstd::to_string(total_lines) + ")");
-    }
+    auto valid =
+        validate_line_range(start_line, end_line, indexer_.get()->line_count());
+    if (!valid.has_value()) co_return valid.error();
 
     processor.begin(start_line, end_line);
 
     // Create a LineStream that returns one line at a time
-    auto line_stream = stream(StreamConfig()
-                                  .stream_type(StreamType::Line)
-                                  .range_type(RangeType::LineRange)
-                                  .from(start_line)
-                                  .to(end_line));
+    auto opened = stream(StreamConfig()
+                             .stream_type(StreamType::Line)
+                             .range_type(RangeType::LineRange)
+                             .from(start_line)
+                             .to(end_line));
+    if (!opened.has_value()) co_return opened.error();
+    auto line_stream = std::move(*opened);
 
     dstd::Vector<char> buffer(default_buffer_size_);
 
     while (!line_stream->done()) {
-        std::size_t bytes_read =
+        auto read =
             co_await line_stream->read_async(buffer.data(), buffer.size());
+        if (!read.has_value()) co_return read.error();
+        const std::size_t bytes_read = *read;
         if (bytes_read == 0) break;
 
         // LineStream returns one complete line with \n
@@ -328,15 +306,18 @@ coro::CoroTask<void> GzipReader::read_lines_with_processor_async(
             co_await processor.process(buffer.data(), line_size);
         if (!process_ok) {
             processor.end();
-            co_return;
+            co_return dstd::Result<void>{};
         }
     }
 
     processor.end();
+    co_return dstd::Result<void>{};
 }
 
-coro::CoroTask<void> GzipReader::read_line_bytes_with_processor_async(
-    std::size_t start_bytes, std::size_t end_bytes, LineProcessor &processor) {
+coro::CoroTask<dstd::Result<void>>
+GzipReader::read_line_bytes_with_processor_async(std::size_t start_bytes,
+                                                 std::size_t end_bytes,
+                                                 LineProcessor &processor) {
     check_reader_state(is_open_, indexer_.get());
 
     if (end_bytes > indexer_.get()->max_bytes()) {
@@ -344,34 +325,40 @@ coro::CoroTask<void> GzipReader::read_line_bytes_with_processor_async(
     }
 
     if (start_bytes >= end_bytes) {
-        co_return;
+        co_return dstd::Result<void>{};
     }
 
     processor.begin(start_bytes, end_bytes);
 
-    auto lines_stream = stream(StreamConfig()
-                                   .stream_type(StreamType::LineBytes)
-                                   .range_type(RangeType::ByteRange)
-                                   .from(start_bytes)
-                                   .to(end_bytes));
+    auto opened = stream(StreamConfig()
+                             .stream_type(StreamType::LineBytes)
+                             .range_type(RangeType::ByteRange)
+                             .from(start_bytes)
+                             .to(end_bytes));
+    if (!opened.has_value()) co_return opened.error();
+    auto lines_stream = std::move(*opened);
 
     dstd::Vector<char> buffer(default_buffer_size_);
 
     while (!lines_stream->done()) {
-        std::size_t bytes_read =
+        auto read =
             co_await lines_stream->read_async(buffer.data(), buffer.size());
+        if (!read.has_value()) co_return read.error();
+        const std::size_t bytes_read = *read;
         if (bytes_read == 0) break;
         co_await processor.process(buffer.data(), bytes_read);
     }
 
     processor.end();
+    co_return dstd::Result<void>{};
 }
 
 bool GzipReader::is_valid() const { return is_open_ && indexer_.get(); }
 
 dstd::String GzipReader::format_name() const { return "GZIP"; }
 
-dstd::UniquePtr<ReaderStream> GzipReader::stream(const StreamConfig &config) {
+dstd::Result<dstd::UniquePtr<ReaderStream>> GzipReader::stream(
+    const StreamConfig &config) {
     check_reader_state(is_open_, indexer_.get());
 
     // Extract config parameters
@@ -390,21 +377,8 @@ dstd::UniquePtr<ReaderStream> GzipReader::stream(const StreamConfig &config) {
 
     if (range_type == RangeType::LineRange) {
         // Convert line numbers to byte offsets using the member table
-        if (start == 0 || end == 0) {
-            throw ReaderError(ReaderError::InvalidArgument,
-                              "Line numbers must be 1-based (start from 1)");
-        }
-        if (start > end) {
-            throw ReaderError(ReaderError::InvalidArgument,
-                              "Start line must be <= end line");
-        }
-
-        std::size_t total_lines = indexer_->line_count();
-        if (start > total_lines || end > total_lines) {
-            throw ReaderError(ReaderError::InvalidArgument,
-                              "Line numbers exceed total lines in file (" +
-                                  dstd::to_string(total_lines) + ")");
-        }
+        auto valid = validate_line_range(start, end, indexer_->line_count());
+        if (!valid.has_value()) return valid.error();
 
         // Members carry the same line bookkeeping as the old recovery
         // points, and their starts are decodable without a dictionary.
@@ -475,7 +449,7 @@ dstd::UniquePtr<ReaderStream> GzipReader::stream(const StreamConfig &config) {
             auto byte_stream = dstd::make_unique<GzipByteStream>(buffer_size);
             byte_stream->initialize(gz_path_, start_bytes, end_bytes,
                                     *indexer_);
-            return byte_stream;
+            return dstd::UniquePtr<ReaderStream>(std::move(byte_stream));
         }
         case StreamType::LineBytes: {
             // Single line-aligned bytes at a time
@@ -490,11 +464,13 @@ dstd::UniquePtr<ReaderStream> GzipReader::stream(const StreamConfig &config) {
 
             // Wrap with LineStream to return one line-aligned chunk at a time
             if (range_type == RangeType::LineRange) {
-                return dstd::make_unique<LineStream>(
-                    std::move(line_byte_stream), start, end, actual_start_line);
+                return dstd::UniquePtr<ReaderStream>(
+                    dstd::make_unique<LineStream>(std::move(line_byte_stream),
+                                                  start, end,
+                                                  actual_start_line));
             } else {
-                return dstd::make_unique<LineStream>(
-                    std::move(line_byte_stream));
+                return dstd::UniquePtr<ReaderStream>(
+                    dstd::make_unique<LineStream>(std::move(line_byte_stream)));
             }
         }
         case StreamType::MultiLinesBytes: {
@@ -507,7 +483,7 @@ dstd::UniquePtr<ReaderStream> GzipReader::stream(const StreamConfig &config) {
                 range_type == RangeType::ByteRange && !extend_to_line_boundary);
             line_byte_stream->initialize(gz_path_, start_bytes, end_bytes,
                                          *indexer_);
-            return line_byte_stream;
+            return dstd::UniquePtr<ReaderStream>(std::move(line_byte_stream));
         }
         case StreamType::Line: {
             // Single parsed line per read
@@ -521,11 +497,13 @@ dstd::UniquePtr<ReaderStream> GzipReader::stream(const StreamConfig &config) {
                                          *indexer_);
 
             if (range_type == RangeType::LineRange) {
-                return dstd::make_unique<LineStream>(
-                    std::move(line_byte_stream), start, end, actual_start_line);
+                return dstd::UniquePtr<ReaderStream>(
+                    dstd::make_unique<LineStream>(std::move(line_byte_stream),
+                                                  start, end,
+                                                  actual_start_line));
             } else {
-                return dstd::make_unique<LineStream>(
-                    std::move(line_byte_stream));
+                return dstd::UniquePtr<ReaderStream>(
+                    dstd::make_unique<LineStream>(std::move(line_byte_stream)));
             }
         }
         case StreamType::MultiLines: {
@@ -540,16 +518,18 @@ dstd::UniquePtr<ReaderStream> GzipReader::stream(const StreamConfig &config) {
                                          *indexer_);
 
             if (range_type == RangeType::LineRange) {
-                return dstd::make_unique<MultiLineStream>(
-                    std::move(line_byte_stream), start, end, actual_start_line);
+                return dstd::UniquePtr<ReaderStream>(
+                    dstd::make_unique<MultiLineStream>(
+                        std::move(line_byte_stream), start, end,
+                        actual_start_line));
             } else {
-                return dstd::make_unique<MultiLineStream>(
-                    std::move(line_byte_stream));
+                return dstd::UniquePtr<ReaderStream>(
+                    dstd::make_unique<MultiLineStream>(
+                        std::move(line_byte_stream)));
             }
         }
         default:
-            throw ReaderError(ReaderError::InvalidArgument,
-                              "Invalid stream type");
+            dstd::fatal("GzipReader::stream: unknown stream type");
     }
 }
 

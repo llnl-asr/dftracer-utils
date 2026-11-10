@@ -116,7 +116,7 @@ bool append_scalar_or_json(RecordBatchBuilder& builder,
                 builder.append_double(idx, *refused);
                 break;
             }
-            auto num = num_r.value();
+            auto num = num_r.value_unsafe();
             if (num.is_int64()) {
                 auto idx = resolve_col_idx(builder, hints, pos++, key_sv,
                                            ColumnType::Int64);
@@ -145,7 +145,7 @@ bool append_scalar_or_json(RecordBatchBuilder& builder,
             if (b_r.error()) return false;
             auto idx = resolve_col_idx(builder, hints, pos++, key_sv,
                                        ColumnType::Bool);
-            builder.append_bool(idx, b_r.value());
+            builder.append_bool(idx, b_r.value_unsafe());
             break;
         }
         case simdjson::ondemand::json_type::null: {
@@ -160,7 +160,7 @@ bool append_scalar_or_json(RecordBatchBuilder& builder,
             auto idx = resolve_col_idx(builder, hints, pos++, key_sv,
                                        ColumnType::String);
             if (!raw_r.error()) {
-                auto sv = raw_r.value();
+                auto sv = raw_r.value_unsafe();
                 builder.append_string(idx, sv);
             } else {
                 builder.append_null(idx);
@@ -189,7 +189,7 @@ bool arrow_row_from_doc(RecordBatchBuilder& builder,
     if (obj_result.error()) return false;
     char key_buf[512];
     std::size_t pos = 0;
-    for (auto field : obj_result.value()) {
+    for (auto field : obj_result.value_unsafe()) {
         if (field.error()) {
             damaged = true;
             continue;
@@ -205,13 +205,13 @@ bool arrow_row_from_doc(RecordBatchBuilder& builder,
             damaged = true;
             continue;
         }
-        auto val = val_r.value();
+        auto val = val_r.value_unsafe();
         auto type_r = val.type();
         if (type_r.error()) {
             damaged = true;
             continue;
         }
-        auto type = type_r.value();
+        auto type = type_r.value_unsafe();
 
         if (flatten_objects && type == simdjson::ondemand::json_type::object) {
             auto nested = val.get_object();
@@ -219,7 +219,7 @@ bool arrow_row_from_doc(RecordBatchBuilder& builder,
                 damaged = true;
                 continue;
             }
-            for (auto nf : nested.value()) {
+            for (auto nf : nested.value_unsafe()) {
                 if (nf.error()) {
                     damaged = true;
                     continue;
@@ -235,7 +235,7 @@ bool arrow_row_from_doc(RecordBatchBuilder& builder,
                     damaged = true;
                     continue;
                 }
-                auto nv = nv_r.value();
+                auto nv = nv_r.value_unsafe();
                 auto nt_r = nv.type();
                 if (nt_r.error()) {
                     damaged = true;
@@ -248,7 +248,7 @@ bool arrow_row_from_doc(RecordBatchBuilder& builder,
                 std::memcpy(key_buf + key_sv.size() + 1, nk.data(), nk.size());
                 if (!append_scalar_or_json(builder, hints, pos,
                                            dstd::StringView(key_buf, needed),
-                                           nv, nt_r.value()))
+                                           nv, nt_r.value_unsafe()))
                     damaged = true;
             }
             continue;
@@ -297,28 +297,29 @@ bool collect_query_fields(simdjson::ondemand::document_reference doc,
                           duql::ValueMap& out) {
     auto obj = doc.get_object();
     if (obj.error()) return obj.error() == simdjson::INCORRECT_TYPE;
-    for (auto field : obj.value()) {
+    for (auto field : obj.value_unsafe()) {
         if (field.error()) return false;
         const auto key_r = json::detail::get_key_or_raw(field);
         if (!key_r) return false;
         auto val_r = field.value();
         if (val_r.error()) return false;
         auto key = *key_r;
-        auto val = val_r.value();
+        auto val = val_r.value_unsafe();
         auto type_r = val.type();
         if (type_r.error()) return false;
-        auto type = type_r.value();
+        auto type = type_r.value_unsafe();
         if (type == simdjson::ondemand::json_type::object) {
             auto nested = val.get_object();
             if (nested.error()) return false;
-            for (auto nf : nested.value()) {
+            for (auto nf : nested.value_unsafe()) {
                 if (nf.error()) return false;
                 const auto nk_r = json::detail::get_key_or_raw(nf);
                 if (!nk_r) return false;
                 auto nv_r = nf.value();
                 if (nv_r.error()) return false;
-                if (!internal::store_referenced_nested(
-                        out, query, check_dotted, key, *nk_r, nv_r.value()))
+                if (!internal::store_referenced_nested(out, query, check_dotted,
+                                                       key, *nk_r,
+                                                       nv_r.value_unsafe()))
                     return false;
             }
         } else {
@@ -331,12 +332,20 @@ bool collect_query_fields(simdjson::ondemand::document_reference doc,
 
 }  // namespace
 
-coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
+coro::AsyncGenerator<dstd::Result<ArrowExportResult>> TraceReader::read_arrow(
     ReadConfig config, std::size_t batch_size) {
+    using Batch = dstd::Result<ArrowExportResult>;
+    if (probe_error_) {
+        co_yield Batch(*probe_error_);
+        co_return;
+    }
     dstd::Optional<Query> query;
     if (!config.query.empty()) {
         auto parsed = Query::from_string(config.query);
-        if (!parsed) throw duql::DuqlParseError(parsed.error());
+        if (!parsed) {
+            co_yield Batch(internal::query_parse_error(parsed.error()));
+            co_return;
+        }
         query = std::move(*parsed);
     }
 
@@ -379,19 +388,28 @@ coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
         for (;;) {
             auto opt = co_await json_gen.next();
             if (!opt) break;
+            if (!opt->has_value()) {
+                warn_dropped(dropped);
+                co_yield Batch(opt->error());
+                co_return;
+            }
+            const JsonLine& json_line = **opt;
             bool damaged = false;
             if (!arrow_row_from_doc(builder, hints,
                                     simdjson::ondemand::document_reference(
-                                        opt->parser->raw_document()),
+                                        json_line.parser->raw_document()),
                                     damaged, flatten)) {
                 // read_json has counted a cropped object.
-                if (!internal::is_cropped_object(opt->parser->text()))
+                if (!internal::is_cropped_object(json_line.parser->text()))
                     count_dropped(dropped);
                 continue;
             }
             if (damaged) count_dropped(dropped);
             if (builder.num_rows() >= batch_size) {
-                co_yield builder.finish();
+                auto finished = builder.finish();
+                const bool failed = !finished.has_value();
+                co_yield std::move(finished);
+                if (failed) co_return;
                 arena.clear();
                 if (!builder.is_schema_locked()) builder.lock_schema();
                 builder.reset(true);
@@ -405,7 +423,12 @@ coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
         co_return;
     }
 
-    auto reader = make_indexed_reader();
+    auto made = make_indexed_reader();
+    if (!made.has_value()) {
+        co_yield Batch(made.error());
+        co_return;
+    }
+    auto reader = std::move(*made);
     auto chunk_gen = read_chunks_indexed(
         reader, index_path_, config_.file_path, config, query,
         /*extend_to_line_boundary=*/config.end_at_checkpoint);
@@ -425,8 +448,8 @@ coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
     builder.reserve(batch_size);
     std::size_t dropped = 0;
 
-    auto maybe_flush = [&builder, &arena, batch_size](
-                           bool final) -> dstd::Optional<ArrowExportResult> {
+    auto maybe_flush = [&builder, &arena,
+                        batch_size](bool final) -> dstd::Optional<Batch> {
         if (builder.num_rows() == 0) return dstd::nullopt;
         if (!final && builder.num_rows() < batch_size) return dstd::nullopt;
         auto result = builder.finish();
@@ -441,7 +464,12 @@ coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
     for (;;) {
         auto chunk_opt = co_await chunk_gen.next();
         if (!chunk_opt) break;
-        auto chunk = *chunk_opt;
+        if (!chunk_opt->has_value()) {
+            warn_dropped(dropped);
+            co_yield Batch(chunk_opt->error());
+            co_return;
+        }
+        auto chunk = **chunk_opt;
         if (chunk.empty()) continue;
 
         // Work items with start_byte > 0 begin at a deflate-block boundary
@@ -531,7 +559,9 @@ coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
             if (damaged) count_dropped(dropped);
 
             if (auto flushed = maybe_flush(/*final=*/false)) {
+                const bool failed = !flushed->has_value();
                 co_yield std::move(*flushed);
+                if (failed) co_return;
             }
         }
         count_dropped(dropped, docs.failed());

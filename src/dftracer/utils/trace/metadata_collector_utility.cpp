@@ -246,7 +246,7 @@ MetadataCollectorUtility::process_compressed(
                 for (;;) {
                     auto line_opt = co_await line_gen.next();
                     if (!line_opt) break;
-                    const auto& line = *line_opt;
+                    const auto line = common::unwrap(std::move(*line_opt));
                     const char* trimmed;
                     std::size_t trimmed_size;
                     if (json::trim_and_validate(line.content.data(),

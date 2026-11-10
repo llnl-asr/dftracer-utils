@@ -5,6 +5,7 @@
 #include <dftracer/utils/utilities/arrow/column_builder.h>
 #include <doctest/doctest.h>
 #include <nanoarrow/nanoarrow.h>
+#include <task_result.h>
 
 #include <dftracer/utils/python/schema_reconcile.cpp>
 
@@ -19,7 +20,7 @@ auto int_batch() {
     const std::size_t x = b.add_or_get_column("x", ColumnType::Int64);
     b.append_int64(x, 7);
     b.end_row();
-    return b.finish();
+    return dftu_utils_test::ok(b.finish());
 }
 
 auto double_batch() {
@@ -27,7 +28,7 @@ auto double_batch() {
     const std::size_t x = b.add_or_get_column("x", ColumnType::Double);
     b.append_double(x, 1.5);
     b.end_row();
-    return b.finish();
+    return dftu_utils_test::ok(b.finish());
 }
 
 struct View {

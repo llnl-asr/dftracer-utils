@@ -53,19 +53,24 @@ class GzipLineByteStream : public GzipStream {
         current_position_ = start_bytes;
     }
 
-    coro::CoroTask<void> on_initialized() override {
-        if (is_finished_) co_return;
-        actual_start_bytes_ = co_await find_line_start(start_bytes_);
+    coro::CoroTask<dstd::Result<void>> on_initialized() override {
+        if (is_finished_) co_return dstd::Result<void>{};
+        auto found = co_await find_line_start(start_bytes_);
+        if (!found.has_value()) co_return found.error();
+        actual_start_bytes_ = *found;
         current_position_ = actual_start_bytes_;
+        co_return dstd::Result<void>{};
     }
 
-    coro::CoroTask<std::size_t> find_line_start(std::size_t target_start) {
+    coro::CoroTask<dstd::Result<std::size_t>> find_line_start(
+        std::size_t target_start) {
         // Unless asked for the line under the target, a piece that starts
         // inside a line owns its lines from the first newline on: the caller
         // counts lines from there, or the piece before finishes the line.
         if (mid_line_start_ && !open_at_earlier_piece_) {
             const std::size_t first = co_await first_line_start_after_anchor();
-            co_await restart_compression();
+            auto restarted = co_await restart_compression();
+            if (!restarted.has_value()) co_return restarted.error();
             if (target_start < first) {
                 if (first > seek_anchor_offset()) co_await skip(first);
                 co_return first;
@@ -91,10 +96,9 @@ class GzipLineByteStream : public GzipStream {
                     reinterpret_cast<unsigned char *>(buffer_.data()),
                     std::min(buffer_.size(), target_start - current_pos), got);
                 if (!read_ok) {
-                    throw ReaderError(
-                        ReaderError::CompressionError,
-                        "gzip decode failed mid-stream at position " +
-                            dstd::to_string(current_pos));
+                    co_return reader_error<ReaderErrorType::CompressionError,
+                                           "gzip decode failed mid-stream at "
+                                           "position {}">(current_pos);
                 }
                 if (got == 0) break;
                 for (std::size_t i = got; i > 0; --i) {
@@ -108,16 +112,19 @@ class GzipLineByteStream : public GzipStream {
             }
             if (found || !mid_line_start_) break;
             if (!indexer_->find_member(seek_anchor_offset() - 1, member_)) {
-                throw ReaderError(ReaderError::CompressionError,
-                                  "Failed to find the piece before position " +
-                                      dstd::to_string(seek_anchor_offset()));
+                co_return reader_error<
+                    ReaderErrorType::CompressionError,
+                    "Failed to find the piece before position {}">(
+                    seek_anchor_offset());
             }
-            co_await restart_compression();
+            auto restarted = co_await restart_compression();
+            if (!restarted.has_value()) co_return restarted.error();
             mid_line_start_ = piece_starts_mid_line();
             actual_start = seek_anchor_offset();
         }
 
-        co_await restart_compression();
+        auto restarted = co_await restart_compression();
+        if (!restarted.has_value()) co_return restarted.error();
         if (actual_start > seek_anchor_offset()) {
             co_await skip(actual_start);
         }
@@ -150,10 +157,11 @@ class GzipLineByteStream : public GzipStream {
         co_return max_file_bytes_;
     }
 
-    coro::CoroTask<std::size_t> read_line_aligned_data() {
+    coro::CoroTask<dstd::Result<std::size_t>> read_line_aligned_data() {
         if (!decompression_initialized_) {
-            throw ReaderError(ReaderError::InitializationError,
-                              "Streaming session not properly initialized");
+            co_return reader_error(
+                ReaderErrorType::InitializationError,
+                "Streaming session not properly initialized");
         }
 
         if (is_at_target_end()) {
@@ -192,10 +200,10 @@ class GzipLineByteStream : public GzipStream {
                     bytes_returned_ += emit;
                     co_return emit;
                 }
-                co_return 0;
+                co_return std::size_t{0};
             }
             is_finished_ = true;
-            co_return 0;
+            co_return std::size_t{0};
         }
 
         // Copy partial line buffer to internal buffer (if exists)
@@ -225,13 +233,13 @@ class GzipLineByteStream : public GzipStream {
             // A decode failure must not pass for clean EOF (which would
             // silently drop the rest of the file).
             if (!status) {
-                throw ReaderError(ReaderError::CompressionError,
-                                  "gzip decode failed mid-stream at position " +
-                                      dstd::to_string(current_position_));
+                co_return reader_error<ReaderErrorType::CompressionError,
+                                       "gzip decode failed mid-stream at "
+                                       "position {}">(current_position_);
             }
             if (bytes_read == 0) {
                 is_finished_ = true;
-                co_return 0;
+                co_return std::size_t{0};
             }
         }
 
@@ -258,7 +266,7 @@ class GzipLineByteStream : public GzipStream {
                 "{}",
                 "No complete line found in current buffer, will read more data "
                 "on next call");
-            co_return 0;
+            co_return std::size_t{0};
         }
 
         bytes_returned_ += adjusted_size;
@@ -269,21 +277,24 @@ class GzipLineByteStream : public GzipStream {
         co_return adjusted_size;
     }
 
-    coro::CoroTask<::std::span<const char>> read_async() override {
-        co_await ensure_initialized();
+    coro::CoroTask<dstd::Result<dstd::Span<const char>>> read_async() override {
+        auto initialized = co_await ensure_initialized();
+        if (!initialized.has_value()) co_return initialized.error();
         if (is_finished_) {
-            co_return {};
+            co_return dstd::Span<const char>{};
         }
 
         // A read that ends inside a line returns nothing yet; an empty span
         // ends the stream, so read on until a line completes or the range
         // ends.
         do {
-            valid_bytes_ = co_await read_line_aligned_data();
+            auto aligned = co_await read_line_aligned_data();
+            if (!aligned.has_value()) co_return aligned.error();
+            valid_bytes_ = *aligned;
         } while (valid_bytes_ == 0 && !is_finished_);
 
         if (valid_bytes_ == 0) {
-            co_return {};
+            co_return dstd::Span<const char>{};
         }
 
         // Return view to the data in buffer_

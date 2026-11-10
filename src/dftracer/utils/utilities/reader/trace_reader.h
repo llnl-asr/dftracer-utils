@@ -7,6 +7,8 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/coro/async_generator.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/json/parser.h>
 #include <dftracer/utils/trace/time_metric.h>
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
@@ -109,15 +111,22 @@ class TraceReader {
     explicit TraceReader(TraceReaderConfig config);
 
     /// Read lines with optional query filtering and chunk pruning.
-    coro::AsyncGenerator<Line> read_lines(ReadConfig config = {});
+    ///
+    /// The four read generators below yield a failure as an error item and end
+    /// after it: a query that does not parse (duql code Parse), an index that
+    /// cannot be opened, a file that is not a gzip trace
+    /// (ReaderErrorType::InvalidArgument) or gzip data that cannot be read
+    /// (ReaderErrorType::CompressionError).
+    coro::AsyncGenerator<dstd::Result<Line>> read_lines(ReadConfig config = {});
 
     /// Read parsed JSON lines. Parses each line once with simdjson ondemand,
     /// applies query filtering, and yields the parsed document.
     /// The yielded JsonParser is valid until the next next() call.
-    coro::AsyncGenerator<JsonLine> read_json(ReadConfig config = {});
+    coro::AsyncGenerator<dstd::Result<JsonLine>> read_json(
+        ReadConfig config = {});
 
     /// Read raw byte chunks.
-    coro::AsyncGenerator<dstd::Span<const char>> read_raw(
+    coro::AsyncGenerator<dstd::Result<dstd::Span<const char>>> read_raw(
         ReadConfig config = {});
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
@@ -126,22 +135,25 @@ class TraceReader {
     /// record batches sized at `batch_size` rows. Emits the final
     /// partial batch on generator close. Non-normalized schema only
     /// (dynamic columns follow the first row seen).
-    coro::AsyncGenerator<arrow::ArrowExportResult> read_arrow(
+    coro::AsyncGenerator<dstd::Result<arrow::ArrowExportResult>> read_arrow(
         ReadConfig config = {}, std::size_t batch_size = 10000);
 #endif
 
     /// Resolve the file's native time unit from its leading `CM` time_metric
     /// metadata by scanning up to `max_lines` header lines. Returns US when no
-    /// `CM` is declared. Independent of any query filter.
-    coro::CoroTask<trace::TimeMetric> read_time_metric(
+    /// `CM` is declared. Independent of any query filter. Gives the error of a
+    /// failed read.
+    coro::CoroTask<dstd::Result<trace::TimeMetric>> read_time_metric(
         std::size_t max_lines = 256);
 
     /// True if a `.dftindex` database was found at construction time.
     bool has_index() const;
-    /// Decompressed size (0 if no index for compressed files).
-    std::size_t max_bytes();
-    /// Total line count (0 if no index).
-    std::size_t line_count();
+    /// Decompressed size (0 if no index for compressed files), or the error
+    /// of an index that cannot be opened.
+    dstd::Result<std::size_t> max_bytes();
+    /// Total line count (0 if no index), or the error of an index that cannot
+    /// be opened.
+    dstd::Result<std::size_t> line_count();
 
     /// How many lines @ref read_json and @ref read_arrow could not read in full
     /// since this reader was made: lines that are no JSON or are cropped, and
@@ -162,6 +174,8 @@ class TraceReader {
    private:
     TraceReaderConfig config_;
     bool has_index_ = false;
+    /// The failure of the index probe at construction; every read gives it.
+    dstd::Optional<dstd::Error> probe_error_;
     dstd::String index_path_;
     common::ArchiveFormat format_ = common::ArchiveFormat::Unknown;
     std::size_t cached_max_bytes_ = 0;
@@ -171,14 +185,14 @@ class TraceReader {
     std::atomic<std::size_t> dropped_lines_{0};
 
     void probe_index();
-    void ensure_metadata_cached();
+    dstd::Result<void> ensure_metadata_cached();
     // Adds `count` unreadable lines to this reader's total and to `local`, the
     // count of the read that found them.
     void count_dropped(std::size_t& local, std::size_t count = 1) noexcept;
     // Logs one warning for the `local` unreadable lines of a finished read.
     void warn_dropped(std::size_t local) const;
 
-    dstd::SharedPtr<internal::Reader> make_indexed_reader();
+    dstd::Result<dstd::SharedPtr<internal::Reader>> make_indexed_reader();
 
     internal::StreamType resolve_raw_stream_type(
         const ReadConfig& config) const;

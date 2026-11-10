@@ -10,6 +10,7 @@
 #include <dftracer/utils/utilities/reader/internal/member_decode_cache.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
+#include <generator_ok.h>
 #include <memory/fresh_process.h>
 #include <sys/wait.h>
 #include <testing_runtime.h>
@@ -64,7 +65,8 @@ TEST_CASE("member cache: fills from a read then returns" * doctest::skip()) {
     dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         reader::TraceReader reader(reader::TraceReaderConfig{
             dstd::String(gz), dstd::String(index_dir)});
-        auto gen = reader.read_lines(reader::ReadConfig{});
+        auto gen =
+            dftu_utils_test::ok_items(reader.read_lines(reader::ReadConfig{}));
         while (co_await gen.next()) ++lines;
         co_return;
     });

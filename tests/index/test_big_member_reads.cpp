@@ -24,6 +24,7 @@
 #include <dftracer/utils/utilities/reader/internal/stream_config.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
+#include <task_result.h>
 #include <testing_runtime.h>
 #include <testing_utilities.h>
 #include <unistd.h>
@@ -241,7 +242,8 @@ struct Indexed {
         utilities::reader::internal::GzipReader reader(indexer);
         dstd::String out;
         dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
-            out = co_await reader.read_lines_async(first, last);
+            out = dftu_utils_test::ok(
+                co_await reader.read_lines_async(first, last));
         });
         return out;
     }
@@ -266,17 +268,18 @@ dstd::String read_line_bytes(
     const dstd::SharedPtr<index::gzip::GzipIndexer>& indexer,
     std::size_t from) {
     utilities::reader::internal::GzipReader reader(indexer);
-    auto stream = reader.stream(
+    auto stream = dftu_utils_test::ok(reader.stream(
         utilities::reader::internal::StreamConfig()
             .stream_type(utilities::reader::internal::StreamType::LineBytes)
             .range_type(utilities::reader::internal::RangeType::ByteRange)
             .from(from)
-            .to(reader.max_bytes()));
+            .to(reader.max_bytes())));
     dstd::String out;
     dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         dstd::Vector<char> buf(1u << 20);
         while (true) {
-            const auto n = co_await stream->read_async(buf.data(), buf.size());
+            const auto n = dftu_utils_test::ok(
+                co_await stream->read_async(buf.data(), buf.size()));
             if (n == 0) break;
             out.append(buf.data(), n);
         }

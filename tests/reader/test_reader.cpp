@@ -103,27 +103,31 @@ TEST_CASE("C++ Reader - Basic functionality") {
     SUBCASE("Constructor and destructor") {
         // Test automatic destruction
         {
-            auto reader = ReaderFactory::create(gz_file, idx_file);
+            auto reader =
+                dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
             REQUIRE(reader != nullptr);
             CHECK(reader->is_valid());
             CHECK(dstd::StringView(reader->archive_path()) == gz_file);
         }
 
         // Should be able to create another one
-        auto reader2 = ReaderFactory::create(gz_file, idx_file);
+        auto reader2 =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader2 != nullptr);
         CHECK(reader2->is_valid());
     }
 
     SUBCASE("Get max bytes") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
         std::size_t max_bytes = reader->max_bytes();
         CHECK(max_bytes > 0);
     }
 
     SUBCASE("Getter methods") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         // Test getter methods
@@ -132,7 +136,8 @@ TEST_CASE("C++ Reader - Basic functionality") {
     }
 
     SUBCASE("Read byte range using streaming API") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         // Read using streaming API
@@ -153,7 +158,8 @@ TEST_CASE("C++ Reader - Basic functionality") {
     }
 
     SUBCASE("Move semantics") {
-        auto reader1 = ReaderFactory::create(gz_file, idx_file);
+        auto reader1 =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader1 != nullptr);
         CHECK(reader1->is_valid());
 
@@ -163,7 +169,8 @@ TEST_CASE("C++ Reader - Basic functionality") {
         CHECK(reader2->is_valid());
 
         // Move assignment
-        auto reader3 = ReaderFactory::create(gz_file, idx_file);
+        auto reader3 =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         CHECK(reader3 != nullptr);
         reader3 = std::move(reader2);
         CHECK(reader2 == nullptr);
@@ -180,9 +187,10 @@ TEST_CASE("C++ API - Error handling") {
     }
 
     SUBCASE("Invalid reader creation") {
-        CHECK_THROWS_AS(ReaderFactory::create("/nonexistent/path.gz",
-                                              "/nonexistent/path.idx"),
-                        utilities::reader::ReaderError);
+        dftu_utils_test::expect_error(
+            ReaderFactory::create("/nonexistent/path.gz",
+                                  "/nonexistent/path.idx"),
+            dftracer::utils::common::ErrorCode::Reader);
     }
 }
 
@@ -204,7 +212,7 @@ TEST_CASE("C++ API - Data range reading") {
     }
 
     // Create reader
-    auto reader = ReaderFactory::create(gz_file, idx_file);
+    auto reader = dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
     REQUIRE(reader != nullptr);
 
     SUBCASE("Read valid byte range") {
@@ -244,22 +252,26 @@ TEST_CASE("C++ API - Edge cases") {
     // Create reader
 
     SUBCASE("Invalid byte range (start >= end) should throw") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
         char buffer[1024];
-        CHECK_THROWS(
-            dftu_utils_test::ok(reader->read(100, 50, buffer, sizeof(buffer))));
-        CHECK_THROWS(dftu_utils_test::ok(
-            reader->read(50, 50, buffer,
-                         sizeof(buffer))));  // Equal start and end
+        dftu_utils_test::expect_error(
+            reader->read(100, 50, buffer, sizeof(buffer)),
+            dftracer::utils::common::ErrorCode::Reader);
+        dftu_utils_test::expect_error(
+            reader->read(50, 50, buffer, sizeof(buffer)),
+            dftracer::utils::common::ErrorCode::Reader);  // Equal start and end
     }
 
     SUBCASE("Non-existent file should throw") {
         // Use cross-platform non-existent path
         dstd::Path non_existent =
             dstd::fs::temp_directory() / "nonexistent" / "file.gz";
-        CHECK_THROWS(ReaderFactory::create(dstd::String(non_existent.str()),
-                                           dstd::String(non_existent.str())));
+        dftu_utils_test::expect_error(
+            ReaderFactory::create(dstd::String(non_existent.str()),
+                                  dstd::String(non_existent.str())),
+            dftracer::utils::common::ErrorCode::Reader);
     }
 }
 
@@ -281,7 +293,8 @@ TEST_CASE("C++ API - Integration test") {
         indexer->build();
 
         // Read data
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
         std::size_t max_bytes = reader->max_bytes();
         CHECK(max_bytes > 0);
@@ -341,7 +354,7 @@ TEST_CASE("C++ API - Memory safety stress test" * doctest::test_suite("vg")) {
     }
 
     // Multiple reads with streaming API
-    auto reader = ReaderFactory::create(gz_file, idx_file);
+    auto reader = dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
     REQUIRE(reader != nullptr);
     for (int i = 0; i < 3; ++i) {  // Reduced from 100 to 3 for easier debugging
         char buffer[1024];
@@ -379,9 +392,10 @@ TEST_CASE("C++ API - Exception handling comprehensive tests") {
     }
 
     SUBCASE("Reader with invalid paths should throw in constructor") {
-        CHECK_THROWS_AS(ReaderFactory::create("/definitely/nonexistent/path.gz",
-                                              "/also/nonexistent/path.idx"),
-                        dftracer::utils::common::DFTUtilsException);
+        dftu_utils_test::expect_error(
+            ReaderFactory::create("/definitely/nonexistent/path.gz",
+                                  "/also/nonexistent/path.idx"),
+            dftracer::utils::common::ErrorCode::Reader);
     }
 
     SUBCASE("Reader operations on invalid reader should throw") {
@@ -393,7 +407,8 @@ TEST_CASE("C++ API - Exception handling comprehensive tests") {
             indexer->build();
         }
 
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
         CHECK(reader->is_valid());
 
@@ -418,17 +433,18 @@ TEST_CASE("C++ API - Exception handling comprehensive tests") {
             indexer->build();
         }
 
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         // Invalid ranges should throw
         char buffer[1024];
-        CHECK_THROWS_AS(
-            dftu_utils_test::ok(reader->read(100, 50, buffer, sizeof(buffer))),
-            utilities::reader::ReaderError);  // start > end
-        CHECK_THROWS_AS(
-            dftu_utils_test::ok(reader->read(50, 50, buffer, sizeof(buffer))),
-            utilities::reader::ReaderError);  // start == end
+        dftu_utils_test::expect_error(
+            reader->read(100, 50, buffer, sizeof(buffer)),
+            dftracer::utils::common::ErrorCode::Reader);  // start > end
+        dftu_utils_test::expect_error(
+            reader->read(50, 50, buffer, sizeof(buffer)),
+            dftracer::utils::common::ErrorCode::Reader);  // start == end
     }
 }
 
@@ -466,8 +482,10 @@ TEST_CASE("C++ API - Advanced indexer functionality") {
         CHECK_NOTHROW(indexer_large->build());
 
         // Both should create valid indices
-        CHECK_NOTHROW(ReaderFactory::create(gz_file, idx_file + "_small"));
-        CHECK_NOTHROW(ReaderFactory::create(gz_file, idx_file + "_large"));
+        CHECK_NOTHROW(dftu_utils_test::ok(
+            ReaderFactory::create(gz_file, idx_file + "_small")));
+        CHECK_NOTHROW(dftu_utils_test::ok(
+            ReaderFactory::create(gz_file, idx_file + "_large")));
     }
 
     SUBCASE("Indexer state after operations") {
@@ -504,9 +522,11 @@ TEST_CASE("C++ API - Advanced reader functionality" *
     }
 
     SUBCASE("Multiple readers for same file") {
-        auto reader1 = ReaderFactory::create(gz_file, idx_file);
+        auto reader1 =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader1 != nullptr);
-        auto reader2 = ReaderFactory::create(gz_file, idx_file);
+        auto reader2 =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader2 != nullptr);
 
         CHECK(reader1->is_valid());
@@ -547,7 +567,8 @@ TEST_CASE("C++ API - Advanced reader functionality" *
     }
 
     SUBCASE("Reader state consistency") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         CHECK(reader->is_valid());
@@ -563,7 +584,8 @@ TEST_CASE("C++ API - Advanced reader functionality" *
     }
 
     SUBCASE("Various read patterns") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
         std::size_t max_bytes = reader->max_bytes();
 
@@ -614,7 +636,8 @@ TEST_CASE("C++ API - Advanced reader functionality" *
     }
 
     SUBCASE("Boundary conditions") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
         std::size_t max_bytes = reader->max_bytes();
 
@@ -650,10 +673,9 @@ TEST_CASE("C++ API - Advanced reader functionality" *
 
         // Read beyond file (should throw exception)
         result.clear();
-        CHECK_THROWS_AS(
-            dftu_utils_test::ok(reader->read(max_bytes, max_bytes + 1000,
-                                             buffer, sizeof(buffer))),
-            utilities::reader::ReaderError);
+        dftu_utils_test::expect_error(
+            reader->read(max_bytes, max_bytes + 1000, buffer, sizeof(buffer)),
+            dftracer::utils::common::ErrorCode::Reader);
     }
 }
 
@@ -675,7 +697,7 @@ TEST_CASE("C++ API - JSON boundary detection") {
     }
 
     // Create reader
-    auto reader = ReaderFactory::create(gz_file, idx_file);
+    auto reader = dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
     REQUIRE(reader != nullptr);
 
     SUBCASE("Small range should provide minimum requested bytes") {
@@ -809,7 +831,8 @@ TEST_CASE("C++ API - Regression and stress tests") {
         }
 
         // Test large reads
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
         std::size_t max_bytes = reader->max_bytes();
         CHECK(max_bytes > 10000);  // Should be a large file
@@ -886,7 +909,8 @@ TEST_CASE("C++ API - Regression and stress tests") {
         }
 
         // Create reader
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         SUBCASE("Original failing case: 0 to 10000 bytes") {
@@ -965,7 +989,8 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
     }
 
     SUBCASE("Basic raw read functionality") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         // Read using raw API
@@ -993,9 +1018,11 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
     }
 
     SUBCASE("Compare raw vs regular read") {
-        auto reader1 = ReaderFactory::create(gz_file, idx_file);
+        auto reader1 =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader1 != nullptr);
-        auto reader2 = ReaderFactory::create(gz_file, idx_file);
+        auto reader2 =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader2 != nullptr);
 
         const std::size_t buffer_size = 1024;
@@ -1045,7 +1072,8 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
     }
 
     SUBCASE("Raw read with different overloads") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         const std::size_t buffer_size = 512;
@@ -1083,7 +1111,8 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
     }
 
     SUBCASE("Raw read edge cases") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
         std::size_t max_bytes = reader->max_bytes();
 
@@ -1118,14 +1147,17 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
         }
 
         // Invalid ranges should still throw
-        CHECK_THROWS(
-            dftu_utils_test::ok(reader->read(100, 50, buffer, sizeof(buffer))));
-        CHECK_THROWS(
-            dftu_utils_test::ok(reader->read(50, 50, buffer, sizeof(buffer))));
+        dftu_utils_test::expect_error(
+            reader->read(100, 50, buffer, sizeof(buffer)),
+            dftracer::utils::common::ErrorCode::Reader);
+        dftu_utils_test::expect_error(
+            reader->read(50, 50, buffer, sizeof(buffer)),
+            dftracer::utils::common::ErrorCode::Reader);
     }
 
     SUBCASE("Raw read with small buffer") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         // Use very small buffer to test streaming behavior
@@ -1153,7 +1185,8 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
     }
 
     SUBCASE("Raw read multiple ranges") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
         std::size_t max_bytes = reader->max_bytes();
 
@@ -1189,9 +1222,11 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
     }
 
     SUBCASE("Full file read comparison: raw vs JSON-boundary aware") {
-        auto reader1 = ReaderFactory::create(gz_file, idx_file);
+        auto reader1 =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader1 != nullptr);
-        auto reader2 = ReaderFactory::create(gz_file, idx_file);
+        auto reader2 =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader2 != nullptr);
 
         std::size_t max_bytes = reader1->max_bytes();
@@ -1294,7 +1329,8 @@ TEST_CASE("C++ Reader - Line reading functionality" *
     }
 
     SUBCASE("Basic line reading functionality") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         // Read first 5 lines
@@ -1313,7 +1349,8 @@ TEST_CASE("C++ Reader - Line reading functionality" *
     }
 
     SUBCASE("Line reading accuracy - specific line numbers") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         // Test specific line numbers that should contain predictable content
@@ -1338,7 +1375,8 @@ TEST_CASE("C++ Reader - Line reading functionality" *
     }
 
     SUBCASE("Line range reading") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         // Read line range 10-15 (6 lines total)
@@ -1363,7 +1401,8 @@ TEST_CASE("C++ Reader - Line reading functionality" *
     }
 
     SUBCASE("Line reading consistency with sed behavior") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         // Test that our line numbering matches sed's 1-based numbering
@@ -1376,22 +1415,27 @@ TEST_CASE("C++ Reader - Line reading functionality" *
     }
 
     SUBCASE("Error handling for invalid line numbers") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         // 0-based line numbers should throw (we use 1-based)
-        CHECK_THROWS_AS(dftu_utils_test::ok(reader->read_lines(0, 5)),
-                        dftracer::utils::common::DFTUtilsException);
-        CHECK_THROWS_AS(dftu_utils_test::ok(reader->read_lines(1, 0)),
-                        dftracer::utils::common::DFTUtilsException);
+        dftu_utils_test::expect_error(
+            reader->read_lines(0, 5),
+            dftracer::utils::common::ErrorCode::Reader);
+        dftu_utils_test::expect_error(
+            reader->read_lines(1, 0),
+            dftracer::utils::common::ErrorCode::Reader);
 
         // start > end should throw
-        CHECK_THROWS_AS(dftu_utils_test::ok(reader->read_lines(10, 5)),
-                        dftracer::utils::common::DFTUtilsException);
+        dftu_utils_test::expect_error(
+            reader->read_lines(10, 5),
+            dftracer::utils::common::ErrorCode::Reader);
     }
 
     SUBCASE("Large line ranges") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         // Get number of lines from indexer
@@ -1419,7 +1463,8 @@ TEST_CASE("C++ Reader - Line reading functionality" *
     }
 
     SUBCASE("Line reading near file boundaries") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         // Get number of lines from indexer
@@ -1445,7 +1490,8 @@ TEST_CASE("C++ Reader - Line reading functionality" *
     }
 
     SUBCASE("Single line reads at various positions") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         // Get number of lines from indexer
@@ -1508,7 +1554,8 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
             indexer->build();
         }
 
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
         std::size_t max_bytes = reader->max_bytes();
 
@@ -1573,7 +1620,8 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
         // Create multiple readers
         dstd::Vector<dstd::SharedPtr<Reader>> readers;
         for (int i = 0; i < 5; ++i) {
-            readers.push_back(ReaderFactory::create(gz_file, idx_file));
+            readers.push_back(
+                dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file)));
             CHECK(readers.back()->is_valid());
         }
 
@@ -1605,7 +1653,8 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
             indexer->build();
         }
 
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
         std::size_t max_bytes = reader->max_bytes();
 
@@ -1655,7 +1704,8 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
             indexer->build();
         }
 
-        auto reader = ReaderFactory::create(large_gz, large_idx);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(large_gz, large_idx));
         std::size_t max_bytes = reader->max_bytes();
 
         // Read various large ranges

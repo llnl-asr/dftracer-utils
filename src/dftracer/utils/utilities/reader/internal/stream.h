@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAM_H
 
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/span.h>
 
 #include <cstddef>
@@ -41,16 +42,16 @@ class ReaderStream {
      *   - Next call to read() or read(buffer, size)
      *   - Calling reset() or destructor
      *
-     * @return View to next chunk (empty span if done)
+     * @return View to next chunk (empty span if done), or the error of a
+     *         failed read, such as corrupt gzip data
      */
-    virtual coro::CoroTask<dstd::Span<const char>> read_async() = 0;
+    virtual coro::CoroTask<dstd::Result<dstd::Span<const char>>>
+    read_async() = 0;
 
     /**
      * @brief Read next chunk as zero-copy view (sync wrapper).
      */
-    coro::TaskResult<dstd::Span<const char>> read() {
-        return read_async().get();
-    }
+    dstd::Result<dstd::Span<const char>> read() { return read_async().get(); }
 
     /**
      * @brief Read next chunk of data into buffer (coroutine).
@@ -60,15 +61,16 @@ class ReaderStream {
      *
      * @param buffer Output buffer
      * @param buffer_size Maximum bytes to read
-     * @return Number of bytes actually read (0 if finished)
+     * @return Number of bytes actually read (0 if finished), or the error of a
+     *         failed read
      */
-    virtual coro::CoroTask<std::size_t> read_async(char* buffer,
-                                                   std::size_t buffer_size) = 0;
+    virtual coro::CoroTask<dstd::Result<std::size_t>> read_async(
+        char* buffer, std::size_t buffer_size) = 0;
 
     /**
      * @brief Read next chunk of data into buffer (sync wrapper).
      */
-    coro::TaskResult<std::size_t> read(char* buffer, std::size_t buffer_size) {
+    dstd::Result<std::size_t> read(char* buffer, std::size_t buffer_size) {
         return read_async(buffer, buffer_size).get();
     }
 

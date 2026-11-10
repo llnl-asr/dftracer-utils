@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/hasher.h>
 #include <dftracer/utils/dstd/raw_buffer.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
@@ -75,12 +76,13 @@ class GzipStream : public StreamBase {
 
     bool done() const override { return is_finished_; }
 
-    coro::CoroTask<dstd::Span<const char>> read_async() override = 0;
+    coro::CoroTask<dstd::Result<dstd::Span<const char>>> read_async() override =
+        0;
 
     // Copy-drain adapter over the zero-copy read_async(): serves the caller's
     // buffer from buffer_, refilling via the derived read_async() when empty.
-    coro::CoroTask<std::size_t> read_async(char *buffer,
-                                           std::size_t buffer_size) override {
+    coro::CoroTask<dstd::Result<std::size_t>> read_async(
+        char *buffer, std::size_t buffer_size) override {
 #ifdef __GNUC__
         __builtin_prefetch(buffer, 1, 3);
 #endif
@@ -100,9 +102,13 @@ class GzipStream : public StreamBase {
         }
 
         // Buffer exhausted, get new chunk via zero-copy read
-        auto span = co_await read_async();
+        auto chunk = co_await read_async();
+        if (!chunk.has_value()) {
+            co_return chunk.error();
+        }
+        const dstd::Span<const char> span = *chunk;
         if (span.empty()) {
-            co_return 0;
+            co_return std::size_t{0};
         }
 
         // Update our tracking of the buffer state
@@ -140,11 +146,11 @@ class GzipStream : public StreamBase {
     }
 
    protected:
-    dstd::File open_file(const dstd::String &path) {
+    dstd::Result<dstd::File> open_file(const dstd::String &path) {
         auto file = dstd::File::open(dstd::PathView(path), {});
         if (!file) {
-            throw ReaderError(ReaderError::FileIoError,
-                              "Failed to open file: " + path);
+            return reader_error<ReaderErrorType::FileIoError,
+                                "Failed to open file: {}">(path);
         }
         file->advise(dstd::Advice::Sequential).discard();
         return std::move(*file);
@@ -169,10 +175,13 @@ class GzipStream : public StreamBase {
         is_finished_ = false;
     }
 
-    coro::CoroTask<void> ensure_initialized() {
-        if (decompression_initialized_ || !is_active_) co_return;
+    coro::CoroTask<dstd::Result<void>> ensure_initialized() {
+        if (decompression_initialized_ || !is_active_)
+            co_return dstd::Result<void>{};
 
-        fd_ = open_file(current_gz_path_);
+        auto opened = open_file(current_gz_path_);
+        if (!opened.has_value()) co_return opened.error();
+        fd_ = std::move(*opened);
         file_offset_ = 0;
 
         // Share member decodes across concurrent readers when a process-level
@@ -195,7 +204,7 @@ class GzipStream : public StreamBase {
         if (max_file_bytes_ > 0 && start_bytes_ >= max_file_bytes_) {
             is_finished_ = true;
             decompression_initialized_ = true;
-            co_return;
+            co_return dstd::Result<void>{};
         }
 
         // Inlined rather than a helper coroutine: GCC 12's coroutine frontend
@@ -216,9 +225,9 @@ class GzipStream : public StreamBase {
         if (!use_member_ &&
             member_.kind !=
                 dftracer::utils::index::gzip::GzipRecordKind::Member) {
-            throw ReaderError(
-                ReaderError::CompressionError,
-                "Failed to start at a restart point of " + current_gz_path_);
+            co_return reader_error<ReaderErrorType::CompressionError,
+                                   "Failed to start at a restart point of {}">(
+                current_gz_path_);
         }
         if (!use_member_) {
             const auto initialize_ok = co_await inflater_.initialize(
@@ -226,18 +235,22 @@ class GzipStream : public StreamBase {
                 common::constants::indexer::ZLIB_GZIP_WINDOW_BITS,
                 expected_out_bytes());
             if (!initialize_ok) {
-                throw ReaderError(ReaderError::CompressionError,
-                                  "Failed to initialize inflater");
+                co_return reader_error(ReaderErrorType::CompressionError,
+                                       "Failed to initialize inflater");
             }
         }
 
         decompression_initialized_ = true;
-        co_await on_initialized();
+        auto initialized = co_await on_initialized();
+        if (!initialized.has_value()) co_return initialized.error();
+        co_return dstd::Result<void>{};
     }
 
     /// Hook for derived streams to seek to their own start once the base
     /// stream is positioned.
-    virtual coro::CoroTask<void> on_initialized() { co_return; }
+    virtual coro::CoroTask<dstd::Result<void>> on_initialized() {
+        co_return dstd::Result<void>{};
+    }
 
     /// Uncompressed offset the stream sits at right after a seek, and the
     /// base every skip measures from. Derived streams must ask here rather
@@ -282,7 +295,7 @@ class GzipStream : public StreamBase {
         return span;
     }
 
-    coro::CoroTask<void> restart_compression() {
+    coro::CoroTask<dstd::Result<void>> restart_compression() {
         inflater_.reset();
         if (use_member_) {
             // GCC 12 lays the frame out differently in the ramp and the
@@ -292,8 +305,8 @@ class GzipStream : public StreamBase {
                 fd_.native_handle(), file_offset_, member_, member_window(),
                 expected_out_bytes());
             if (!restarted) {
-                throw ReaderError(ReaderError::CompressionError,
-                                  "Failed to reinitialize from member");
+                co_return reader_error(ReaderErrorType::CompressionError,
+                                       "Failed to reinitialize from member");
             }
         } else {
             const auto initialize_ok = co_await inflater_.initialize(
@@ -301,10 +314,11 @@ class GzipStream : public StreamBase {
                 common::constants::indexer::ZLIB_GZIP_WINDOW_BITS,
                 expected_out_bytes());
             if (!initialize_ok) {
-                throw ReaderError(ReaderError::CompressionError,
-                                  "Failed to initialize inflater");
+                co_return reader_error(ReaderErrorType::CompressionError,
+                                       "Failed to initialize inflater");
             }
         }
+        co_return dstd::Result<void>{};
     }
 };
 

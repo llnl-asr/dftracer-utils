@@ -9,13 +9,13 @@
 #include <dftracer/utils/utilities/reader/internal/gzip_reader.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 
-#include <stdexcept>
+#include <exception>
 
 namespace dftracer::utils::utilities::reader::internal {
 
-dstd::SharedPtr<Reader> ReaderFactory::create(dstd::CStringView archive_path,
-                                              dstd::StringView index_path,
-                                              std::size_t index_ckpt_size) {
+dstd::Result<dstd::SharedPtr<Reader>> ReaderFactory::create(
+    dstd::CStringView archive_path, dstd::StringView index_path,
+    std::size_t index_ckpt_size) {
     common::ArchiveFormat format = common::FormatDetector::detect(archive_path);
 
     DFTRACER_UTILS_LOG_DEBUG(
@@ -23,26 +23,48 @@ dstd::SharedPtr<Reader> ReaderFactory::create(dstd::CStringView archive_path,
         static_cast<int>(format), archive_path);
 
     switch (format) {
-        case common::ArchiveFormat::Gzip:
-            return dstd::make_shared<GzipReader>(archive_path, index_path,
-                                                 index_ckpt_size);
+        case common::ArchiveFormat::Gzip: {
+            dstd::SharedPtr<dftracer::utils::index::gzip::CheckpointIndexer>
+                indexer;
+            // The indexer factory still reports a failure as an exception.
+            const dstd::String index(index_path);
+            try {
+                indexer =
+                    dftracer::utils::index::gzip::CheckpointIndexerFactory::
+                        create(archive_path, index, index_ckpt_size, false);
+            } catch (const std::exception &e) {
+                return reader_error<ReaderErrorType::InitializationError,
+                                    "Failed to initialize reader with "
+                                    "indexer: {}">(dstd::StringView(e.what()));
+            }
+            if (!indexer) {
+                return reader_error(ReaderErrorType::InitializationError,
+                                    "Failed to initialize reader with "
+                                    "indexer: no indexer for the file");
+            }
+            DFTRACER_UTILS_LOG_DEBUG(
+                "Successfully created GZIP reader for gz: {} and index: {}",
+                archive_path, index_path);
+            return dstd::SharedPtr<Reader>(
+                dstd::make_shared<GzipReader>(std::move(indexer)));
+        }
 
         default:
-            throw ReaderError(
-                ReaderError::InvalidArgument,
-                common::str_cat("Unsupported archive format for file: ",
-                                archive_path.view()));
+            return reader_error<ReaderErrorType::InvalidArgument,
+                                "Unsupported archive format for file: {}">(
+                archive_path.view());
     }
 }
 
-dstd::SharedPtr<Reader> ReaderFactory::create(
+dstd::Result<dstd::SharedPtr<Reader>> ReaderFactory::create(
     dstd::SharedPtr<dftracer::utils::index::gzip::CheckpointIndexer> indexer) {
     if (!indexer) {
-        throw ReaderError(ReaderError::InvalidArgument,
-                          "Indexer cannot be null");
+        return reader_error(ReaderErrorType::InvalidArgument,
+                            "Indexer cannot be null");
     }
 
-    return dstd::make_shared<GzipReader>(indexer);
+    return dstd::SharedPtr<Reader>(
+        dstd::make_shared<GzipReader>(std::move(indexer)));
 }
 
 }  // namespace dftracer::utils::utilities::reader::internal

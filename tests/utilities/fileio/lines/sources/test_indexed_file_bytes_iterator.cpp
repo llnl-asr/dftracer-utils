@@ -9,6 +9,8 @@
 #include <dftracer/utils/utilities/fileio/lines/sources/indexed_file_bytes_iterator.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 #include <doctest/doctest.h>
+#include <memory/fresh_process.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 using namespace dftracer::utils::utilities::fileio::lines::sources;
@@ -32,14 +34,15 @@ TEST_SUITE("IndexedFileBytesIterator") {
             indexer->build();
 
             // Create reader
-            auto reader =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
             // Get file size to determine byte range
             std::size_t file_size = reader->max_bytes();
 
-            IndexedFileBytesIterator iter(reader, 0, file_size);
+            auto iter = dftu_utils_test::ok(
+                IndexedFileBytesIterator::open(reader, 0, file_size));
 
             dstd::Vector<dstd::String> lines;
             while (iter.has_next()) {
@@ -61,12 +64,13 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
             // Read first 300 bytes
-            IndexedFileBytesIterator iter(reader, 0, 300);
+            auto iter = dftu_utils_test::ok(
+                IndexedFileBytesIterator::open(reader, 0, 300));
 
             dstd::Vector<dstd::String> lines;
             while (iter.has_next()) {
@@ -89,12 +93,13 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
             // Read bytes 200-400 (should skip some initial lines)
-            IndexedFileBytesIterator iter(reader, 200, 400);
+            auto iter = dftu_utils_test::ok(
+                IndexedFileBytesIterator::open(reader, 200, 400));
 
             dstd::Vector<dstd::String> lines;
             while (iter.has_next()) {
@@ -115,12 +120,13 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
             // Read just 50 bytes
-            IndexedFileBytesIterator iter(reader, 0, 50);
+            auto iter = dftu_utils_test::ok(
+                IndexedFileBytesIterator::open(reader, 0, 50));
 
             CHECK(iter.has_next());
             Line line = iter.next();
@@ -141,14 +147,15 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
             std::size_t file_size = reader->max_bytes();
 
             // Use small buffer (256 bytes)
-            IndexedFileBytesIterator iter(reader, 0, file_size, 256);
+            auto iter = dftu_utils_test::ok(
+                IndexedFileBytesIterator::open(reader, 0, file_size, 256));
 
             int count = 0;
             while (iter.has_next()) {
@@ -168,14 +175,15 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
             std::size_t file_size = reader->max_bytes();
 
             // Use large buffer (1MB)
-            IndexedFileBytesIterator iter(reader, 0, file_size, 1024 * 1024);
+            auto iter = dftu_utils_test::ok(IndexedFileBytesIterator::open(
+                reader, 0, file_size, 1024 * 1024));
 
             int count = 0;
             while (iter.has_next()) {
@@ -197,13 +205,14 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
             std::size_t file_size = reader->max_bytes();
 
-            IndexedFileBytesIterator iter(reader, 0, file_size);
+            auto iter = dftu_utils_test::ok(
+                IndexedFileBytesIterator::open(reader, 0, file_size));
 
             dstd::Vector<dstd::String> lines;
             for (const auto& line : iter) {
@@ -224,13 +233,14 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
             std::size_t file_size = reader->max_bytes();
 
-            IndexedFileBytesIterator iter(reader, 0, file_size);
+            auto iter = dftu_utils_test::ok(
+                IndexedFileBytesIterator::open(reader, 0, file_size));
 
             auto begin = iter.begin();
             auto end = iter.end();
@@ -256,12 +266,13 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
             // Read first 200 bytes
-            IndexedFileBytesIterator iter(reader, 0, 200);
+            auto iter = dftu_utils_test::ok(
+                IndexedFileBytesIterator::open(reader, 0, 200));
 
             dstd::Vector<dstd::String> lines;
             for (const auto& line : iter) {
@@ -283,13 +294,14 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
             std::size_t file_size = reader->max_bytes();
 
-            IndexedFileBytesIterator iter(reader, 0, file_size);
+            auto iter = dftu_utils_test::ok(
+                IndexedFileBytesIterator::open(reader, 0, file_size));
 
             CHECK(iter.current_position() == 1);
 
@@ -315,12 +327,13 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
             // Start at byte 200
-            IndexedFileBytesIterator iter(reader, 200, 400);
+            auto iter = dftu_utils_test::ok(
+                IndexedFileBytesIterator::open(reader, 200, 400));
 
             // Position should still start at 1 (relative to the iterator's
             // range)
@@ -328,10 +341,33 @@ TEST_SUITE("IndexedFileBytesIterator") {
         }
     }
 
+    TEST_CASE("next() with no more lines ends the process" * doctest::skip()) {
+        fresh_process::announce_abort();
+        TestEnvironment env(3);
+        dstd::String gz_path = env.create_test_gzip_file();
+        auto indexer =
+            CheckpointIndexerFactory::create(gz_path, "", 1024, true);
+        indexer->build();
+        auto reader = dftu_utils_test::ok(
+            ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
+        auto iter =
+            dftu_utils_test::ok(IndexedFileBytesIterator::open(reader, 0, 50));
+        while (iter.has_next()) iter.next();
+        iter.next();
+    }
+
+    TEST_CASE("next() with no more lines aborts with its message") {
+        auto result =
+            fresh_process::run("next() with no more lines ends the process");
+        CHECK(result.aborted_with(
+            "IndexedFileBytesIterator::next: no more lines"));
+    }
+
     TEST_CASE("IndexedFileBytesIterator - Error Handling") {
         SUBCASE("Null reader") {
-            CHECK_THROWS_AS(IndexedFileBytesIterator(nullptr, 0, 100),
-                            common::DFTUtilsException);
+            dftu_utils_test::expect_error(
+                IndexedFileBytesIterator::open(nullptr, 0, 100),
+                common::ErrorCode::InvalidArgument, "Reader cannot be null");
         }
 
         SUBCASE("Invalid byte range - start >= end") {
@@ -343,41 +379,17 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
             // start >= end
-            CHECK_THROWS_AS(IndexedFileBytesIterator(reader, 100, 100),
-                            common::DFTUtilsException);
-            CHECK_THROWS_AS(IndexedFileBytesIterator(reader, 100, 50),
-                            common::DFTUtilsException);
-        }
-
-        SUBCASE("Calling next() when no more lines") {
-            TestEnvironment env(3);
-            dstd::String gz_path = env.create_test_gzip_file();
-
-            auto indexer =
-                CheckpointIndexerFactory::create(gz_path, "", 1024, true);
-            REQUIRE(indexer != nullptr);
-            indexer->build();
-
-            auto reader =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
-            REQUIRE(reader != nullptr);
-
-            // Read small byte range that contains only 1-2 lines
-            IndexedFileBytesIterator iter(reader, 0, 50);
-
-            // Consume all available lines
-            while (iter.has_next()) {
-                iter.next();
-            }
-
-            CHECK_FALSE(iter.has_next());
-            CHECK_THROWS_AS(iter.next(),
-                            dftracer::utils::common::DFTUtilsException);
+            dftu_utils_test::expect_error(
+                IndexedFileBytesIterator::open(reader, 100, 100),
+                common::ErrorCode::InvalidArgument, "Invalid byte range");
+            dftu_utils_test::expect_error(
+                IndexedFileBytesIterator::open(reader, 100, 50),
+                common::ErrorCode::InvalidArgument, "Invalid byte range");
         }
 
         SUBCASE("Byte range beyond file size") {
@@ -389,14 +401,15 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
             std::size_t file_size = reader->max_bytes();
 
             // Try to read beyond file size (should handle gracefully)
-            IndexedFileBytesIterator iter(reader, 0, file_size * 2);
+            auto iter = dftu_utils_test::ok(
+                IndexedFileBytesIterator::open(reader, 0, file_size * 2));
 
             int count = 0;
             while (iter.has_next()) {
@@ -419,12 +432,13 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
             // Read bytes 5000-10000
-            IndexedFileBytesIterator iter(reader, 5000, 10000);
+            auto iter = dftu_utils_test::ok(
+                IndexedFileBytesIterator::open(reader, 5000, 10000));
 
             int count = 0;
             while (iter.has_next()) {
@@ -446,8 +460,8 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
             // Test multiple small ranges
@@ -455,7 +469,8 @@ TEST_SUITE("IndexedFileBytesIterator") {
                 {0, 500}, {500, 1000}, {1000, 1500}};
 
             for (const auto& [start, end] : ranges) {
-                IndexedFileBytesIterator iter(reader, start, end);
+                auto iter = dftu_utils_test::ok(
+                    IndexedFileBytesIterator::open(reader, start, end));
 
                 int count = 0;
                 while (iter.has_next()) {
@@ -479,13 +494,14 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
             std::size_t file_size = reader->max_bytes();
 
-            IndexedFileBytesIterator iter(reader, 0, file_size);
+            auto iter = dftu_utils_test::ok(
+                IndexedFileBytesIterator::open(reader, 0, file_size));
 
             // Get first line
             CHECK(iter.has_next());
@@ -514,13 +530,14 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
             std::size_t file_size = reader->max_bytes();
 
-            IndexedFileBytesIterator iter(reader, 0, file_size);
+            auto iter = dftu_utils_test::ok(
+                IndexedFileBytesIterator::open(reader, 0, file_size));
 
             CHECK(iter.reader() == reader);
             CHECK(iter.reader() != nullptr);
@@ -537,12 +554,13 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
             // Read just one byte
-            IndexedFileBytesIterator iter(reader, 10, 11);
+            auto iter = dftu_utils_test::ok(
+                IndexedFileBytesIterator::open(reader, 10, 11));
 
             // Should handle gracefully (may or may not have content)
             if (iter.has_next()) {
@@ -560,12 +578,13 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
             // Read first 100 bytes (will likely cut mid-line)
-            IndexedFileBytesIterator iter(reader, 0, 100);
+            auto iter = dftu_utils_test::ok(
+                IndexedFileBytesIterator::open(reader, 0, 100));
 
             dstd::Vector<dstd::String> lines;
             while (iter.has_next()) {
@@ -586,14 +605,15 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
             std::size_t file_size = reader->max_bytes();
 
             // Start at byte 50 (likely mid-line)
-            IndexedFileBytesIterator iter(reader, 50, file_size);
+            auto iter = dftu_utils_test::ok(
+                IndexedFileBytesIterator::open(reader, 50, file_size));
 
             dstd::Vector<dstd::String> lines;
             while (iter.has_next()) {
@@ -618,24 +638,26 @@ TEST_SUITE("IndexedFileBytesIterator") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            auto reader1 =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
-            auto reader2 =
-                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path));
+            auto reader1 = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
+            auto reader2 = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader1 != nullptr);
             REQUIRE(reader2 != nullptr);
 
             std::size_t file_size = reader1->max_bytes();
 
             // Read with small buffer
-            IndexedFileBytesIterator iter1(reader1, 0, file_size, 256);
+            auto iter1 = dftu_utils_test::ok(
+                IndexedFileBytesIterator::open(reader1, 0, file_size, 256));
             dstd::Vector<dstd::String> lines1;
             while (iter1.has_next()) {
                 lines1.push_back(dstd::String(iter1.next().content));
             }
 
             // Read with large buffer
-            IndexedFileBytesIterator iter2(reader2, 0, file_size, 1024 * 1024);
+            auto iter2 = dftu_utils_test::ok(IndexedFileBytesIterator::open(
+                reader2, 0, file_size, 1024 * 1024));
             dstd::Vector<dstd::String> lines2;
             while (iter2.has_next()) {
                 lines2.push_back(dstd::String(iter2.next().content));

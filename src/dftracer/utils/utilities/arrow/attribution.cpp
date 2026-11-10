@@ -52,43 +52,41 @@ struct OutRow {
 
 }  // namespace
 
-ArrowExportResult attribute(const ArrowSchema* s, const ArrowArray* a,
-                            std::uint32_t select_col,
-                            const std::uint32_t* dim_cols, std::uint32_t n_dim,
-                            std::uint32_t top_k) {
+dstd::Result<ArrowExportResult> attribute(
+    const ArrowSchema* s, const ArrowArray* a, std::uint32_t select_col,
+    const std::uint32_t* dim_cols, std::uint32_t n_dim, std::uint32_t top_k) {
     ArrowArrayView av;
     if (init_array_view(av, const_cast<ArrowSchema*>(s),
                         const_cast<ArrowArray*>(a)) != NANOARROW_OK) {
-        throw common::DFTUtilsException(common::ErrorCode::Internal,
-                                        "attribute: failed to view batch");
+        return common::make_error(common::ErrorCode::Internal,
+                                  "attribute: failed to view batch");
     }
     auto guard = dstd::defer([&] { ArrowArrayViewReset(&av); });
 
     const std::int64_t ncols = av.n_children;
     if (select_col >= static_cast<std::uint32_t>(ncols)) {
-        throw common::DFTUtilsException(
+        return common::make_error(
             common::ErrorCode::InvalidArgument,
             "attribute: select column index out of range");
     }
     const ArrowArrayView* sview = av.children[select_col];
     if (sview->storage_type != NANOARROW_TYPE_BOOL) {
-        throw common::DFTUtilsException(
-            common::ErrorCode::InvalidArgument,
-            "attribute: select column must be boolean");
+        return common::make_error(common::ErrorCode::InvalidArgument,
+                                  "attribute: select column must be boolean");
     }
 
     dstd::Vector<const ArrowArrayView*> dviews(n_dim);
     dstd::Vector<KeyKind> dkinds(n_dim);
     for (std::uint32_t d = 0; d < n_dim; ++d) {
         if (dim_cols[d] >= static_cast<std::uint32_t>(ncols)) {
-            throw common::DFTUtilsException(
+            return common::make_error(
                 common::ErrorCode::InvalidArgument,
                 "attribute: dimension column index out of range");
         }
         const ArrowArrayView* v = av.children[dim_cols[d]];
         auto kk = key_kind_from_storage(v->storage_type);
         if (!kk) {
-            throw common::DFTUtilsException(
+            return common::make_error(
                 common::ErrorCode::InvalidArgument,
                 "attribute: unsupported dimension column type");
         }

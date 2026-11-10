@@ -5,7 +5,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/utilities/arrow/array_view.h>
-#include <dftracer/utils/utilities/arrow/arrow.h>
+#include <dftracer/utils/utilities/arrow/arrow_export.h>
+#include <dftracer/utils/utilities/arrow/column_builder.h>
 #include <doctest/doctest.h>
 #include <nanoarrow/nanoarrow.h>
 #include <task_result.h>

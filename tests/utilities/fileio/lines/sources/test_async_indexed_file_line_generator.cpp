@@ -289,42 +289,6 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
         }
     }
 
-    TEST_CASE("Consistency with Sync Iterator") {
-        SUBCASE("Async and sync produce same results") {
-            TestEnvironment env(20);
-            dstd::String gz_path = env.create_test_gzip_file();
-
-            auto indexer =
-                CheckpointIndexerFactory::create(gz_path, "", 1024, true);
-            REQUIRE(indexer != nullptr);
-            indexer->build();
-
-            auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
-                              .with_line_range(5, 15);
-
-            // Sync path
-            auto sync_iter =
-                dftu_utils_test::ok(IndexedFileLineIterator::open(config));
-            dstd::Vector<dstd::String> sync_lines;
-            while (sync_iter.has_next()) {
-                Line line = sync_iter.next();
-                sync_lines.push_back(dstd::String(line.content));
-            }
-
-            // Async path
-            auto gen =
-                dftu_utils_test::ok_items(async_indexed_file_lines(config));
-            auto task = collect_lines(std::move(gen));
-            auto async_lines = dftu_utils_test::ok(task.get());
-
-            REQUIRE(sync_lines.size() == async_lines.size());
-            for (std::size_t i = 0; i < sync_lines.size(); ++i) {
-                CHECK(sync_lines[i] == async_lines[i]);
-            }
-        }
-    }
-
     TEST_CASE("Generator Lifecycle" * doctest::test_suite("vg")) {
         SUBCASE("Generator done() after exhaustion") {
             TestEnvironment env(3);

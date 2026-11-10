@@ -3,7 +3,6 @@
 #include <dftracer/utils/dstd/vector.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
-#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
@@ -63,42 +62,6 @@ coro::CoroTask<ParallelReadResult> read_arrow_files_parallel(
     }
 
     co_return result;
-}
-
-coro::CoroTask<ParallelReadResult> read_arrow_files_streaming(
-    coro::Scope& /*scope*/, dstd::Vector<dstd::String> paths,
-    FileResultCallback callback) {
-    if (paths.empty()) {
-        co_return ParallelReadResult{};
-    }
-
-    dstd::Vector<coro::CoroTask<ArrowFileReadResult>> tasks;
-    tasks.reserve(paths.size());
-
-    for (auto& path : paths) {
-        tasks.push_back(read_arrow_file_async(std::move(path)));
-    }
-
-    auto results = co_await coro::when_all(std::move(tasks));
-
-    ParallelReadResult summary;
-    bool cancelled = false;
-
-    for (auto& result : results) {
-        if (result.success) {
-            summary.files_read++;
-            summary.total_rows += result.total_rows;
-            summary.total_batches += result.batches->size();
-        } else {
-            summary.files_failed++;
-        }
-
-        if (!cancelled && !callback(std::move(result))) {
-            cancelled = true;
-        }
-    }
-
-    co_return summary;
 }
 
 }  // namespace dftracer::utils::utilities::arrow

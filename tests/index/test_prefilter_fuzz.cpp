@@ -234,22 +234,6 @@ std::size_t reader_count(dstd::StringView gz, const dstd::String& text) {
     return dftu_utils_test::ok(run().get());
 }
 
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-std::int64_t arrow_count(dstd::StringView gz, const dstd::String& text) {
-    auto run = [&]() -> dftracer::utils::coro::CoroTask<std::int64_t> {
-        utilities::reader::TraceReader r({.file_path = dstd::String(gz)});
-        utilities::reader::ReadConfig cfg;
-        cfg.query = text;
-        cfg.buffer_size = READ_BUFFER_BYTES;
-        auto gen = dftu_utils_test::ok_items(r.read_arrow(cfg));
-        std::int64_t n = 0;
-        while (auto b = co_await gen.next()) n += b->num_rows();
-        co_return n;
-    };
-    return dftu_utils_test::ok(run().get());
-}
-#endif
-
 }  // namespace
 
 TEST_CASE("the pre-filter never drops a match") {
@@ -288,9 +272,6 @@ TEST_CASE("the pre-filter never drops a match") {
         CHECK(v.prefiltered == data);
         CHECK(v.plain == data);
         CHECK(reader_count(gz, text) == all);
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-        CHECK(arrow_count(gz, text) == static_cast<std::int64_t>(all));
-#endif
     }
 }
 
@@ -364,8 +345,5 @@ TEST_CASE("the pre-filter never drops a match on generic records") {
         CHECK(v.prefiltered == all);
         CHECK(v.plain == all);
         CHECK(reader_count(gz, text) == all);
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-        CHECK(arrow_count(gz, text) == static_cast<std::int64_t>(all));
-#endif
     }
 }

@@ -41,7 +41,6 @@ set(UTILITIES_TEST_SOURCES
     hash/test_hasher_utility.cpp
 
     # I/O
-    fileio/test_file_reader.cpp
     fileio/test_streaming_file_writer.cpp
     fileio/test_indexed_file_reader.cpp
     fileio/test_file_compressor.cpp
@@ -59,11 +58,8 @@ set(UTILITIES_TEST_SOURCES
     fileio/parallel/test_padded_striped_writer.cpp
 
     # I/O Lines
-    fileio/lines/sources/test_indexed_file_line_iterator.cpp
-    fileio/lines/sources/test_indexed_file_bytes_iterator.cpp
     fileio/lines/sources/test_async_indexed_file_line_generator.cpp
     fileio/lines/sources/test_async_streaming_gz_line_generator.cpp
-    fileio/lines/sources/test_async_indexed_file_bytes_generator.cpp
 
     # Reader
     reader/test_trace_reader.cpp
@@ -74,9 +70,6 @@ set(UTILITIES_TEST_SOURCES
     reader/test_large_gzip_members.cpp
     reader/test_gzip_restart_points.cpp
     reader/test_sigill_regression.cpp
-
-    # Text
-    text/test_line_filter.cpp
 
     # Plugins
     plugins/test_plugin_host_services.cpp
@@ -139,35 +132,6 @@ if(DFTRACER_UTILS_ENABLE_ARROW)
     set_tests_properties(utilities/${arrow_bin_exec} PROPERTIES
                          WORKING_DIRECTORY "${arrow_workdir}")
   endforeach()
-
-  set(ATTRIBUTION_TEST_SOURCE arrow/test_arrow_attribution.cpp)
-  string(REPLACE ".cpp" "" attribution_bin_exec ${ATTRIBUTION_TEST_SOURCE})
-  string(REPLACE "/" "_" attribution_target "utilities_${attribution_bin_exec}")
-
-  add_executable(${attribution_target} ${ATTRIBUTION_TEST_SOURCE})
-  target_include_directories(${attribution_target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
-  target_link_libraries(${attribution_target} PRIVATE doctest::doctest dftracer_utils testing_utilities)
-  link_nanoarrow(${attribution_target} STATIC)
-  target_set_warnings(${attribution_target})
-
-  get_filename_component(attribution_bin_dir ${attribution_bin_exec} DIRECTORY)
-  get_filename_component(attribution_bin_name ${attribution_bin_exec} NAME)
-  if(attribution_bin_dir)
-    set_target_properties(${attribution_target} PROPERTIES
-      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${attribution_bin_dir}")
-  endif()
-  set_target_properties(${attribution_target} PROPERTIES OUTPUT_NAME ${attribution_bin_name})
-
-  if(DFTRACER_UTILS_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(${attribution_target} PRIVATE --coverage -fprofile-arcs -ftest-coverage)
-    target_link_libraries(${attribution_target} PRIVATE --coverage)
-  endif()
-
-  set(attribution_workdir "${CMAKE_CURRENT_BINARY_DIR}/workdirs/${attribution_target}")
-  file(MAKE_DIRECTORY "${attribution_workdir}")
-  add_test(NAME utilities/${attribution_bin_exec} COMMAND ${attribution_target})
-  set_tests_properties(utilities/${attribution_bin_exec} PROPERTIES
-                       WORKING_DIRECTORY "${attribution_workdir}")
 endif()
 
 # +++++++++++++++++++++++++++++++++++++++++

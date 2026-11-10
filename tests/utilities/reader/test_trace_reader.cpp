@@ -13,12 +13,9 @@
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/trace/internal/utils.h>
-#include <dftracer/utils/utilities/arrow/array_view.h>
-#include <dftracer/utils/utilities/arrow/arrow_export.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
 #include <generator_ok.h>
-#include <nanoarrow/nanoarrow.h>
 #include <refused_lines.h>
 #include <task_result.h>
 #include <testing_utilities.h>
@@ -126,15 +123,6 @@ static CoroTask<std::size_t> count_json_lines(AsyncGenerator<JsonLine> gen) {
     std::size_t n = 0;
     while (auto opt = co_await gen.next()) {
         ++n;
-    }
-    co_return n;
-}
-
-static CoroTask<std::size_t> count_arrow_rows(
-    AsyncGenerator<dftracer::utils::utilities::arrow::ArrowExportResult> gen) {
-    std::size_t n = 0;
-    while (auto opt = co_await gen.next()) {
-        n += static_cast<std::size_t>(opt->array()->length);
     }
     co_return n;
 }
@@ -1216,15 +1204,10 @@ TEST_SUITE("TraceReader::read_json") {
 
 namespace {
 
-// Lines written to a gzip trace, read back through read_json and read_arrow
-// with and without an index. Returns the line counts the two readers keep.
-struct KeptCounts {
-    std::size_t json;
-    std::size_t arrow;
-};
-
-KeptCounts read_kept(const dstd::Vector<dstd::String>& lines,
-                     const dstd::String& query, bool indexed) {
+// Lines written to a gzip trace, read back through read_json with and without
+// an index. Returns the line count the reader keeps.
+std::size_t read_kept(const dstd::Vector<dstd::String>& lines,
+                      const dstd::String& query, bool indexed) {
     dstd::String content;
     for (const auto& l : lines) content += l + "\n";
     const dstd::Path dir = make_unique_test_path("malformed_reader");
@@ -1237,14 +1220,9 @@ KeptCounts read_kept(const dstd::Vector<dstd::String>& lines,
     REQUIRE(reader.has_index() == indexed);
     ReadConfig rc;
     rc.query = query;
-    KeptCounts out;
-    out.json = dftu_utils_test::ok(
+    return dftu_utils_test::ok(
         count_json_lines(dftu_utils_test::ok_items(reader.read_json(rc)))
             .get());
-    out.arrow = dftu_utils_test::ok(
-        count_arrow_rows(dftu_utils_test::ok_items(reader.read_arrow(rc)))
-            .get());
-    return out;
 }
 
 }  // namespace
@@ -1263,8 +1241,7 @@ TEST_SUITE("TraceReader malformed lines") {
             CAPTURE(indexed);
             const auto kept =
                 read_kept(lines, R"(x == 1 or name == "read")", indexed);
-            CHECK(kept.json == 1);
-            CHECK(kept.arrow == 1);
+            CHECK(kept == 1);
         }
     }
 
@@ -1277,8 +1254,7 @@ TEST_SUITE("TraceReader malformed lines") {
             CAPTURE(indexed);
             const auto kept =
                 read_kept(lines, R"(x == 1 or name == "read")", indexed);
-            CHECK(kept.json == 2);
-            CHECK(kept.arrow == 2);
+            CHECK(kept == 2);
         }
     }
 
@@ -1292,11 +1268,10 @@ TEST_SUITE("TraceReader malformed lines") {
             CAPTURE(indexed);
             const auto field_filter =
                 read_kept(lines, R"(name == "read" or pid == 1)", indexed);
-            CHECK(field_filter.json == 0);
-            CHECK(field_filter.arrow == 0);
+            CHECK(field_filter == 0);
             const auto expression =
                 read_kept(lines, R"(lower(name) == "read")", indexed);
-            CHECK(expression.json == 1);
+            CHECK(expression == 1);
         }
     }
 
@@ -1340,12 +1315,9 @@ TEST_SUITE("TraceReader malformed lines") {
             const auto indexed = read_kept(lines, query, true);
             CAPTURE(query);
             CAPTURE(lines.size());
-            CHECK(plain.json >= good_lines);
-            CHECK(plain.json <= good_lines + extra);
-            CHECK(plain.arrow >= good_lines);
-            CHECK(plain.arrow <= good_lines + extra);
-            CHECK(indexed.json == plain.json);
-            CHECK(indexed.arrow == plain.arrow);
+            CHECK(plain >= good_lines);
+            CHECK(plain <= good_lines + extra);
+            CHECK(indexed == plain);
             ++shapes;
         };
         for (const bool crlf : {false, true}) {
@@ -1399,8 +1371,7 @@ TEST_SUITE("TraceReader malformed lines") {
                 CAPTURE(query);
                 CAPTURE(indexed);
                 const auto kept = read_kept(lines, query, indexed);
-                CHECK(kept.json == 2);
-                CHECK(kept.arrow == 2);
+                CHECK(kept == 2);
             }
         }
     }
@@ -1460,7 +1431,6 @@ void check_windows(const WindowFixture& f, dstd::Vector<std::size_t> cuts) {
     cuts.erase(std::unique(cuts.begin(), cuts.end()), cuts.end());
     dstd::Vector<dstd::String> raw;
     dstd::Vector<dstd::String> json;
-    std::size_t arrow = 0;
     for (std::size_t i = 0; i + 1 < cuts.size(); ++i) {
         ReadConfig rc;
         rc.start_byte = cuts[i];
@@ -1476,15 +1446,11 @@ void check_windows(const WindowFixture& f, dstd::Vector<std::size_t> cuts) {
                                                        reader.read_json(rc)))
                                      .get()))
             json.push_back(std::move(l));
-        arrow += dftu_utils_test::ok(
-            count_arrow_rows(dftu_utils_test::ok_items(reader.read_arrow(rc)))
-                .get());
     }
     const bool raw_same = raw == f.lines;
     const bool json_same = json == f.lines;
     CHECK(raw_same);
     CHECK(json_same);
-    CHECK(arrow == f.lines.size());
 }
 
 }  // namespace
@@ -1529,13 +1495,12 @@ TEST_SUITE("TraceReader byte windows") {
 
 namespace {
 
-// What the two readers give back for lines that hold a number too large for a
+// What read_json gives back for lines that hold a number too large for a
 // double or a string with an invalid escape.
 struct OddRead {
     dstd::Vector<dstd::String> lines;
     dstd::Vector<dstd::Optional<double>> json_doubles;
     dstd::Vector<dstd::Optional<dstd::String>> json_strings;
-    std::size_t arrow_rows = 0;
 };
 
 static CoroTask<void> collect_odd_json(AsyncGenerator<JsonLine> gen,
@@ -1548,89 +1513,6 @@ static CoroTask<void> collect_odd_json(AsyncGenerator<JsonLine> gen,
         auto s = p->get_string("x");
         out.json_strings.push_back(
             s ? dstd::Optional<dstd::String>(dstd::String(*s)) : dstd::nullopt);
-    }
-}
-
-// The values of column `name` over every row, as doubles or strings.
-static CoroTask<void> collect_odd_arrow(
-    AsyncGenerator<dftracer::utils::utilities::arrow::ArrowExportResult> gen,
-    const char* name, dstd::Vector<dstd::Optional<double>>& doubles,
-    dstd::Vector<dstd::Optional<dstd::String>>& strings, std::size_t& rows) {
-    while (auto opt = co_await gen.next()) {
-        ArrowArrayView view;
-        if (dftracer::utils::utilities::arrow::init_array_view(
-                view, opt->schema(), opt->array()) != NANOARROW_OK)
-            co_return;
-        int column = -1;
-        for (std::int64_t i = 0; i < opt->schema()->n_children; ++i)
-            if (std::strcmp(opt->schema()->children[i]->name, name) == 0)
-                column = static_cast<int>(i);
-        for (std::int64_t r = 0; r < view.length; ++r) {
-            ++rows;
-            if (column < 0 || ArrowArrayViewIsNull(view.children[column], r)) {
-                doubles.push_back(dstd::nullopt);
-                strings.push_back(dstd::nullopt);
-                continue;
-            }
-            const ArrowArrayView* child = view.children[column];
-            if (child->storage_type == NANOARROW_TYPE_STRING) {
-                const ArrowStringView text =
-                    ArrowArrayViewGetStringUnsafe(child, r);
-                strings.push_back(dstd::String(
-                    text.data, static_cast<std::size_t>(text.size_bytes)));
-                doubles.push_back(dstd::nullopt);
-            } else {
-                doubles.push_back(ArrowArrayViewGetDoubleUnsafe(child, r));
-                strings.push_back(dstd::nullopt);
-            }
-        }
-        ArrowArrayViewReset(&view);
-    }
-}
-
-// One cell of a column, whatever its type.
-struct OddCell {
-    enum class Kind { Null, Text, Number, Bool };
-    Kind kind = Kind::Null;
-    dstd::String text;
-    double number = 0;
-    bool flag = false;
-};
-
-static CoroTask<void> collect_odd_cells(
-    AsyncGenerator<dftracer::utils::utilities::arrow::ArrowExportResult> gen,
-    const char* name, dstd::Vector<OddCell>& cells) {
-    while (auto opt = co_await gen.next()) {
-        ArrowArrayView view;
-        if (dftracer::utils::utilities::arrow::init_array_view(
-                view, opt->schema(), opt->array()) != NANOARROW_OK)
-            co_return;
-        int column = -1;
-        for (std::int64_t i = 0; i < opt->schema()->n_children; ++i)
-            if (std::strcmp(opt->schema()->children[i]->name, name) == 0)
-                column = static_cast<int>(i);
-        for (std::int64_t r = 0; r < view.length; ++r) {
-            OddCell cell;
-            if (column >= 0 &&
-                !ArrowArrayViewIsNull(view.children[column], r)) {
-                const ArrowArrayView* child = view.children[column];
-                if (child->storage_type == NANOARROW_TYPE_STRING) {
-                    const ArrowStringView text =
-                        ArrowArrayViewGetStringUnsafe(child, r);
-                    cell.kind = OddCell::Kind::Text;
-                    cell.text = dstd::String(
-                        text.data, static_cast<std::size_t>(text.size_bytes));
-                } else if (child->storage_type == NANOARROW_TYPE_BOOL) {
-                    cell.kind = OddCell::Kind::Bool;
-                    cell.flag = ArrowArrayViewGetIntUnsafe(child, r) != 0;
-                } else {
-                    cell.kind = OddCell::Kind::Number;
-                    cell.number = ArrowArrayViewGetDoubleUnsafe(child, r);
-                }
-            }
-            cells.push_back(std::move(cell));
-        }
-        ArrowArrayViewReset(&view);
     }
 }
 
@@ -1698,7 +1580,6 @@ TEST_SUITE("TraceReader valid but odd values") {
                     ReadConfig selective;
                     selective.query =
                         expression ? odd.expression : odd.selective;
-                    selective.flatten_objects = true;
                     OddRead json;
                     dftu_utils_test::ok(
                         collect_odd_json(dftu_utils_test::ok_items(
@@ -1714,23 +1595,6 @@ TEST_SUITE("TraceReader valid but odd values") {
                         REQUIRE(json.json_doubles[0].has_value());
                         CHECK(*json.json_doubles[0] == odd.expected_double);
                     }
-                    dstd::Vector<dstd::Optional<double>> doubles;
-                    dstd::Vector<dstd::Optional<dstd::String>> strings;
-                    std::size_t rows = 0;
-                    dftu_utils_test::ok(
-                        collect_odd_arrow(dftu_utils_test::ok_items(
-                                              reader.read_arrow(selective)),
-                                          "x", doubles, strings, rows)
-                            .get());
-                    REQUIRE(rows == 1);
-                    if (odd.is_string) {
-                        REQUIRE(strings[0].has_value());
-                        CHECK(*strings[0] == odd.expected_string);
-                    } else {
-                        REQUIRE(doubles[0].has_value());
-                        CHECK(*doubles[0] == odd.expected_double);
-                    }
-
                     ReadConfig both;
                     both.query = expression
                                      ? R"(x > 5 or lower(name) == "read")"
@@ -1743,222 +1607,6 @@ TEST_SUITE("TraceReader valid but odd values") {
                             .get());
                     CHECK(all.lines.size() == 2);
                     CHECK(all.lines[1] == lines[1]);
-                    std::size_t arrow_rows = 0;
-                    dstd::Vector<dstd::Optional<double>> d2;
-                    dstd::Vector<dstd::Optional<dstd::String>> s2;
-                    dftu_utils_test::ok(
-                        collect_odd_arrow(
-                            dftu_utils_test::ok_items(reader.read_arrow(both)),
-                            "x", d2, s2, arrow_rows)
-                            .get());
-                    CHECK(arrow_rows == 2);
-                }
-            }
-        }
-    }
-
-    TEST_CASE("one key with two value types keeps both values in read_arrow") {
-        struct Pair {
-            const char* first;
-            const char* second;
-            bool as_text;
-            const char* first_text;
-            const char* second_text;
-            double first_number;
-            double second_number;
-        };
-        const Pair pairs[] = {
-            {"1", "1.5", false, "", "", 1.0, 1.5},
-            {"1.5", "1", false, "", "", 1.5, 1.0},
-            {"1", "18446744073709551615", false, "", "", 1.0,
-             18446744073709551615.0},
-            {"18446744073709551615", "1", false, "", "", 18446744073709551615.0,
-             1.0},
-            {"1", "1e400", false, "", "", 1.0,
-             std::numeric_limits<double>::infinity()},
-            {"1e400", "1", false, "", "",
-             std::numeric_limits<double>::infinity(), 1.0},
-            {"1", "\"s\"", true, "1", "s", 0, 0},
-            {"\"s\"", "1", true, "s", "1", 0, 0},
-            {"1.5", "\"s\"", true, "1.5", "s", 0, 0},
-            {"\"s\"", "2.5", true, "s", "2.5", 0, 0},
-            {"true", "\"s\"", true, "true", "s", 0, 0},
-            {"\"s\"", "false", true, "s", "false", 0, 0},
-            {"true", "1", true, "true", "1", 0, 0},
-            {"1", "true", true, "1", "true", 0, 0},
-            {"{\"k\":1}", "1", true, "{\"k\":1}", "1", 0, 0},
-            {"1", "[1,2]", true, "1", "[1,2]", 0, 0},
-            {"\"a\\qb\"", "1", true, "a\\qb", "1", 0, 0},
-        };
-        for (const Pair& pair : pairs) {
-            for (const bool indexed : {false, true}) {
-                INFO(dstd::String(pair.first)
-                     << " then " << pair.second << " indexed=" << indexed);
-                const dstd::Vector<dstd::String> lines = {
-                    common::str_cat(R"({"name":"r","x":)", pair.first, "}"),
-                    common::str_cat(R"({"name":"r","x":)", pair.second, "}")};
-                const dstd::String gz = write_odd_trace(lines, indexed);
-                TraceReader reader({.file_path = gz});
-                dstd::Vector<dstd::Optional<double>> doubles;
-                dstd::Vector<dstd::Optional<dstd::String>> strings;
-                std::size_t rows = 0;
-                dftu_utils_test::ok(
-                    collect_odd_arrow(dftu_utils_test::ok_items(
-                                          reader.read_arrow(ReadConfig{})),
-                                      "x", doubles, strings, rows)
-                        .get());
-                REQUIRE(rows == 2);
-                if (pair.as_text) {
-                    REQUIRE(strings[0].has_value());
-                    REQUIRE(strings[1].has_value());
-                    CHECK(*strings[0] == pair.first_text);
-                    CHECK(*strings[1] == pair.second_text);
-                } else {
-                    REQUIRE(doubles[0].has_value());
-                    REQUIRE(doubles[1].has_value());
-                    CHECK(*doubles[0] == pair.first_number);
-                    CHECK(*doubles[1] == pair.second_number);
-                }
-            }
-        }
-    }
-
-    // A value as the JSON line holds it, and what a cell may hold for it: the
-    // text of a string column, or its own number or bool when the batch has a
-    // column of that type.
-    struct Lit {
-        const char* json;
-        const char* text;
-        bool is_number;
-        double number;
-        bool is_bool;
-        bool flag;
-    };
-    static bool lit_holds(const OddCell& cell, const Lit& lit) {
-        switch (cell.kind) {
-            case OddCell::Kind::Text:
-                return cell.text == lit.text;
-            case OddCell::Kind::Number:
-                return lit.is_number && cell.number == lit.number;
-            case OddCell::Kind::Bool:
-                return lit.is_bool && cell.flag == lit.flag;
-            case OddCell::Kind::Null:
-                break;
-        }
-        return false;
-    }
-    static const Lit LITS[] = {
-        {"1", "1", true, 1.0, false, false},
-        {"1.5", "1.5", true, 1.5, false, false},
-        {"18446744073709551615", "18446744073709551615", true,
-         18446744073709551615.0, false, false},
-        {"1e400", "Infinity", true, std::numeric_limits<double>::infinity(),
-         false, false},
-        {"\"s\"", "s", false, 0, false, false},
-        {"true", "true", false, 0, true, true},
-        {"{\"k\":1}", "{\"k\":1}", false, 0, false, false},
-        {"[1,2]", "[1,2]", false, 0, false, false},
-        {"18446744073709551616", "18446744073709551616", false, 0, false,
-         false},
-        {"123456789012345678901", "123456789012345678901", false, 0, false,
-         false},
-        {"-9223372036854775809", "-9223372036854775809", false, 0, false,
-         false},
-    };
-
-    TEST_CASE("every pair of value types keeps both values across batches") {
-        struct Shape {
-            dstd::Vector<int> order;
-            std::size_t batch_size;
-        };
-        const Shape shapes[] = {{{0, 1}, 1}, {{0, 1, 0}, 2}};
-        for (const Lit& a : LITS) {
-            for (const Lit& b : LITS) {
-                if (&a == &b) continue;
-                for (const Shape& shape : shapes) {
-                    for (const bool indexed : {false, true}) {
-                        INFO(a.json << " then " << b.json
-                                    << " batch_size=" << shape.batch_size
-                                    << " indexed=" << indexed);
-                        dstd::Vector<dstd::String> lines;
-                        for (const int which : shape.order)
-                            lines.push_back(common::str_cat(
-                                R"({"name":"r","x":)",
-                                which == 0 ? a.json : b.json, "}"));
-                        const dstd::String gz = write_odd_trace(lines, indexed);
-                        TraceReader reader({.file_path = gz});
-                        dstd::Vector<OddCell> cells;
-                        dftu_utils_test::ok(
-                            collect_odd_cells(
-                                dftu_utils_test::ok_items(reader.read_arrow(
-                                    ReadConfig{}, shape.batch_size)),
-                                "x", cells)
-                                .get());
-                        REQUIRE(cells.size() == lines.size());
-                        for (std::size_t i = 0; i < cells.size(); ++i) {
-                            const Lit& lit = shape.order[i] == 0 ? a : b;
-                            CAPTURE(i);
-                            CHECK(lit_holds(cells[i], lit));
-                        }
-                        CHECK(reader.dropped_line_count() == 0);
-                    }
-                }
-            }
-        }
-    }
-
-    TEST_CASE(
-        "an integer wider than 64 bits is one string cell of its digits") {
-        const char* const wide[] = {
-            "18446744073709551616", "99999999999999999999",
-            "123456789012345678901", "-9223372036854775809",
-            "-123456789012345678901234567890"};
-        for (const char* digits : wide) {
-            for (const bool indexed : {false, true}) {
-                for (const int order : {0, 1, 2}) {
-                    INFO(digits << " indexed=" << indexed
-                                << " order=" << order);
-                    dstd::Vector<dstd::String> lines;
-                    dstd::Vector<dstd::String> expected;
-                    const auto add_wide = [&] {
-                        lines.push_back(common::str_cat(R"({"name":"r","x":)",
-                                                        digits, "}"));
-                        expected.push_back(digits);
-                    };
-                    const auto add_int = [&] {
-                        lines.push_back(R"({"name":"r","x":7})");
-                        expected.push_back("7");
-                    };
-                    if (order == 0) {
-                        add_wide();
-                    } else if (order == 1) {
-                        add_int();
-                        add_wide();
-                    } else {
-                        add_wide();
-                        add_int();
-                    }
-                    const dstd::String gz = write_odd_trace(lines, indexed);
-                    TraceReader reader({.file_path = gz});
-                    dstd::Vector<OddCell> cells;
-                    dftu_utils_test::ok(
-                        collect_odd_cells(dftu_utils_test::ok_items(
-                                              reader.read_arrow(ReadConfig{})),
-                                          "x", cells)
-                            .get());
-                    REQUIRE(cells.size() == lines.size());
-                    for (std::size_t i = 0; i < cells.size(); ++i) {
-                        CAPTURE(i);
-                        CHECK(cells[i].kind == OddCell::Kind::Text);
-                        CHECK(cells[i].text == expected[i]);
-                    }
-                    CHECK(reader.dropped_line_count() == 0);
-                    ReadConfig rc;
-                    rc.query = R"(x > 1 or name == "r")";
-                    CHECK(dftu_utils_test::ok(
-                              count_arrow_rows(dftu_utils_test::ok_items(
-                                                   reader.read_arrow(rc)))
-                                  .get()) == lines.size());
                 }
             }
         }
@@ -1985,10 +1633,6 @@ TEST_SUITE("TraceReader valid but odd values") {
                     CHECK(dftu_utils_test::ok(
                               count_json_lines(dftu_utils_test::ok_items(
                                                    reader.read_json(rc)))
-                                  .get()) == 2);
-                    CHECK(dftu_utils_test::ok(
-                              count_arrow_rows(dftu_utils_test::ok_items(
-                                                   reader.read_arrow(rc)))
                                   .get()) == 2);
                 }
             }
@@ -2044,16 +1688,6 @@ TEST_SUITE("TraceReader valid but odd values") {
                         REQUIRE(json.lines.size() == 3);
                         CHECK(json.lines[at] == bad.line);
                         CHECK(json.json_strings[at] == bad.repaired);
-                        dstd::Vector<dstd::Optional<double>> doubles;
-                        dstd::Vector<dstd::Optional<dstd::String>> strings;
-                        std::size_t rows = 0;
-                        dftu_utils_test::ok(
-                            collect_odd_arrow(dftu_utils_test::ok_items(
-                                                  reader.read_arrow(rc)),
-                                              "x", doubles, strings, rows)
-                                .get());
-                        REQUIRE(rows == 3);
-                        CHECK(strings[at] == bad.repaired);
                     }
                 }
             }
@@ -2064,20 +1698,18 @@ TEST_SUITE("TraceReader valid but odd values") {
         const dstd::String good = R"({"name":"read","x":"ok"})";
         // Without a query, read_json hands over a line that starts as an
         // object without reading it, so a byte broken inside it is found only
-        // by a consumer. read_arrow reads every field and counts the line,
-        // and keeps the fields before the break.
+        // by a consumer.
         struct Drop {
             dstd::String line;
             std::size_t plain_json_kept;
             std::size_t plain_json_dropped;
-            std::size_t plain_arrow_rows;
         };
         const Drop drops[] = {
-            {dstd::String("{\"name\":\"read\",\x01\"x\":\"a\"}"), 3, 0, 3},
-            {dstd::String("{\"name\":\"read\",\"x\":\x01 1}"), 3, 0, 3},
-            {dstd::String("{\"name\":\"read\",\xff\"x\":1}"), 2, 1, 2},
-            {dstd::String("{\"name\":\"read\",\"x\":\"a\tb"), 2, 1, 2},
-            {dstd::String("{\"name\":\"read\",\"x\":\"\xff"), 2, 1, 2},
+            {dstd::String("{\"name\":\"read\",\x01\"x\":\"a\"}"), 3, 0},
+            {dstd::String("{\"name\":\"read\",\"x\":\x01 1}"), 3, 0},
+            {dstd::String("{\"name\":\"read\",\xff\"x\":1}"), 2, 1},
+            {dstd::String("{\"name\":\"read\",\"x\":\"a\tb"), 2, 1},
+            {dstd::String("{\"name\":\"read\",\"x\":\"\xff"), 2, 1},
         };
         for (const Drop& drop : drops) {
             for (const bool indexed : {false, true}) {
@@ -2095,14 +1727,6 @@ TEST_SUITE("TraceReader valid but odd values") {
                                   .get()) == 2);
                     CHECK(reader.dropped_line_count() == 1);
                 }
-                {
-                    TraceReader reader({.file_path = gz});
-                    CHECK(dftu_utils_test::ok(
-                              count_arrow_rows(dftu_utils_test::ok_items(
-                                                   reader.read_arrow(rc)))
-                                  .get()) == 2);
-                    CHECK(reader.dropped_line_count() == 1);
-                }
                 ReadConfig plain;
                 {
                     TraceReader reader({.file_path = gz});
@@ -2112,14 +1736,6 @@ TEST_SUITE("TraceReader valid but odd values") {
                                   .get()) == drop.plain_json_kept);
                     CHECK(reader.dropped_line_count() ==
                           drop.plain_json_dropped);
-                }
-                {
-                    TraceReader reader({.file_path = gz});
-                    CHECK(dftu_utils_test::ok(
-                              count_arrow_rows(dftu_utils_test::ok_items(
-                                                   reader.read_arrow(plain)))
-                                  .get()) == drop.plain_arrow_rows);
-                    CHECK(reader.dropped_line_count() == 1);
                 }
             }
         }
@@ -2173,15 +1789,6 @@ TEST_SUITE("TraceReader valid but odd values") {
                         }
                         {
                             TraceReader reader({.file_path = gz});
-                            CHECK(
-                                dftu_utils_test::ok(
-                                    count_arrow_rows(dftu_utils_test::ok_items(
-                                                         reader.read_arrow(rc)))
-                                        .get()) == 2);
-                            CHECK(reader.dropped_line_count() == bad_count);
-                        }
-                        {
-                            TraceReader reader({.file_path = gz});
                             (void)count_json_lines(
                                 dftu_utils_test::ok_items(reader.read_json(rc)))
                                 .get();
@@ -2207,9 +1814,6 @@ TEST_SUITE("TraceReader valid but odd values") {
             (void)count_json_lines(
                 dftu_utils_test::ok_items(reader.read_json(rc)))
                 .get();
-            (void)count_arrow_rows(
-                dftu_utils_test::ok_items(reader.read_arrow(rc)))
-                .get();
             CHECK(reader.dropped_line_count() == 0);
         }
     }
@@ -2231,14 +1835,6 @@ TEST_SUITE("TraceReader valid but odd values") {
                     CHECK(dftu_utils_test::ok(
                               count_json_lines(dftu_utils_test::ok_items(
                                                    reader.read_json(rc)))
-                                  .get()) == 0);
-                    CHECK(reader.dropped_line_count() == 2);
-                }
-                {
-                    TraceReader reader({.file_path = gz});
-                    CHECK(dftu_utils_test::ok(
-                              count_arrow_rows(dftu_utils_test::ok_items(
-                                                   reader.read_arrow(rc)))
                                   .get()) == 0);
                     CHECK(reader.dropped_line_count() == 2);
                 }
@@ -2268,14 +1864,6 @@ TEST_SUITE("TraceReader valid but odd values") {
                                   .get()) == 3);
                     CHECK(reader.dropped_line_count() == bad.json_dropped);
                 }
-                {
-                    TraceReader reader({.file_path = gz});
-                    CHECK(dftu_utils_test::ok(
-                              count_arrow_rows(dftu_utils_test::ok_items(
-                                                   reader.read_arrow(rc)))
-                                  .get()) == 2);
-                    CHECK(reader.dropped_line_count() == 1);
-                }
             }
         }
     }
@@ -2298,42 +1886,6 @@ TEST_SUITE("TraceReader valid but odd values") {
             CHECK(events[3].name.empty());
             CHECK(events[4].name == "c");
             CHECK(reader.dropped_line_count() == 1);
-        }
-    }
-
-    TEST_CASE("read_arrow keeps the readable fields of a line it counts") {
-        const dstd::String good = R"({"name":"read","x":"ok"})";
-        const dstd::String damaged[] = {R"({"name":"read","b":tru,"x":"kept"})",
-                                        R"({"name":"read","x":"kept","b":tru})",
-                                        R"({"name":"read","b":01,"x":"kept"})"};
-        for (const dstd::String& bad : damaged) {
-            for (const bool indexed : {false, true}) {
-                INFO(bad << " indexed=" << indexed);
-                const dstd::Vector<dstd::String> lines = {good, bad, good};
-                const dstd::String gz = write_odd_trace(lines, indexed);
-                TraceReader reader({.file_path = gz});
-                dstd::Vector<dstd::Optional<double>> doubles;
-                dstd::Vector<dstd::Optional<dstd::String>> strings;
-                std::size_t rows = 0;
-                dftu_utils_test::ok(
-                    collect_odd_arrow(dftu_utils_test::ok_items(
-                                          reader.read_arrow(ReadConfig{})),
-                                      "x", doubles, strings, rows)
-                        .get());
-                REQUIRE(rows == 3);
-                CHECK(reader.dropped_line_count() == 1);
-                CHECK(strings[0] == "ok");
-                CHECK(strings[1] == "kept");
-                CHECK(strings[2] == "ok");
-                // read_json hands the line over unread, so it cannot count it.
-                TraceReader json_reader({.file_path = gz});
-                CHECK(dftu_utils_test::ok(
-                          count_json_lines(
-                              dftu_utils_test::ok_items(
-                                  json_reader.read_json(ReadConfig{})))
-                              .get()) == 3);
-                CHECK(json_reader.dropped_line_count() == 0);
-            }
         }
     }
 
@@ -2363,10 +1915,6 @@ TEST_SUITE("TraceReader valid but odd values") {
                               count_json_lines(dftu_utils_test::ok_items(
                                                    reader.read_json(rc)))
                                   .get()) == expected);
-                    CHECK(dftu_utils_test::ok(
-                              count_arrow_rows(dftu_utils_test::ok_items(
-                                                   reader.read_arrow(rc)))
-                                  .get()) == expected);
                 }
             }
         }
@@ -2391,10 +1939,6 @@ TEST_SUITE("TraceReader valid but odd values") {
                         dftu_utils_test::ok_items(reader.read_json(rc)))
                         .get());
                 CHECK(bad_kept <= 1);
-                CHECK(dftu_utils_test::ok(
-                          count_arrow_rows(
-                              dftu_utils_test::ok_items(reader.read_arrow(rc)))
-                              .get()) == bad_kept);
             }
         }
     }
@@ -2461,10 +2005,6 @@ TEST_SUITE("TraceReader long lines") {
                                           reader.read_json(ReadConfig{})))
                         .get()) == f.lines;
             CHECK(json_same);
-            CHECK(dftu_utils_test::ok(
-                      count_arrow_rows(dftu_utils_test::ok_items(
-                                           reader.read_arrow(ReadConfig{})))
-                          .get()) == f.lines.size());
             const bool raw_same =
                 dftu_utils_test::ok(
                     collect_raw_text(dftu_utils_test::ok_items(

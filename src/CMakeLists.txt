@@ -386,9 +386,6 @@ set(DFTRACER_UTILS_TRACE_SOURCES
 
     # Reader
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/trace_reader.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/trace_reader_arrow.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/trace_reader_prefilter.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/arrow_row_builder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/member_decode_cache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/gzip_reader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/reader_factory.cpp
@@ -398,7 +395,6 @@ if(DFTRACER_UTILS_ENABLE_ARROW)
   list(
     APPEND
     DFTRACER_UTILS_TRACE_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/arrow/attribution.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/arrow/column_builder.cpp
   )
 endif()
@@ -410,8 +406,6 @@ if(DFTRACER_UTILS_ENABLE_ARROW_IPC)
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/arrow/ipc_reader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/arrow/ipc_writer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/arrow/parallel_reader.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/arrow/partition_writer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/arrow/partition_router.cpp
   )
 endif()
 
@@ -1381,9 +1375,6 @@ use_precompiled_header(dftracer_utils_dataframe_objects)
 # that -isystem cannot suppress; keep =2 for our own code.
 set_source_files_properties(
   ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/trace_reader.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/trace_reader_arrow.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/trace_reader_prefilter.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/arrow_row_builder.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/fold.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_scanner_utility.cpp
   PROPERTIES COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:GNU>:-Wno-strict-overflow>")

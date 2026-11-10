@@ -616,13 +616,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   The on-demand readers descend at most 128 containers (`MAX_READ_DEPTH`), so a very deep line never overflows the stack and is never dropped: a container below that depth stays under its path as its JSON text.
   A value nested between 128 and 1024 levels, which gave one value per leaf, now gives that text below level 128.
   Density keeps the first value of a repeated key in an event, as the DOM reader did.
-- Fix `read_arrow` when one key holds several value types: the column now widens and keeps every value, where it read past a buffer or wrote a null.
-  Mixed numbers become a double column and any other mix becomes a text column, so a value can change form: an integer above 2^53 becomes inexact, and `1.50` becomes `1.5` in text.
 - Fix the Python Arrow stream reading a column of another type under the first type: such a column now goes to `_extra` as JSON.
-- Read an integer of 20 or more digits above the 64-bit range as its exact digits on the on-demand read paths, as a text cell in `read_arrow`.
+- Read an integer of 20 or more digits above the 64-bit range as its exact digits on the on-demand read paths.
 - Read a line with bad UTF-8 or a raw control byte in a string, with `?` in place of each bad byte in the parsed fields; the raw line stays as it was.
 - Add `TraceReader::dropped_line_count()` and one warning per read for lines that could not be read in full, such as a cropped line.
-  A cropped line stays in `read_json` as text, and its readable fields stay in `read_arrow`.
+  A cropped line stays in `read_json` as text.
 - Fix a crash when code read a field of a line whose document a read error had abandoned.
 - Fix byte range reads that open more than 512 bytes into a line, which returned the tail of that line and lost the event.
   Adjacent byte ranges now give each line once and whole, at any cut and any line size.

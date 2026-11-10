@@ -3,29 +3,22 @@
 #define DFTRACER_UTILS_UTILITIES_FILEIO_LINES_SOURCES_INDEXED_FILE_LINE_ITERATOR_H
 
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/cstring_view.h>
-#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
-#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/utilities/fileio/lines/iterator.h>
-#include <dftracer/utils/utilities/fileio/lines/line_types.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
-#include <dftracer/utils/utilities/reader/internal/stream.h>
 #include <dftracer/utils/utilities/reader/internal/stream_type.h>
 
-#include <cstring>
-#include <iterator>
+#include <cstddef>
 
 namespace dftracer::utils::utilities::fileio::lines::sources {
 
 /**
- * @brief Configuration for @ref IndexedFileLineIterator.
+ * @brief Configuration for an indexed file line source.
  *
- * The iterator automatically selects the appropriate stream type:
+ * The source automatically selects the appropriate stream type:
  * - LINE_RANGE: Uses StreamType::LINE
  * - BYTE_RANGE: Uses StreamType::LINE_BYTES
  *
@@ -41,8 +34,6 @@ namespace dftracer::utils::utilities::fileio::lines::sources {
  * auto config = IndexedFileLineIteratorConfig()
  *     .with_reader(reader)
  *     .with_line_range(1, 100);
- *
- * auto iter = IndexedFileLineIterator::open(config);
  * @endcode
  */
 class IndexedFileLineIteratorConfig {
@@ -118,297 +109,6 @@ class IndexedFileLineIteratorConfig {
     std::size_t buffer_size() const { return buffer_size_; }
     /// The error of a failed @ref with_file, if any.
     const dstd::Optional<dstd::Error>& error() const { return error_; }
-};
-
-/**
- * @brief Unified zero-copy line iterator over indexed archive files.
- *
- * This iterator returns one line at a time. It automatically selects the
- * appropriate stream type based on the range:
- * - LINE_RANGE: Uses StreamType::LINE (line-number based seeking)
- * - BYTE_RANGE: Uses StreamType::LINE_BYTES (byte-offset based seeking)
- *
- * Both stream types return one complete line per read(), so no complex
- * buffering or newline splitting is needed.
- *
- * Usage:
- * @code
- * auto created =
- * dftracer::utils::utilities::reader::internal::ReaderFactory::create("file.gz",
- * "file.gz.idx");
- * if (!created) return created.error();
- *
- * auto config = IndexedFileLineIteratorConfig()
- *     .with_reader(*created)
- *     .with_line_range(1, 100);
- * auto lines = IndexedFileLineIterator::open(config);
- * if (!lines) return lines.error();
- *
- * // Iterate; a failed read ends the loop, so check error() after it
- * for (const auto& line : *lines) {
- *     std::cout << line.content << "\n";
- * }
- * if (lines->error()) return *lines->error();
- * @endcode
- */
-class IndexedFileLineIterator {
-   private:
-    IndexedFileLineIteratorConfig config_;
-    dstd::UniquePtr<dftracer::utils::utilities::reader::internal::ReaderStream>
-        stream_;
-    std::size_t current_position_;
-    mutable dstd::String line_buffer_;    ///< Buffer to hold current line data
-    mutable dstd::String stream_buffer_;  ///< Buffer for reading from stream
-    mutable bool stream_done_;
-    mutable bool
-        has_buffered_line_;  ///< True if line_buffer_ contains a valid line
-    mutable bool
-        attempted_read_;     ///< True if we've tried to read the first line
-    mutable dstd::Optional<dstd::Error> error_;  ///< The failure that ended it
-
-    explicit IndexedFileLineIterator(
-        const IndexedFileLineIteratorConfig& config)
-        : config_(config),
-          current_position_(config.start()),
-          stream_buffer_(),  // Initialize empty
-          stream_done_(false),
-          has_buffered_line_(false),
-          attempted_read_(false) {
-        // Resize (not reserve) to allocate the buffer with the correct size
-        // This gives us a buffer of the right size without filling it with '\0'
-        stream_buffer_.resize(config.buffer_size());
-    }
-
-   public:
-    using Iterator = LineIterator<IndexedFileLineIterator>;
-
-    /**
-     * @brief Make an iterator from a config object.
-     *
-     * @param config Configuration object with builder pattern
-     * @return The iterator, or the error that @ref
-     *         IndexedFileLineIteratorConfig::with_file stored, or an
-     *         InvalidArgument error for a missing reader or an invalid range,
-     *         or the error of a stream that cannot be created
-     */
-    static dstd::Result<IndexedFileLineIterator> open(
-        const IndexedFileLineIteratorConfig& config) {
-        IndexedFileLineIterator iterator(config);
-        auto ready = iterator.validate_and_initialize();
-        if (!ready.has_value()) return ready.error();
-        return std::move(iterator);
-    }
-
-   private:
-    dstd::Result<void> validate_and_initialize() {
-        if (config_.error()) return *config_.error();
-        if (!config_.reader()) {
-            return common::make_error(common::ErrorCode::InvalidArgument,
-                                      "Reader cannot be null");
-        }
-
-        // Validate range based on type
-        if (config_.range_type() == dftracer::utils::utilities::reader::
-                                        internal::RangeType::LineRange) {
-            if (config_.end() == 0) {
-                std::size_t line_count = config_.reader()->line_count();
-                DFTRACER_UTILS_LOG_DEBUG(
-                    "IndexedFileLineIterator: end=0, setting to num_lines={}",
-                    line_count);
-                config_ = config_.with_line_range(config_.start(), line_count);
-            }
-
-            DFTRACER_UTILS_LOG_DEBUG(
-                "IndexedFileLineIterator: line range {} to {}", config_.start(),
-                config_.end());
-
-            if (config_.start() < 1 || config_.end() < config_.start()) {
-                return common::make_error(
-                    common::ErrorCode::InvalidArgument,
-                    "Invalid line range (must be 1-based and start <= end)");
-            }
-        } else {
-            if (config_.end() < config_.start()) {
-                return common::make_error(common::ErrorCode::InvalidArgument,
-                                          "Invalid byte range (start <= end)");
-            }
-        }
-
-        dftracer::utils::utilities::reader::internal::StreamConfig
-            stream_config;
-        if (config_.range_type() == dftracer::utils::utilities::reader::
-                                        internal::RangeType::LineRange) {
-            stream_config
-                .stream_type(dftracer::utils::utilities::reader::internal::
-                                 StreamType::Line)
-                .range_type(dftracer::utils::utilities::reader::internal::
-                                RangeType::LineRange)
-                .from(config_.start())
-                .to(config_.end());
-        } else {
-            stream_config
-                .stream_type(dftracer::utils::utilities::reader::internal::
-                                 StreamType::LineBytes)
-                .range_type(dftracer::utils::utilities::reader::internal::
-                                RangeType::ByteRange)
-                .from(config_.start())
-                .to(config_.end());
-        }
-
-        auto opened = config_.reader()->stream(stream_config);
-        if (!opened.has_value()) return opened.error();
-        stream_ = std::move(*opened);
-        return {};
-    }
-
-   public:
-    /**
-     * @brief Check if more lines are available.
-     *
-     * Returns false when a read fails; @ref error then gives the failure.
-     */
-    bool has_next() const {
-        // Check if we've already determined the stream is done
-        if (stream_done_) {
-            return false;
-        }
-        // Check if we've exceeded our requested range
-        if (current_position_ > config_.end()) {
-            return false;
-        }
-
-        // If we haven't tried to read yet, try to buffer the first line
-        if (!attempted_read_) {
-            attempted_read_ = true;
-            has_buffered_line_ = read_next_line();
-            if (!has_buffered_line_) {
-                stream_done_ = true;
-                return false;
-            }
-        }
-
-        return has_buffered_line_;
-    }
-
-   private:
-    /**
-     * @brief Read next line from stream into line_buffer_.
-     *
-     * Since we use LINE or LINE_BYTES stream types, each read() returns
-     * exactly one complete line (with newline). No complex buffering needed.
-     *
-     * @return true if a line was read, false if stream is done
-     */
-    bool read_next_line() const {
-        if (stream_->done()) {
-            stream_done_ = true;
-            return false;
-        }
-
-        // LINE and LINE_BYTES streams return one complete line per read()
-        auto read = stream_->read(const_cast<char*>(stream_buffer_.data()),
-                                  stream_buffer_.size());
-        if (!read.has_value()) {
-            error_ = read.error();
-            stream_done_ = true;
-            return false;
-        }
-        std::size_t bytes_read = *read;
-
-        if (bytes_read == 0) {
-            stream_done_ = true;
-            return false;
-        }
-
-        // Remove trailing newline if present
-        if (bytes_read > 0 && stream_buffer_[bytes_read - 1] == '\n') {
-            bytes_read--;
-        }
-
-        // Store in line_buffer_ for zero-copy string_view access
-        line_buffer_.assign(stream_buffer_.data(), bytes_read);
-        return true;
-    }
-
-   public:
-    /**
-     * @brief Get the next line (zero-copy).
-     *
-     * @return Line object with string_view content (valid until next call).
-     *         Call it only after @ref has_next gave true.
-     */
-    Line next() {
-        if (!has_next()) {
-            dstd::fatal("IndexedFileLineIterator::next: no more lines");
-        }
-
-        // Return the buffered line
-        Line result(dstd::StringView(line_buffer_), current_position_);
-        current_position_++;
-
-        // Mark that we need to read the next line on the next has_next() call
-        // DON'T read it now, as that would invalidate the string_view we just
-        // returned
-        has_buffered_line_ = false;
-        attempted_read_ = false;
-
-        return result;
-    }
-
-    /**
-     * @brief The failure of a stream read that ended the iteration, if any.
-     *
-     * Check it after the loop: a failed read ends the iteration as a normal
-     * end does.
-     */
-    const dstd::Optional<dstd::Error>& error() const { return error_; }
-
-    /**
-     * @brief Get the current position.
-     *
-     * Interpretation depends on range_type:
-     * - LINE_RANGE: Current line number (1-based)
-     * - BYTE_RANGE: Current byte offset
-     */
-    std::size_t current_position() const { return current_position_; }
-
-    /**
-     * @brief Get total count in this range.
-     *
-     * Interpretation depends on range_type:
-     * - LINE_RANGE: Number of lines
-     * - BYTE_RANGE: Number of bytes
-     */
-    std::size_t total_count() const {
-        return (config_.end() >= config_.start())
-                   ? (config_.end() - config_.start() + 1)
-                   : 0;
-    }
-
-    /**
-     * @brief Get the range type being used.
-     */
-    dftracer::utils::utilities::reader::internal::RangeType range_type() const {
-        return config_.range_type();
-    }
-
-    /**
-     * @brief Get the underlying Reader.
-     */
-    dstd::SharedPtr<dftracer::utils::utilities::reader::internal::Reader>
-    reader() const {
-        return config_.reader();
-    }
-
-    /**
-     * @brief Get an iterator to the beginning.
-     */
-    Iterator begin() { return Iterator(this, false); }
-
-    /**
-     * @brief Get an iterator to the end.
-     */
-    Iterator end() { return Iterator(nullptr, true); }
 };
 
 }  // namespace dftracer::utils::utilities::fileio::lines::sources

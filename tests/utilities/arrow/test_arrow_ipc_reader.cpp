@@ -9,7 +9,10 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/utilities/arrow/arrow.h>
+#include <dftracer/utils/utilities/arrow/column_builder.h>
+#include <dftracer/utils/utilities/arrow/ipc_reader.h>
+#include <dftracer/utils/utilities/arrow/ipc_writer.h>
+#include <dftracer/utils/utilities/arrow/parallel_reader.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
 #include <testing_utilities.h>
@@ -404,90 +407,6 @@ TEST_CASE("read_arrow_files_parallel - empty list") {
     CHECK(result.file_results.empty());
 
     runtime.shutdown();
-}
-
-TEST_CASE("read_arrow_files_streaming - completion order callback") {
-    dstd::String dir = tmp_path("test_streaming");
-    REQUIRE(dstd::fs::remove_all(dir).has_value());
-    REQUIRE(dstd::fs::create_directories(dir).has_value());
-
-    dstd::Vector<dstd::String> paths;
-    for (int i = 0; i < 4; ++i) {
-        dstd::String path = dir + "/file_" + dstd::to_string(i) + ".arrow";
-        write_test_file(path, 1, 25);
-        paths.push_back(path);
-    }
-
-    Runtime runtime(4);
-
-    dstd::Vector<dstd::String> received_paths;
-    std::int64_t total_rows = 0;
-    ParallelReadResult result;
-
-    auto task = coro::with_scope(
-        [&result, &received_paths, &total_rows](
-            coro::Scope& scope,
-            dstd::Vector<dstd::String> file_paths) -> CoroTask<void> {
-            result = co_await read_arrow_files_streaming(
-                scope, std::move(file_paths), [&](ArrowFileReadResult&& fr) {
-                    if (fr.success) {
-                        received_paths.push_back(fr.path);
-                        total_rows += fr.total_rows;
-                    }
-                    return true;  // continue
-                });
-        },
-        paths);
-
-    runtime.submit(std::move(task), "test_streaming").get();
-
-    CHECK(result.files_read == 4);
-    CHECK(result.files_failed == 0);
-    CHECK(result.total_rows == 100);
-    CHECK(received_paths.size() == 4);
-    CHECK(total_rows == 100);
-
-    runtime.shutdown();
-    dstd::fs::remove_all(dir).discard();
-}
-
-TEST_CASE("read_arrow_files_streaming - early cancel") {
-    dstd::String dir = tmp_path("test_streaming_cancel");
-    REQUIRE(dstd::fs::remove_all(dir).has_value());
-    REQUIRE(dstd::fs::create_directories(dir).has_value());
-
-    dstd::Vector<dstd::String> paths;
-    for (int i = 0; i < 4; ++i) {
-        dstd::String path = dir + "/file_" + dstd::to_string(i) + ".arrow";
-        write_test_file(path, 1, 25);
-        paths.push_back(path);
-    }
-
-    Runtime runtime(4);
-
-    int callback_count = 0;
-    ParallelReadResult result;
-
-    auto task = coro::with_scope(
-        [&result, &callback_count](
-            coro::Scope& scope,
-            dstd::Vector<dstd::String> file_paths) -> CoroTask<void> {
-            result = co_await read_arrow_files_streaming(
-                scope, std::move(file_paths), [&](ArrowFileReadResult&&) {
-                    callback_count++;
-                    return callback_count < 2;  // cancel after 2
-                });
-        },
-        paths);
-
-    runtime.submit(std::move(task), "test_streaming_cancel").get();
-
-    // All files still processed (for stats), but callback cancelled early
-    CHECK(result.files_read == 4);
-    CHECK(callback_count == 2);  // Only 2 callbacks before cancel
-
-    runtime.shutdown();
-    dstd::fs::remove_all(dir).discard();
 }
 
 TEST_CASE("read_arrow_files_parallel - mixed compression") {

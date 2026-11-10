@@ -317,7 +317,7 @@ inline bool store_referenced_nested(duql::ValueMap& fields,
 }
 
 // Chunk generator with index-driven pruning. Defined in trace_reader.cpp;
-// shared by read_json (core) and read_arrow (Arrow export).
+// used by read_json.
 coro::AsyncGenerator<dstd::Result<dstd::Span<const char>>> read_chunks_indexed(
     dstd::SharedPtr<Reader> reader, dstd::String index_path,
     dstd::String file_path, ReadConfig config,

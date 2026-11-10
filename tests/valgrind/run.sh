@@ -447,10 +447,7 @@ run_cpp_one() {
   case "${name##*/}" in
   test_channel | test_reader | test_reader_stream | \
     test_reader_line_byte_stream | test_reader_multi_lines_byte_stream | \
-    test_reader_formats | test_indexed_file_line_iterator | \
-    test_indexed_file_bytes_iterator | \
-    test_async_indexed_file_line_generator | \
-    test_async_indexed_file_bytes_generator)
+    test_reader_formats | test_async_indexed_file_line_generator)
     doctest_args=(--test-suite=vg)
     ;;
   esac

@@ -8,7 +8,8 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/utilities/arrow/arrow.h>
+#include <dftracer/utils/utilities/arrow/column_builder.h>
+#include <dftracer/utils/utilities/arrow/ipc_writer.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
 #include <testing_utilities.h>
@@ -188,135 +189,6 @@ TEST_CASE("IpcWriter - explicit ZSTD compression") {
     CHECK(dstd::fs::exists(path).value());
     CHECK(dstd::fs::file_size(path).value() > 0);
     dstd::fs::remove(path).discard();
-}
-
-TEST_CASE("PartitionWriter - basic single file") {
-    dstd::String dir = tmp_path("test_partition_basic");
-    dstd::fs::remove_all(dir).discard();
-
-    Runtime runtime(2);
-    PartitionWriteStats stats;
-
-    auto task = [&]() -> CoroTask<int> {
-        PartitionWriter writer;
-        if (co_await writer.open(dir, 0) != 0) co_return 1;
-        if (!writer.is_open()) co_return 2;
-
-        RecordBatchBuilder builder;
-        builder.declare_schema({{"id", ColumnType::Int64}});
-        builder.reserve(100);
-        for (int i = 0; i < 100; ++i) {
-            builder.append_int64(0, i);
-            builder.end_row();
-        }
-        auto batch = dftu_utils_test::ok(builder.finish());
-
-        if (co_await writer.write_batch(batch) != 0) co_return 3;
-        stats = co_await writer.close();
-        if (writer.is_open()) co_return 4;
-        co_return 0;
-    };
-    auto result = runtime.submit(task(), "test").get();
-
-    CHECK(result == 0);
-    CHECK(stats.files.size() == 1);
-    CHECK(stats.total_rows == 100);
-    CHECK(stats.row_counts.size() == 1);
-    CHECK(stats.row_counts[0] == 100);
-    CHECK(dstd::fs::exists(stats.files[0]).value());
-
-    dstd::fs::remove_all(dir).discard();
-}
-
-TEST_CASE("PartitionRouter - NONE mode pass-through") {
-    dstd::String dir = tmp_path("test_router_none");
-    dstd::fs::remove_all(dir).discard();
-
-    PartitionConfig config;
-    config.mode = PartitionConfig::Mode::None;
-
-    Runtime runtime(2);
-    RouterWriteStats stats;
-
-    auto task = [&]() -> CoroTask<int> {
-        PartitionRouter router;
-        if (router.open(dir, config, 0) != 0) co_return 1;
-
-        RecordBatchBuilder builder;
-        builder.declare_schema(
-            {{"id", ColumnType::Int64}, {"cat", ColumnType::String}});
-        builder.reserve(10);
-        for (int i = 0; i < 10; ++i) {
-            builder.append_int64(0, i);
-            builder.append_string(1, "POSIX");
-            builder.end_row();
-        }
-        auto batch = dftu_utils_test::ok(builder.finish());
-
-        if (co_await router.write_batch(batch) != 0) co_return 2;
-        stats = co_await router.close();
-        co_return 0;
-    };
-    auto result = runtime.submit(task(), "test").get();
-
-    CHECK(result == 0);
-    CHECK(stats.total_rows == 10);
-    CHECK(stats.partitions.size() == 1);
-    CHECK(stats.partitions.count("") == 1);
-
-    dstd::fs::remove_all(dir).discard();
-}
-
-TEST_CASE("PartitionRouter - COLUMN mode single column") {
-    dstd::String dir = tmp_path("test_router_column");
-    dstd::fs::remove_all(dir).discard();
-
-    PartitionConfig config;
-    config.mode = PartitionConfig::Mode::Column;
-    config.partition_columns = {"cat"};
-
-    Runtime runtime(2);
-    RouterWriteStats stats;
-
-    auto task = [&]() -> CoroTask<int> {
-        PartitionRouter router;
-        if (router.open(dir, config, 0) != 0) co_return 1;
-
-        RecordBatchBuilder builder;
-        builder.declare_schema(
-            {{"id", ColumnType::Int64}, {"cat", ColumnType::String}});
-        builder.reserve(6);
-
-        for (int i = 0; i < 3; ++i) {
-            builder.append_int64(0, i);
-            builder.append_string(1, "POSIX");
-            builder.end_row();
-        }
-        for (int i = 3; i < 6; ++i) {
-            builder.append_int64(0, i);
-            builder.append_string(1, "APP");
-            builder.end_row();
-        }
-        auto batch = dftu_utils_test::ok(builder.finish());
-
-        if (co_await router.write_batch(batch) != 0) co_return 2;
-        stats = co_await router.close();
-        co_return 0;
-    };
-    auto result = runtime.submit(task(), "test").get();
-
-    CHECK(result == 0);
-    CHECK(stats.total_rows == 6);
-    CHECK(stats.partitions.size() == 2);
-    CHECK(stats.partitions.count("cat=POSIX") == 1);
-    CHECK(stats.partitions.count("cat=APP") == 1);
-    CHECK(stats.partitions["cat=POSIX"].total_rows == 3);
-    CHECK(stats.partitions["cat=APP"].total_rows == 3);
-
-    CHECK(dstd::fs::exists(dir + "/cat=POSIX").value());
-    CHECK(dstd::fs::exists(dir + "/cat=APP").value());
-
-    dstd::fs::remove_all(dir).discard();
 }
 
 #else

@@ -7,19 +7,16 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/coro/async_generator.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/json/parser.h>
 #include <dftracer/utils/trace/time_metric.h>
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
 #include <dftracer/utils/utilities/reader/internal/stream_type.h>
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/dstd/memory.h>
-#include <dftracer/utils/dstd/span.h>
-#include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/utilities/arrow/arrow_export.h>
-#endif
 
 #include <atomic>
 #include <cstddef>
@@ -34,16 +31,6 @@ struct JsonLine {
     dstd::StringView content;
     std::size_t line_number;
     JsonParser* parser;
-};
-
-/// Target output unit for `ts`/`dur` (see ReadConfig::normalize_time). `None`
-/// returns the file's native unit unchanged.
-enum class TimeNormalization {
-    None = 0,
-    Nanoseconds = 1,
-    Microseconds = 2,
-    Milliseconds = 3,
-    Seconds = 4,
 };
 
 /// File-level configuration for @ref TraceReader.
@@ -88,18 +75,6 @@ struct ReadConfig {
     bool start_at_checkpoint = false;
     bool end_at_checkpoint = false;
 
-    /// When true, top-level object values (e.g. `args`) are expanded one
-    /// level into `parent.child` columns with native Arrow types instead
-    /// of being serialized as a JSON string column. One-level only; deeper
-    /// nesting still round-trips as JSON text under the flattened key.
-    bool flatten_objects = false;
-
-    /// Target output unit for `ts`/`dur`. Defaults to `None` (native unit
-    /// unchanged). Any other value scales from the file's declared `CM`
-    /// time_metric (absent = us) to that unit. Query DSL predicates always
-    /// match the native index and are unaffected.
-    TimeNormalization normalize_time = TimeNormalization::None;
-
     bool has_line_range() const { return start_line > 0 || end_line > 0; }
     bool has_byte_range() const { return start_byte > 0 || end_byte > 0; }
 };
@@ -129,16 +104,6 @@ class TraceReader {
     coro::AsyncGenerator<dstd::Result<dstd::Span<const char>>> read_raw(
         ReadConfig config = {});
 
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-    /// Direct Arrow batch pipeline: chunk-prune + line-level prefilter +
-    /// per-line in-place parsing + inline row build. Yields complete Arrow
-    /// record batches sized at `batch_size` rows. Emits the final
-    /// partial batch on generator close. Non-normalized schema only
-    /// (dynamic columns follow the first row seen).
-    coro::AsyncGenerator<dstd::Result<arrow::ArrowExportResult>> read_arrow(
-        ReadConfig config = {}, std::size_t batch_size = 10000);
-#endif
-
     /// Resolve the file's native time unit from its leading `CM` time_metric
     /// metadata by scanning up to `max_lines` header lines. Returns US when no
     /// `CM` is declared. Independent of any query filter. Gives the error of a
@@ -155,18 +120,15 @@ class TraceReader {
     /// be opened.
     dstd::Result<std::size_t> line_count();
 
-    /// How many lines @ref read_json and @ref read_arrow could not read in full
-    /// since this reader was made: lines that are no JSON or are cropped, and
-    /// lines broken in a part the query read. A counted line may still reach
-    /// the caller: @ref read_json with no query hands over every line as text,
-    /// and a line that is valid JSON but no object is not counted there. @ref
-    /// read_arrow reads every field, so it also counts a line that is no
-    /// object, which has no row, and a line with a field it could not read,
-    /// whose readable fields stay in a row. A blank line or a lone bracket is
-    /// not a line. A line the query did not match is not counted, and neither
-    /// is a line the index pruned or the line prefilter skipped without
-    /// parsing. The count of a read is final when its generator has run to its
-    /// end; one warning with the path and that count is logged then. A
+    /// How many lines @ref read_json could not read in full since this reader
+    /// was made: lines that are no JSON or are cropped, and lines broken in a
+    /// part the query read. A counted line may still reach the caller: @ref
+    /// read_json with no query hands over every line as text, and a line that
+    /// is valid JSON but no object is not counted there. A blank line or a lone
+    /// bracket is not a line. A line the query did not match is not counted,
+    /// and neither is a line the index pruned or the line prefilter skipped
+    /// without parsing. The count of a read is final when its generator has run
+    /// to its end; one warning with the path and that count is logged then. A
     /// generator that is dropped early has counted only the lines it passed.
     /// Safe to call from any thread.
     std::size_t dropped_line_count() const noexcept;

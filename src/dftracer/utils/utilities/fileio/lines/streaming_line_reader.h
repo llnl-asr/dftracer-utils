@@ -10,7 +10,6 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
-#include <dftracer/utils/utilities/fileio/lines/sources/async_indexed_file_bytes_generator.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_indexed_file_line_generator.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>

@@ -33,7 +33,6 @@
 #include <dftracer/utils/utilities/reader/internal/stream.h>
 #include <dftracer/utils/utilities/reader/internal/stream_config.h>
 #include <dftracer/utils/utilities/reader/internal/stream_type.h>
-#include <dftracer/utils/utilities/reader/internal/trace_reader_prefilter.h>
 #include <dftracer/utils/utilities/reader/internal/trace_reader_shared.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <simdjson.h>
@@ -855,9 +854,7 @@ coro::AsyncGenerator<dstd::Result<JsonLine>> TraceReader::read_json(
                 }
 
                 // Matched (or no query): lend the line's document to
-                // yield_parser without re-parsing. Consumers like
-                // build_arrow_row call parser.for_each_field which now
-                // iterates the borrowed doc_reference.
+                // yield_parser without re-parsing.
                 doc.rewind();
                 if (internal::is_cropped_object(src)) count_dropped(dropped);
                 yield_parser.set_borrowed_document(

@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/utilities/hash/hash.h>
+#include <dftracer/utils/utilities/hash/fnv1a_hasher_utility.h>
+#include <dftracer/utils/utilities/hash/hasher_utility.h>
+#include <dftracer/utils/utilities/hash/types.h>
 #include <doctest/doctest.h>
 
 using namespace dftracer::utils;

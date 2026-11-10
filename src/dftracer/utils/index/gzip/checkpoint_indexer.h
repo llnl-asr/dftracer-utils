@@ -37,13 +37,6 @@ class CheckpointIndexer {
 
     dstd::Result<void> try_build() const { return try_build_async().get(); }
 
-    /// The same, throwing the error. Kept for callers that still throw.
-    coro::CoroTask<void> build_async() const {
-        auto built = co_await try_build_async();
-        common::unwrap(std::move(built));
-    }
-
-    void build() const { common::unwrap(try_build()); }
     virtual bool need_rebuild() const = 0;
     virtual bool exists() const = 0;
 

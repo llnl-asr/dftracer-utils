@@ -53,7 +53,7 @@ dstd::String member(int first) {
 
 dstd::Map<dstd::String, std::uint64_t> leaf_counts(const View& v) {
     dstd::Map<dstd::String, std::uint64_t> out;
-    for (const auto& leaf : v.schema_tree())
+    for (const auto& leaf : dftu_utils_test::ok(v.schema_tree()))
         out[leaf.path] = leaf.count.value_or(0);
     return out;
 }

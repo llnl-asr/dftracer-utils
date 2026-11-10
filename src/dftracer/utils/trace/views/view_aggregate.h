@@ -99,7 +99,7 @@ void project_columns(dftracer::utils::dataframe::DataFrame& batch,
 
 // The plan's sort_by/topk/offset+limit/select, applied in that order. Apply
 // once at the final result boundary, after all merges.
-dftracer::utils::dataframe::DataFrame apply_agg_post_ops(
+dstd::Result<dftracer::utils::dataframe::DataFrame> apply_agg_post_ops(
     dftracer::utils::dataframe::DataFrame batch, const ViewPlan& plan);
 
 }  // namespace dftracer::utils::trace::views::detail

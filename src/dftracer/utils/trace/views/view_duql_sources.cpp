@@ -88,9 +88,14 @@ class FinishSource final : public dataframe::Source {
                 auto joining = dataframe::join_chunks(std::move(*collected));
                 auto joined = co_await std::move(joining);
                 if (!joined) co_return joined.error();
-                dataframe::DataFrame f = (*finish_)(std::move(*joined));
-                if (!projection_.empty())
-                    f = common::unwrap(f.select(projection_));
+                auto finished = (*finish_)(std::move(*joined));
+                if (!finished) co_return finished.error();
+                dataframe::DataFrame f = std::move(*finished);
+                if (!projection_.empty()) {
+                    auto selected = f.select(projection_);
+                    if (!selected) co_return selected.error();
+                    f = std::move(*selected);
+                }
                 intern_ =
                     dstd::make_shared<dftracer::utils::dstd::StringIntern>();
                 ids_ = frame_ids(f, declared_, *intern_);
@@ -175,9 +180,14 @@ class MapSource final : public dataframe::Source {
                 auto batch = co_await batches_.next();
                 if (!batch) co_return dataframe::MorselResult(dstd::nullopt);
                 if (!*batch) co_return batch->error();
-                dataframe::DataFrame f = (*map_)(std::move(**batch));
-                if (!projection_.empty())
-                    f = common::unwrap(f.select(projection_));
+                auto mapped = (*map_)(std::move(**batch));
+                if (!mapped) co_return mapped.error();
+                dataframe::DataFrame f = std::move(*mapped);
+                if (!projection_.empty()) {
+                    auto selected = f.select(projection_);
+                    if (!selected) co_return selected.error();
+                    f = std::move(*selected);
+                }
                 ids_ = frame_ids(f, declared_, *intern_);
                 auto scanned = dataframe::InMemorySource(std::move(f)).scan({});
                 if (!scanned) co_return scanned.error();
@@ -282,12 +292,17 @@ class FoldSource final : public dataframe::Source {
                     auto batch = co_await batches_.next();
                     if (!batch) break;
                     if (!*batch) co_return batch->error();
-                    common::unwrap(fold_.add(aligned(std::move(**batch), in_)));
+                    auto added = fold_.add(aligned(std::move(**batch), in_));
+                    if (!added) co_return added.error();
                 }
-                dataframe::DataFrame f =
-                    common::unwrap(fold_.finish(std::move(names_)));
-                if (!projection_.empty())
-                    f = common::unwrap(f.select(projection_));
+                auto finished = fold_.finish(std::move(names_));
+                if (!finished) co_return finished.error();
+                dataframe::DataFrame f = std::move(*finished);
+                if (!projection_.empty()) {
+                    auto selected = f.select(projection_);
+                    if (!selected) co_return selected.error();
+                    f = std::move(*selected);
+                }
                 auto scanned = dataframe::InMemorySource(std::move(f)).scan({});
                 if (!scanned) co_return scanned.error();
                 rows_ = std::move(scanned->cursor);

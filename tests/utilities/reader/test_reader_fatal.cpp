@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <checkpoint_indexer_helpers.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/utilities/reader/internal/gzip_reader.h>
 #include <doctest/doctest.h>
@@ -31,9 +32,9 @@ TEST_CASE("gzip reader moved from scenario" * doctest::skip()) {
     fresh_process::announce_abort();
     TestEnvironment env(10);
     dstd::String gz_file = env.create_dft_test_gzip_file(10);
-    auto indexer = index::gzip::CheckpointIndexerFactory::create(
+    auto indexer = dftu_utils_test::create_indexer(
         gz_file, env.get_index_path(gz_file), 32 * 1024 * 1024, false);
-    indexer->build();
+    dftu_utils_test::build_indexer(*indexer);
     GzipReader first(std::move(indexer));
     GzipReader second(std::move(first));
     (void)first.max_bytes();

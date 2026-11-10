@@ -34,7 +34,7 @@ namespace dftracer::utils::trace::views::detail {
 dstd::Optional<dftracer::utils::dataframe::Schema> aggregated_output_schema(
     const ViewPlan& plan);
 
-dftracer::utils::dataframe::DataFrame finalize_engine_result(
+dstd::Result<dftracer::utils::dataframe::DataFrame> finalize_engine_result(
     const dftracer::utils::dataframe::AggState& state, const ViewPlan& plan);
 
 /// Whether an aggregation of `plan` reads every event overlapping its window
@@ -45,8 +45,8 @@ bool scans_by_overlap(const ViewPlan& plan);
 /// (fine-grain, key layout [time_bucket?, group_by...]) before finalizing. The
 /// unit persisted as a rollup and merged across distributed ranks; finalize
 /// with finalize_engine_result or coarsen with agg_regroup.
-coro::CoroTask<dftracer::utils::dataframe::AggStatePtr> build_engine_agg_state(
-    const ViewPlan& plan);
+coro::CoroTask<dstd::Result<dftracer::utils::dataframe::AggStatePtr>>
+build_engine_agg_state(const ViewPlan& plan);
 
 /// One dyn (auto_numeric_metrics) output column needing a post-finalize fix: a
 /// Pct on an absent arg reads an empty sketch (NaN -> 0), a Count is folded as
@@ -122,8 +122,8 @@ struct AggInputSpec {
 };
 
 /// Derive the shared aggregation input spec for a bucket-resolved,
-/// schema-ensured `plan`.
-AggInputSpec make_agg_input_spec(const ViewPlan& plan);
+/// schema-ensured `plan`. The error is that of an index that cannot be read.
+dstd::Result<AggInputSpec> make_agg_input_spec(const ViewPlan& plan);
 
 /// Build the engine group-by input frame for one event chunk exactly as the
 /// streaming path's morsel-plus-exprs would: build_row_frame over
@@ -131,8 +131,8 @@ AggInputSpec make_agg_input_spec(const ViewPlan& plan);
 /// group-transform / time-bucket / value-scale columns `spec` describes.
 /// `resolver` is required only when `spec.transform_wants_resolver`. The result
 /// feeds agg_accumulate_chunk with `spec.group_key_names`, the gagg value
-/// names, and `spec.dyn_prefix`.
-dftracer::utils::dataframe::DataFrame build_agg_input_frame(
+/// names, and `spec.dyn_prefix`. The error is that of a computed column.
+dstd::Result<dftracer::utils::dataframe::DataFrame> build_agg_input_frame(
     const dstd::Vector<FoldEvent>& events,
     const dftracer::utils::dstd::StringIntern& intern, const AggInputSpec& spec,
     const dftracer::utils::index::plan::GroupResolver* resolver);

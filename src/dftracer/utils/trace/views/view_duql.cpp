@@ -17,7 +17,6 @@
 #include <dftracer/utils/index/source.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/trace/internal/utils.h>
-#include <dftracer/utils/trace/views/interim_guard.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_duql_internal.h>
 #include <dftracer/utils/trace/views/view_plan.h>
@@ -25,7 +24,7 @@
 #include <dftracer/utils/trace/views/view_scan.h>
 
 #include <algorithm>
-#include <exception>
+#include <atomic>
 #include <mutex>
 #include <utility>
 
@@ -56,16 +55,25 @@ Applier::Applier(View v, const index::RecordSchema& schema, const Ctx& ctx,
     blocker_ = "from";
 }
 
-void Applier::apply(const duql::PipelineStage& stage) {
-    std::visit([this](const auto& s) { this->stage(s); }, stage);
+Status Applier::status() const {
+    if (tree_error_) return *tree_error_;
+    return v_.status();
+}
+
+Status Applier::apply(const duql::PipelineStage& stage) {
+    const Status done =
+        std::visit([this](const auto& s) { return this->stage(s); }, stage);
+    if (auto kept = status(); !kept) return kept;
+    if (!done) return done;
     dstd::Vector<dstd::String> rest;
     for (const auto& c : cols_)
         if (!c.quant && !c.lookup && !c.call && !c.index && !c.list && !c.term)
             rest.push_back(c.name);
-    if (rest.size() != cols_.size()) keep(std::move(rest));
+    if (rest.size() != cols_.size()) return keep(std::move(rest));
+    return {};
 }
 
-void Applier::finish_columns() {
+Status Applier::finish_columns() {
     dstd::Vector<dstd::String> rest;
     bool dropped = false;
     for (const auto& n : names()) {
@@ -74,11 +82,20 @@ void Applier::finish_columns() {
         else
             rest.push_back(n);
     }
-    if (dropped) keep(std::move(rest));
+    if (dropped) return keep(std::move(rest));
+    return {};
 }
 
 const dstd::Vector<SchemaLeaf>& Applier::tree() {
-    if (!tree_) tree_ = detail::catalog_leaves(v_);
+    if (!tree_) {
+        auto leaves = detail::catalog_leaves(v_);
+        if (leaves) {
+            tree_ = std::move(*leaves);
+        } else {
+            tree_error_ = leaves.error();
+            tree_.emplace();
+        }
+    }
     return *tree_;
 }
 
@@ -109,9 +126,11 @@ dataframe::TypeId Applier::observed(dstd::StringView name) {
 // `p` as a View over its input: its build step, when it reads lookups, then
 // its scan filter and projection, then its stages. With `table`, the scan
 // ends, so the columns are the stages' own. The `main` plan owns the sides.
-Built build(const Ctx& ctx, const duql::Pipeline& p, bool table,
-            dstd::Vector<dstd::String>& lines, bool main, bool ordered) {
+dstd::Result<Built> build(const Ctx& ctx, const duql::Pipeline& p, bool table,
+                          dstd::Vector<dstd::String>& lines, bool main,
+                          bool ordered) {
     View v = ctx.input(p.input);
+    if (auto kept = v.status(); !kept) return kept.error();
     if (ordered && p.input.kind != duql::InputKind::Side) v = ctx.order(v);
     dstd::Optional<dstd::Vector<duql::VectorColumn>> side_cols;
     if (p.input.kind == duql::InputKind::Side) {
@@ -123,11 +142,10 @@ Built build(const Ctx& ctx, const duql::Pipeline& p, bool table,
                 dataframe::Field{dstd::String(c.name), c.type, true});
         v = v.with_lazy(side_source(main ? ctx.sides : nullptr, ctx.sides, i,
                                     std::move(schema)));
-        lines.push_back(
-            dstd::String("from " + ctx.sides->program.sides[i].name +
-                         (ctx.sides->stored[i]
-                              ? " (rows stored in the index)"
-                              : " (its side runs when the query executes)")));
+        lines.push_back(dstd::fmt<"from {}{}">(
+            ctx.sides->program.sides[i].name,
+            ctx.sides->stored[i] ? " (rows stored in the index)"
+                                 : " (its side runs when the query executes)"));
     }
     dstd::Vector<std::size_t> reads;
     term_reads(p, reads);
@@ -136,41 +154,52 @@ Built build(const Ctx& ctx, const duql::Pipeline& p, bool table,
     dstd::SharedPtr<detail::BuildStep> step;
     if (!reads.empty() || !sets.empty()) {
         struct Once {
-            std::once_flag flag;
-            Pushdown keys;
+            std::mutex mu;
+            std::atomic<bool> prepared{false};
+            dstd::Optional<Pushdown> keys;
         };
         auto once = dstd::make_shared<Once>();
         step = dstd::make_shared<detail::BuildStep>();
         step->run = [once, strong = main ? ctx.sides : nullptr,
                      weak = dstd::WeakPtr<Sides>(ctx.sides),
-                     pipeline = &p](dstd::Optional<duql::Query> query) {
-            std::call_once(once->flag, [&] {
-                once->keys =
-                    (strong ? strong : owner(weak))->prepare(*pipeline);
-            });
-            return pushed(once->keys, std::move(query));
+                     pipeline = &p](dstd::Optional<duql::Query> query)
+            -> dstd::Result<dstd::Optional<duql::Query>> {
+            if (!once->prepared.load(std::memory_order_acquire)) {
+                const std::lock_guard<std::mutex> lock(once->mu);
+                if (!once->prepared.load(std::memory_order_relaxed)) {
+                    dstd::SharedPtr<Sides> sides = strong;
+                    if (!sides) {
+                        auto owned = owner(weak);
+                        if (!owned) return owned.error();
+                        sides = std::move(*owned);
+                    }
+                    auto keys = sides->prepare(*pipeline);
+                    if (!keys) return keys.error();
+                    once->keys = std::move(*keys);
+                    once->prepared.store(true, std::memory_order_release);
+                }
+            }
+            return pushed(*once->keys, std::move(query));
         };
         v = ctx.with_step(v, step);
         for (const auto i : reads)
-            lines.push_back(dstd::String("reads " +
-                                         ctx.sides->program.sides[i].name +
-                                         " before the scan"));
+            lines.push_back(dstd::fmt<"reads {} before the scan">(
+                ctx.sides->program.sides[i].name));
         for (const auto i : sets)
             if (std::find(reads.begin(), reads.end(), i) == reads.end())
-                lines.push_back(dstd::String("reads the distinct rows of " +
-                                             ctx.sides->program.sides[i].name +
-                                             " before the scan"));
+                lines.push_back(
+                    dstd::fmt<"reads the distinct rows of {} before the scan">(
+                        ctx.sides->program.sides[i].name));
     }
     if (p.filter) {
-        lines.push_back(
-            dstd::String("scan filter: " + p.filter_text + " (pushed)"));
+        lines.push_back(dstd::fmt<"scan filter: {} (pushed)">(p.filter_text));
         v = v.filter(
             duql::detail::QueryAccess::from_node(duql::clone(*p.filter)));
     }
     each_pushed(p, [&](const duql::Term&, const duql::TField& f,
                        const duql::TLookup& l, const duql::Term*) {
-        lines.push_back(dstd::String("scan filter: " + f.base +
-                                     " in (keys of " + l.name + ") (pushed)"));
+        lines.push_back(dstd::fmt<"scan filter: {} in (keys of {}) (pushed)">(
+            f.base, l.name));
     });
     auto adds = [&](const duql::PipelineLookup& l) {
         dstd::Vector<dstd::String> out;
@@ -191,7 +220,7 @@ Built build(const Ctx& ctx, const duql::Pipeline& p, bool table,
         p.stages, adds,
         ctx.schema(v).decoder == dftracer::utils::index::Decoder::Path);
     if (!p.scan_select.empty()) {
-        lines.push_back("scan select: " + joined(p.scan_select));
+        lines.push_back(dstd::fmt<"scan select: {}">(joined(p.scan_select)));
         dstd::Vector<dstd::String> select;
         dstd::Optional<dstd::Vector<SchemaLeaf>> tree;
         for (const auto& f : p.scan_select) {
@@ -202,7 +231,11 @@ Built build(const Ctx& ctx, const duql::Pipeline& p, bool table,
                 select.push_back(dstd::String(f));
                 continue;
             }
-            if (!tree) tree = detail::catalog_leaves(v);
+            if (!tree) {
+                auto leaves = detail::catalog_leaves(v);
+                if (!leaves) return leaves.error();
+                tree = std::move(*leaves);
+            }
             for (auto& r :
                  scan_reads(*tree, dstd::String(f), array, fields.arrays,
                             ctx.schema(v).args_fallback))
@@ -215,18 +248,21 @@ Built build(const Ctx& ctx, const duql::Pipeline& p, bool table,
         dstd::Vector<duql::VectorColumn> cols;
         for (const auto& f : v.output_schema().fields)
             cols.push_back({dstd::String(f.name), f.type});
-        return {std::move(v), std::move(cols)};
+        return Built{std::move(v), std::move(cols)};
     }
     const index::RecordSchema& schema = ctx.schema(v);
     Applier a(std::move(v), schema, ctx, std::move(fields), step, reads, main,
               std::move(side_cols));
+    if (auto kept = a.status(); !kept) return kept.error();
     if (!p.scan_select.empty()) a.selected_at_scan();
-    for (const auto& s : p.stages) a.apply(s);
+    for (const auto& s : p.stages)
+        if (auto done = a.apply(s); !done) return done.error();
     if (table) a.end_scan("union");
-    a.finish_columns();
+    if (auto done = a.finish_columns(); !done) return done.error();
+    if (auto kept = a.status(); !kept) return kept.error();
     for (auto& l : a.lines) lines.push_back(std::move(l));
     dstd::Vector<duql::VectorColumn> cols = a.columns();
-    return {std::move(a).take(), std::move(cols)};
+    return Built{std::move(a).take(), std::move(cols)};
 }
 
 }  // namespace duql_detail
@@ -245,51 +281,47 @@ View detail::with_named_columns(const View& v,
 dstd::Result<dstd::Pair<View, dstd::Vector<dstd::String>>> View::duql_plan(
     dstd::StringView text, const duql::Params& params) const {
     if (auto kept = lf_.status(); !kept) return kept.error();
-    auto planned = detail::guard_exceptions(
-        [&] { return duql_plan_or_throw(text, params); });
-    if (!planned) return planned;
-    // A step that refused left its error on the view it returned.
-    if (auto kept = planned->first.status(); !kept) return kept.error();
-    return planned;
-}
-
-dstd::Pair<View, dstd::Vector<dstd::String>> View::duql_plan_or_throw(
-    dstd::StringView text, const duql::Params& params) const {
+    if (auto resolved = detail::resolve_record_schema(*plan_); !resolved)
+        return resolved.error();
     const index::RecordSchema& schema = detail::plan_record_schema(*plan_);
     Ctx ctx;
     ctx.roles = index::duql_roles(schema);
     const duql::PluginCatalog plugins = registry_plugins();
-    // duql is built without exceptions, so the lookup keeps what it throws and
-    // hands duql an error; the throw comes back after the compile.
-    std::exception_ptr leaves_failure;
+    // The lookup keeps its own error and hands duql a plain one, which
+    // replaces the compile error when the lookup is what failed.
+    dstd::Optional<dstd::Error> leaves_failure;
     const duql::LeafPaths leaves =
         [&]() -> dstd::Expected<dstd::Vector<dstd::String>, duql::DuqlError> {
-        try {
-            detail::scan::ensure_catalog(plan_);
-            if (const auto file = detail::scan::file_without_catalog(plan_))
-                refuse(
-                    "wildcard paths expand against the index's path catalog, "
-                    "which the index of " +
-                    *file +
-                    " does not hold; build the full index (dftracer_index or "
-                    "BatchIndexer) first");
-            dstd::Vector<dstd::String> out;
-            for (const auto& l : schema_tree()) out.emplace_back(l.path);
-            return out;
-        } catch (...) {
-            leaves_failure = std::current_exception();
+        auto fail = [&](dstd::Error cause) {
+            leaves_failure = std::move(cause);
             duql::DuqlError error;
             error.message = "the leaf paths could not be read";
             return dstd::Unexpected(std::move(error));
-        }
+        };
+        if (auto ensured = detail::scan::ensure_catalog(plan_); !ensured)
+            return fail(ensured.error());
+        auto without = detail::scan::file_without_catalog(plan_);
+        if (!without) return fail(without.error());
+        if (*without)
+            return fail(dstd::Error::from_format<
+                        "View::duql wildcard paths expand against the "
+                        "index's path catalog, which the index of {} does "
+                        "not hold; build the full index (dftracer_index or "
+                        "BatchIndexer) first">(
+                common::ErrorCode::InvalidArgument, **without));
+        auto tree = schema_tree();
+        if (!tree) return fail(tree.error());
+        dstd::Vector<dstd::String> out;
+        for (const auto& l : *tree) out.emplace_back(l.path);
+        return out;
     };
     auto p = duql::compile_program(text, params, &ctx.roles, schema.source,
                                    &plugins, &leaves);
     if (!p) {
-        if (leaves_failure) std::rethrow_exception(leaves_failure);
-        refuse(p.error().format());
+        if (leaves_failure) return *leaves_failure;
+        return refuse(p.error().format());
     }
-    reject_resolved(*p);
+    if (auto rejected = reject_resolved(*p); !rejected) return rejected.error();
     ctx.sides = dstd::make_shared<Sides>(std::move(*p));
     ctx.order = [](const View& in) {
         return in.reshape("duql", [](const detail::ScanPlan& s) {
@@ -363,8 +395,11 @@ dstd::Pair<View, dstd::Vector<dstd::String>> View::duql_plan_or_throw(
         if (!needed[i]) continue;
         const duql::Side& side = sides.program.sides[i];
         dstd::Vector<dstd::String> side_lines;
-        Built b = build(ctx, side.pipeline, false, side_lines, false,
-                        std::find(asof.begin(), asof.end(), i) != asof.end());
+        auto built =
+            build(ctx, side.pipeline, false, side_lines, false,
+                  std::find(asof.begin(), asof.end(), i) != asof.end());
+        if (!built) return built.error();
+        Built b = std::move(*built);
         sides.keys[i] =
             cache_key(*b.view.plan_, side.pipeline.input.kind, side.key);
         if (side.rowset) {
@@ -374,8 +409,10 @@ dstd::Pair<View, dstd::Vector<dstd::String>> View::duql_plan_or_throw(
                      f.index_path.empty()
                          ? internal::determine_index_path(f.file_path, "")
                          : dstd::String(dstd::StringView(f.index_path))});
-            sides.stored[i] = !detail::is_past_pin(*plan_) &&
-                              index::plan::has_stored_rowsets(sides.files[i]);
+            const auto past = detail::is_past_pin(*plan_);
+            if (!past.has_value()) return past.error();
+            sides.stored[i] =
+                !*past && index::plan::has_stored_rowsets(sides.files[i]);
         }
         sides.views[i] = std::move(b.view);
         sides.columns[i] = std::move(b.cols);
@@ -394,21 +431,29 @@ dstd::Pair<View, dstd::Vector<dstd::String>> View::duql_plan_or_throw(
             const auto frame = table ? sides.frame(i)
                                : set ? sides.key_frame(i)
                                      : sides.probe(i);
+            if (!frame) return frame.error();
             for (auto& c : sides.columns[i])
-                for (std::size_t k = 0; k < frame->names.size(); ++k)
+                for (std::size_t k = 0; k < (*frame)->names.size(); ++k)
                     if (c.type.id == dataframe::TypeId::Unknown &&
-                        dstd::StringView(frame->names[k]) == c.name)
-                        c.type = frame->columns[k].data_type();
+                        dstd::StringView((*frame)->names[k]) == c.name)
+                        c.type = (*frame)->columns[k].data_type();
         }
-        lines.push_back(dstd::String("side " + side.name + ": from ") +
-                        input_text(side.pipeline.input, sides.program) + "; " +
-                        (sides.stored[i] ? dstd::String("stored in the index")
-                                         : cache_state(sides.keys[i])));
+        dstd::String state("stored in the index");
+        if (!sides.stored[i]) {
+            auto cached = cache_state(sides.keys[i]);
+            if (!cached) return cached.error();
+            state = std::move(*cached);
+        }
+        lines.push_back(dstd::fmt<"side {}: from {}; {}">(
+            side.name, input_text(side.pipeline.input, sides.program), state));
         if (!sides.stored[i])
-            for (auto& l : side_lines) lines.push_back("  " + std::move(l));
+            for (auto& l : side_lines) lines.push_back(dstd::fmt<"  {}">(l));
     }
-    Built main = build(ctx, sides.program.main, false, lines, true);
-    return {std::move(main.view), std::move(lines)};
+    auto main = build(ctx, sides.program.main, false, lines, true);
+    if (!main) return main.error();
+    if (auto kept = main->view.status(); !kept) return kept.error();
+    return dstd::Pair<View, dstd::Vector<dstd::String>>{std::move(main->view),
+                                                        std::move(lines)};
 }
 
 View View::duql(dstd::StringView text, const duql::Params& params) const {

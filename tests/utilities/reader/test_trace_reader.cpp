@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <checkpoint_indexer_helpers.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
@@ -169,10 +170,10 @@ TEST_SUITE("TraceReader") {
         dstd::String index_dir = env.dir();
         dstd::String index_path = env.get_index_path(gz_file);
 
-        auto indexer = CheckpointIndexerFactory::create(
-            gz_file, index_path, 32 * 1024 * 1024, false);
+        auto indexer = dftu_utils_test::create_indexer(gz_file, index_path,
+                                                       32 * 1024 * 1024, false);
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
         REQUIRE(
             dstd::fs::exists(determine_index_path(gz_file, index_dir)).value());
 
@@ -207,10 +208,10 @@ TEST_SUITE("TraceReader") {
         dstd::String index_dir = env.dir();
         dstd::String index_path = env.get_index_path(gz_file);
 
-        auto indexer = CheckpointIndexerFactory::create(
-            gz_file, index_path, 32 * 1024 * 1024, false);
+        auto indexer = dftu_utils_test::create_indexer(gz_file, index_path,
+                                                       32 * 1024 * 1024, false);
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
         const dstd::String root = determine_index_path(gz_file, index_dir);
         REQUIRE(dstd::fs::exists(root).value());
 
@@ -237,10 +238,10 @@ TEST_SUITE("TraceReader") {
         dstd::String gz_file = env.create_dft_test_gzip_file(100);
         dstd::String index_dir = env.dir();
         dstd::String index_path = env.get_index_path(gz_file);
-        auto indexer = CheckpointIndexerFactory::create(
-            gz_file, index_path, 32 * 1024 * 1024, false);
+        auto indexer = dftu_utils_test::create_indexer(gz_file, index_path,
+                                                       32 * 1024 * 1024, false);
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
 
         TraceReader reader({.file_path = dstd::String(gz_file),
                             .index_dir = dstd::String(index_dir)});
@@ -392,10 +393,10 @@ TEST_SUITE("TraceReader") {
         dstd::String index_dir = env.dir();
         dstd::String index_path = env.get_index_path(gz_file);
 
-        auto indexer = CheckpointIndexerFactory::create(
-            gz_file, index_path, 32 * 1024 * 1024, false);
+        auto indexer = dftu_utils_test::create_indexer(gz_file, index_path,
+                                                       32 * 1024 * 1024, false);
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
         REQUIRE(
             dstd::fs::exists(determine_index_path(gz_file, index_dir)).value());
 
@@ -497,10 +498,10 @@ TEST_SUITE("TraceReader") {
                 dftu_utils_test::ok_items(plain_reader.read_raw(single_line)))
                 .get());
 
-        auto indexer = CheckpointIndexerFactory::create(
-            gz_file, index_path, 32 * 1024 * 1024, false);
+        auto indexer = dftu_utils_test::create_indexer(gz_file, index_path,
+                                                       32 * 1024 * 1024, false);
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
 
         TraceReader indexed_reader({.file_path = dstd::String(gz_file),
                                     .index_dir = dstd::String(index_dir)});
@@ -761,10 +762,10 @@ TEST_SUITE("TraceReader") {
         dstd::String index_dir = env.dir();
         dstd::String index_path = env.get_index_path(gz_file);
 
-        auto indexer = CheckpointIndexerFactory::create(
-            gz_file, index_path, 32 * 1024 * 1024, false);
+        auto indexer = dftu_utils_test::create_indexer(gz_file, index_path,
+                                                       32 * 1024 * 1024, false);
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
         REQUIRE(
             dstd::fs::exists(determine_index_path(gz_file, index_dir)).value());
 
@@ -1474,7 +1475,7 @@ TEST_SUITE("TraceReader byte windows") {
     TEST_CASE("a window near a restart piece finds its line") {
         const std::size_t checkpoint = 64 * 1024;
         const WindowFixture f = window_fixture(30, checkpoint);
-        const auto indexer = CheckpointIndexerFactory::create(
+        const auto indexer = dftu_utils_test::create_indexer(
             f.gz, determine_index_path(f.gz, ""), checkpoint, false);
         REQUIRE(indexer != nullptr);
         std::size_t mid_line_pieces = 0;

@@ -44,15 +44,16 @@ ScanShape scan_shape(const ViewDefinition& vdef);
 
 // The index-building folds worth riding along on this scan (dictionary, bloom):
 // those the scan can establish, and only while some file still lacks the pruner
-// bloom, so a repeat scan of an already-built index attaches nothing.
-dstd::Vector<dstd::UniquePtr<Fold>> select_index_folds(
+// bloom, so a repeat scan of an already-built index attaches nothing. The error
+// is that of an index that cannot be read.
+dstd::Result<dstd::Vector<dstd::UniquePtr<Fold>>> select_index_folds(
     const ViewPlan& plan, const ViewDefinition& vdef,
     dftracer::utils::dstd::StringIntern& intern);
 
 // The fold that writes the path catalog of the files that lack one, or null
 // when every file has it or the scan cannot establish it. Its slot is the first
-// full scan of a trace.
-dstd::UniquePtr<Fold> select_catalog_fold(
+// full scan of a trace. The error is that of an index that cannot be read.
+dstd::Result<dstd::UniquePtr<Fold>> select_catalog_fold(
     const ViewPlan& plan, const ViewDefinition& vdef,
     dftracer::utils::dstd::StringIntern& intern);
 

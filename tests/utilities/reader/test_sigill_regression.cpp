@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <checkpoint_indexer_helpers.h>
 #include <dftracer/utils/coro/detail/frame.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -73,7 +74,7 @@ TEST_SUITE("sigill_regression") {
             dstd::String(dstd::StringView(gz_path)),
             dstd::String(dstd::StringView(dir.file("idx"))), 1u << 20, true);
         dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
-            co_await indexer->build_async();
+            co_await dftu_utils_test::build_indexer_async(*indexer);
         });
 
         const std::size_t start = text.size() / 2;

@@ -126,23 +126,23 @@ static int CheckpointIndexer_init(CheckpointIndexerObject *self, PyObject *args,
         return -1;
     }
 
-    try {
-        auto indexer =
-            dftracer::utils::index::gzip::CheckpointIndexerFactory::create(
-                gz_path, index_path_str, checkpoint_size, force_rebuild != 0);
-        if (!indexer) {
-            PyErr_SetString(PyExc_RuntimeError, "Unsupported archive format");
-            return -1;
-        }
-        self->handle =
-            dftracer::utils::dstd::make_unique<dftracer::utils::dstd::SharedPtr<
-                dftracer::utils::index::gzip::CheckpointIndexer>>(
-                std::move(indexer))
-                .release();
-    } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+    auto created =
+        dftracer::utils::index::gzip::CheckpointIndexerFactory::try_create(
+            gz_path, index_path_str, checkpoint_size, force_rebuild != 0);
+    if (!created) {
+        PyErr_SetString(PyExc_RuntimeError, created.error().c_str());
         return -1;
     }
+    auto indexer = std::move(*created);
+    if (!indexer) {
+        PyErr_SetString(PyExc_RuntimeError, "Unsupported archive format");
+        return -1;
+    }
+    self->handle =
+        dftracer::utils::dstd::make_unique<dftracer::utils::dstd::SharedPtr<
+            dftracer::utils::index::gzip::CheckpointIndexer>>(
+            std::move(indexer))
+            .release();
 
     return 0;
 }
@@ -214,11 +214,8 @@ static PyObject *CheckpointIndexer_build(CheckpointIndexerObject *self,
     } else {
         // Simple checkpoint-only build
         dftracer::utils::dstd::String error;
-        Py_BEGIN_ALLOW_THREADS try {
-            (*self->handle)->build();
-        } catch (const std::exception &e) {
-            error = e.what();
-        }
+        Py_BEGIN_ALLOW_THREADS auto built = (*self->handle)->try_build();
+        if (!built) error = built.error().c_str();
         Py_END_ALLOW_THREADS if (!error.empty()) {
             PyErr_SetString(PyExc_RuntimeError, error.c_str());
             return NULL;

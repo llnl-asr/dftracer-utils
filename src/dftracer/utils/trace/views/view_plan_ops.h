@@ -27,30 +27,34 @@ namespace dftracer::utils::trace::views::detail::scan {
 
 using detail::ScanPlan;
 
+/// A plan builder that cannot take its argument (an index it cannot read, a
+/// group key the schema lacks) returns a plan that holds the error
+/// (@ref ViewPlan::error); every terminal on it returns that error.
 ScanPlan from_files(dstd::Vector<ViewFile> files);
 ScanPlan from_file(dstd::String file_path, dstd::String index_path = "");
 coro::CoroTask<ScanPlan> from_directory(dstd::String dir,
                                         dstd::String index_path = "");
-dstd::Vector<TraceConfig> config(const ScanPlan& plan);
-dstd::Vector<dstd::String> columns(const ScanPlan& plan);
-dstd::Vector<ColumnInfo> schema(const ScanPlan& plan);
+dstd::Result<dstd::Vector<TraceConfig>> config(const ScanPlan& plan);
+dstd::Result<dstd::Vector<dstd::String>> columns(const ScanPlan& plan);
+dstd::Result<dstd::Vector<ColumnInfo>> schema(const ScanPlan& plan);
 /// Writes the path catalog of each file of `plan` that has no current one,
 /// by one unfiltered scan of those files only. A catalog that cannot be
 /// written (locked index) stays absent.
-void ensure_catalog(const ScanPlan& plan);
+dstd::Result<void> ensure_catalog(const ScanPlan& plan);
 /// The leaves of the catalog, built first where missing.
-dstd::Vector<SchemaLeaf> schema_tree(const ScanPlan& plan);
+dstd::Result<dstd::Vector<SchemaLeaf>> schema_tree(const ScanPlan& plan);
 /// The leaves of the catalogs as they stand; scans nothing.
-dstd::Vector<SchemaLeaf> catalog_tree(const ScanPlan& plan);
+dstd::Result<dstd::Vector<SchemaLeaf>> catalog_tree(const ScanPlan& plan);
 /// The first file of the plan whose index holds no path catalog (no index,
 /// or one built without its statistics tier), or nullopt.
-dstd::Optional<dstd::String> file_without_catalog(const ScanPlan& plan);
+dstd::Result<dstd::Optional<dstd::String>> file_without_catalog(
+    const ScanPlan& plan);
 /// Each column's type from the index; a column of mixed JSON types is a JSON
 /// String (DataType::json).
-dstd::HashMap<dstd::String, dataframe::DataType> column_types(
+dstd::Result<dstd::HashMap<dstd::String, dataframe::DataType>> column_types(
     const ScanPlan& plan);
 /// The columns `plan` gives as JSON (see detail::JsonColumns); null when none.
-dstd::SharedPtr<const detail::JsonColumns> json_columns(
+dstd::Result<dstd::SharedPtr<const detail::JsonColumns>> json_columns(
     const detail::ViewPlan& plan);
 TimeMetric time_metric(const ScanPlan& plan);
 ScanPlan filter(const ScanPlan& plan, Query q);
@@ -95,8 +99,8 @@ coro::CoroTask<dstd::Result<ExportStats>> for_each_batch(
     dstd::Function<void(std::size_t, const dstd::Vector<dstd::StringView>&)>
         on_batch,
     std::size_t slot_count, std::uint64_t limit = 0);
-bool export_would_bootstrap(const ScanPlan& plan);
-bool collect_would_bootstrap(const ScanPlan& plan);
+dstd::Result<bool> export_would_bootstrap(const ScanPlan& plan);
+dstd::Result<bool> collect_would_bootstrap(const ScanPlan& plan);
 coro::CoroTask<dstd::Result<ExportStats>> export_json(ScanPlan plan,
                                                       ExportSink& sink);
 coro::CoroTask<dstd::Result<ExportStats>> export_trace(ScanPlan plan,
@@ -129,9 +133,10 @@ coro::CoroTask<dstd::Result<ExportStats>> run_folds(
     coro::AsyncSemaphore* gate = nullptr);
 coro::CoroTask<dstd::Result<ExportStats>> run(
     ScanPlan plan, const ProgressFn* progress = nullptr);
-dstd::String materialize_dir(const ScanPlan& plan);
-void register_materialized(const ScanPlan& plan, const dstd::String& dir);
-dstd::Vector<dstd::String> mv_source(const ScanPlan& plan);
+dstd::Result<dstd::String> materialize_dir(const ScanPlan& plan);
+dstd::Result<void> register_materialized(const ScanPlan& plan,
+                                         const dstd::String& dir);
+dstd::Result<dstd::Vector<dstd::String>> mv_source(const ScanPlan& plan);
 coro::CoroTask<dstd::Result<TypedResult>> collect_typed(
     ScanPlan plan, int shard_begin, int shard_end,
     const ProgressFn* progress = nullptr);
@@ -139,7 +144,7 @@ coro::CoroTask<dstd::Result<ExportStats>> export_counters(ScanPlan plan,
                                                           ExportSink& sink);
 coro::CoroTask<dstd::Result<void>> materialize_partials(
     ScanPlan plan, const dstd::Vector<dstd::StringView>& partials);
-dstd::Optional<dataframe::DataFrame> reconstruct_if_cached(
+dstd::Result<dstd::Optional<dataframe::DataFrame>> reconstruct_if_cached(
     const ScanPlan& plan);
 coro::CoroTask<dstd::Result<dstd::String>> aggregate_partial(ScanPlan plan);
 dstd::Result<dataframe::DataFrame> merge_partials_to_table(

@@ -162,7 +162,7 @@ coro::CoroTask<dstd::Result<TypedResult>> run_collect_typed(
 
 // Return a subsuming rollup as a table, or nullopt on a miss, so a distributed
 // caller decides read vs recompute without a scan.
-dstd::Optional<dataframe::DataFrame> run_reconstruct_if_cached(
+dstd::Result<dstd::Optional<dataframe::DataFrame>> run_reconstruct_if_cached(
     const ViewPlan& plan);
 
 // Streaming, out-of-core counter aggregation under a per-worker memory budget

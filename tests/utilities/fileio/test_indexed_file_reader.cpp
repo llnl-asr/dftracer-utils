@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <checkpoint_indexer_helpers.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
@@ -70,9 +71,9 @@ TEST_SUITE("IndexedFileReader") {
 
             // Create index first
             auto indexer =
-                CheckpointIndexerFactory::create(gz_path, db_root, 1024, true);
+                dftu_utils_test::create_indexer(gz_path, db_root, 1024, true);
             REQUIRE(indexer != nullptr);
-            indexer->build();
+            dftu_utils_test::build_indexer(*indexer);
             REQUIRE(dstd::fs::exists(db_root).value());
 
             // Process with existing index (should not rebuild)
@@ -96,9 +97,9 @@ TEST_SUITE("IndexedFileReader") {
 
             // Create index first
             auto indexer =
-                CheckpointIndexerFactory::create(gz_path, db_root, 1024, true);
+                dftu_utils_test::create_indexer(gz_path, db_root, 1024, true);
             REQUIRE(indexer != nullptr);
-            indexer->build();
+            dftu_utils_test::build_indexer(*indexer);
             REQUIRE(dstd::fs::exists(db_root).value());
 
             // Sleep to ensure different timestamp
@@ -257,9 +258,9 @@ TEST_SUITE("IndexedFileReader") {
                 dstd::String(determine_index_path(gz_path, ""));
 
             // Create index
-            auto indexer = CheckpointIndexerFactory::create(gz_path, index_path,
-                                                            1024, true);
-            indexer->build();
+            auto indexer = dftu_utils_test::create_indexer(gz_path, index_path,
+                                                           1024, true);
+            dftu_utils_test::build_indexer(*indexer);
             REQUIRE(dstd::fs::exists(db_root).value());
 
             // Sleep to ensure different timestamp
@@ -290,9 +291,9 @@ TEST_SUITE("IndexedFileReader") {
                 dstd::String(determine_index_path(gz_path, ""));
 
             // Create index
-            auto indexer = CheckpointIndexerFactory::create(gz_path, index_path,
-                                                            1024, true);
-            indexer->build();
+            auto indexer = dftu_utils_test::create_indexer(gz_path, index_path,
+                                                           1024, true);
+            dftu_utils_test::build_indexer(*indexer);
             // Process without modifying file
             IndexedFileReaderUtility reader_utility;
             IndexedReadInput input =

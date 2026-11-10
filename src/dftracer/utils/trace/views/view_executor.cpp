@@ -541,7 +541,9 @@ coro::CoroTask<dstd::Result<ExportStats>> run_export(const ViewPlan& base_plan,
     // Nothing attaches unless the scan already satisfies it, so this cannot
     // make the read slower than not having it.
     dftracer::utils::dstd::StringIntern intern;
-    auto folds = select_index_folds(plan, vdef, intern);
+    auto selected = select_index_folds(plan, vdef, intern);
+    if (!selected) co_return selected.error();
+    auto folds = std::move(*selected);
     dstd::Vector<Fold*> fold_ptrs;
     for (auto& f : folds) fold_ptrs.push_back(f.get());
     // Stream matched events; --select projects each one to the chosen fields
@@ -700,13 +702,14 @@ coro::CoroTask<dstd::Result<ExportStats>> run_folds(
     auto made = make_vdef(plan, /*for_aggregation=*/false);
     if (!made) co_return made.error();
     ViewDefinition vdef = std::move(*made);
-    auto catalog = select_catalog_fold(plan, vdef, intern);
+    auto selected = select_catalog_fold(plan, vdef, intern);
+    if (!selected) co_return selected.error();
+    auto catalog = std::move(*selected);
     dstd::Vector<Fold*> all(folds.begin(), folds.end());
     if (catalog) all.push_back(catalog.get());
-    ExportStats stats = co_await fuse(plan, vdef, all, intern,
-                                      /*covered=*/nullptr,
-                                      /*limit=*/0, dyn_prune, gate);
-    co_return stats;
+    co_return co_await fuse(plan, vdef, all, intern,
+                            /*covered=*/nullptr,
+                            /*limit=*/0, dyn_prune, gate);
 }
 
 #if DFTRACER_UTILS_TEST_PROBES
@@ -807,12 +810,17 @@ coro::CoroTask<dstd::Result<BootstrapFile>> bootstrap_file(
     }
     dstd::UniquePtr<IndexRuleFold> rule_agg;
     dstd::UniquePtr<EngineAggFold> frame_agg;
-    if (run->rule_query)
-        rule_agg = IndexRuleFold::make(*plan, *run->rule_query, intern,
-                                       /*apply_query=*/true);
-    else
-        frame_agg = dstd::make_unique<EngineAggFold>(*plan, intern,
-                                                     /*apply_query=*/true);
+    if (run->rule_query) {
+        auto made = IndexRuleFold::make(*plan, *run->rule_query, intern,
+                                        /*apply_query=*/true);
+        if (!made) co_return made.error();
+        rule_agg = std::move(*made);
+    } else {
+        auto spec = make_agg_input_spec(*plan);
+        if (!spec) co_return spec.error();
+        frame_agg = dstd::make_unique<EngineAggFold>(
+            *plan, intern, std::move(*spec), /*apply_query=*/true);
+    }
     Fold* agg = rule_agg ? static_cast<Fold*>(rule_agg.get())
                          : static_cast<Fold*>(frame_agg.get());
     dftracer::utils::index::extensions::BloomFold bloom(
@@ -966,7 +974,11 @@ coro::CoroTask<dstd::Result<bool>> try_collect_bootstrap(
     run.plan = &plan;
     run.stores = &stores;
     run.keep_state = !resolved_transform;
-    if (run.keep_state) run.rule_query = trace_fold_query(plan);
+    if (run.keep_state) {
+        auto rule = trace_fold_query(plan);
+        if (!rule) co_return rule.error();
+        run.rule_query = std::move(*rule);
+    }
     for (const auto& store : stores.roots) {
         dstd::Vector<std::uint64_t> costs;
         costs.reserve(store->members.size());
@@ -1028,7 +1040,9 @@ coro::CoroTask<dstd::Result<bool>> try_collect_bootstrap(
         stores.building.clear();
         ViewPlan rescan = plan;
         rescan.resolver.reset();
-        merged = co_await build_engine_agg_state(rescan);
+        auto rebuilt = co_await build_engine_agg_state(rescan);
+        if (!rebuilt) co_return rebuilt.error();
+        merged = std::move(*rebuilt);
     }
     co_return true;
 }
@@ -1112,8 +1126,13 @@ coro::CoroTask<dstd::Result<ExportStats>> run_materialize(
     }
 
     dataframe::AggStatePtr state;
-    const bool from_partials = co_await partials_collect(plan, state);
-    if (!from_partials) state = co_await build_engine_agg_state(plan);
+    const auto from_partials = co_await partials_collect(plan, state);
+    if (!from_partials.has_value()) co_return from_partials.error();
+    if (!*from_partials) {
+        auto built = co_await build_engine_agg_state(plan);
+        if (!built) co_return built.error();
+        state = std::move(*built);
+    }
     if (!rdir.empty()) {
         auto db = dftracer::utils::index::cache::open_rollup_db(
             rdir, dftracer::utils::index::cache::CacheStore::Mode::ReadWrite);
@@ -1171,7 +1190,7 @@ coro::CoroTask<dstd::Result<bool>> try_serve_aggregate_no_scan(
     if (!bootstrapped.has_value()) co_return bootstrapped.error();
     if (*bootstrapped) co_return true;
     // Named for the same reason.
-    const bool from_partials = co_await partials_collect(plan, out);
+    auto from_partials = co_await partials_collect(plan, out);
     co_return from_partials;
 }
 
@@ -1270,12 +1289,14 @@ coro::CoroTask<dstd::Result<TypedResult>> run_collect_typed(
     const ProgressFn* progress) {
     ensure_schema(plan);
     TypedResult out;
-    const bool from_partials = co_await partials_collect_typed(
+    const auto from_partials = co_await partials_collect_typed(
         plan, out.regular, out.aggregated, shard_begin, shard_end, progress);
-    if (from_partials) {
-        const bool from_columns = system_collect(
+    if (!from_partials.has_value()) co_return from_partials.error();
+    if (*from_partials) {
+        const auto from_columns = system_collect(
             plan, out.counters, shard_begin, shard_end, progress);
-        if (from_columns) co_return out;
+        if (!from_columns.has_value()) co_return from_columns.error();
+        if (*from_columns) co_return out;
     }
     // Scan the raw trace, so collect_typed returns rows rather than silently
     // none.
@@ -1285,7 +1306,8 @@ coro::CoroTask<dstd::Result<TypedResult>> run_collect_typed(
     dftracer::utils::dstd::StringIntern intern;
     TypedCollectFold fold(intern);
     std::array<Fold*, 1> folds{&fold};
-    co_await fuse(plan, vdef, folds, intern);
+    auto fused = co_await fuse(plan, vdef, folds, intern);
+    if (!fused) co_return fused.error();
     out.regular = fold.build_regular();
     out.aggregated = fold.build_aggregated();
     out.counters = fold.build_counters();
@@ -1577,7 +1599,9 @@ coro::CoroTask<dstd::Result<dataframe::DataFrame>> run_collect_rows(
     NativeRowFold fold(intern, plan.select, plan.time_scale,
                        metadata_rows(plan), by_path);
     dstd::Vector<Fold*> folds{&fold};
-    auto catalog = select_catalog_fold(plan, vdef, intern);
+    auto selected = select_catalog_fold(plan, vdef, intern);
+    if (!selected) co_return selected.error();
+    auto catalog = std::move(*selected);
     if (catalog) folds.push_back(catalog.get());
     auto fused = execute(lower_fused_folds(plan, vdef, folds), intern);
     auto fused_stats = co_await std::move(fused);
@@ -1634,7 +1658,9 @@ coro::CoroTask<dstd::Result<dataframe::DataFrame>> run_collect_rows_distinct(
     DistinctRowFold fold(intern, plan.select, std::move(keys), plan.time_scale,
                          metadata_rows(plan), by_path);
     dstd::Vector<Fold*> folds{&fold};
-    auto catalog = select_catalog_fold(plan, vdef, intern);
+    auto selected = select_catalog_fold(plan, vdef, intern);
+    if (!selected) co_return selected.error();
+    auto catalog = std::move(*selected);
     if (catalog) folds.push_back(catalog.get());
     auto fused = execute(lower_fused_folds(plan, vdef, folds), intern);
     auto fused_stats = co_await std::move(fused);
@@ -1668,7 +1694,8 @@ coro::CoroTask<dstd::Result<R>> run_containment_terminal(
         std::move(name_field), plan.time_scale, std::move(group),
         plan_by_path(plan) ? &plan_record_schema(plan) : nullptr);
     std::array<Fold*, 1> folds{&fold};
-    co_await fuse(plan, vdef, folds, intern);
+    auto fused = co_await fuse(plan, vdef, folds, intern);
+    if (!fused) co_return fused.error();
     co_return (fold.*build)();
 }
 
@@ -1753,8 +1780,10 @@ dstd::Result<dataframe::AggStatePtr> decode_partials(
 // An empty engine AggState shaped like `plan`'s aggregation (right specs and
 // key columns, zero groups), so a merge with no partials still finalizes to the
 // correct empty columns.
-dataframe::AggStatePtr empty_engine_state(const ViewPlan& plan) {
-    AggInputSpec spec = make_agg_input_spec(plan);
+dstd::Result<dataframe::AggStatePtr> empty_engine_state(const ViewPlan& plan) {
+    auto made = make_agg_input_spec(plan);
+    if (!made) return made.error();
+    AggInputSpec& spec = *made;
     dataframe::LoweredGroupAggs lowered =
         dataframe::lower_group_aggs(spec.gaggs);
     auto st = dataframe::agg_new(lowered.specs, spec.dyn_specs);
@@ -1771,6 +1800,8 @@ dataframe::AggStatePtr empty_engine_state(const ViewPlan& plan) {
 // merged rollup.
 coro::CoroTask<dstd::Result<void>> run_materialize_partials(
     const ViewPlan& plan, const dstd::Vector<dstd::StringView>& partials) {
+    if (auto resolved = resolve_record_schema(plan); !resolved)
+        co_return resolved.error();
     ensure_schema(plan);
     const dstd::String rdir =
         dftracer::utils::index::cache::rollup_cache_path(plan);
@@ -1793,9 +1824,12 @@ coro::CoroTask<dstd::Result<void>> run_materialize_partials(
     co_return dstd::Result<void>{};
 }
 
-dstd::Optional<dataframe::DataFrame> run_reconstruct_if_cached(
+dstd::Result<dstd::Optional<dataframe::DataFrame>> run_reconstruct_if_cached(
     const ViewPlan& plan) {
-    if (plan.group_by.empty() && plan.agg.empty()) return dstd::nullopt;
+    if (plan.group_by.empty() && plan.agg.empty())
+        return dstd::Optional<dataframe::DataFrame>();
+    if (auto resolved = resolve_record_schema(plan); !resolved)
+        return resolved.error();
     ensure_schema(plan);
     return try_serve_rollup(plan);
 }
@@ -1948,10 +1982,13 @@ void add_materialize_branch(ViewSessionState& state,
         if (rdir.empty()) return {};
         dataframe::AggStatePtr state_out;
         const auto ran = dftracer::utils::default_runtime().block_on(
-            coro::named("session_materialize", [&]() -> coro::CoroTask<void> {
-                state_out = co_await build_engine_agg_state(*plan);
-                co_return;
-            }()));
+            coro::named("session_materialize",
+                        [&]() -> coro::CoroTask<dstd::Result<void>> {
+                            auto built = co_await build_engine_agg_state(*plan);
+                            if (!built) co_return built.error();
+                            state_out = std::move(*built);
+                            co_return dstd::Result<void>{};
+                        }()));
         if (!ran || !state_out) return {};
         auto db = dftracer::utils::index::cache::open_rollup_db(
             rdir, dftracer::utils::index::cache::CacheStore::Mode::ReadWrite);
@@ -2109,7 +2146,9 @@ coro::CoroTask<dstd::Result<ExportStats>> run_session(
             // the tier; a partial wants the raw (unresolved) map. Both scan.
             if (!br.agg->apply_query && !br.agg->partial_out) {
                 if (auto df = try_serve_rollup(*full)) {
-                    *br.agg->out = apply_agg_post_ops(std::move(*df), *full);
+                    auto post = apply_agg_post_ops(std::move(*df), *full);
+                    if (!post) co_return post.error();
+                    *br.agg->out = std::move(*post);
                     continue;
                 }
                 dataframe::AggStatePtr served;
@@ -2118,8 +2157,12 @@ coro::CoroTask<dstd::Result<ExportStats>> run_session(
                 if (!try_serve_aggregate_no_scan_ok.has_value())
                     co_return try_serve_aggregate_no_scan_ok.error();
                 if (*try_serve_aggregate_no_scan_ok) {
-                    *br.agg->out = apply_agg_post_ops(
-                        finalize_engine_result(*served, *full), *full);
+                    auto finalized = finalize_engine_result(*served, *full);
+                    if (!finalized) co_return finalized.error();
+                    auto post =
+                        apply_agg_post_ops(std::move(*finalized), *full);
+                    if (!post) co_return post.error();
+                    *br.agg->out = std::move(*post);
                     continue;
                 }
             }
@@ -2127,11 +2170,17 @@ coro::CoroTask<dstd::Result<ExportStats>> run_session(
             // on its own.
             if (scans_by_overlap(*full)) {
                 auto st = co_await build_engine_agg_state(*full);
-                if (br.agg->partial_out)
-                    *br.agg->partial_out = encode_agg_partial(*st);
-                else
-                    *br.agg->out = apply_agg_post_ops(
-                        finalize_engine_result(*st, *full), *full);
+                if (!st) co_return st.error();
+                if (br.agg->partial_out) {
+                    *br.agg->partial_out = encode_agg_partial(**st);
+                } else {
+                    auto finalized = finalize_engine_result(**st, *full);
+                    if (!finalized) co_return finalized.error();
+                    auto post =
+                        apply_agg_post_ops(std::move(*finalized), *full);
+                    if (!post) co_return post.error();
+                    *br.agg->out = std::move(*post);
+                }
                 continue;
             }
             scan_branches.push_back(
@@ -2156,9 +2205,14 @@ coro::CoroTask<dstd::Result<ExportStats>> run_session(
     if (agg_b.size() == 1 && raw_b.empty() && !has_factories && !has_streams &&
         !agg_b[0]->br->agg->partial_out) {
         auto agg_state = co_await build_engine_agg_state(*agg_b[0]->agg_plan);
-        *agg_b[0]->br->agg->out = apply_agg_post_ops(
-            finalize_engine_result(*agg_state, *agg_b[0]->agg_plan),
-            *agg_b[0]->agg_plan);
+        if (!agg_state) co_return agg_state.error();
+        auto finalized =
+            finalize_engine_result(**agg_state, *agg_b[0]->agg_plan);
+        if (!finalized) co_return finalized.error();
+        auto post =
+            apply_agg_post_ops(std::move(*finalized), *agg_b[0]->agg_plan);
+        if (!post) co_return post.error();
+        *agg_b[0]->br->agg->out = std::move(*post);
         co_return ExportStats{};
     }
 
@@ -2202,11 +2256,16 @@ coro::CoroTask<dstd::Result<ExportStats>> run_session(
     dstd::Vector<dstd::UniquePtr<EngineAggFold>> aggs(agg_b.size());
     dstd::Vector<dstd::UniquePtr<IndexRuleFold>> rule_aggs(agg_b.size());
     for (std::size_t i = 0; i < agg_b.size(); ++i) {
-        rule_aggs[i] = IndexRuleFold::make(*agg_b[i]->agg_plan, intern,
-                                           agg_b[i]->apply_query);
-        if (!rule_aggs[i])
-            aggs[i] = dstd::make_unique<EngineAggFold>(
-                *agg_b[i]->agg_plan, intern, agg_b[i]->apply_query);
+        auto rule = IndexRuleFold::make(*agg_b[i]->agg_plan, intern,
+                                        agg_b[i]->apply_query);
+        if (!rule) co_return rule.error();
+        rule_aggs[i] = std::move(*rule);
+        if (rule_aggs[i]) continue;
+        auto spec = make_agg_input_spec(*agg_b[i]->agg_plan);
+        if (!spec) co_return spec.error();
+        aggs[i] = dstd::make_unique<EngineAggFold>(*agg_b[i]->agg_plan, intern,
+                                                   std::move(*spec),
+                                                   agg_b[i]->apply_query);
     }
 
     dstd::UniquePtr<BranchDriverFold> raw_fold;
@@ -2262,9 +2321,13 @@ coro::CoroTask<dstd::Result<ExportStats>> run_session(
             *agg_b[i]->br->agg->partial_out = encode_agg_partial(branch_state);
             continue;
         }
-        *agg_b[i]->br->agg->out = apply_agg_post_ops(
-            finalize_engine_result(branch_state, *agg_b[i]->agg_plan),
-            *agg_b[i]->agg_plan);
+        auto finalized =
+            finalize_engine_result(branch_state, *agg_b[i]->agg_plan);
+        if (!finalized) co_return finalized.error();
+        auto post =
+            apply_agg_post_ops(std::move(*finalized), *agg_b[i]->agg_plan);
+        if (!post) co_return post.error();
+        *agg_b[i]->br->agg->out = std::move(*post);
     }
     // Factory folds published their results in Fold::finalize during the fuse;
     // let the caller pull them (while the folds are still alive here).
@@ -2287,11 +2350,16 @@ coro::CoroTask<dstd::Result<ExportStats>> run_export_counters(
     if (!made) co_return made.error();
     ViewDefinition vdef = std::move(*made);
     dftracer::utils::dstd::StringIntern intern;
-    EngineAggFold agg(plan, intern);
+    auto spec = make_agg_input_spec(plan);
+    if (!spec) co_return spec.error();
+    EngineAggFold agg(plan, intern, std::move(*spec));
     std::array<Fold*, 1> folds{&agg};
-    ExportStats stats = co_await fuse(plan, vdef, folds, intern);
-    emit_counters_from_state(agg.state(), plan, sink);
-    co_return stats;
+    auto stats = co_await fuse(plan, vdef, folds, intern);
+    if (!stats) co_return stats.error();
+    if (auto emitted = emit_counters_from_state(agg.state(), plan, sink);
+        !emitted)
+        co_return emitted.error();
+    co_return *stats;
 }
 
 // Rank-local counter aggregation for distributed runs: aggregate this view's
@@ -2308,17 +2376,21 @@ coro::CoroTask<dstd::Result<dstd::String>> run_aggregate_partial(
     if (plan.phase != Phase::Counters && !plan.auto_numeric_metrics &&
         !has_occupancy) {
         dataframe::AggStatePtr served;
-        const bool from_partials = co_await partials_collect(plan, served);
-        if (from_partials) co_return encode_agg_partial(*served);
+        const auto from_partials = co_await partials_collect(plan, served);
+        if (!from_partials.has_value()) co_return from_partials.error();
+        if (*from_partials) co_return encode_agg_partial(*served);
     }
     auto state = co_await build_engine_agg_state(plan);
-    co_return encode_agg_partial(*state);
+    if (!state) co_return state.error();
+    co_return encode_agg_partial(**state);
 }
 
 // Merge partials and emit each combined group as a ph="C" counter event.
 dstd::Result<ExportStats> merge_counters_partials(
     const ViewPlan& plan, const dstd::Vector<dstd::StringView>& partials,
     ExportSink& sink) {
+    if (auto resolved = resolve_record_schema(plan); !resolved)
+        return resolved.error();
     const ViewPlan p = resolve_bucket_origin(plan);
     ensure_schema(p);
     auto decoded = decode_partials(partials);
@@ -2326,7 +2398,8 @@ dstd::Result<ExportStats> merge_counters_partials(
     dataframe::AggStatePtr state = std::move(*decoded);
     ExportStats st;
     if (state) {
-        emit_counters_from_state(*state, p, sink);
+        if (auto emitted = emit_counters_from_state(*state, p, sink); !emitted)
+            return emitted.error();
         st.events_matched =
             static_cast<std::uint64_t>(dataframe::agg_group_count(*state));
     }
@@ -2336,12 +2409,18 @@ dstd::Result<ExportStats> merge_counters_partials(
 // Merge partials into a materialized DataFrame (distributed collect()).
 dstd::Result<dataframe::DataFrame> merge_partials_to_table(
     const ViewPlan& plan, const dstd::Vector<dstd::StringView>& partials) {
+    if (auto resolved = resolve_record_schema(plan); !resolved)
+        return resolved.error();
     const ViewPlan p = resolve_bucket_origin(plan);
     ensure_schema(p);
     auto decoded = decode_partials(partials);
     if (!decoded) return decoded.error();
     dataframe::AggStatePtr state = std::move(*decoded);
-    if (!state) state = empty_engine_state(p);
+    if (!state) {
+        auto empty = empty_engine_state(p);
+        if (!empty) return empty.error();
+        state = std::move(*empty);
+    }
     return finalize_engine_result(*state, p);
 }
 

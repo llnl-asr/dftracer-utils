@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <checkpoint_indexer_helpers.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fmt.h>
@@ -65,9 +66,9 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
-                CheckpointIndexerFactory::create(gz_path, "", 1024, true);
+                dftu_utils_test::create_indexer(gz_path, "", 1024, true);
             REQUIRE(indexer != nullptr);
-            indexer->build();
+            dftu_utils_test::build_indexer(*indexer);
 
             auto config = IndexedFileLineIteratorConfig()
                               .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
@@ -88,9 +89,9 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
-                CheckpointIndexerFactory::create(gz_path, "", 1024, true);
+                dftu_utils_test::create_indexer(gz_path, "", 1024, true);
             REQUIRE(indexer != nullptr);
-            indexer->build();
+            dftu_utils_test::build_indexer(*indexer);
 
             auto config = IndexedFileLineIteratorConfig()
                               .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
@@ -111,9 +112,9 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
-                CheckpointIndexerFactory::create(gz_path, "", 1024, true);
+                dftu_utils_test::create_indexer(gz_path, "", 1024, true);
             REQUIRE(indexer != nullptr);
-            indexer->build();
+            dftu_utils_test::build_indexer(*indexer);
 
             auto config = IndexedFileLineIteratorConfig()
                               .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
@@ -135,9 +136,9 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
-                CheckpointIndexerFactory::create(gz_path, "", 1024, true);
+                dftu_utils_test::create_indexer(gz_path, "", 1024, true);
             REQUIRE(indexer != nullptr);
-            indexer->build();
+            dftu_utils_test::build_indexer(*indexer);
 
             // end=0 should auto-detect total lines
             auto config = IndexedFileLineIteratorConfig()
@@ -161,9 +162,9 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
-                CheckpointIndexerFactory::create(gz_path, "", 1024, true);
+                dftu_utils_test::create_indexer(gz_path, "", 1024, true);
             REQUIRE(indexer != nullptr);
-            indexer->build();
+            dftu_utils_test::build_indexer(*indexer);
 
             auto reader = dftu_utils_test::ok(
                 ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
@@ -191,9 +192,9 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
-                CheckpointIndexerFactory::create(gz_path, "", 1024, true);
+                dftu_utils_test::create_indexer(gz_path, "", 1024, true);
             REQUIRE(indexer != nullptr);
-            indexer->build();
+            dftu_utils_test::build_indexer(*indexer);
 
             auto config = IndexedFileLineIteratorConfig()
                               .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
@@ -214,9 +215,9 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
-                CheckpointIndexerFactory::create(gz_path, "", 1024, true);
+                dftu_utils_test::create_indexer(gz_path, "", 1024, true);
             REQUIRE(indexer != nullptr);
-            indexer->build();
+            dftu_utils_test::build_indexer(*indexer);
 
             auto config = IndexedFileLineIteratorConfig()
                               .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
@@ -267,9 +268,9 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
-                CheckpointIndexerFactory::create(gz_path, "", 4096, true);
+                dftu_utils_test::create_indexer(gz_path, "", 4096, true);
             REQUIRE(indexer != nullptr);
-            indexer->build();
+            dftu_utils_test::build_indexer(*indexer);
 
             auto config = IndexedFileLineIteratorConfig()
                               .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
@@ -295,9 +296,9 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
-                CheckpointIndexerFactory::create(gz_path, "", 1024, true);
+                dftu_utils_test::create_indexer(gz_path, "", 1024, true);
             REQUIRE(indexer != nullptr);
-            indexer->build();
+            dftu_utils_test::build_indexer(*indexer);
 
             auto config = IndexedFileLineIteratorConfig()
                               .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
@@ -333,9 +334,9 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
-                CheckpointIndexerFactory::create(gz_path, "", 1024, true);
+                dftu_utils_test::create_indexer(gz_path, "", 1024, true);
             REQUIRE(indexer != nullptr);
-            indexer->build();
+            dftu_utils_test::build_indexer(*indexer);
 
             auto config = IndexedFileLineIteratorConfig()
                               .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))

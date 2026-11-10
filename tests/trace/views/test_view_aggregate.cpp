@@ -110,12 +110,14 @@ using namespace dftracer::utils::trace;
 dataframe::DataFrame engine_collect(const views::detail::scan::ScanPlan& v) {
     Runtime rt;
     dataframe::DataFrame result;
-    dftu_utils_test::ok(rt.block_on(coro::named(
-        "engine-collect",
-        coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-            result = co_await views::detail::run_collect_via_engine(*v);
-        }))));
-    return views::detail::apply_agg_post_ops(std::move(result), *v);
+    dftu_utils_test::ok(rt.block_on(
+        coro::named("engine-collect",
+                    coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                        result = dftu_utils_test::ok(
+                            co_await views::detail::run_collect_via_engine(*v));
+                    }))));
+    return dftu_utils_test::ok(
+        views::detail::apply_agg_post_ops(std::move(result), *v));
 }
 
 // The engine scan with the tier/rollup fast paths bypassed:
@@ -124,13 +126,16 @@ dataframe::DataFrame engine_collect(const views::detail::scan::ScanPlan& v) {
 dataframe::DataFrame scan_only(const views::detail::scan::ScanPlan& v) {
     Runtime rt;
     dataframe::DataFrame result;
-    dftu_utils_test::ok(rt.block_on(coro::named(
-        "scan-only",
-        coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-            auto st = co_await views::detail::build_engine_agg_state(*v);
-            result = views::detail::finalize_engine_result(*st, *v);
-        }))));
-    return views::detail::apply_agg_post_ops(std::move(result), *v);
+    dftu_utils_test::ok(rt.block_on(
+        coro::named("scan-only",
+                    coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                        auto st = dftu_utils_test::ok(
+                            co_await views::detail::build_engine_agg_state(*v));
+                        result = dftu_utils_test::ok(
+                            views::detail::finalize_engine_result(*st, *v));
+                    }))));
+    return dftu_utils_test::ok(
+        views::detail::apply_agg_post_ops(std::move(result), *v));
 }
 
 // Build the aggregation tier every build makes, so the chunk partials can

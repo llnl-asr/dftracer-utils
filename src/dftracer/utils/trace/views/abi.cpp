@@ -10,7 +10,6 @@
 #include <dftracer/utils/duql/pipeline.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/views/abi.h>
-#include <dftracer/utils/trace/views/interim_guard.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
@@ -41,7 +40,9 @@ using dftracer::utils::trace::views::Phase;
 using dftracer::utils::trace::views::ViewFile;
 using dftracer::utils::trace::views::ViewSource;
 
+// A plan that holds a builder's error is a null handle, as an error is.
 dftu_view* wrap(trace::views::detail::scan::ScanPlan p) {
+    if (p->error) return nullptr;
     return new dftu_view{{}, std::move(p)};
 }
 
@@ -57,15 +58,6 @@ char* owned_string(dftracer::utils::dstd::StringView s) {
 
 void set_error(char** error, dftracer::utils::dstd::StringView what) {
     if (error) *error = owned_string(what);
-}
-
-// The plan operations behind a builder may still raise an exception: it is a
-// null handle, as an error is.
-template <class F>
-auto handle_or_null(F&& f) -> decltype(f()) {
-    auto r = dftracer::utils::trace::views::detail::guard_exceptions(
-        std::forward<F>(f));
-    return r ? *r : nullptr;
 }
 
 dftracer::utils::dstd::Result<View> duql_view(const dftu_view* v,
@@ -222,74 +214,63 @@ extern "C" {
 dftu_view* dftu_view_from_files(const char* const* paths,
                                 const char* const* index_paths, int32_t n) {
     if (!paths || n < 0) return nullptr;
-    return handle_or_null([&]() -> dftu_view* {
-        dftracer::utils::dstd::Vector<ViewFile> files;
-        files.reserve(static_cast<std::size_t>(n));
-        for (int32_t i = 0; i < n; ++i) {
-            if (!paths[i]) return nullptr;
-            ViewFile f;
-            f.file_path = paths[i];
-            if (index_paths && index_paths[i]) f.index_path = index_paths[i];
-            files.push_back(std::move(f));
-        }
-        return wrap(trace::views::detail::scan::from_files(std::move(files)));
-    });
+    dftracer::utils::dstd::Vector<ViewFile> files;
+    files.reserve(static_cast<std::size_t>(n));
+    for (int32_t i = 0; i < n; ++i) {
+        if (!paths[i]) return nullptr;
+        ViewFile f;
+        f.file_path = paths[i];
+        if (index_paths && index_paths[i]) f.index_path = index_paths[i];
+        files.push_back(std::move(f));
+    }
+    return wrap(trace::views::detail::scan::from_files(std::move(files)));
 }
 
 dftu_view* dftu_view_from_directory(const char* dir, const char* index_path,
                                     dftu_runtime* rt) {
     if (!dir) return nullptr;
-    return handle_or_null([&]() -> dftu_view* {
-        auto planned = runtime_of(rt)
-                           .submit(trace::views::detail::scan::from_directory(
-                               dir, index_path ? index_path : ""))
-                           .get();
-        if (!planned) return nullptr;
-        trace::views::detail::scan::ScanPlan v = std::move(*planned);
-        if (v->files.empty()) return nullptr;
-        return wrap(std::move(v));
-    });
+    auto planned = runtime_of(rt)
+                       .submit(trace::views::detail::scan::from_directory(
+                           dir, index_path ? index_path : ""))
+                       .get();
+    if (!planned) return nullptr;
+    trace::views::detail::scan::ScanPlan v = std::move(*planned);
+    if (v->files.empty()) return nullptr;
+    return wrap(std::move(v));
 }
 
 void dftu_view_free(dftu_view* v) { delete v; }
 
 dftu_view* dftu_view_filter(const dftu_view* v, const dftu_duql* q) {
     if (!v || !q) return nullptr;
-    return handle_or_null([&]() -> dftu_view* {
-        return wrap(
-            trace::views::detail::scan::filter(v->p, duql_handle_unwrap(q)));
-    });
+    return wrap(
+        trace::views::detail::scan::filter(v->p, duql_handle_unwrap(q)));
 }
 
 char* dftu_view_schema_tree(const dftu_view* v) {
     if (!v) return nullptr;
-    return handle_or_null([&]() -> char* {
-        return owned_string(
-            schema_tree_json(trace::views::detail::scan::schema_tree(v->p)));
-    });
+    auto tree = trace::views::detail::scan::schema_tree(v->p);
+    if (!tree) return nullptr;
+    return owned_string(schema_tree_json(*tree));
 }
 
 void dftu_view_string_free(char* s) { std::free(s); }
 
 dftu_view* dftu_view_record_schema(const dftu_view* v, const char* id) {
     if (!v || !id) return nullptr;
-    return handle_or_null([&]() -> dftu_view* {
-        return wrap(trace::views::detail::scan::record_schema(v->p, id));
-    });
+    return wrap(trace::views::detail::scan::record_schema(v->p, id));
 }
 
 dftu_view* dftu_view_select(const dftu_view* v, const char* const* cols,
                             int32_t n) {
     if (!v || n < 0 || (n > 0 && !cols)) return nullptr;
-    return handle_or_null([&]() -> dftu_view* {
-        dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> c;
-        c.reserve(static_cast<std::size_t>(n));
-        for (int32_t i = 0; i < n; ++i) {
-            if (!cols[i]) return nullptr;
-            c.emplace_back(cols[i]);
-        }
-        return wrap(trace::views::detail::scan::select(v->p, std::move(c)));
-    });
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> c;
+    c.reserve(static_cast<std::size_t>(n));
+    for (int32_t i = 0; i < n; ++i) {
+        if (!cols[i]) return nullptr;
+        c.emplace_back(cols[i]);
+    }
+    return wrap(trace::views::detail::scan::select(v->p, std::move(c)));
 }
 
 dftu_view* dftu_view_phase(const dftu_view* v, int phase) {
@@ -314,9 +295,7 @@ dftu_view* dftu_view_phase(const dftu_view* v, int phase) {
         default:
             return nullptr;
     }
-    return handle_or_null([&]() -> dftu_view* {
-        return wrap(trace::views::detail::scan::phase(v->p, p));
-    });
+    return wrap(trace::views::detail::scan::phase(v->p, p));
 }
 
 dftu_view* dftu_view_all(const dftu_view* v) {
@@ -325,86 +304,71 @@ dftu_view* dftu_view_all(const dftu_view* v) {
 
 dftu_view* dftu_view_limit(const dftu_view* v, uint64_t n) {
     if (!v) return nullptr;
-    return handle_or_null([&]() -> dftu_view* {
-        return wrap(trace::views::detail::scan::limit(v->p, n));
-    });
+    return wrap(trace::views::detail::scan::limit(v->p, n));
 }
 
 dftu_view* dftu_view_offset(const dftu_view* v, uint64_t n) {
     if (!v) return nullptr;
-    return handle_or_null([&]() -> dftu_view* {
-        return wrap(trace::views::detail::scan::offset(v->p, n));
-    });
+    return wrap(trace::views::detail::scan::offset(v->p, n));
 }
 
 dftu_view* dftu_view_sort_by(const dftu_view* v, const char* column,
                              int32_t descending) {
     if (!v || !column) return nullptr;
-    return handle_or_null([&]() -> dftu_view* {
-        return wrap(
-            trace::views::detail::scan::sort_by(v->p, column, descending != 0));
-    });
+    return wrap(
+        trace::views::detail::scan::sort_by(v->p, column, descending != 0));
 }
 
 dftu_view* dftu_view_group_by(const dftu_view* v, const dftu_group_key* keys,
                               int32_t n) {
     if (!v || n < 0 || (n > 0 && !keys)) return nullptr;
-    return handle_or_null([&]() -> dftu_view* {
-        dftracer::utils::dstd::Vector<GroupKey> ks;
-        ks.reserve(static_cast<std::size_t>(n));
-        for (int32_t i = 0; i < n; ++i) {
-            GroupKey k;
-            k.kind = to_kind(keys[i].kind);
-            if (keys[i].arg) k.arg = keys[i].arg;
-            k.transform = to_transform(keys[i].transform);
-            if (k.transform == GroupKey::Transform::Bucket) {
-                if (keys[i].n_transform_args > 0 && !keys[i].transform_args)
-                    return nullptr;
-                for (int32_t j = 0; j < keys[i].n_transform_args; ++j) {
-                    if (!keys[i].transform_args[j]) return nullptr;
-                    k.transform_args.emplace_back(keys[i].transform_args[j]);
-                }
+    dftracer::utils::dstd::Vector<GroupKey> ks;
+    ks.reserve(static_cast<std::size_t>(n));
+    for (int32_t i = 0; i < n; ++i) {
+        GroupKey k;
+        k.kind = to_kind(keys[i].kind);
+        if (keys[i].arg) k.arg = keys[i].arg;
+        k.transform = to_transform(keys[i].transform);
+        if (k.transform == GroupKey::Transform::Bucket) {
+            if (keys[i].n_transform_args > 0 && !keys[i].transform_args)
+                return nullptr;
+            for (int32_t j = 0; j < keys[i].n_transform_args; ++j) {
+                if (!keys[i].transform_args[j]) return nullptr;
+                k.transform_args.emplace_back(keys[i].transform_args[j]);
             }
-            ks.push_back(std::move(k));
         }
-        return wrap(trace::views::detail::scan::group_by(v->p, std::move(ks)));
-    });
+        ks.push_back(std::move(k));
+    }
+    return wrap(trace::views::detail::scan::group_by(v->p, std::move(ks)));
 }
 
 dftu_view* dftu_view_agg(const dftu_view* v, const dftu_view_agg_spec* specs,
                          int32_t n) {
     if (!v || n < 0 || (n > 0 && !specs)) return nullptr;
-    return handle_or_null([&]() -> dftu_view* {
-        dftracer::utils::dstd::Vector<AggSpec> ag;
-        ag.reserve(static_cast<std::size_t>(n));
-        for (int32_t i = 0; i < n; ++i) {
-            ag.emplace_back(to_agg_op(specs[i].op),
-                            specs[i].field ? specs[i].field : "",
-                            specs[i].out ? specs[i].out : "",
-                            specs[i].by ? specs[i].by : "", specs[i].q);
-        }
-        return wrap(trace::views::detail::scan::agg(v->p, std::move(ag)));
-    });
+    dftracer::utils::dstd::Vector<AggSpec> ag;
+    ag.reserve(static_cast<std::size_t>(n));
+    for (int32_t i = 0; i < n; ++i) {
+        ag.emplace_back(to_agg_op(specs[i].op),
+                        specs[i].field ? specs[i].field : "",
+                        specs[i].out ? specs[i].out : "",
+                        specs[i].by ? specs[i].by : "", specs[i].q);
+    }
+    return wrap(trace::views::detail::scan::agg(v->p, std::move(ag)));
 }
 
 dftu_dataframe* dftu_view_collect(const dftu_view* v, dftu_runtime* rt) {
     if (!v) return nullptr;
-    return handle_or_null([&]() -> dftu_dataframe* {
-        auto frame =
-            runtime_of(rt)
-                .submit(trace::views::detail::scan::collect_frame(v->p))
-                .get();
-        if (!frame) return nullptr;
-        return dataframe_handle_wrap(std::move(*frame));
-    });
+    auto frame = runtime_of(rt)
+                     .submit(trace::views::detail::scan::collect_frame(v->p))
+                     .get();
+    if (!frame) return nullptr;
+    return dataframe_handle_wrap(std::move(*frame));
 }
 
 dftu_lazyframe* dftu_view_lazy(const dftu_view* v) {
     if (!v) return nullptr;
-    return handle_or_null([&]() -> dftu_lazyframe* {
-        return lazyframe_handle_wrap(LazyFrame::scan(
-            dftracer::utils::dstd::make_shared<ViewSource>(v->p)));
-    });
+    return lazyframe_handle_wrap(
+        LazyFrame::scan(dftracer::utils::dstd::make_shared<ViewSource>(v->p)));
 }
 
 dftu_lazyframe* dftu_view_duql(const dftu_view* v, const char* text,

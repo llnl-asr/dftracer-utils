@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <checkpoint_indexer_helpers.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -68,7 +69,7 @@ TEST_CASE_TEMPLATE("Indexer creation and destruction", FormatType, GZIPFormat) {
     FormatTestFixture fixture(FormatType::value);
 
     SUBCASE("Basic indexer creation") {
-        auto indexer = CheckpointIndexerFactory::create(
+        auto indexer = dftu_utils_test::create_indexer(
             fixture.test_file(), fixture.index_file(), 1024 * 1024);
         REQUIRE(indexer != nullptr);
         CHECK_FALSE(indexer->exists());
@@ -76,13 +77,10 @@ TEST_CASE_TEMPLATE("Indexer creation and destruction", FormatType, GZIPFormat) {
     }
 
     SUBCASE("Invalid file path") {
-        try {
-            (void)CheckpointIndexerFactory::create(
-                "/nonexistent/file.gz", fixture.index_file(), 1024 * 1024);
-            FAIL("create did not throw");
-        } catch (const common::DFTUtilsException& e) {
-            CHECK(e.error().is_code(common::ErrorCode::Indexer));
-        }
+        auto created = index::gzip::CheckpointIndexerFactory::try_create(
+            "/nonexistent/file.gz", fixture.index_file(), 1024 * 1024);
+        REQUIRE_FALSE(created.has_value());
+        CHECK(created.error().is_code(common::ErrorCode::Indexer));
     }
 }
 
@@ -90,32 +88,32 @@ TEST_CASE_TEMPLATE("Index building", FormatType, GZIPFormat) {
     FormatTestFixture fixture(FormatType::value);
 
     SUBCASE("Basic index building") {
-        auto indexer = CheckpointIndexerFactory::create(
+        auto indexer = dftu_utils_test::create_indexer(
             fixture.test_file(), fixture.index_file(), 1024 * 1024);
         REQUIRE(indexer != nullptr);
 
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
         CHECK(indexer->line_count() > 0);
     }
 
     SUBCASE("Rebuild detection") {
-        auto indexer = CheckpointIndexerFactory::create(
+        auto indexer = dftu_utils_test::create_indexer(
             fixture.test_file(), fixture.index_file(), 1024 * 1024);
         REQUIRE(indexer != nullptr);
 
         // First build
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
 
         // Check if rebuild is needed (should not be needed after fresh build)
         CHECK_FALSE(indexer->need_rebuild());
     }
 
     SUBCASE("Force rebuild") {
-        auto indexer = CheckpointIndexerFactory::create(
+        auto indexer = dftu_utils_test::create_indexer(
             fixture.test_file(), fixture.index_file(), 1024 * 1024, true);
         REQUIRE(indexer != nullptr);
 
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
     }
 }
 
@@ -123,10 +121,10 @@ TEST_CASE_TEMPLATE("Reader creation and basic functionality", FormatType,
                    GZIPFormat) {
     FormatTestFixture fixture(FormatType::value);
 
-    auto indexer = CheckpointIndexerFactory::create(
+    auto indexer = dftu_utils_test::create_indexer(
         fixture.test_file(), fixture.index_file(), 1024 * 1024);
     REQUIRE(indexer != nullptr);
-    indexer->build();
+    dftu_utils_test::build_indexer(*indexer);
 
     SUBCASE("Reader creation with indexer") {
         auto reader = dftu_utils_test::ok(ReaderFactory::create(indexer));
@@ -145,10 +143,10 @@ TEST_CASE_TEMPLATE("Reader creation and basic functionality", FormatType,
 TEST_CASE_TEMPLATE("Data reading operations", FormatType, GZIPFormat) {
     FormatTestFixture fixture(FormatType::value);
 
-    auto indexer = CheckpointIndexerFactory::create(
+    auto indexer = dftu_utils_test::create_indexer(
         fixture.test_file(), fixture.index_file(), 512 * 1024);
     REQUIRE(indexer != nullptr);
-    indexer->build();
+    dftu_utils_test::build_indexer(*indexer);
 
     auto reader = dftu_utils_test::ok(ReaderFactory::create(indexer));
     REQUIRE(reader != nullptr);
@@ -226,10 +224,10 @@ TEST_CASE_TEMPLATE("Data reading operations", FormatType, GZIPFormat) {
 TEST_CASE_TEMPLATE("JSON boundary detection", FormatType, GZIPFormat) {
     FormatTestFixture fixture(FormatType::value);
 
-    auto indexer = CheckpointIndexerFactory::create(
+    auto indexer = dftu_utils_test::create_indexer(
         fixture.test_file(), fixture.index_file(), 512 * 1024);
     REQUIRE(indexer != nullptr);
-    indexer->build();
+    dftu_utils_test::build_indexer(*indexer);
 
     auto reader = dftu_utils_test::ok(ReaderFactory::create(indexer));
     REQUIRE(reader != nullptr);
@@ -279,10 +277,10 @@ TEST_CASE_TEMPLATE("Line-based reading", FormatType, GZIPFormat) {
 
     dstd::String large_index_file = large_env.get_index_path(large_test_file);
 
-    auto indexer = CheckpointIndexerFactory::create(
+    auto indexer = dftu_utils_test::create_indexer(
         large_test_file, large_index_file, 100 * 1024);
     REQUIRE(indexer != nullptr);
-    indexer->build();
+    dftu_utils_test::build_indexer(*indexer);
 
     uint64_t total_lines = indexer->line_count();
     CHECK(total_lines > 0);

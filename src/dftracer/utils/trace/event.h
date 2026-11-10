@@ -264,7 +264,9 @@ struct DFTracerEvent {
         if (!root.is_object()) return false;
 
         bool has_ph = false;
-        for (auto field : root.get_object()) {
+        simdjson::dom::object members;
+        if (root.get_object().get(members)) return false;
+        for (auto field : members) {
             dstd::StringView key = field.key;
             simdjson::dom::element val = field.value;
             switch (key.size()) {

@@ -39,14 +39,9 @@ coro::CoroTask<dstd::Result<ExportStats>> execute(
             dstd::fatal("pipeline: sink node carries no fold");
         folds.push_back(s.fold);
     }
-    // fuse still throws; its exception is the error here.
     auto fused = fuse(*pipeline.source.plan, *pipeline.source.vdef, folds,
                       intern, covered, limit);
-    auto settled = co_await coro::settle(std::move(fused));
-    if (settled.stopped) co_await coro::stop_here();
-    if (settled.exception)
-        co_return common::error_of_exception(settled.exception);
-    co_return *settled.value;
+    co_return co_await std::move(fused);
 }
 
 }  // namespace dftracer::utils::trace::views::detail

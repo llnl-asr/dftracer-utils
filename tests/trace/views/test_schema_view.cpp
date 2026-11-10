@@ -95,7 +95,7 @@ TEST_SUITE("SchemaView") {
         TestEnvironment env(10);
         const auto gz = write_log(env);
         dstd::Map<dstd::String, dstd::String> types;
-        for (const auto& c : view_of(gz).column_info())
+        for (const auto& c : dftu_utils_test::ok(view_of(gz).column_info()))
             types[dstd::String(c.name)] = dstd::String(c.type);
         CHECK(types["status"] == "int64");
         CHECK(types["took"] == "float64");
@@ -204,7 +204,7 @@ TEST_SUITE("SchemaView") {
         TestEnvironment env(10);
         const auto gz = write_log(env);
         dstd::Map<dstd::String, SchemaLeaf> tree;
-        for (auto& leaf : view_of(gz).schema_tree())
+        for (auto& leaf : dftu_utils_test::ok(view_of(gz).schema_tree()))
             tree[dstd::String(leaf.path)] = std::move(leaf);
         REQUIRE(tree.count("status"));
         CHECK(tree["status"].type == "mixed");

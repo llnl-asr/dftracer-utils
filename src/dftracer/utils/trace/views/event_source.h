@@ -95,7 +95,9 @@ class DomSource {
     template <class F>
     void for_each_numeric_arg(F&& fn) const {
         if (!has_args_) return;
-        for (auto field : args_.get_object())
+        simdjson::dom::object members;
+        if (args_.get_object().get(members)) return;
+        for (auto field : members)
             if (auto n = as_number(field.value)) fn(field.key, *n);
     }
 

@@ -116,8 +116,8 @@ bool has(const dataframe::DataFrame& f, const dstd::String& n) {
 
 // Reads the catalog as it is: schema_tree() would build a missing one.
 bool declares(const View& v, const dstd::String& path) {
-    for (const auto& leaf :
-         dftracer::utils::trace::views::detail::catalog_leaves(v))
+    for (const auto& leaf : dftu_utils_test::ok(
+             dftracer::utils::trace::views::detail::catalog_leaves(v)))
         if (dstd::String(leaf.path) == path) return true;
     return false;
 }

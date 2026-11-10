@@ -23,7 +23,6 @@
 #include <dftracer/utils/trace/time_metric.h>
 #include <dftracer/utils/trace/views/containment_fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
-#include <dftracer/utils/trace/views/interim_guard.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
 #include <dftracer/utils/trace/views/result_join.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -532,21 +531,18 @@ View View::from_file(dstd::String file_path, dstd::String index_path) {
 }
 
 View View::from_files(dstd::Vector<ViewFile> files) {
-    auto plan = detail::guard_exceptions(
-        [&] { return detail::scan::from_files(std::move(files)); });
-    if (!plan) return View().failed(plan.error());
-    return View(std::move(*plan));
+    auto plan = detail::scan::from_files(std::move(files));
+    if (plan->error) return View().failed(*plan->error);
+    return View(std::move(plan));
 }
 
 coro::CoroTask<View> View::from_directory(dstd::String dir,
                                           dstd::String index_path) {
     auto listing =
         detail::scan::from_directory(std::move(dir), std::move(index_path));
-    auto settled = co_await coro::settle(std::move(listing));
-    if (settled.stopped) co_await coro::stop_here();
-    if (settled.exception)
-        co_return View().failed(common::error_of_exception(settled.exception));
-    co_return View(std::move(*settled.value));
+    detail::ScanPlan plan = co_await std::move(listing);
+    if (plan->error) co_return View().failed(*plan->error);
+    co_return View(std::move(plan));
 }
 
 dstd::Result<void> View::status() const { return lf_.status(); }
@@ -572,11 +568,11 @@ View View::reshape(
             dataframe::detail::first_non_filter_op(lf_))
         return refuse(dstd::fmt<"must come before '{}'">(*op));
     if (!dataframe::detail::first_op(lf_)) {
-        auto next = detail::guard_exceptions([&] { return step(plan_); });
-        if (!next) return failed(next.error());
-        dataframe::LazyFrame lf = dataframe::detail::rebase(
-            lf_, dstd::make_shared<ViewSource>(*next));
-        return View(std::move(*next), std::move(lf));
+        detail::ScanPlan next = step(plan_);
+        if (next->error) return failed(*next->error);
+        dataframe::LazyFrame lf =
+            dataframe::detail::rebase(lf_, dstd::make_shared<ViewSource>(next));
+        return View(std::move(next), std::move(lf));
     }
     // The filters before a builder select the events it sees, so they move
     // into the scan first.
@@ -586,24 +582,24 @@ View View::reshape(
     if (!residual) {
         const auto& src = static_cast<const ViewSource&>(
             *dataframe::detail::plan_source(planned));
-        auto next = detail::guard_exceptions([&] { return step(src.plan()); });
-        if (!next) return failed(next.error());
+        detail::ScanPlan next = step(src.plan());
+        if (next->error) return failed(*next->error);
         dataframe::LazyFrame lf = dataframe::detail::rebase(
-            planned, dstd::make_shared<ViewSource>(*next));
-        return View(std::move(*next), std::move(lf));
+            planned, dstd::make_shared<ViewSource>(next));
+        return View(std::move(next), std::move(lf));
     }
     // A filter the scan cannot evaluate stays above it, which is sound only
     // while the builder leaves the columns and their values as they were.
-    auto next = detail::guard_exceptions([&] { return step(plan_); });
-    if (!next) return failed(next.error());
+    detail::ScanPlan next = step(plan_);
+    if (next->error) return failed(*next->error);
     if (dstd::StringView(builder) == "time_scale" ||
-        ViewSource(*next).names() != ViewSource(plan_).names())
+        ViewSource(next).names() != ViewSource(plan_).names())
         return refuse(
             dstd::fmt<"cannot follow '{}': the trace scan cannot evaluate "
                       "that filter">(*residual));
     dataframe::LazyFrame lf =
-        dataframe::detail::rebase(lf_, dstd::make_shared<ViewSource>(*next));
-    return View(std::move(*next), std::move(lf));
+        dataframe::detail::rebase(lf_, dstd::make_shared<ViewSource>(next));
+    return View(std::move(next), std::move(lf));
 }
 
 bool View::aggregates() const {
@@ -923,7 +919,7 @@ coro::CoroTask<dstd::Result<ExportStats>> View::run_folds(
     return scan_folds(std::move(*v), folds, intern);
 }
 
-dstd::Vector<TraceConfig> View::config() const {
+dstd::Result<dstd::Vector<TraceConfig>> View::config() const {
     return detail::scan::config(plan_);
 }
 
@@ -931,21 +927,26 @@ dstd::Result<void> View::schema_status() const {
     return detail::resolve_record_schema(*plan_);
 }
 
-dstd::Vector<dstd::String> View::columns() const {
-    detail::scan::ensure_catalog(plan_);
+dstd::Result<dstd::Vector<dstd::String>> View::columns() const {
+    if (auto kept = lf_.status(); !kept) return kept.error();
+    if (auto ensured = detail::scan::ensure_catalog(plan_); !ensured)
+        return ensured.error();
     return detail::scan::columns(plan_);
 }
 
-dstd::Vector<ColumnInfo> View::column_info() const {
-    detail::scan::ensure_catalog(plan_);
+dstd::Result<dstd::Vector<ColumnInfo>> View::column_info() const {
+    if (auto kept = lf_.status(); !kept) return kept.error();
+    if (auto ensured = detail::scan::ensure_catalog(plan_); !ensured)
+        return ensured.error();
     return detail::scan::schema(plan_);
 }
 
-dstd::Vector<SchemaLeaf> View::schema_tree() const {
+dstd::Result<dstd::Vector<SchemaLeaf>> View::schema_tree() const {
+    if (auto kept = lf_.status(); !kept) return kept.error();
     return detail::scan::schema_tree(plan_);
 }
 
-dstd::Vector<SchemaLeaf> detail::catalog_leaves(const View& v) {
+dstd::Result<dstd::Vector<SchemaLeaf>> detail::catalog_leaves(const View& v) {
     return detail::scan::catalog_tree(v.plan_);
 }
 
@@ -990,17 +991,16 @@ bool View::filters_events() const {
            !dataframe::detail::first_non_filter_op(lf_);
 }
 
-// The bookkeeping getters below raise the exception of their plan, as the plan
-// operations they call still do; they raise the error of absorbed() the same
-// way.
-bool View::export_would_bootstrap() const {
-    return detail::scan::export_would_bootstrap(
-        common::unwrap(absorbed("export_would_bootstrap", Need::EventsWindow)));
+dstd::Result<bool> View::export_would_bootstrap() const {
+    auto v = absorbed("export_would_bootstrap", Need::EventsWindow);
+    if (!v) return v.error();
+    return detail::scan::export_would_bootstrap(*v);
 }
 
-bool View::collect_would_bootstrap() const {
-    return detail::scan::collect_would_bootstrap(
-        common::unwrap(absorbed("collect_would_bootstrap", Need::Any)));
+dstd::Result<bool> View::collect_would_bootstrap() const {
+    auto v = absorbed("collect_would_bootstrap", Need::Any);
+    if (!v) return v.error();
+    return detail::scan::collect_would_bootstrap(*v);
 }
 
 dstd::Result<ExportStats> View::merge_counter_partials(
@@ -1026,9 +1026,11 @@ coro::CoroTask<dstd::Result<void>> View::materialize_partials(
     return materialize_from_partials(std::move(*v), partials);
 }
 
-dstd::Optional<dataframe::DataFrame> View::reconstruct_if_cached() const {
-    return detail::scan::reconstruct_if_cached(
-        common::unwrap(absorbed("reconstruct_if_cached", Need::Aggregate)));
+dstd::Result<dstd::Optional<dataframe::DataFrame>> View::reconstruct_if_cached()
+    const {
+    auto v = absorbed("reconstruct_if_cached", Need::Aggregate);
+    if (!v) return v.error();
+    return detail::scan::reconstruct_if_cached(*v);
 }
 
 coro::CoroTask<dstd::Result<ExportStats>> View::materialize(
@@ -1056,19 +1058,22 @@ dataframe::LazyResult<ExportStats> View::materialize(
             }};
 }
 
-dstd::Vector<dstd::String> View::mv_source() const {
-    return detail::scan::mv_source(
-        common::unwrap(absorbed("mv_source", Need::Any)));
+dstd::Result<dstd::Vector<dstd::String>> View::mv_source() const {
+    auto v = absorbed("mv_source", Need::Any);
+    if (!v) return v.error();
+    return detail::scan::mv_source(*v);
 }
 
-dstd::String View::materialize_dir() const {
-    return detail::scan::materialize_dir(
-        common::unwrap(absorbed("materialize_dir", Need::Any)));
+dstd::Result<dstd::String> View::materialize_dir() const {
+    auto v = absorbed("materialize_dir", Need::Any);
+    if (!v) return v.error();
+    return detail::scan::materialize_dir(*v);
 }
 
-void View::register_materialized(const dstd::String& dir) const {
-    detail::scan::register_materialized(
-        common::unwrap(absorbed("register_materialized", Need::Any)), dir);
+dstd::Result<void> View::register_materialized(const dstd::String& dir) const {
+    auto v = absorbed("register_materialized", Need::Any);
+    if (!v) return v.error();
+    return detail::scan::register_materialized(*v, dir);
 }
 
 View View::select(dstd::Vector<dstd::String> names) const {

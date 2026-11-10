@@ -278,7 +278,7 @@ TEST_SUITE("ViewMV") {
 
         // Coordinator picks the shared MV dir; each shard materializes its own
         // file into its own subdir; the coordinator writes the manifest.
-        const dstd::String dir = full().materialize_dir();
+        const dstd::String dir = dftu_utils_test::ok(full().materialize_dir());
         REQUIRE(!dir.empty());
         int r = 0;
         for (const auto& f : both) {
@@ -296,7 +296,7 @@ TEST_SUITE("ViewMV") {
                                     .sink_trace(opts)
                                     .get());
         }
-        full().register_materialized(dstd::String(dir));
+        dftu_utils_test::ok(full().register_materialized(dstd::String(dir)));
         // The parts of both ranks sit under the one view root.
         dstd::Vector<dstd::String> parts;
         collect_parts(dstd::String(dftracer::utils::index::view_parts_dir(dir)),

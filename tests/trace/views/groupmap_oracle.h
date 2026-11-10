@@ -1020,13 +1020,15 @@ inline dftracer::utils::dataframe::DataFrame groupmap_oracle(
                 OracleAggFold agg(plan, intern);
                 std::array<dftracer::utils::trace::views::detail::Fold*, 1>
                     folds{&agg};
-                co_await dftracer::utils::trace::views::detail::fuse(
-                    plan, vdef, folds, intern);
+                dftu_utils_test::ok(
+                    co_await dftracer::utils::trace::views::detail::fuse(
+                        plan, vdef, folds, intern));
                 resolve_group_keys(agg.map(), plan, agg.maps());
                 result = to_batch(agg.map(), plan);
             }))));
-    return dftracer::utils::trace::views::detail::apply_agg_post_ops(
-        std::move(result), plan);
+    return dftu_utils_test::ok(
+        dftracer::utils::trace::views::detail::apply_agg_post_ops(
+            std::move(result), plan));
 }
 
 }  // namespace gmoracle

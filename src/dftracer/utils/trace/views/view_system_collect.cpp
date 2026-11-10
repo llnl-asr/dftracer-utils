@@ -42,33 +42,35 @@ bool is_hash_arg(dstd::StringView path) {
 // The plan's time_bucket and group_by do not apply here, as the counters keep
 // their own (host, name, time_bucket) grain.
 dstd::Optional<index::Snapshot> covering_index(const ViewPlan& plan) {
-    if (plan.files.empty() || is_past_pin(plan)) return dstd::nullopt;
+    const auto past_pin = is_past_pin(plan);
+    if (plan.files.empty() || !past_pin.has_value() || *past_pin)
+        return dstd::nullopt;
     const dstd::String& index_path = plan.files.front().index_path;
     if (index_path.empty()) return dstd::nullopt;
-    try {
-        auto snapshot = common::unwrap(snapshot_of(plan, index_path));
-        const auto config = common::unwrap(
-            index::schemas::dft::agg::tier::read_config(snapshot));
-        if (!config) return dstd::nullopt;
-        dstd::HashSet<dstd::String> current;
-        for (const auto& file : common::unwrap(snapshot.files())) {
-            if (snapshot.extension(file, index::store::IndexExtension::Agg,
-                                   config->params_hash) ==
-                index::Freshness::Current)
-                current.emplace(file.path().data(), file.path().size());
-        }
-        if (current.size() != plan.files.size()) return dstd::nullopt;
-        for (const auto& f : plan.files) {
-            if (f.index_path != index_path) return dstd::nullopt;
-            const dstd::String logical =
-                index::store::internal::get_logical_path(f.file_path);
-            if (current.find(dstd::StringView(logical)) == current.end())
-                return dstd::nullopt;
-        }
-        return snapshot;
-    } catch (const std::exception&) {
-        return dstd::nullopt;
+    // An index that cannot be read has no covering columns; the scan reports
+    // it.
+    auto snapshot = snapshot_of(plan, index_path);
+    if (!snapshot) return dstd::nullopt;
+    const auto config = index::schemas::dft::agg::tier::read_config(*snapshot);
+    if (!config || !*config) return dstd::nullopt;
+    const auto files = snapshot->files();
+    if (!files) return dstd::nullopt;
+    dstd::HashSet<dstd::String> current;
+    for (const auto& file : *files) {
+        if (snapshot->extension(file, index::store::IndexExtension::Agg,
+                                (*config)->params_hash) ==
+            index::Freshness::Current)
+            current.emplace(file.path().data(), file.path().size());
     }
+    if (current.size() != plan.files.size()) return dstd::nullopt;
+    for (const auto& f : plan.files) {
+        if (f.index_path != index_path) return dstd::nullopt;
+        const dstd::String logical =
+            index::store::internal::get_logical_path(f.file_path);
+        if (current.find(dstd::StringView(logical)) == current.end())
+            return dstd::nullopt;
+    }
+    return std::move(*snapshot);
 }
 
 struct GroupKey {
@@ -224,24 +226,26 @@ dataframe::DataFrame build_counters_frame(const Groups& groups, int shard_begin,
 
 }  // namespace
 
-bool system_collect(const ViewPlan& plan, dataframe::DataFrame& out_table,
-                    int shard_begin, int shard_end, const ProgressFn*) {
+dstd::Result<bool> system_collect(const ViewPlan& plan,
+                                  dataframe::DataFrame& out_table,
+                                  int shard_begin, int shard_end,
+                                  const ProgressFn*) {
     auto index = covering_index(plan);
     if (!index) return false;
     if (shard_end <= 0)
         shard_end = index::schemas::dft::agg::AGG_KEY_NUM_SHARDS;
-    const auto stored =
-        common::unwrap(index::schemas::dft::agg::tier::read_config(*index));
-    if (!stored) return false;
+    const auto stored = index::schemas::dft::agg::tier::read_config(*index);
+    if (!stored) return stored.error();
+    if (!*stored) return false;
     index::schemas::dft::agg::AggregationConfig cfg;
-    cfg.time_interval_us = stored->time_interval_us;
+    cfg.time_interval_us = (*stored)->time_interval_us;
 
     Groups groups;
     for (const auto& f : plan.files) {
         const auto file =
             index->file(index::store::internal::get_logical_path(f.file_path));
         if (!file) return false;
-        common::unwrap(index::for_each_agg_chunk_columns(
+        const auto walked = index::for_each_agg_chunk_columns(
             *index, *file,
             [&](std::uint64_t,
                 const index::schemas::dft::agg::ChunkColumns& block) {
@@ -257,7 +261,8 @@ bool system_collect(const ViewPlan& plan, dataframe::DataFrame& out_table,
                         it->second.merge_from(metrics);
                 }
                 return true;
-            }));
+            });
+        if (!walked) return walked.error();
     }
 
     out_table = build_counters_frame(groups, shard_begin, shard_end);

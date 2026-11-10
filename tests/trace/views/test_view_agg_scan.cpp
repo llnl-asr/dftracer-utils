@@ -47,10 +47,11 @@ TEST_SUITE("View") {
                 "occ-engine",
                 coro::with_scope(
                     [&](coro::Scope&) -> dftracer::utils::coro::CoroTask<void> {
-                        result =
-                            co_await views::detail::run_collect_via_engine(*v);
+                        result = dftu_utils_test::ok(
+                            co_await views::detail::run_collect_via_engine(*v));
                     }))));
-            return views::detail::apply_agg_post_ops(std::move(result), *v);
+            return dftu_utils_test::ok(
+                views::detail::apply_agg_post_ops(std::move(result), *v));
         };
         auto collect_groupmap = [](const views::detail::scan::ScanPlan& v) {
             return gmoracle::groupmap_oracle(v);

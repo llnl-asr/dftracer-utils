@@ -42,13 +42,15 @@ dftu_scalar Applier::plugin_scalar(const duql::LiteralValue& v) {
     return s;
 }
 
-void Applier::plugin_refusal(const dstd::String& what, const dftu_op_desc* op,
-                             const char* why) {
-    refuse(dstd::String(why) + " for '" + what + "'; it takes " +
-           dftu_op_signature(op->sig));
+dstd::Unexpected<dstd::Error> Applier::plugin_refusal(const dstd::String& what,
+                                                      const dftu_op_desc* op,
+                                                      const char* why) {
+    return refuse<"{} for '{}'; it takes {}">(
+        dstd::StringView(why), what,
+        dstd::StringView(dftu_op_signature(op->sig)));
 }
 
-dataframe::DataFrame Applier::run_column_op(
+dstd::Result<dataframe::DataFrame> Applier::run_column_op(
     dataframe::DataFrame f, const dstd::String& name, const dftu_op_desc* op,
     const dstd::String& second, dftu_scalar a, dftu_scalar b,
     const dstd::Optional<dstd::String>& str) {
@@ -57,22 +59,28 @@ dataframe::DataFrame Applier::run_column_op(
         in, name.c_str(), op->name, second.empty() ? nullptr : second.c_str(),
         a, b, str ? str->c_str() : nullptr);
     dftu_dataframe_free(in);
-    if (!out) plugin_refusal(op->name, op, "the arguments do not fit");
+    if (!out) return plugin_refusal(op->name, op, "the arguments do not fit");
     return dataframe::dataframe_handle_take(out);
 }
 
-void Applier::stage(const duql::PipelinePlugin& p) {
+Status Applier::stage(const duql::PipelinePlugin& p) {
     leave_scan("plugin function");
     const dftu_op_desc* op = dftu_op_find(p.op.c_str());
-    if (!op) refuse("plugin function '" + p.op + "' is not registered");
-    with_column(dstd::String(p.arg.name),
-                compile(p.arg.term, dstd::String(p.arg.text)),
-                dstd::String(p.arg.text));
+    if (!op) return refuse<"plugin function '{}' is not registered">(p.op);
+    auto compiled = compile(p.arg.term, dstd::String(p.arg.text));
+    if (!compiled) return compiled.error();
+    if (auto done = with_column(dstd::String(p.arg.name), *compiled,
+                                dstd::String(p.arg.text));
+        !done)
+        return done;
     dstd::String second;
     if (p.arg2) {
-        with_column(dstd::String(p.arg2->name),
-                    compile(p.arg2->term, dstd::String(p.arg2->text)),
-                    dstd::String(p.arg2->text));
+        auto compiled2 = compile(p.arg2->term, dstd::String(p.arg2->text));
+        if (!compiled2) return compiled2.error();
+        if (auto done = with_column(dstd::String(p.arg2->name), *compiled2,
+                                    dstd::String(p.arg2->text));
+            !done)
+            return done;
         second = p.arg2->name;
     }
     std::size_t takes_scalars = 0, takes_series = 0, takes_str = 0;
@@ -88,7 +96,8 @@ void Applier::stage(const duql::PipelinePlugin& p) {
     }
     if (p.scalars.size() > takes_scalars || p.arg2.has_value() > takes_series ||
         p.str.has_value() > takes_str)
-        plugin_refusal(dstd::String(p.op), op, "the arguments do not fit");
+        return plugin_refusal(dstd::String(p.op), op,
+                              "the arguments do not fit");
     const dftu_scalar a =
         p.scalars.size() > 0 ? plugin_scalar(p.scalars[0]) : dftu_scalar{};
     const dftu_scalar b =
@@ -111,32 +120,33 @@ void Applier::stage(const duql::PipelinePlugin& p) {
         const auto out =
             run_column_op(std::move(probe), dstd::String(p.arg.name), op,
                           second, a, b, p.str);
-        type = dataframe::scalar(out.columns[0].type());
+        if (!out) return out.error();
+        type = dataframe::scalar(out->columns[0].type());
     }
     dstd::Vector<duql::VectorColumn> next = cols_;
     next[at].type = type;
     map_rows(
-        [name = p.arg.name, op, second, a, b,
-         str = p.str](dataframe::DataFrame f) {
+        [name = p.arg.name, op, second, a, b, str = p.str](
+            dataframe::DataFrame f) -> dstd::Result<dataframe::DataFrame> {
             return run_column_op(std::move(f), dstd::String(name), op, second,
                                  a, b, str);
         },
-        std::move(next),
-        dstd::String("plugin " + p.op + " over " + p.arg.name));
+        std::move(next), dstd::fmt<"plugin {} over {}">(p.op, p.arg.name));
+    return {};
 }
 
-void Applier::stage(const duql::PipelineCall& c) {
+Status Applier::stage(const duql::PipelineCall& c) {
     leave_scan("call");
     const dftu_op_desc* op = dftu_op_find(c.op.c_str());
-    if (!op) refuse("'call " + c.op + "' is not registered");
-    const dstd::String what = dstd::String("call " + c.op);
+    if (!op) return refuse<"'call {}' is not registered">(c.op);
+    const dstd::String what = dstd::fmt<"call {}">(c.op);
     dataframe::OpArgs args;
     std::size_t used = 0;
     for (std::uint32_t i = 1; i < DFTU_OP_MAX_ARGS; ++i) {
         const dftu_op_tok tok = DFTU_OP_SIG_ARG(op->sig, i);
         if (tok == DFTU_TOK_NONE) break;
         if (used >= c.args.size())
-            plugin_refusal(what, op, "too few arguments");
+            return plugin_refusal(what, op, "too few arguments");
         const duql::LiteralValue& v = c.args[used++];
         const auto* s = std::get_if<dstd::String>(&v);
         const auto* d = std::get_if<double>(&v);
@@ -150,41 +160,46 @@ void Applier::stage(const duql::PipelineCall& c) {
         const bool integer = !s && !d;
         switch (tok) {
             case DFTU_TOK_I64:
-                if (!integer) plugin_refusal(what, op, "an integer is needed");
+                if (!integer)
+                    return plugin_refusal(what, op, "an integer is needed");
                 args.i64(i, n);
                 break;
             case DFTU_TOK_I32:
             case DFTU_TOK_BOOL:
-                if (!integer) plugin_refusal(what, op, "an integer is needed");
+                if (!integer)
+                    return plugin_refusal(what, op, "an integer is needed");
                 args.i32(i, static_cast<std::int32_t>(n));
                 break;
             case DFTU_TOK_F64:
-                if (s) plugin_refusal(what, op, "a number is needed");
+                if (s) return plugin_refusal(what, op, "a number is needed");
                 args.f64(i, d ? *d : static_cast<double>(n));
                 break;
             case DFTU_TOK_STR:
-                if (!s) plugin_refusal(what, op, "a string is needed");
+                if (!s) return plugin_refusal(what, op, "a string is needed");
                 args.str(i, *s);
                 break;
             case DFTU_TOK_SCALAR:
-                if (s) plugin_refusal(what, op, "a number is needed");
+                if (s) return plugin_refusal(what, op, "a number is needed");
                 args.scalar(i, plugin_scalar(v));
                 break;
             default:
-                plugin_refusal(what, op, "an argument of this kind");
+                return plugin_refusal(what, op, "an argument of this kind");
         }
     }
-    if (used != c.args.size()) plugin_refusal(what, op, "too many arguments");
-    lines.push_back(dstd::String("frame_op " + c.op));
+    if (used != c.args.size())
+        return plugin_refusal(what, op, "too many arguments");
+    lines.push_back(dstd::fmt<"frame_op {}">(c.op));
     v_ = v_.with_lazy(v_.lazy().frame_op(std_str(c.op), args));
     cols_.clear();
+    return {};
 }
 
-void Applier::stage(const duql::PipelineSession& ss) {
+Status Applier::stage(const duql::PipelineSession& ss) {
     leave_scan("session");
     if (index(ss.name))
-        refuse("'session' gives column '" + ss.name +
-               "', which is already a column; name it with 'as'");
+        return refuse<
+            "'session' gives column '{}', which is already a column; name "
+            "it with 'as'">(ss.name);
     dstd::Vector<dstd::String> keep_names = names();
     keep_names.push_back(dstd::String(ss.name));
     const dstd::String pos = "__duql_pos";
@@ -192,19 +207,30 @@ void Applier::stage(const duql::PipelineSession& ss) {
     dstd::Vector<dstd::String> part;
     dstd::String keys_text;
     for (std::size_t k = 0; k < ss.keys.size(); ++k) {
-        part.push_back(source(ss.keys[k], "__duql_part_" + dstd::to_string(k)));
-        keys_text += (keys_text.empty() ? "" : ", ") + ss.keys[k].text;
+        auto column = source(ss.keys[k], dstd::fmt<"__duql_part_{}">(k));
+        if (!column) return column.error();
+        part.push_back(std::move(*column));
+        if (!keys_text.empty()) keys_text += ", ";
+        keys_text += ss.keys[k].text;
     }
     const dstd::String time = "__duql_time";
     const dstd::String end = "__duql_end";
-    with_column(time, compile(ss.time, dstd::String(duql::term_text(*ss.time))),
-                dstd::String(duql::term_text(*ss.time)));
-    if (ss.end)
-        with_column(end,
-                    compile(ss.end, dstd::String(duql::term_text(*ss.end))),
-                    dstd::String(duql::term_text(*ss.end)));
+    auto time_expr = compile(ss.time, dstd::String(duql::term_text(*ss.time)));
+    if (!time_expr) return time_expr.error();
+    if (auto done = with_column(time, *time_expr,
+                                dstd::String(duql::term_text(*ss.time)));
+        !done)
+        return done;
+    if (ss.end) {
+        auto end_expr = compile(ss.end, dstd::String(duql::term_text(*ss.end)));
+        if (!end_expr) return end_expr.error();
+        if (auto done = with_column(end, *end_expr,
+                                    dstd::String(duql::term_text(*ss.end)));
+            !done)
+            return done;
+    }
     // Time order, ties in input order.
-    lines.push_back("sort_by_multi " + time + ", " + pos);
+    lines.push_back(dstd::fmt<"sort_by_multi {}, {}">(time, pos));
     v_ = v_.sort_by_multi({std_str(time), std_str(pos)},
                           dstd::Vector<bool>{false, false});
     const dstd::String ord = "__duql_ord";
@@ -230,20 +256,20 @@ void Applier::stage(const duql::PipelineSession& ss) {
     v_ = v_.with_lazy(
         v_.lazy().frame_op("dftu.frame.window", a, {}, std_strs(out)));
 
-    lines.push_back("sort_by_multi " + pos);
+    lines.push_back(dstd::fmt<"sort_by_multi {}">(pos));
     v_ = v_.sort_by_multi({std_str(pos)}, dstd::Vector<bool>{false});
     lines.push_back(
-        "session keys " + keys_text + "; time " + dstd::String(ss.text) +
-        "; gap " + number_text(ss.gap) + "; max " +
-        (ss.span > 0 ? number_text(ss.span) : dstd::String("none")) + "; as " +
-        dstd::String(ss.name));
-    keep(std::move(keep_names));
+        dstd::fmt<"session keys {}; time {}; gap {}; max {}; as {}">(
+            keys_text, ss.text, number_text(ss.gap),
+            ss.span > 0 ? number_text(ss.span) : dstd::String("none"),
+            ss.name));
+    return keep(std::move(keep_names));
 }
 
-void Applier::stage(const duql::PipelineExpand& e) {
+Status Applier::stage(const duql::PipelineExpand& e) {
     leave_scan("expand");
-    dstd::String line = dstd::String("expand " + e.path + " as " + e.name);
-    if (!e.index.empty()) line += " with_index " + e.index;
+    dstd::String line = dstd::fmt<"expand {} as {}">(e.path, e.name);
+    if (!e.index.empty()) line += dstd::fmt<" with_index {}">(e.index);
     if (e.keep_empty) line += " keep_empty";
     const auto li = field_index(dstd::String(e.path));
     const bool list = li && cols_[*li].type.id == dataframe::TypeId::List;
@@ -284,7 +310,8 @@ void Applier::stage(const duql::PipelineExpand& e) {
     const dstd::String idx = dstd::String(e.index);
     const bool keep_empty = e.keep_empty;
     map_rows(
-        [at, drop, name, idx, keep_empty](dataframe::DataFrame f) {
+        [at, drop, name, idx, keep_empty](
+            dataframe::DataFrame f) -> dstd::Result<dataframe::DataFrame> {
             const std::int64_t n = f.num_rows();
             dataframe::Series lists;
             const std::int32_t* off = nullptr;
@@ -353,6 +380,7 @@ void Applier::stage(const duql::PipelineExpand& e) {
             return out;
         },
         std::move(next), line);
+    return {};
 }
 
 duql::PipelineItem Applier::column_item(const dstd::String& name) {
@@ -365,7 +393,7 @@ duql::PipelineItem Applier::column_item(const dstd::String& name) {
             dstd::String(name)};
 }
 
-void Applier::stage(const duql::PipelinePivot& p) {
+Status Applier::stage(const duql::PipelinePivot& p) {
     leave_scan("pivot");
     dstd::Vector<dstd::String> read;
     auto reads = [&](const duql::TermRef& t) {
@@ -399,17 +427,17 @@ void Applier::stage(const duql::PipelinePivot& p) {
     g.aggs = p.aggs;
     dstd::Vector<dstd::String> fixed;
     for (const auto& v : p.values) fixed.push_back(pivot_name(v));
-    lines.push_back(dstd::String("pivot " + p.key.text) +
-                    (p.fixed ? " in [" + joined(fixed) + "]"
-                             : " (columns after the scan)"));
-    stage(g);
+    lines.push_back(dstd::fmt<"pivot {}{}">(
+        p.key.text, p.fixed ? dstd::fmt<" in [{}]">(joined(fixed))
+                            : dstd::String(" (columns after the scan)")));
+    if (auto done = stage(g); !done) return done;
     dstd::Vector<dstd::String> aggs;
     dstd::Vector<duql::VectorColumn> next(cols_.begin(),
                                           cols_.begin() + n_keys);
     for (std::size_t a = 0; a < p.aggs.size(); ++a) {
         aggs.push_back(dstd::String(p.aggs[a].name));
         for (const auto& v : fixed)
-            next.push_back({dstd::String(p.aggs[a].name + ".") + v,
+            next.push_back({dstd::fmt<"{}.{}">(p.aggs[a].name, v),
                             cols_[n_keys + 1 + a].type});
     }
     dstd::Optional<dataframe::Schema> schema{dataframe::Schema{}};
@@ -420,10 +448,12 @@ void Applier::stage(const duql::PipelinePivot& p) {
     const bool open = !p.fixed;
     const std::uint64_t limit = pivot_max_columns();
     finish(
-        [n_keys, aggs, fixed, open, limit](dataframe::DataFrame f) {
+        [n_keys, aggs, fixed, open,
+         limit](dataframe::DataFrame f) -> dstd::Result<dataframe::DataFrame> {
             return spread(std::move(f), n_keys, aggs, fixed, open, limit);
         },
-        "spread __duql_pivot into " + joined(aggs), std::move(schema));
+        dstd::fmt<"spread __duql_pivot into {}">(joined(aggs)),
+        std::move(schema));
     cols_ = p.fixed ? std::move(next) : dstd::Vector<duql::VectorColumn>{};
     duql::PipelineRename labels;
     for (std::size_t i = 0; i < p.labels.size() && i < fixed.size(); ++i) {
@@ -431,16 +461,17 @@ void Applier::stage(const duql::PipelinePivot& p) {
         for (const auto& a : aggs)
             labels.pairs.emplace_back(aggs.size() == 1
                                           ? dstd::String(p.labels[i])
-                                          : a + "_" + dstd::String(p.labels[i]),
-                                      a + "." + fixed[i]);
+                                          : dstd::fmt<"{}_{}">(a, p.labels[i]),
+                                      dstd::fmt<"{}.{}">(a, fixed[i]));
     }
-    if (!labels.pairs.empty()) stage(labels);
+    if (!labels.pairs.empty()) return stage(labels);
+    return {};
 }
 
-dataframe::DataFrame Applier::spread(dataframe::DataFrame f, std::size_t n_keys,
-                                     const dstd::Vector<dstd::String>& aggs,
-                                     dstd::Vector<dstd::String> values,
-                                     bool open, std::uint64_t limit) {
+dstd::Result<dataframe::DataFrame> Applier::spread(
+    dataframe::DataFrame f, std::size_t n_keys,
+    const dstd::Vector<dstd::String>& aggs, dstd::Vector<dstd::String> values,
+    bool open, std::uint64_t limit) {
     const std::int64_t n = f.num_rows();
     auto text = [](const dataframe::Series& s, std::int64_t r) -> dstd::String {
         if (s.is_null(r)) return "null";
@@ -469,9 +500,9 @@ dataframe::DataFrame Applier::spread(dataframe::DataFrame f, std::size_t n_keys,
             if (seen.insert(row_value[static_cast<std::size_t>(r)]).second)
                 firsts.push_back(r);
         if (firsts.size() > limit)
-            refuse("'pivot' gives " + dstd::to_string(firsts.size()) +
-                   " columns per aggregate, over DUQL_PIVOT_MAX_COLUMNS (" +
-                   dstd::to_string(limit) + ")");
+            return refuse<
+                "'pivot' gives {} columns per aggregate, over "
+                "DUQL_PIVOT_MAX_COLUMNS ({})">(firsts.size(), limit);
         const dataframe::Series order = pk.take(firsts).argsort();
         for (std::int64_t i = 0; i < order.length(); ++i)
             values.push_back(row_value[static_cast<std::size_t>(
@@ -504,19 +535,19 @@ dataframe::DataFrame Applier::spread(dataframe::DataFrame f, std::size_t n_keys,
     }
     for (std::size_t a = 0; a < aggs.size(); ++a)
         for (std::size_t v = 0; v < values.size(); ++v) {
-            out.names.emplace_back(aggs[a] + "." + values[v]);
+            out.names.emplace_back(dstd::fmt<"{}.{}">(aggs[a], values[v]));
             out.columns.push_back(f.columns[n_keys + 1 + a].take(cells[v]));
         }
     return out;
 }
 
-void Applier::stage(const duql::PipelineUnpivot& u) {
+Status Applier::stage(const duql::PipelineUnpivot& u) {
     leave_scan("unpivot");
     dstd::Vector<std::size_t> at;
     dstd::Vector<dataframe::TypeId> types;
     for (const auto& f : u.fields) {
         const auto i = field_index(dstd::String(f));
-        if (!i) refuse("'unpivot' has no field '" + f + "'");
+        if (!i) return refuse<"'unpivot' has no field '{}'">(f);
         at.push_back(*i);
         types.push_back(cols_[*i].type.id);
     }
@@ -536,22 +567,25 @@ void Applier::stage(const duql::PipelineUnpivot& u) {
                      : dataframe::TypeId::Float64;
     } else if (!same) {
         dstd::String what;
-        for (std::size_t k = 0; k < u.fields.size(); ++k)
-            what +=
-                dstd::String((what.empty() ? "" : ", ") + u.fields[k] + " (") +
-                dstd::String(dataframe::type_name(types[k])) + ")";
-        refuse("'unpivot' mixes the types of " + what +
-               "; convert them with int(), float() or string()");
+        for (std::size_t k = 0; k < u.fields.size(); ++k) {
+            if (!what.empty()) what += ", ";
+            what += dstd::fmt<"{} ({})">(u.fields[k],
+                                         dataframe::type_name(types[k]));
+        }
+        return refuse<
+            "'unpivot' mixes the types of {}; convert them with int(), "
+            "float() or string()">(what);
     }
     dstd::Vector<dstd::String> values;
     for (std::size_t k = 0; k < at.size(); ++k) {
-        const dstd::String name = "__duql_value_" + dstd::to_string(k);
+        const dstd::String name = dstd::fmt<"__duql_value_{}">(k);
         dataframe::Expr e = col(cols_[at[k]].name);
         if (types[k] != target)
             e = target == dataframe::TypeId::String
                     ? dataframe::expr_convert(dataframe::ConvertOp::String, e)
                     : dataframe::expr_cast(target, e);
-        with_column(name, e, dstd::String(u.fields[k]));
+        if (auto done = with_column(name, e, dstd::String(u.fields[k])); !done)
+            return done;
         values.push_back(name);
     }
     dstd::Vector<std::size_t> ids;
@@ -574,7 +608,8 @@ void Applier::stage(const duql::PipelineUnpivot& u) {
     const dstd::String key = dstd::String(u.key);
     const dstd::String value = dstd::String(u.value);
     map_rows(
-        [ids, value_at, keys, key, value](dataframe::DataFrame f) {
+        [ids, value_at, keys, key,
+         value](dataframe::DataFrame f) -> dstd::Result<dataframe::DataFrame> {
             const std::int64_t n = f.num_rows();
             const auto k = static_cast<std::int64_t>(keys.size());
             dstd::Vector<std::int64_t> parent;
@@ -595,10 +630,13 @@ void Applier::stage(const duql::PipelineUnpivot& u) {
             }
             dstd::Vector<const dataframe::DataFrame*> ptrs;
             for (const auto& p : parts) ptrs.push_back(&p);
-            dataframe::DataFrame stacked =
-                ptrs.empty() ? dataframe::DataFrame{}
-                             : common::unwrap(dataframe::concat(
-                                   ptrs, dataframe::ConcatHow::Vertical));
+            dataframe::DataFrame stacked;
+            if (!ptrs.empty()) {
+                auto all =
+                    dataframe::concat(ptrs, dataframe::ConcatHow::Vertical);
+                if (!all) return all.error();
+                stacked = std::move(*all);
+            }
             dataframe::DataFrame out;
             for (const auto j : ids) {
                 out.names.emplace_back(f.names[j]);
@@ -611,8 +649,8 @@ void Applier::stage(const duql::PipelineUnpivot& u) {
             return out;
         },
         std::move(next),
-        "unpivot " + joined(u.fields) + " as " + dstd::String(u.key) + ", " +
-            dstd::String(u.value));
+        dstd::fmt<"unpivot {} as {}, {}">(joined(u.fields), u.key, u.value));
+    return {};
 }
 
 }  // namespace dftracer::utils::trace::views::duql_detail

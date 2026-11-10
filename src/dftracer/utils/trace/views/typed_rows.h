@@ -159,10 +159,10 @@ dataframe::LazyResult<dstd::Vector<T>> rows(const View& view, Lazy) {
 }
 
 template <typename T>
-coro::CoroTask<dstd::Vector<T>> rows(const View& view) {
+coro::CoroTask<dstd::Result<dstd::Vector<T>>> rows(const View& view) {
     auto lazy = rows<T>(view, LAZY);
     auto collecting = lazy.collect();
-    co_return common::unwrap(co_await std::move(collecting));
+    co_return co_await std::move(collecting);
 }
 
 }  // namespace dftracer::utils::trace::views

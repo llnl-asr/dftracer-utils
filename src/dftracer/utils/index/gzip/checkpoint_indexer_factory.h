@@ -37,16 +37,6 @@ class CheckpointIndexerFactory {
             common::constants::indexer::DEFAULT_CHECKPOINT_SIZE,
         bool force = false);
 
-    /// The same, throwing the error. Kept for callers that still throw.
-    static dstd::SharedPtr<CheckpointIndexer> create(
-        dstd::CStringView archive_path, dstd::CStringView index_path = "",
-        std::uint64_t checkpoint_size =
-            common::constants::indexer::DEFAULT_CHECKPOINT_SIZE,
-        bool force = false) {
-        return common::unwrap(
-            try_create(archive_path, index_path, checkpoint_size, force));
-    }
-
     /**
      * Detect the format of an archive file
      *

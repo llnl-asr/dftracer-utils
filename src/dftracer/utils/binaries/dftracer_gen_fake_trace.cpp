@@ -173,7 +173,14 @@ static coro::CoroTask<int> run_verify(
                     .with_batch_size(4 * 1024 * 1024);
 
                 ChunkIndexer idx_util;
-                auto output = co_await idx_util(ci);
+                auto indexed = co_await idx_util(ci);
+                if (!indexed) {
+                    std::fprintf(stderr,
+                                 "  ERROR: chunk index failed for %s: %s\n",
+                                 abs_path.c_str(), indexed.error().c_str());
+                    co_return 1;
+                }
+                auto output = std::move(*indexed);
                 total_events += output.events_processed;
 
                 for (auto& [dim, bloom] : output.bloom_filters) {

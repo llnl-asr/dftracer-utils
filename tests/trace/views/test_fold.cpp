@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/coro/async_semaphore.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <doctest/doctest.h>
@@ -14,7 +17,10 @@
 #include <trace/views/test_view_common.h>
 
 #include <array>
+#include <chrono>
+#include <condition_variable>
 #include <memory>
+#include <mutex>
 #include <utility>
 #include <variant>
 
@@ -69,6 +75,23 @@ struct CountingFold : Fold {
         ts_sum += o.ts_sum;
         sealed_units += o.sealed_units;
     }
+    coro::CoroTask<bool> finalize(const CoverageSet&) override {
+        co_return true;
+    }
+};
+
+struct FailingFold : Fold {
+    bool accepts(const ScanShape&) const override { return true; }
+    dstd::UniquePtr<Fold> slice() const override {
+        return dstd::make_unique<FailingFold>();
+    }
+    dstd::Result<void> step(const FoldBatch&) override {
+        return common::make_error<"fold step failed">(
+            common::ErrorCode::Internal);
+    }
+    void seal_unit(const ScanUnit&) override {}
+    void drop_unit(const ScanUnit&) override {}
+    void merge(Fold&) override {}
     coro::CoroTask<bool> finalize(const CoverageSet&) override {
         co_return true;
     }
@@ -530,5 +553,55 @@ TEST_SUITE("Fold") {
         for (const FoldEvent& e : rows) seen.push_back(e.ts);
         CHECK(seen == dstd::Vector<std::uint64_t>{10, 30, 40});
         CHECK(EventRows(evs).size() == 5);
+    }
+
+    // A worker parked on the gate must wake when another worker's fold step
+    // fails; the scan returns that error instead of waiting for a permit.
+    TEST_CASE("an ordered scan ends with the error of a failing fold step") {
+        TestEnvironment env_a(200), env_b(200), env_c(200), env_d(200);
+        ViewPlan plan;
+        for (TestEnvironment* env : {&env_a, &env_b, &env_c, &env_d}) {
+            dstd::String gz = create_mixed_trace(*env, 30, 20);
+            dstd::String idx = dstd::String(determine_index_path(gz, ""));
+            StringSink s;
+            dftu_utils_test::ok(
+                View::from_file(dstd::String(gz), dstd::String(idx))
+                    .sink_json(s)
+                    .get());
+            ViewFile f;
+            f.file_path = gz;
+            f.index_path = idx;
+            plan.files.push_back(f);
+        }
+        ViewDefinition vdef;
+        vdef.include_metadata = false;
+
+        struct Outcome {
+            std::mutex mu;
+            std::condition_variable cv;
+            bool done = false;
+            bool failed = false;
+            dstd::String message;
+        };
+        auto outcome = dstd::make_shared<Outcome>();
+        dstd::Thread([outcome, plan, vdef]() mutable {
+            dstd::StringIntern intern;
+            FailingFold ff;
+            std::array<Fold*, 1> folds{&ff};
+            coro::AsyncSemaphore gate(1);
+            auto r = fuse(plan, vdef, folds, intern, nullptr, 0, nullptr, &gate)
+                         .get();
+            std::lock_guard<std::mutex> lock(outcome->mu);
+            outcome->failed = !r.has_value();
+            if (!r.has_value()) outcome->message = r.error().c_str();
+            outcome->done = true;
+            outcome->cv.notify_all();
+        }).detach();
+        std::unique_lock<std::mutex> lock(outcome->mu);
+        const bool finished = outcome->cv.wait_for(
+            lock, std::chrono::seconds(20), [&] { return outcome->done; });
+        REQUIRE_MESSAGE(finished, "fuse hung with a worker parked on the gate");
+        CHECK(outcome->failed);
+        CHECK(outcome->message.find("fold step failed") != dstd::String::npos);
     }
 }

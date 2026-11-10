@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <checkpoint_indexer_helpers.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -68,7 +69,7 @@ struct Fixture {
             dstd::String(dstd::StringView(gz_path)),
             dstd::String(dstd::StringView(index_path)), CKPT, true);
         dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
-            co_await indexer->build_async();
+            co_await dftu_utils_test::build_indexer_async(*indexer);
         });
     }
     ~Fixture() { dstd::fs::remove_all(dir).discard(); }

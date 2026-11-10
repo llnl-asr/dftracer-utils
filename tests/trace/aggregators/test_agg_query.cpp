@@ -4,6 +4,7 @@
 // the chunks that cannot be answered from the stored partials are re-read.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <checkpoint_indexer_helpers.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
@@ -1204,10 +1205,10 @@ TEST_SUITE("AggQuery") {
 
         auto indexer = dstd::make_shared<index::gzip::GzipIndexer>(
             fx->files[0], fx->index_path, std::size_t{512} << 10, true);
-        dftu_utils_test::ok(shared_runtime().block_on(
-            coro::named("reindex", coro::with_scope([&](coro::Scope&) {
-                            return indexer->build_async();
-                        }))));
+        dftu_utils_test::ok(shared_runtime().block_on(coro::named(
+            "reindex", coro::with_scope([&](coro::Scope&) {
+                return dftu_utils_test::build_indexer_async(*indexer);
+            }))));
 
         Ask ask;
         ask.window = FIVE_SECONDS_US;

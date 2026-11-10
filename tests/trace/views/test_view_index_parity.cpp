@@ -201,13 +201,16 @@ struct Fixture {
 dataframe::DataFrame scan_only(const views::detail::scan::ScanPlan& p) {
     static Runtime rt;
     dataframe::DataFrame out;
-    dftu_utils_test::ok(rt.block_on(coro::named(
-        "scan-only",
-        coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-            auto st = co_await views::detail::build_engine_agg_state(*p);
-            out = views::detail::finalize_engine_result(*st, *p);
-        }))));
-    return views::detail::apply_agg_post_ops(std::move(out), *p);
+    dftu_utils_test::ok(rt.block_on(
+        coro::named("scan-only",
+                    coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                        auto st = dftu_utils_test::ok(
+                            co_await views::detail::build_engine_agg_state(*p));
+                        out = dftu_utils_test::ok(
+                            views::detail::finalize_engine_result(*st, *p));
+                    }))));
+    return dftu_utils_test::ok(
+        views::detail::apply_agg_post_ops(std::move(out), *p));
 }
 
 struct Shape {

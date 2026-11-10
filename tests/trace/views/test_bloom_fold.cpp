@@ -511,7 +511,7 @@ TEST_SUITE("BloomFold") {
         }
 
         View v = View::from_file(dstd::String(gz), dstd::String(index_path));
-        auto cols = v.columns();
+        auto cols = dftu_utils_test::ok(v.columns());
         auto has = [&](const dstd::String& c) {
             return std::find(cols.begin(), cols.end(), dstd::String(c)) !=
                    cols.end();
@@ -538,7 +538,7 @@ TEST_SUITE("BloomFold") {
         CHECK_FALSE(has("resolved.fhash.path"));
 
         dstd::HashMap<dstd::String, dstd::String> ty;
-        for (const auto& ci : v.column_info())
+        for (const auto& ci : dftu_utils_test::ok(v.column_info()))
             ty[dstd::String(ci.name)] = dstd::String(ci.type);
         CHECK(ty["pid"] == "int64");
         CHECK(ty["ts"] == "int64");

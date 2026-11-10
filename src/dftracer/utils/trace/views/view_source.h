@@ -205,7 +205,7 @@ class ViewSource : public dftracer::utils::dataframe::Source {
 
     /// Best-effort column list for the streaming source's schema(), from index
     /// metadata rather than a scan.
-    dstd::Vector<dstd::String> row_schema() const;
+    dstd::Result<dstd::Vector<dstd::String>> row_schema() const;
 
     /// Open a bounded-channel streaming cursor over `v` (a row query). Used by
     /// scan() once projection + filters are folded into `v`. `fnames` is the

@@ -30,14 +30,14 @@ constexpr std::uint64_t SEED_MASK = (std::uint64_t{1} << 62) - 1;
 
 }  // namespace
 
-void Applier::stage(const duql::PipelineSample& s) {
+Status Applier::stage(const duql::PipelineSample& s) {
     leave_scan("sample");
-    const dstd::String seed = " seed " + dstd::to_string(s.seed);
+    const dstd::String seed = dstd::fmt<" seed {}">(s.seed);
     if (!s.percent) {
         const auto n = static_cast<std::int64_t>(s.amount);
-        lines.push_back("sample " + dstd::to_string(n) + seed);
+        lines.push_back(dstd::fmt<"sample {}{}">(n, seed));
         v_ = v_.with_lazy(v_.lazy().sample(n, s.seed));
-        return;
+        return {};
     }
     const dstd::Vector<dstd::String> before = names();
     const dstd::String row = "__duql_row";
@@ -57,34 +57,37 @@ void Applier::stage(const duql::PipelineSample& s) {
             dataframe::CmpOp::Lt, hash,
             dataframe::expr_lit(-9223372036854775808.0 +
                                 s.amount / 100.0 * 18446744073709551616.0)));
-    lines.push_back("sample " + number_text(s.amount) + "%" + seed);
-    keep(before);
+    lines.push_back(dstd::fmt<"sample {}%{}">(number_text(s.amount), seed));
+    return keep(before);
 }
 
 double Applier::us_per_time_unit() const {
     return static_cast<double>(roles_.time_ns_per_unit) / 1000.0;
 }
 
-void Applier::stage(const duql::PipelineTimeRange& t) {
+Status Applier::stage(const duql::PipelineTimeRange& t) {
     if (scan_ && !t.overlap && std::isfinite(t.low) && std::isfinite(t.high)) {
         v_ = v_.time_range(t.low * us_per_time_unit(),
                            t.high * us_per_time_unit());
-        lines.push_back("scan time_range " + number_text(t.low) + " .. " +
-                        number_text(t.high) + " (pushed)");
-        return;
+        lines.push_back(dstd::fmt<"scan time_range {} .. {} (pushed)">(
+            number_text(t.low), number_text(t.high)));
+        return {};
     }
     if (scan_) {
         v_ = v_.filter(
             duql::detail::QueryAccess::from_node(duql::detail::make_node(
                 duql::detail::ExprLeaf{t.condition, t.text})));
-        lines.push_back(dstd::String("scan filter: " + t.text + " (pushed)"));
-        return;
+        lines.push_back(dstd::fmt<"scan filter: {} (pushed)">(t.text));
+        return {};
     }
-    v_ = v_.filter(compile(t.condition, dstd::String(t.text), true));
-    lines.push_back(dstd::String("filter after scan: " + t.text));
+    auto condition = compile(t.condition, dstd::String(t.text), true);
+    if (!condition) return condition.error();
+    v_ = v_.filter(std::move(*condition));
+    lines.push_back(dstd::fmt<"filter after scan: {}">(t.text));
+    return {};
 }
 
-void Applier::stage(const duql::PipelineCallTree&) {
+Status Applier::stage(const duql::PipelineCallTree&) {
     scan_ = false;
     blocker_ = "call_tree";
     lines.push_back("call_tree pid, tid");
@@ -97,6 +100,7 @@ void Applier::stage(const duql::PipelineCallTree&) {
         if (n == "parent_id") n = "parent";
     }
     rename(std::move(to));
+    return {};
 }
 
 void Applier::row_index(const dstd::String& name) {
@@ -185,7 +189,8 @@ void Applier::partition_aggs(
         }
         specs.push_back(std::move(g));
         next.push_back({dstd::String(c->column), std::move(type)});
-        text += (text.empty() ? "" : ", ") + c->text;
+        if (!text.empty()) text += ", ";
+        text += c->text;
     }
     dataframe::Schema schema;
     for (const auto& c : next)
@@ -193,13 +198,13 @@ void Applier::partition_aggs(
             dataframe::Field{dstd::String(c.name), c.type, true});
     const dstd::String spid(pid);
     finish(
-        [spid, specs](dataframe::DataFrame f) {
-            dataframe::DataFrame g = common::unwrap(
-                f.group_by(dstd::Vector<dstd::String>{spid}, specs));
-            return common::unwrap(
-                f.join(g, {spid}, {spid}, dataframe::JoinHow::Lookup));
+        [spid,
+         specs](dataframe::DataFrame f) -> dstd::Result<dataframe::DataFrame> {
+            auto g = f.group_by(dstd::Vector<dstd::String>{spid}, specs);
+            if (!g) return g.error();
+            return f.join(*g, {spid}, {spid}, dataframe::JoinHow::Lookup);
         },
-        "partition aggregates " + text, std::move(schema));
+        dstd::fmt<"partition aggregates {}">(text), std::move(schema));
     cols_ = std::move(next);
     for (const auto& q : quantiles)
         v_ = v_.with_column(
@@ -213,11 +218,11 @@ dataframe::DataType Applier::type_of(const dstd::String& column) const {
     return cols_[*index(column)].type;
 }
 
-dataframe::DataType Applier::sum_type(const dstd::String& in,
-                                      const dstd::String& text) {
+dstd::Result<dataframe::DataType> Applier::sum_type(const dstd::String& in,
+                                                    const dstd::String& text) {
     const dataframe::TypeId t = type_of(in).id;
     if (t != dataframe::TypeId::Unknown && !is_number(t))
-        refuse("'" + text + "' in a window needs numbers");
+        return refuse<"'{}' in a window needs numbers">(text);
     return dataframe::scalar(is_integer(t) ? dataframe::TypeId::Int64
                                            : dataframe::TypeId::Float64);
 }
@@ -232,19 +237,20 @@ dataframe::Expr Applier::differs(const dstd::String& a, const dstd::String& b) {
             dataframe::expr_cmp_expr(dataframe::CmpOp::Ne, col(a), col(b))));
 }
 
-void Applier::window_framed(WindowPasses& p, WinSpec s,
-                            const duql::PipelineWinCall& c) {
+Status Applier::window_framed(WindowPasses& p, WinSpec s,
+                              const duql::PipelineWinCall& c) {
     if (!c.frame) {
         p.forward.push_back(std::move(s));
-        return;
+        return {};
     }
     s.offset = 1;
     s.following = 0;
     if (c.frame->range) {
-        if (p.sort_keys.size() != 1) refuse("'over' needs one sort key");
+        if (p.sort_keys.size() != 1)
+            return refuse<"'over' needs one sort key">();
         const dataframe::TypeId t = type_of(p.sort_keys[0]).id;
         if (t != dataframe::TypeId::Unknown && !is_number(t))
-            refuse("'" + c.text + "' needs a numeric sort key");
+            return refuse<"'{}' needs a numeric sort key">(c.text);
         s.preceding = static_cast<std::int64_t>(c.frame->width);
         s.mode = DFTU_WINDOW_FRAME_RANGE;
         p.ranged.push_back(std::move(s));
@@ -252,39 +258,51 @@ void Applier::window_framed(WindowPasses& p, WinSpec s,
         s.preceding = c.frame->rows - 1;
         p.forward.push_back(std::move(s));
     }
+    return {};
 }
 
-dstd::String Applier::window_input(const duql::PipelineWinCall& c,
-                                   std::size_t i) {
+dstd::Result<dstd::String> Applier::window_input(const duql::PipelineWinCall& c,
+                                                 std::size_t i) {
     dstd::String in;
     if (c.fn == duql::WinFn::CountIf) {
-        in = "__duql_in_" + dstd::to_string(i);
-        with_column(in,
-                    dataframe::expr_select(
-                        compile(c.arg, dstd::String(c.text), true),
-                        dataframe::expr_lit(std::int64_t{1}),
-                        dataframe::expr_lit_null(dataframe::TypeId::Int64)),
-                    dstd::String(c.text));
+        in = dstd::fmt<"__duql_in_{}">(i);
+        auto condition = compile(c.arg, dstd::String(c.text), true);
+        if (!condition) return condition.error();
+        if (auto done = with_column(
+                in,
+                dataframe::expr_select(
+                    *condition, dataframe::expr_lit(std::int64_t{1}),
+                    dataframe::expr_lit_null(dataframe::TypeId::Int64)),
+                dstd::String(c.text));
+            !done)
+            return done.error();
     } else if (c.arg) {
-        in = source({"", c.arg, c.text}, "__duql_in_" + dstd::to_string(i));
+        auto column = source({"", c.arg, c.text}, dstd::fmt<"__duql_in_{}">(i));
+        if (!column) return column.error();
+        in = std::move(*column);
     }
     return in;
 }
 
-void Applier::window_arg(WindowPasses& p, const duql::PipelineWinCall& c,
-                         std::size_t i, const dstd::String& in) {
+Status Applier::window_arg(WindowPasses& p, const duql::PipelineWinCall& c,
+                           std::size_t i, const dstd::String& in) {
     WinSpec s{c.fn == duql::WinFn::Argmax ? DFTU_WINDOW_FRAME_ARG_MAX
                                           : DFTU_WINDOW_FRAME_ARG_MIN,
               in, dstd::String(c.column), type_of(in)};
-    s.by = source({"", c.by, c.text}, "__duql_by_" + dstd::to_string(i));
-    window_framed(p, std::move(s), c);
+    auto by = source({"", c.by, c.text}, dstd::fmt<"__duql_by_{}">(i));
+    if (!by) return by.error();
+    s.by = std::move(*by);
+    return window_framed(p, std::move(s), c);
 }
 
-void Applier::window_call(WindowPasses& p, const duql::PipelineWinCall& c,
-                          std::size_t i) {
+Status Applier::window_call(WindowPasses& p, const duql::PipelineWinCall& c,
+                            std::size_t i) {
     const dataframe::DataType i64 = dataframe::scalar(dataframe::TypeId::Int64);
-    const dstd::String in = window_input(c, i);
-    const dstd::String tmp = "__duql_fill_" + dstd::to_string(i);
+    auto input = window_input(c, i);
+    if (!input) return input.error();
+    const dstd::String in = std::move(*input);
+    const dstd::String tmp = dstd::fmt<"__duql_fill_{}">(i);
+    const dstd::String text(c.text);
     switch (c.fn) {
         case duql::WinFn::RowNumber:
             p.forward.push_back(
@@ -300,7 +318,7 @@ void Applier::window_call(WindowPasses& p, const duql::PipelineWinCall& c,
                 {c.fn == duql::WinFn::Lag ? DFTU_WINDOW_LAG : DFTU_WINDOW_LEAD,
                  in, dstd::String(c.column), type_of(in), c.offset});
             if (c.fallback) {
-                const dstd::String edge = "__duql_edge_" + dstd::to_string(i);
+                const dstd::String edge = dstd::fmt<"__duql_edge_{}">(i);
                 p.forward.push_back(
                     {p.forward.back().func, p.pos, edge, i64, c.offset});
                 p.edges.emplace_back(edge, &c);
@@ -314,7 +332,8 @@ void Applier::window_call(WindowPasses& p, const duql::PipelineWinCall& c,
                                  in, dstd::String(c.column), type_of(in)});
             break;
         case duql::WinFn::RunningMean:
-            sum_type(in, dstd::String(c.text));
+            if (auto numbers = sum_type(in, text); !numbers)
+                return numbers.error();
             p.forward.push_back(
                 {DFTU_WINDOW_FRAME_MEAN, in, dstd::String(c.column),
                  dataframe::scalar(dataframe::TypeId::Float64), 1, 0});
@@ -336,38 +355,42 @@ void Applier::window_call(WindowPasses& p, const duql::PipelineWinCall& c,
         case duql::WinFn::CumeDist:
             p.dist.push_back(&c);
             break;
-        case duql::WinFn::RunningSum:
+        case duql::WinFn::RunningSum: {
+            auto type = sum_type(in, text);
+            if (!type) return type.error();
             p.forward.push_back({DFTU_WINDOW_FRAME_SUM, in,
-                                 dstd::String(c.column),
-                                 sum_type(in, dstd::String(c.text)), 0, 0});
+                                 dstd::String(c.column), *type, 0, 0});
             break;
+        }
         case duql::WinFn::Count:
-            window_framed(p,
-                          {DFTU_WINDOW_FRAME_COUNT, in.empty() ? p.pos : in,
-                           dstd::String(c.column), i64},
-                          c);
-            break;
-        case duql::WinFn::Sum:
-            window_framed(p,
-                          {DFTU_WINDOW_FRAME_SUM, in, dstd::String(c.column),
-                           sum_type(in, dstd::String(c.text))},
-                          c);
-            break;
+            return window_framed(
+                p,
+                {DFTU_WINDOW_FRAME_COUNT, in.empty() ? p.pos : in,
+                 dstd::String(c.column), i64},
+                c);
+        case duql::WinFn::Sum: {
+            auto type = sum_type(in, text);
+            if (!type) return type.error();
+            return window_framed(
+                p, {DFTU_WINDOW_FRAME_SUM, in, dstd::String(c.column), *type},
+                c);
+        }
         case duql::WinFn::Mean:
-            sum_type(in, dstd::String(c.text));
-            window_framed(p,
-                          {DFTU_WINDOW_FRAME_MEAN, in, dstd::String(c.column),
-                           dataframe::scalar(dataframe::TypeId::Float64)},
-                          c);
-            break;
+            if (auto numbers = sum_type(in, text); !numbers)
+                return numbers.error();
+            return window_framed(
+                p,
+                {DFTU_WINDOW_FRAME_MEAN, in, dstd::String(c.column),
+                 dataframe::scalar(dataframe::TypeId::Float64)},
+                c);
         case duql::WinFn::Min:
         case duql::WinFn::Max:
-            window_framed(p,
-                          {c.fn == duql::WinFn::Min ? DFTU_WINDOW_FRAME_MIN
-                                                    : DFTU_WINDOW_FRAME_MAX,
-                           in, dstd::String(c.column), type_of(in)},
-                          c);
-            break;
+            return window_framed(
+                p,
+                {c.fn == duql::WinFn::Min ? DFTU_WINDOW_FRAME_MIN
+                                          : DFTU_WINDOW_FRAME_MAX,
+                 in, dstd::String(c.column), type_of(in)},
+                c);
         case duql::WinFn::Last:
             p.forward.push_back(
                 {DFTU_WINDOW_FILL_FORWARD, in, tmp, type_of(in)});
@@ -385,32 +408,29 @@ void Applier::window_call(WindowPasses& p, const duql::PipelineWinCall& c,
             p.ranks.push_back(&c);
             break;
         case duql::WinFn::CountIf:
-            window_framed(
+            return window_framed(
                 p, {DFTU_WINDOW_FRAME_COUNT, in, dstd::String(c.column), i64},
                 c);
-            break;
         case duql::WinFn::CountDistinct:
-            window_framed(p,
-                          {DFTU_WINDOW_FRAME_COUNT_DISTINCT, in,
-                           dstd::String(c.column), i64},
-                          c);
-            break;
+            return window_framed(p,
+                                 {DFTU_WINDOW_FRAME_COUNT_DISTINCT, in,
+                                  dstd::String(c.column), i64},
+                                 c);
         case duql::WinFn::Collect:
-            window_framed(
+            return window_framed(
                 p,
                 {DFTU_WINDOW_FRAME_COLLECT, in, dstd::String(c.column),
                  dataframe::list_of(type_of(in))},
                 c);
-            break;
         case duql::WinFn::Argmax:
         case duql::WinFn::Argmin:
-            window_arg(p, c, i, in);
-            break;
+            return window_arg(p, c, i, in);
         case duql::WinFn::Var:
         case duql::WinFn::Std:
         case duql::WinFn::Quantile:
             if (c.frame) {
-                sum_type(in, dstd::String(c.text));
+                if (auto numbers = sum_type(in, text); !numbers)
+                    return numbers.error();
                 WinSpec s{c.fn == duql::WinFn::Var ? DFTU_WINDOW_FRAME_VAR
                           : c.fn == duql::WinFn::Std
                               ? DFTU_WINDOW_FRAME_STD
@@ -418,18 +438,19 @@ void Applier::window_call(WindowPasses& p, const duql::PipelineWinCall& c,
                           in, dstd::String(c.column),
                           dataframe::scalar(dataframe::TypeId::Float64)};
                 s.q = c.q;
-                window_framed(p, std::move(s), c);
-                break;
+                return window_framed(p, std::move(s), c);
             }
             [[fallthrough]];
         case duql::WinFn::Histogram:
-            sum_type(in, dstd::String(c.text));
+            if (auto numbers = sum_type(in, text); !numbers)
+                return numbers.error();
             p.partition.emplace_back(&c, in);
             break;
     }
+    return {};
 }
 
-void Applier::window_peers(WindowPasses& p, bool peers) {
+Status Applier::window_peers(WindowPasses& p, bool peers) {
     const dataframe::DataType i64 = dataframe::scalar(dataframe::TypeId::Int64);
     if (peers) {
         dataframe::Expr peer =
@@ -438,17 +459,23 @@ void Applier::window_peers(WindowPasses& p, bool peers) {
         for (std::size_t k = 0; k < p.sort_keys.size(); ++k)
             peer = dataframe::expr_logical(
                 dataframe::LogicalOp::Or, peer,
-                differs(p.sort_keys[k], "__duql_prev_" + dstd::to_string(k)));
-        with_column(
-            "__duql_peer",
-            dataframe::expr_select(peer, dataframe::expr_lit(std::int64_t{1}),
-                                   dataframe::expr_lit(std::int64_t{0})),
-            "peer start");
-        with_column("__duql_start",
-                    dataframe::expr_select(
-                        peer, col("__duql_rn"),
-                        dataframe::expr_lit_null(dataframe::TypeId::Int64)),
-                    "peer start row");
+                differs(p.sort_keys[k], dstd::fmt<"__duql_prev_{}">(k)));
+        if (auto done =
+                with_column("__duql_peer",
+                            dataframe::expr_select(
+                                peer, dataframe::expr_lit(std::int64_t{1}),
+                                dataframe::expr_lit(std::int64_t{0})),
+                            "peer start");
+            !done)
+            return done;
+        if (auto done = with_column(
+                "__duql_start",
+                dataframe::expr_select(
+                    peer, col("__duql_rn"),
+                    dataframe::expr_lit_null(dataframe::TypeId::Int64)),
+                "peer start row");
+            !done)
+            return done;
         for (const auto* c : p.ranks)
             p.last.push_back(c->fn == duql::WinFn::Rank
                                  ? WinSpec{DFTU_WINDOW_FILL_FORWARD,
@@ -461,16 +488,20 @@ void Applier::window_peers(WindowPasses& p, bool peers) {
                 {DFTU_WINDOW_FRAME_SUM, "__duql_peer", "__duql_dr", i64, 0, 0});
     } else {
         for (const auto* c : p.ranks)
-            with_column(dstd::String(c->column),
-                        dataframe::expr_lit(std::int64_t{1}),
-                        dstd::String(c->text));
+            if (auto done = with_column(dstd::String(c->column),
+                                        dataframe::expr_lit(std::int64_t{1}),
+                                        dstd::String(c->text));
+                !done)
+                return done;
         if (!p.dist.empty())
-            with_column("__duql_dr", dataframe::expr_lit(std::int64_t{1}),
-                        "peer group");
+            return with_column("__duql_dr",
+                               dataframe::expr_lit(std::int64_t{1}),
+                               "peer group");
     }
+    return {};
 }
 
-void Applier::stage(const duql::PipelineWindow& w) {
+Status Applier::stage(const duql::PipelineWindow& w) {
     leave_scan("window");
     const dstd::Vector<dstd::String> before = names();
     const dstd::String pos = "__duql_pos";
@@ -480,25 +511,31 @@ void Applier::stage(const duql::PipelineWindow& w) {
     dstd::Vector<dstd::String> part;
     dstd::String keys_text;
     for (std::size_t k = 0; k < w.keys.size(); ++k) {
-        part.push_back(source(w.keys[k], "__duql_part_" + dstd::to_string(k)));
-        keys_text += (keys_text.empty() ? "" : ", ") + w.keys[k].text;
+        auto column = source(w.keys[k], dstd::fmt<"__duql_part_{}">(k));
+        if (!column) return column.error();
+        part.push_back(std::move(*column));
+        if (!keys_text.empty()) keys_text += ", ";
+        keys_text += w.keys[k].text;
     }
     dstd::String ord = pos;
     dstd::String sort_text;
     if (!w.order.empty()) {
-        SortColumns c = sort_columns(w.order);
+        auto sorted = sort_columns(w.order);
+        if (!sorted) return sorted.error();
+        SortColumns c = std::move(*sorted);
         p.sort_keys = c.keys;
-        lines.push_back("sort_by_multi " + joined(c.by));
+        lines.push_back(dstd::fmt<"sort_by_multi {}">(joined(c.by)));
         v_ = v_.sort_by_multi(std_strs(c.by), std::move(c.desc));
         ord = "__duql_ord";
         row_index(ord);
-        for (const auto& k : w.order)
-            sort_text += (sort_text.empty() ? "" : ", ") +
-                         dstd::String(k.descending ? "-" : "") +
-                         dstd::String(k.key.text);
+        for (const auto& k : w.order) {
+            if (!sort_text.empty()) sort_text += ", ";
+            if (k.descending) sort_text += '-';
+            sort_text += k.key.text;
+        }
     }
     for (std::size_t i = 0; i < w.calls.size(); ++i)
-        window_call(p, w.calls[i], i);
+        if (auto done = window_call(p, w.calls[i], i); !done) return done;
     const dataframe::DataType i64 = dataframe::scalar(dataframe::TypeId::Int64);
     const dstd::String pid = "__duql_pid";
     if (!p.partition.empty())
@@ -509,21 +546,28 @@ void Applier::stage(const duql::PipelineWindow& w) {
         p.forward.push_back({DFTU_WINDOW_ROW_NUMBER, "", "__duql_rn", i64});
         for (std::size_t k = 0; k < p.sort_keys.size(); ++k)
             p.forward.push_back({DFTU_WINDOW_LAG, p.sort_keys[k],
-                                 "__duql_prev_" + dstd::to_string(k),
+                                 dstd::fmt<"__duql_prev_{}">(k),
                                  type_of(p.sort_keys[k]), 1});
     }
     window_op(part, ord, p.forward);
     window_op(part, p.sort_keys.empty() ? ord : p.sort_keys[0], p.ranged);
-    for (const auto& [edge, c] : p.edges)
-        with_column(
-            dstd::String(c->column),
-            dataframe::expr_select(dataframe::expr_is_null(col(edge)),
-                                   compile(c->fallback, dstd::String(c->text)),
-                                   col(c->column)),
-            dstd::String(c->text));
-    window_peers(p, peers);
+    for (const auto& [edge, c] : p.edges) {
+        auto fallback = compile(c->fallback, dstd::String(c->text));
+        if (!fallback) return fallback.error();
+        if (auto done = with_column(
+                dstd::String(c->column),
+                dataframe::expr_select(dataframe::expr_is_null(col(edge)),
+                                       *fallback, col(c->column)),
+                dstd::String(c->text));
+            !done)
+            return done;
+    }
+    if (auto done = window_peers(p, peers); !done) return done;
     if (!p.reverse.empty()) {
-        with_column("__duql_rev", dataframe::expr_neg(col(ord)), "-" + ord);
+        if (auto done = with_column("__duql_rev", dataframe::expr_neg(col(ord)),
+                                    dstd::fmt<"-{}">(ord));
+            !done)
+            return done;
         window_op(part, "__duql_rev", p.reverse);
     }
     window_op(part, ord, p.last);
@@ -535,22 +579,26 @@ void Applier::stage(const duql::PipelineWindow& w) {
              dataframe::scalar(dataframe::TypeId::Float64)});
     window_op(part, "__duql_dr", p.distribution);
     if (!p.partition.empty()) partition_aggs(p.partition, pid);
-    lines.push_back("sort_by_multi " + pos);
+    lines.push_back(dstd::fmt<"sort_by_multi {}">(pos));
     v_ = v_.sort_by_multi({std_str(pos)}, dstd::Vector<bool>{false});
     dstd::Vector<dstd::String> keep_names = before;
     dstd::String items;
     for (const auto& it : w.items) {
-        with_column(dstd::String(it.name),
-                    compile(it.term, dstd::String(it.text)),
-                    dstd::String(it.text));
+        auto compiled = compile(it.term, dstd::String(it.text));
+        if (!compiled) return compiled.error();
+        if (auto done = with_column(dstd::String(it.name), *compiled,
+                                    dstd::String(it.text));
+            !done)
+            return done;
         if (std::find(keep_names.begin(), keep_names.end(),
                       dstd::String(it.name)) == keep_names.end())
             keep_names.push_back(dstd::String(it.name));
-        items += (items.empty() ? "" : ", ") + it.name + " = " + it.text;
+        if (!items.empty()) items += ", ";
+        items += dstd::fmt<"{} = {}">(it.name, it.text);
     }
-    lines.push_back("window keys " + keys_text + "; sort " + sort_text + "; " +
-                    items);
-    keep(std::move(keep_names));
+    lines.push_back(
+        dstd::fmt<"window keys {}; sort {}; {}">(keys_text, sort_text, items));
+    return keep(std::move(keep_names));
 }
 
 }  // namespace dftracer::utils::trace::views::duql_detail

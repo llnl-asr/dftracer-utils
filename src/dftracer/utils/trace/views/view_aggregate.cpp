@@ -294,14 +294,20 @@ void project_columns(dftracer::utils::dataframe::DataFrame& batch,
     batch.columns = std::move(columns);
 }
 
-dataframe::DataFrame apply_agg_post_ops(dataframe::DataFrame batch,
-                                        const ViewPlan& plan) {
-    if (!plan.sort_col.empty())
-        batch = common::unwrap(
-            batch.sort_by(dstd::String(plan.sort_col), plan.sort_desc));
-    if (!plan.topk_col.empty())
-        batch = common::unwrap(batch.topk(dstd::String(plan.topk_col),
-                                          plan.topk_k, plan.topk_largest));
+dstd::Result<dataframe::DataFrame> apply_agg_post_ops(
+    dataframe::DataFrame batch, const ViewPlan& plan) {
+    if (!plan.sort_col.empty()) {
+        auto sorted =
+            batch.sort_by(dstd::String(plan.sort_col), plan.sort_desc);
+        if (!sorted) return sorted.error();
+        batch = std::move(*sorted);
+    }
+    if (!plan.topk_col.empty()) {
+        auto top = batch.topk(dstd::String(plan.topk_col), plan.topk_k,
+                              plan.topk_largest);
+        if (!top) return top.error();
+        batch = std::move(*top);
+    }
     if (plan.offset || plan.limit) {
         const std::int64_t off = static_cast<std::int64_t>(plan.offset);
         const std::int64_t len = plan.limit

@@ -88,7 +88,8 @@ int child_main(const dstd::String& mode, const dstd::String& gz) {
             [&](dftracer::utils::coro::Scope&)
                 -> dftracer::utils::coro::CoroTask<void> {
                 auto df = co_await views::detail::run_collect_via_engine(*plan);
-                rows = df.num_rows();
+                rows =
+                    dftracer::utils::common::unwrap(std::move(df)).num_rows();
             }))));
     std::printf("rows=%lld\n", static_cast<long long>(rows));
     return 0;

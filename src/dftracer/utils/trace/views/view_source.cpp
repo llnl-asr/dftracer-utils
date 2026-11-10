@@ -28,7 +28,6 @@
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/views/fold.h>
-#include <dftracer/utils/trace/views/interim_guard.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
 #include <dftracer/utils/trace/views/stream_row_fold.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
@@ -838,6 +837,7 @@ dstd::Optional<dataframe::SourceApplication> ViewSource::apply_aggregation(
     if (!keys.empty())
         grouped = detail::scan::group_by(grouped, std::move(keys));
     grouped = detail::scan::agg(grouped, std::move(aggs));
+    if (grouped->error) return dstd::nullopt;
     auto next = dstd::make_shared<ViewSource>(std::move(grouped), emit_dyn_);
     if (!same_names(next->names(), expected)) return dstd::nullopt;
     return dataframe::SourceApplication{std::move(next),
@@ -1252,14 +1252,16 @@ bool ViewSource::can_stream_rows() const {
 // Matches build_row_frame's own empty-select order (fixed top-level fields,
 // fhash/hhash if present, then sorted args), from index metadata rather than
 // a scan - best-effort, may omit an arg key not yet indexed.
-dstd::Vector<dstd::String> ViewSource::row_schema() const {
+dstd::Result<dstd::Vector<dstd::String>> ViewSource::row_schema() const {
     // Path-decoded records: every column is a catalog path, as written.
     if (detail::plan_by_path(*plan_)) return detail::scan::columns(plan_);
     static const char* const TOP_LEVEL[] = {"name", "cat", "pid", "tid",
                                             "ts",   "dur", "ph"};
     dstd::Vector<dstd::String> out(std::begin(TOP_LEVEL), std::end(TOP_LEVEL));
 
-    dstd::Vector<dstd::String> cols = detail::scan::columns(plan_);  // sorted
+    auto indexed = detail::scan::columns(plan_);  // sorted
+    if (!indexed) return indexed.error();
+    dstd::Vector<dstd::String>& cols = *indexed;
     const bool has_fhash =
         std::binary_search(cols.begin(), cols.end(), dstd::String("fhash"));
     const bool has_hhash =
@@ -1281,8 +1283,7 @@ dstd::Vector<dstd::String> ViewSource::row_schema() const {
 dftracer::utils::dataframe::Schema ViewSource::schema() const {
     std::lock_guard<std::mutex> lock(schema_mu_);
     if (!schema_) {
-        auto computed =
-            detail::guard_exceptions([&] { return compute_schema(); });
+        auto computed = compute_schema();
         if (!computed) {
             // An empty schema, not cached: scan() runs the same work again
             // and returns the error.
@@ -1357,11 +1358,17 @@ dstd::Result<dftracer::utils::dataframe::Schema> ViewSource::compute_schema()
         // so name and type cannot disagree.
         const bool by_path = detail::plan_by_path(*plan_);
         dstd::HashMap<dstd::String, dataframe::DataType> harvested;
+        dstd::Optional<dstd::Error> harvest_failure;
         auto resolve = [&](dstd::StringView name) {
             const dataframe::TypeId id = detail::row_column_type(name, by_path);
             if (id != dataframe::TypeId::Unknown) return dataframe::scalar(id);
-            if (harvested.empty())
-                harvested = detail::scan::column_types(plan_);
+            if (harvested.empty() && !harvest_failure) {
+                auto types = detail::scan::column_types(plan_);
+                if (types)
+                    harvested = std::move(*types);
+                else
+                    harvest_failure = types.error();
+            }
             dstd::StringView key = detail::window_inner(name);
             if (!by_path &&
                 key.rfind(dftracer::utils::common::ARGS_PREFIX, 0) == 0)
@@ -1385,7 +1392,9 @@ dstd::Result<dftracer::utils::dataframe::Schema> ViewSource::compute_schema()
                     dataframe::Field{std::move(col_name), type, true});
             }
         } else {
-            dstd::Vector<dstd::String> names = row_schema();
+            auto row_names = row_schema();
+            if (!row_names) return row_names.error();
+            const dstd::Vector<dstd::String>& names = *row_names;
             s.fields.reserve(names.size() + plan_->named_columns.size());
             for (const dstd::String& name : names)
                 s.fields.push_back(
@@ -1398,6 +1407,7 @@ dstd::Result<dftracer::utils::dataframe::Schema> ViewSource::compute_schema()
                     s.fields.push_back(std::move(named));
             }
         }
+        if (harvest_failure) return *harvest_failure;
         return s;
     }
     // An aggregation's columns follow from its plan, so planning and explain()
@@ -1519,10 +1529,12 @@ dstd::UniquePtr<dftracer::utils::dataframe::Cursor> ViewSource::open_stream(
            dstd::SharedPtr<detail::DynamicPrune> dp, bool emit_dyn,
            dstd::SharedPtr<coro::AsyncSemaphore> gt)
         -> coro::CoroTask<dstd::Result<void>> {
-        detail::StreamRowFold fold(
-            ch, sem, iv, vv->select, ts, detail::metadata_rows(*vv), emit_dyn,
-            nullptr, nullptr, detail::plan_by_path(*vv), gt != nullptr,
-            detail::scan::json_columns(*vv));
+        auto json = detail::scan::json_columns(*vv);
+        if (!json) co_return json.error();
+        detail::StreamRowFold fold(ch, sem, iv, vv->select, ts,
+                                   detail::metadata_rows(*vv), emit_dyn,
+                                   nullptr, nullptr, detail::plan_by_path(*vv),
+                                   gt != nullptr, std::move(*json));
         std::array<detail::Fold*, 1> folds{&fold};
         auto ran = detail::scan::run_folds(vv, folds, *iv, dp.get(), gt.get());
         auto stats = co_await std::move(ran);

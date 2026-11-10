@@ -1026,9 +1026,10 @@ coro::CoroTask<void> ViewRun::run_local() {
     // bootstrap (answer the query and build the index in one pass);
     // pre-building first would make the index exist so the bootstrap never
     // fires. Only the plain export / collect paths bootstrap.
-    const bool will_bootstrap = (aggregate && base.collect_would_bootstrap()) ||
-                                (!counters && !aggregate && !write_trace &&
-                                 !duql_rows && v.export_would_bootstrap());
+    const bool will_bootstrap =
+        (aggregate && common::unwrap(base.collect_would_bootstrap())) ||
+        (!counters && !aggregate && !write_trace && !duql_rows &&
+         common::unwrap(v.export_would_bootstrap()));
     if (!no_auto_index && !will_bootstrap) {
         co_await refresh_indexes(files, index_dir_std);
     }

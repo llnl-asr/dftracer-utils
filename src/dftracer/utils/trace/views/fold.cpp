@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/coro/async_semaphore.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -518,7 +519,9 @@ void build_fold_event_into(FoldEvent& ev, const DFTracerEvent& scalars,
 
     // fhash/hhash are group dimensions even for folds that want no other args,
     // so they are always harvested; the rest only when a fold asks.
-    for (auto field : args.get_object()) {
+    simdjson::dom::object members;
+    if (args.get_object().get(members)) return;
+    for (auto field : members) {
         dstd::StringView key = field.key;
         if (key == "fhash" || key == "hhash") {
             const std::uint32_t id = intern_string(ids, field.value);
@@ -3042,7 +3045,8 @@ coro::CoroTask<void> for_slices(dstd::Vector<dstd::UniquePtr<Fold>>& slices,
 // coroutine) to avoid the GCC 12/13 coroutine-frame miscompile on non-trivial
 // frame locals (the scanner/generator/batch below). Behavior is identical to
 // the previous inline lambda.
-coro::CoroTask<void> fuse_worker(FuseWorkerCtx ctx, std::size_t w) {
+coro::CoroTask<dstd::Result<void>> fuse_worker(FuseWorkerCtx ctx,
+                                               std::size_t w) {
     auto& slices = ctx.fslice[w];
     FoldPortBus bus;
     FoldEventBuffer fold_buffer;
@@ -3108,7 +3112,12 @@ coro::CoroTask<void> fuse_worker(FuseWorkerCtx ctx, std::size_t w) {
         for (;;) {
             auto next = co_await gen.next();
             if (!next) break;
-            auto batch = common::unwrap(std::move(*next));
+            if (!*next) {
+                // The error ends the scan: the others stop claiming units.
+                ctx.produced.store(ctx.cap, std::memory_order_relaxed);
+                co_return next->error();
+            }
+            auto batch = std::move(**next);
             auto* b = &batch;
             if (is_cancelled(ctx.plan)) {
                 complete = false;
@@ -3127,7 +3136,10 @@ coro::CoroTask<void> fuse_worker(FuseWorkerCtx ctx, std::size_t w) {
                          dstd::Span<const dstd::StringView>(b->events)};
             bus.clear();
             for (auto& s : slices) {
-                common::unwrap(s->step(fb));
+                if (auto stepped = s->step(fb); !stepped) {
+                    ctx.produced.store(ctx.cap, std::memory_order_relaxed);
+                    co_return stepped.error();
+                }
                 // Await an async plugin fold's task before the next step
                 // recycles the batch; null for sync folds.
                 if (auto* t = s->take_pending())
@@ -3143,18 +3155,41 @@ coro::CoroTask<void> fuse_worker(FuseWorkerCtx ctx, std::size_t w) {
                               ctx.units[i].checkpoint_idx);
         pending.seal();
     }
-    co_return;
+    co_return dstd::Result<void>{};
+}
+
+// Runs one worker and, on its error, stops the scope so siblings parked on the
+// gate or the budget wake. A sibling that ends because of that stop returns ok;
+// the error is in the future of the worker that failed.
+coro::CoroTask<dstd::Result<void>> fuse_worker_guarded(
+    FuseWorkerCtx ctx, std::size_t w, coro::Scope& scope,
+    std::atomic<bool>& failed) {
+    auto task = fuse_worker(ctx, w);
+    auto settled = co_await coro::settle(std::move(task));
+    if (settled.exception) {
+        failed.store(true, std::memory_order_relaxed);
+        scope.request_stop();
+        co_await coro::fail_with(std::move(settled.exception));
+    }
+    if (settled.stopped) {
+        if (failed.load(std::memory_order_relaxed))
+            co_return dstd::Result<void>{};
+        co_await coro::stop_here();
+    }
+    if (!*settled.value) {
+        failed.store(true, std::memory_order_relaxed);
+        scope.request_stop();
+    }
+    co_return std::move(*settled.value);
 }
 
 }  // namespace
 
-coro::CoroTask<ExportStats> fuse(const ViewPlan& plan,
-                                 const ViewDefinition& vdef_in,
-                                 dstd::Span<Fold* const> folds,
-                                 dftracer::utils::dstd::StringIntern& intern,
-                                 const CoverageSet* covered,
-                                 std::uint64_t limit, DynamicPrune* dyn_prune,
-                                 coro::AsyncSemaphore* gate) {
+coro::CoroTask<dstd::Result<ExportStats>> fuse(
+    const ViewPlan& plan, const ViewDefinition& vdef_in,
+    dstd::Span<Fold* const> folds, dftracer::utils::dstd::StringIntern& intern,
+    const CoverageSet* covered, std::uint64_t limit, DynamicPrune* dyn_prune,
+    coro::AsyncSemaphore* gate) {
     // Folds that all drop metadata records need no chunk read for them.
     ViewDefinition vdef = vdef_in;
     if (std::none_of(folds.begin(), folds.end(),
@@ -3168,7 +3203,9 @@ coro::CoroTask<ExportStats> fuse(const ViewPlan& plan,
         vdef.path_fields.clear();
     }
     std::uint64_t skipped = 0;
-    auto units = common::unwrap(co_await gather_units(plan, vdef, skipped));
+    auto gathered = co_await gather_units(plan, vdef, skipped);
+    if (!gathered) co_return gathered.error();
+    auto units = std::move(*gathered);
     for (std::size_t i = 0; i < units.size(); ++i) units[i].seq = i;
     const std::uint64_t cap =
         limit > 0 ? limit : std::numeric_limits<std::uint64_t>::max();
@@ -3250,13 +3287,22 @@ coro::CoroTask<ExportStats> fuse(const ViewPlan& plan,
                       skip_never_indexed,
                       dyn_prune,
                       gate};
-    co_await coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
-        for (std::size_t w = 0; w < nworkers; ++w)
-            scope.spawn([&ctx, w]() -> coro::CoroTask<void> {
-                return fuse_worker(ctx, w);
-            });
-        co_return;
-    });
+    std::atomic<bool> failed{false};
+    auto fused = co_await coro::with_scope(
+        [&](coro::Scope& scope) -> coro::CoroTask<dstd::Result<void>> {
+            dstd::Vector<coro::SpawnFuture<dstd::Result<void>>> workers;
+            workers.reserve(nworkers);
+            for (std::size_t w = 0; w < nworkers; ++w)
+                workers.push_back(
+                    scope.spawn_future([&ctx, &scope, &failed, w]() {
+                        return fuse_worker_guarded(ctx, w, scope, failed);
+                    }));
+            auto results = co_await coro::when_all(std::move(workers));
+            for (auto& r : results)
+                if (!r.has_value()) co_return r.error();
+            co_return dstd::Result<void>{};
+        });
+    if (!fused) co_return fused.error();
 
     for (std::size_t w = 0; w < nworkers; ++w)
         for (std::size_t k = 0; k < folds.size(); ++k)

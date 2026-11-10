@@ -172,7 +172,8 @@ TEST_SUITE("trace scan - streaming row query") {
         // The schema a plan declares comes from the index it reads, which
         // here holds both traces.
         dstd::Vector<dstd::String> schema_b;
-        for (const auto& name : views::detail::scan::columns(plan_b))
+        for (const auto& name :
+             dftu_utils_test::ok(views::detail::scan::columns(plan_b)))
             schema_b.emplace_back(name);
         CHECK(std::find(schema_b.begin(), schema_b.end(), "a") ==
               schema_b.end());

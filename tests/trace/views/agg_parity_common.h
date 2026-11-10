@@ -111,11 +111,13 @@ inline dftracer::utils::dataframe::DataFrame engine_collect(
         "engine-collect", dftracer::utils::coro::with_scope(
                               [&](dftracer::utils::coro::Scope&)
                                   -> dftracer::utils::coro::CoroTask<void> {
-                                  result = co_await dftracer::utils::trace::
-                                      views::detail::run_collect_via_engine(*v);
+                                  result = dftu_utils_test::ok(
+                                      co_await dftracer::utils::trace::views::
+                                          detail::run_collect_via_engine(*v));
                               }))));
-    return dftracer::utils::trace::views::detail::apply_agg_post_ops(
-        std::move(result), *v);
+    return dftu_utils_test::ok(
+        dftracer::utils::trace::views::detail::apply_agg_post_ops(
+            std::move(result), *v));
 }
 
 // Two aggregation frames equal, pairing rows by their composite key text so a
@@ -199,11 +201,13 @@ inline dftracer::utils::dataframe::DataFrame collect_engine_plan(
         "agg-engine", dftracer::utils::coro::with_scope(
                           [&](dftracer::utils::coro::Scope&)
                               -> dftracer::utils::coro::CoroTask<void> {
-                              result = co_await dftracer::utils::trace::views::
-                                  detail::run_collect_via_engine(*v);
+                              result = dftu_utils_test::ok(
+                                  co_await dftracer::utils::trace::views::
+                                      detail::run_collect_via_engine(*v));
                           }))));
-    return dftracer::utils::trace::views::detail::apply_agg_post_ops(
-        std::move(result), *v);
+    return dftu_utils_test::ok(
+        dftracer::utils::trace::views::detail::apply_agg_post_ops(
+            std::move(result), *v));
 }
 inline dftracer::utils::dataframe::DataFrame collect_groupmap_plan(
     const dftracer::utils::trace::views::detail::scan::ScanPlan& v) {

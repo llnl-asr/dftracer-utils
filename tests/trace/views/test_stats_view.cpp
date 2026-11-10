@@ -216,10 +216,12 @@ TEST_SUITE("stats via View") {
                         .group_by({GroupKey::name()})
                         .agg({{AggOp::Count, "", "n"}})
                         .reconstruct_if_cached();
-        REQUIRE(cat.has_value());
-        REQUIRE(name.has_value());
-        CHECK(sum_i64(*cat, "n") == 50);
-        CHECK(sum_i64(*name, "n") == 50);
+        const auto cat_rows = dftu_utils_test::ok(std::move(cat));
+        const auto name_rows = dftu_utils_test::ok(std::move(name));
+        REQUIRE(cat_rows.has_value());
+        REQUIRE(name_rows.has_value());
+        CHECK(sum_i64(*cat_rows, "n") == 50);
+        CHECK(sum_i64(*name_rows, "n") == 50);
     }
 
     TEST_CASE("execute() serves materialized branches without scanning") {

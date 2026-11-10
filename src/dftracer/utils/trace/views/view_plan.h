@@ -49,7 +49,8 @@ struct ComputedColumn {
 /// gives the one to use with the lookups' key sets. It is thread-safe and
 /// runs the sides once; a call after a failed one runs them again.
 struct BuildStep {
-    dstd::Function<dstd::Optional<duql::Query>(dstd::Optional<duql::Query>)>
+    dstd::Function<dstd::Result<dstd::Optional<duql::Query>>(
+        dstd::Optional<duql::Query>)>
         run;
 };
 
@@ -192,6 +193,9 @@ struct ViewPlan {
     /// Why the files have no one record_schema, when plan_record_schema fell
     /// back to dftracer's.
     mutable dstd::SharedPtr<const dstd::Error> record_schema_error;
+    /// The error a builder met (a refused argument, an unreadable index).
+    /// Every copy of the plan keeps it, and a terminal returns it first.
+    dstd::SharedPtr<const dstd::Error> error;
 
     /// Index snapshots by index path, taken where the pins of the files were
     /// read. Every read of those indexes goes through them, so a refresh that
@@ -210,7 +214,7 @@ bool has_pin(const ViewPlan& plan);
 /// True when the index of a pinned file holds more than its pin, so an answer
 /// from the index covers rows the view must leave out. Such a plan reads
 /// chunks.
-bool is_past_pin(const ViewPlan& plan);
+dstd::Result<bool> is_past_pin(const ViewPlan& plan);
 
 }  // namespace dftracer::utils::trace::views::detail
 

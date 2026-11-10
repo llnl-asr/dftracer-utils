@@ -28,8 +28,9 @@ dstd::String counter_line(
 // counter-partial merge). Byte-matches emit_group_counter: finalizes the state,
 // then writes one event per group with its own args (spec value columns then
 // the present dyn columns, skipping args a group did not see).
-void emit_counters_from_state(const dftracer::utils::dataframe::AggState& state,
-                              const ViewPlan& plan, ExportSink& sink);
+dstd::Result<void> emit_counters_from_state(
+    const dftracer::utils::dataframe::AggState& state, const ViewPlan& plan,
+    ExportSink& sink);
 
 }  // namespace dftracer::utils::trace::views::detail
 

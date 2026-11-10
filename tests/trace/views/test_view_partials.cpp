@@ -147,13 +147,16 @@ dstd::Vector<AggSpec> specs() {
 dataframe::DataFrame scan_only(const views::detail::scan::ScanPlan& p) {
     Runtime rt;
     dataframe::DataFrame out;
-    dftu_utils_test::ok(rt.block_on(coro::named(
-        "scan-only",
-        coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-            auto st = co_await views::detail::build_engine_agg_state(*p);
-            out = views::detail::finalize_engine_result(*st, *p);
-        }))));
-    return views::detail::apply_agg_post_ops(std::move(out), *p);
+    dftu_utils_test::ok(rt.block_on(
+        coro::named("scan-only",
+                    coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                        auto st = dftu_utils_test::ok(
+                            co_await views::detail::build_engine_agg_state(*p));
+                        out = dftu_utils_test::ok(
+                            views::detail::finalize_engine_result(*st, *p));
+                    }))));
+    return dftu_utils_test::ok(
+        views::detail::apply_agg_post_ops(std::move(out), *p));
 }
 
 using Rows = dstd::Map<dstd::String, dstd::Map<dstd::String, double>>;
@@ -296,9 +299,9 @@ TEST_SUITE("ViewPartials") {
             coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
                 dftu_utils_test::ok(co_await rollup.materialize());
             }))));
-        REQUIRE(rollup.reconstruct_if_cached().has_value());
-        const Rows got =
-            rows_of(*rollup.reconstruct_if_cached(), {"cat", "pid", "tid"});
+        const auto cached = dftu_utils_test::ok(rollup.reconstruct_if_cached());
+        REQUIRE(cached.has_value());
+        const Rows got = rows_of(*cached, {"cat", "pid", "tid"});
         const Rows want = rows_of(expected, {"cat", "pid", "tid"});
         REQUIRE(got.size() == want.size());
         for (const auto& [key, cells] : want) {

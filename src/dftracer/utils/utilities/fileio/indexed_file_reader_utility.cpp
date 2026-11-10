@@ -50,28 +50,19 @@ IndexedFileReaderUtility::operator()(const IndexedReadInput& input) const {
             common::forget_input(store);
         }
 
-        // Build new index. The indexer still reports a failure as an
-        // exception.
+        auto created =
+            dftracer::utils::index::gzip::CheckpointIndexerFactory::try_create(
+                input.file_path, input.index_path, input.checkpoint_size, true);
+        if (!created) co_return created.error();
         dstd::SharedPtr<dftracer::utils::index::gzip::CheckpointIndexer>
-            indexer;
-        try {
-            indexer =
-                dftracer::utils::index::gzip::CheckpointIndexerFactory::create(
-                    input.file_path, input.index_path, input.checkpoint_size,
-                    true);
-        } catch (...) {
-            co_return common::error_of_exception(std::current_exception());
-        }
+            indexer = std::move(*created);
         if (!indexer) {
             co_return common::make_error<"No indexer for file: {}">(
                 common::ErrorCode::InvalidArgument, input.file_path);
         }
-        auto building = indexer->build_async();
-        auto built = co_await coro::settle(std::move(building));
-        if (built.stopped) co_await coro::stop_here();
-        if (built.exception) {
-            co_return common::error_of_exception(built.exception);
-        }
+        auto building = indexer->try_build_async();
+        auto built = co_await std::move(building);
+        if (!built) co_return built.error();
     }
 
     // Step 2: Create and return Reader

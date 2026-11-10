@@ -400,9 +400,9 @@ TEST_SUITE("View") {
                         .get());
                 sc += stt.events_scanned;
                 mt += stt.events_matched;
-                for (auto& c :
-                     View::from_file(dstd::String(f), dstd::String(ix))
-                         .columns())
+                for (auto& c : dftu_utils_test::ok(
+                         View::from_file(dstd::String(f), dstd::String(ix))
+                             .columns()))
                     cols.emplace_back(c);
             };
             q(parts_a[i], idx_a, scanned_a, matched_a, cols_a);
@@ -594,7 +594,8 @@ TEST_SUITE("View") {
             CHECK(std::binary_search(collected.begin(), collected.end(),
                                      dstd::String(c)));
         dstd::Vector<dstd::String> index_cols;
-        for (const auto& name : v.columns()) index_cols.emplace_back(name);
+        for (const auto& name : dftu_utils_test::ok(v.columns()))
+            index_cols.emplace_back(name);
         for (const dstd::String& c : collected) {
             if (c.rfind("args.", 0) != 0) continue;
             CAPTURE(c);

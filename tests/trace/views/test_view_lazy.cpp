@@ -1203,18 +1203,21 @@ TEST_SUITE("View - trace terminals") {
                        .rollup_root(dstd::String(env.dir() + "/rollups"))
                        .group_by({GroupKey::name()})
                        .agg({{AggOp::Count, "", "n"}});
-        CHECK_FALSE(agg.reconstruct_if_cached());
+        CHECK_FALSE(dftu_utils_test::ok(agg.reconstruct_if_cached()));
         const dstd::String p =
             test_view_common::run(agg.aggregate_partial().collect());
         test_view_common::run(agg.materialize_partials({p}));
         dstd::Optional<dataframe::DataFrame> cached =
-            agg.reconstruct_if_cached();
+            dftu_utils_test::ok(agg.reconstruct_if_cached());
         REQUIRE(cached);
         CHECK(rows_of(*cached, {"name", "n"}) ==
               rows_of(test_view_common::run(agg.collect()), {"name", "n"}));
-        CHECK_THROWS_WITH_AS(nested_viewer().reconstruct_if_cached(),
-                             doctest::Contains("group_by or agg"),
-                             dftracer::utils::common::DFTUtilsException);
+        const auto refused = nested_viewer().reconstruct_if_cached();
+        REQUIRE_FALSE(refused.has_value());
+        CHECK(dstd::String(refused.error().message()).find("group_by or agg") !=
+              dstd::String::npos);
+        CHECK(dftracer::utils::common::errorcode_of(refused.error()) ==
+              dftracer::utils::common::ErrorCode::InvalidArgument);
     }
 
     TEST_CASE("compare applies the baseline aggregation to the variant") {
@@ -1350,8 +1353,11 @@ TEST_SUITE("View - low-level scans") {
     }
 
     TEST_CASE("config reads the trace description without a filter") {
-        CHECK(nested_viewer().duql(R"(cat == "POSIX")").config().size() ==
-              views::detail::scan::config(nested_plan()).size());
+        CHECK(dftu_utils_test::ok(
+                  nested_viewer().duql(R"(cat == "POSIX")").config())
+                  .size() ==
+              dftu_utils_test::ok(views::detail::scan::config(nested_plan()))
+                  .size());
     }
 }
 

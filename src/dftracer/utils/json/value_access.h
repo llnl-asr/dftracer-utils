@@ -209,7 +209,14 @@ inline dstd::Optional<double> get_double_or_refused(
 /// simdjson rejects an escape in it.
 template <class Field>
 inline dstd::Optional<dstd::StringView> get_key_or_raw(Field&& field) {
-    const char* const begin = field.key().raw();
+    auto raw = field.key().raw();
+    const char* begin = nullptr;
+    if constexpr (requires { raw.error(); }) {
+        if (raw.error()) return dstd::nullopt;
+        begin = raw.value_unsafe();
+    } else {
+        begin = raw;
+    }
     auto result = field.unescaped_key();
     if (!result.error()) return dstd::StringView(result.value_unsafe());
     if (result.error() != simdjson::STRING_ERROR) return dstd::nullopt;

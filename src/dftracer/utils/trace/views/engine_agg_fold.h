@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <utility>
 
 namespace dftracer::utils::trace::views::detail {
 
@@ -34,10 +35,10 @@ class EngineAggFold : public Fold {
    public:
     EngineAggFold(const ViewPlan& plan,
                   const dftracer::utils::dstd::StringIntern& intern,
-                  bool apply_query = false)
+                  AggInputSpec spec, bool apply_query = false)
         : plan_(&plan),
           intern_(&intern),
-          spec_(make_agg_input_spec(plan)),
+          spec_(std::move(spec)),
           lowered_(dftracer::utils::dataframe::lower_group_aggs(spec_.gaggs)),
           phase_target_(agg_phase_target(plan)),
           keep_metadata_(metadata_rows(plan)),
@@ -71,7 +72,8 @@ class EngineAggFold : public Fold {
     }
 
     dstd::UniquePtr<Fold> slice() const override {
-        return dstd::make_unique<EngineAggFold>(*plan_, *intern_, apply_query_);
+        return dstd::make_unique<EngineAggFold>(*plan_, *intern_, spec_,
+                                                apply_query_);
     }
 
     dstd::Result<void> step(const FoldBatch& batch) override {
@@ -87,10 +89,10 @@ class EngineAggFold : public Fold {
                        pod_matches(*plan_->query, ev, *intern_, qmap_);
             });
         if (keep.empty()) return {};
-        dftracer::utils::dataframe::DataFrame f =
-            build_agg_input_frame(keep, *intern_, spec_, resolver_);
+        auto f = build_agg_input_frame(keep, *intern_, spec_, resolver_);
+        if (!f) return f.error();
         return dftracer::utils::dataframe::agg_accumulate_chunk(
-            *state_, f, spec_.group_key_names, lowered_.value_names,
+            *state_, *f, spec_.group_key_names, lowered_.value_names,
             spec_.emit_dyn ? spec_.dyn_prefix : dstd::String());
     }
 

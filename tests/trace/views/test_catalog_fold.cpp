@@ -235,16 +235,17 @@ TEST_SUITE("CatalogFold") {
             (void)view_of(gz).duql(R"(name == "read")").collect().get();
             REQUIRE_FALSE(has_catalog(gz));
         }
-        const auto cols = view_of(gz).columns();
+        const auto cols = dftu_utils_test::ok(view_of(gz).columns());
         REQUIRE(has_catalog(gz));
         const dstd::String built = write_gz(env, "cb", dftracer_lines());
         build_full(built);
         CHECK(cols.size() > 7);
-        CHECK(cols == view_of(built).columns());
+        CHECK(cols == dftu_utils_test::ok(view_of(built).columns()));
 
         // A rewrite would drop the sentinel.
         plant_sentinel(gz);
-        CHECK(view_of(gz).columns() == view_of(gz).columns());
+        CHECK(dftu_utils_test::ok(view_of(gz).columns()) ==
+              dftu_utils_test::ok(view_of(gz).columns()));
         CHECK(has_sentinel(gz));
     }
 
@@ -272,10 +273,10 @@ TEST_SUITE("CatalogFold") {
         const dstd::String built = write_gz(env, "gb", genesis_lines());
         build_full(built);
         REQUIRE(has_catalog(built));
-        const auto cols = view_of(gz).columns();
+        const auto cols = dftu_utils_test::ok(view_of(gz).columns());
         REQUIRE(has_catalog(gz));
         for (const char* want : {"v.p50", "v.p99", "count"})
             CHECK(std::find(cols.begin(), cols.end(), want) != cols.end());
-        CHECK(cols == view_of(built).columns());
+        CHECK(cols == dftu_utils_test::ok(view_of(built).columns()));
     }
 }

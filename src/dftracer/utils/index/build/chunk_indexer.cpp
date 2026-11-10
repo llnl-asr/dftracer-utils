@@ -52,13 +52,12 @@ dstd::Vector<dstd::String> get_target_dimensions(
 
 }  // namespace
 
-coro::CoroTask<ChunkIndexerOutput> ChunkIndexer::operator()(
+coro::CoroTask<dstd::Result<ChunkIndexerOutput>> ChunkIndexer::operator()(
     const ChunkIndexerInput& input) {
     DFTRACER_UTILS_TRACE_SCOPE("index chunk");
     ChunkIndexerOutput output;
     output.checkpoint_idx = input.checkpoint_idx;
     output.events_processed = 0;
-    output.success = false;
 
     const ChunkIndexState* existing = nullptr;
     if (input.existing_state) {
@@ -94,7 +93,6 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexer::operator()(
             output.bloom_filters.clear();
             output.statistics = existing->statistics;
             output.events_processed = existing->events_processed;
-            output.success = true;
             co_return output;
         }
 
@@ -128,14 +126,16 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexer::operator()(
 
         utilities::fileio::IndexedFileReaderUtility reader_utility;
         auto opened = co_await reader_utility(reader_input);
-        reader = common::unwrap(std::move(opened));
+        if (!opened) {
+            co_return opened.error();
+        }
+        reader = std::move(*opened);
 
         if (!reader) {
-            DFTRACER_UTILS_LOG_ERROR(
-                "ChunkIndexer: Failed to create reader for {} checkpoint {}",
-                input.file_path,
+            co_return common::make_error<
+                "ChunkIndexer: no reader for {} checkpoint {}">(
+                common::ErrorCode::Internal, input.file_path,
                 static_cast<unsigned long long>(input.checkpoint_idx));
-            co_return output;
         }
     }
 
@@ -146,7 +146,6 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexer::operator()(
             output.statistics = existing->statistics;
             output.events_processed = existing->events_processed;
         }
-        output.success = true;
         co_return output;
     }
 
@@ -160,11 +159,7 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexer::operator()(
             .to(input.end_byte));
 
     if (!opened_stream) {
-        DFTRACER_UTILS_LOG_ERROR(
-            "ChunkIndexer: Failed to create stream for {} checkpoint {}",
-            input.file_path,
-            static_cast<unsigned long long>(input.checkpoint_idx));
-        co_return output;
+        co_return opened_stream.error();
     }
     auto stream = std::move(*opened_stream);
 
@@ -313,9 +308,10 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexer::operator()(
                 output.events_processed++;
             }
         });
-    common::unwrap(std::move(scanned));
+    if (!scanned) {
+        co_return scanned.error();
+    }
 
-    output.success = true;
     co_return output;
 }
 

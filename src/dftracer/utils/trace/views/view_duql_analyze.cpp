@@ -54,9 +54,9 @@ duql::PluginCatalog registry_plugins() {
     return out;
 }
 
-[[noreturn]] void refuse(dstd::StringView why) {
-    throw common::DFTUtilsException::cat(common::ErrorCode::InvalidArgument,
-                                         "View::duql ", why);
+dstd::Unexpected<dstd::Error> refuse(dstd::StringView why) {
+    return common::make_error<"View::duql {}">(
+        common::ErrorCode::InvalidArgument, why);
 }
 
 dstd::Vector<dstd::String> std_strs(const dstd::Vector<dstd::String>& v) {
@@ -508,13 +508,14 @@ bool is_count(duql::AggFn fn) {
            fn == duql::AggFn::CountDistinct;
 }
 
-void reject_resolved(const duql::Program& p) {
-    auto check = [](dstd::StringView path) {
-        if (!path.starts_with("resolved.")) return;
-        refuse("'" + dstd::String(path) +
-               "': 'resolved.' columns are removed; write an arrow into a "
-               "row set of the source, such as 'fhash -> files.path', "
-               "'hhash -> hosts.name' or 'run -> runs.app'");
+Status reject_resolved(const duql::Program& p) {
+    Status result;
+    auto check = [&result](dstd::StringView path) {
+        if (!result || !path.starts_with("resolved.")) return;
+        result = refuse<
+            "'{}': 'resolved.' columns are removed; write an arrow into a "
+            "row set of the source, such as 'fhash -> files.path', "
+            "'hhash -> hosts.name' or 'run -> runs.app'">(path);
     };
     dstd::Function<void(const duql::detail::QueryNode&)> node =
         [&](const duql::detail::QueryNode& n) {
@@ -540,8 +541,6 @@ void reject_resolved(const duql::Program& p) {
         };
     auto pipeline = [&](const duql::Pipeline& pl) {
         if (pl.filter) node(*pl.filter);
-        // Checked after the walk: check can throw, and the walk is in duql,
-        // which is built without exceptions.
         dstd::Vector<dstd::StringView> bases;
         duql::for_each_pipeline_term(pl, [&](const duql::Term& t) {
             if (const auto* f = std::get_if<duql::TField>(&t.node))
@@ -551,6 +550,7 @@ void reject_resolved(const duql::Program& p) {
     };
     pipeline(p.main);
     for (const auto& s : p.sides) pipeline(s.pipeline);
+    return result;
 }
 
 dstd::String input_text(const duql::Input& in, const duql::Program& program) {
@@ -562,7 +562,7 @@ dstd::String input_text(const duql::Input& in, const duql::Program& program) {
         case duql::InputKind::Data:
             return "data";
         case duql::InputKind::File:
-            return dstd::String("\"" + in.path + "\"");
+            return dstd::fmt<"\"{}\"">(in.path);
     }
     return {};
 }
@@ -706,11 +706,13 @@ dstd::Optional<duql::Query> pushed(const Pushdown& p,
     return duql::detail::QueryAccess::from_node(std::move(root));
 }
 
-Pushdown key_sets(const duql::Pipeline& p) {
+dstd::Result<Pushdown> key_sets(const duql::Pipeline& p) {
     Pushdown out;
     duql::detail::QueryNodePtr extra;
+    dstd::Optional<dstd::Error> failure;
     each_pushed(p, [&](const duql::Term& leaf, const duql::TField& f,
                        const duql::TLookup& l, const duql::Term* cond) {
+        if (failure) return;
         const duql::LookupTable& t = *l.slot->table;
         const dataframe::Series& keys = t.frame->columns[t.key_columns.front()];
         dstd::Optional<dataframe::Series> pass;
@@ -727,9 +729,14 @@ Pushdown key_sets(const duql::Pipeline& p) {
         if (cond && !record && t.value) {
             const dataframe::Series& values = t.frame->columns[*t.value];
             if (auto e = duql::vectorize_condition(
-                    *cond, {{".", values.data_type()}}, false))
-                pass = common::unwrap(dataframe::eval(*e, {&values}))
-                           .materialize();
+                    *cond, {{".", values.data_type()}}, false)) {
+                auto evaluated = dataframe::eval(*e, {&values});
+                if (!evaluated) {
+                    failure = evaluated.error();
+                    return;
+                }
+                pass = evaluated->materialize();
+            }
         }
         auto passes = [&](std::int64_t r) {
             if (!pass) return !cond || !t.value || record;
@@ -761,6 +768,7 @@ Pushdown key_sets(const duql::Pipeline& p) {
                             std::move(extra), std::move(node)})
                       : std::move(node);
     });
+    if (failure) return *failure;
     if (extra)
         out.extra = duql::detail::QueryAccess::from_node(std::move(extra));
     return out;
@@ -780,14 +788,13 @@ dstd::Optional<CacheKey> cache_key(const detail::ViewPlan& given,
     // A `data` side reads the View as given: its filters are part of it.
     dstd::String key(text);
     if (input == duql::InputKind::Data) {
-        key +=
-            "\n" +
-            (plan.query ? dstd::String(plan.query->source()) : dstd::String()) +
-            "\n" + dstd::to_string(static_cast<int>(plan.phase)) +
-            dstd::to_string(static_cast<int>(plan.all_records));
+        const dstd::String source =
+            plan.query ? dstd::String(plan.query->source()) : dstd::String();
+        key += dstd::fmt<"\n{}\n{}{}">(source, static_cast<int>(plan.phase),
+                                       static_cast<int>(plan.all_records));
         if (plan.time_range)
-            key += "\n" + number_text(plan.time_range->first) + ".." +
-                   number_text(plan.time_range->second);
+            key += dstd::fmt<"\n{}..{}">(number_text(plan.time_range->first),
+                                         number_text(plan.time_range->second));
     }
     const auto sig = index::cache::lookup_signature(plan, key);
     if (!sig) return dstd::nullopt;

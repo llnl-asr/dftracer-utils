@@ -321,12 +321,13 @@ struct ViewSessionState;
 /// (view_agg_engine.h/.cpp); builds the
 /// raw row-query @ref dftracer::utils::dataframe::LazyFrame "LazyFrame" the
 /// streaming group_by runs over.
-coro::CoroTask<dftracer::utils::dataframe::DataFrame> run_collect_via_engine(
-    const ViewPlan& plan);
+coro::CoroTask<dstd::Result<dftracer::utils::dataframe::DataFrame>>
+run_collect_via_engine(const ViewPlan& plan);
 
 // Builds the engine group-by inputs (and the raw scan plan) for a plan.
 struct EnginePrep;
-coro::CoroTask<EnginePrep> prepare_engine_group(const ViewPlan& plan);
+coro::CoroTask<dstd::Result<EnginePrep>> prepare_engine_group(
+    const ViewPlan& plan);
 }  // namespace detail
 
 /// A result handle from a @ref ViewSession op, resolved when execute()
@@ -649,7 +650,7 @@ View view_of(ScanPlan plan);
 View with_named_columns(const View& v, dstd::Vector<dataframe::Field> columns);
 /// The leaves of `v`'s catalogs as they stand; unlike View::schema_tree it
 /// builds none.
-dstd::Vector<SchemaLeaf> catalog_leaves(const View& v);
+dstd::Result<dstd::Vector<SchemaLeaf>> catalog_leaves(const View& v);
 }  // namespace detail
 
 /// Plans registered here run together on execute(), as collect_all() runs
@@ -798,17 +799,18 @@ class View : public dataframe::LazyOps<View> {
     /// runs to `counter`, which must outlive those scans.
     View count_scans(dstd::SharedPtr<ScanCounter> counter) const;
 
-    /// The error that stops columns(), column_info() and schema_tree() from
-    /// reading the files' record schema, such as files of two record schemas;
-    /// those getters return what dftracer's schema holds meanwhile.
+    /// The error that stops the files' record schema from resolving, such as
+    /// files of two record schemas; columns(), column_info() and
+    /// schema_tree() return it too.
     dstd::Result<void> schema_status() const;
-    /// Index metadata only; no trace event is decoded.
-    dstd::Vector<dstd::String> columns() const;
-    dstd::Vector<ColumnInfo> column_info() const;
+    /// Index metadata only; no trace event is decoded. The error is that of
+    /// the plan, of the record schema or of an index that cannot be read.
+    dstd::Result<dstd::Vector<dstd::String>> columns() const;
+    dstd::Result<dstd::Vector<ColumnInfo>> column_info() const;
     /// Every path the files hold, with types, counts and the record schema's
     /// declared fields (count 0 when no file holds one), sorted by path, from
     /// the index without scanning records.
-    dstd::Vector<SchemaLeaf> schema_tree() const;
+    dstd::Result<dstd::Vector<SchemaLeaf>> schema_tree() const;
     TimeMetric time_metric() const;
     /// The spill budget set on this view, in bytes (0 = the default).
     std::uint64_t memory_budget_bytes() const;
@@ -944,12 +946,12 @@ class View : public dataframe::LazyOps<View> {
 
     /// The trace self-description, one entry per process, from each file's
     /// "end" event (@ref TraceConfig). Ignores this view's filters.
-    dstd::Vector<TraceConfig> config() const;
+    dstd::Result<dstd::Vector<TraceConfig>> config() const;
     /// True when sink_json / collect() would take the first-touch pass that
     /// answers the query and builds the index at once, so a caller that would
     /// build the index first can skip that.
-    bool export_would_bootstrap() const;
-    bool collect_would_bootstrap() const;
+    dstd::Result<bool> export_would_bootstrap() const;
+    dstd::Result<bool> collect_would_bootstrap() const;
     /// Write merged aggregate_partial() output as counter events, with this
     /// view's aggregation. An Aggregation error for a partial that is empty or
     /// from another aggregation, and the error of decoding it.
@@ -986,12 +988,14 @@ class View : public dataframe::LazyOps<View> {
     /// aggregation. The bytes behind `partials` must outlive the task.
     coro::CoroTask<dstd::Result<void>> materialize_partials(
         const dstd::Vector<dstd::StringView>& partials) const;
-    dstd::Optional<dataframe::DataFrame> reconstruct_if_cached() const;
+    dstd::Result<dstd::Optional<dataframe::DataFrame>> reconstruct_if_cached()
+        const;
 
-    /// Materialized-view bookkeeping over this viewer's events.
-    dstd::Vector<dstd::String> mv_source() const;
-    dstd::String materialize_dir() const;
-    void register_materialized(const dstd::String& dir) const;
+    /// Materialized-view bookkeeping over this viewer's events. Each returns
+    /// the error of a view that is not a plain aggregation or events scan.
+    dstd::Result<dstd::Vector<dstd::String>> mv_source() const;
+    dstd::Result<dstd::String> materialize_dir() const;
+    dstd::Result<void> register_materialized(const dstd::String& dir) const;
 
     /// The plan: the trace scan as a source plus the ops above it.
     const dataframe::LazyFrame& lazy() const { return lf_; }
@@ -1028,10 +1032,9 @@ class View : public dataframe::LazyOps<View> {
     friend View detail::view_of(detail::ScanPlan plan);
     friend View detail::with_named_columns(
         const View& v, dstd::Vector<dataframe::Field> columns);
-    friend dstd::Vector<SchemaLeaf> detail::catalog_leaves(const View& v);
+    friend dstd::Result<dstd::Vector<SchemaLeaf>> detail::catalog_leaves(
+        const View& v);
     dstd::Result<dstd::Pair<View, dstd::Vector<dstd::String>>> duql_plan(
-        dstd::StringView text, const duql::Params& params) const;
-    dstd::Pair<View, dstd::Vector<dstd::String>> duql_plan_or_throw(
         dstd::StringView text, const duql::Params& params) const;
 
     detail::ScanPlan plan_;

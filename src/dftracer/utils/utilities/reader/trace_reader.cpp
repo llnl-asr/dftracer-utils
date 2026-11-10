@@ -632,15 +632,10 @@ void TraceReader::warn_dropped(std::size_t local) const {
 
 dstd::Result<dstd::SharedPtr<internal::Reader>>
 TraceReader::make_indexed_reader() {
-    dstd::SharedPtr<index::gzip::CheckpointIndexer> indexer;
-    // The indexer factory still reports a failure as an exception.
-    try {
-        indexer = CheckpointIndexerFactory::create(
-            config_.file_path, index_path_, config_.checkpoint_size, false);
-    } catch (...) {
-        return common::error_of_exception(std::current_exception());
-    }
-    return internal::ReaderFactory::create(std::move(indexer));
+    auto indexer = CheckpointIndexerFactory::try_create(
+        config_.file_path, index_path_, config_.checkpoint_size, false);
+    if (!indexer) return indexer.error();
+    return internal::ReaderFactory::create(std::move(*indexer));
 }
 
 internal::StreamType TraceReader::resolve_raw_stream_type(

@@ -9,6 +9,7 @@
 #include <dftracer/utils/trace/agg_event_fold.h>
 #include <dftracer/utils/trace/agg_query.h>
 #include <dftracer/utils/trace/views/fold.h>
+#include <dftracer/utils/trace/views/view_agg_engine.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 
 #include <utility>
@@ -18,13 +19,14 @@ namespace dftracer::utils::trace::views::detail {
 class IndexRuleFold : public Fold {
    public:
     /// Folds every event of `plan` by the rules of the index fold, in the ids
-    /// of `scan_intern`. nullptr when the plan stays on the frame path.
-    static dstd::UniquePtr<IndexRuleFold> make(
+    /// of `scan_intern`. nullptr when the plan stays on the frame path; the
+    /// error is that of an index that cannot be read.
+    static dstd::Result<dstd::UniquePtr<IndexRuleFold>> make(
         const ViewPlan& plan, dftracer::utils::dstd::StringIntern& scan_intern,
         bool apply_query);
 
     /// As above, with the query `trace_fold_query(plan)` returned.
-    static dstd::UniquePtr<IndexRuleFold> make(
+    static dstd::Result<dstd::UniquePtr<IndexRuleFold>> make(
         const ViewPlan& plan, AggQuery query,
         dftracer::utils::dstd::StringIntern& scan_intern, bool apply_query);
 
@@ -57,12 +59,13 @@ class IndexRuleFold : public Fold {
     };
 
     struct Rules {
-        Rules(const ViewPlan& plan, AggQuery q,
+        Rules(const ViewPlan& plan, AggInputSpec spec, AggQuery q,
               dftracer::utils::dstd::StringIntern& read, bool apply_query);
 
         dftracer::utils::dstd::StringIntern texts;
         AggQuery query;
         AggEventRules events;
+        AggInputSpec spec;
         const ViewPlan* plan;
         bool apply_query;
     };

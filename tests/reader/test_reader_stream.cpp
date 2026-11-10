@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <checkpoint_indexer_helpers.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
@@ -31,9 +32,9 @@ TEST_CASE("C++ Reader Streaming API - BYTES stream" *
     // Build index first
     {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
     }
 
     auto reader = dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
@@ -181,9 +182,9 @@ TEST_CASE("C++ Reader Streaming API - LINE_BYTES stream") {
     // Build index first
     {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
     }
 
     auto reader = dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
@@ -264,9 +265,9 @@ TEST_CASE("C++ Reader Streaming API - MULTI_LINES_BYTES stream" *
     // Build index first
     {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
     }
 
     auto reader = dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
@@ -354,9 +355,9 @@ TEST_CASE("C++ Reader Streaming API - LINE stream") {
     // Build index first
     {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
     }
 
     auto reader = dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
@@ -441,9 +442,9 @@ TEST_CASE("C++ Reader Streaming API - MULTI_LINES stream" *
     // Build index first
     {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
     }
 
     auto reader = dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
@@ -535,9 +536,9 @@ TEST_CASE("C++ Reader Streaming API - Edge cases") {
     // Build index first
     {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
     }
 
     auto reader = dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
@@ -651,9 +652,9 @@ TEST_CASE("C++ Reader Streaming API - Format identification") {
     // Build index first
     {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
     }
 
     auto reader = dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
@@ -684,9 +685,9 @@ TEST_CASE("C++ Reader Streaming API - Buffer Size Tests") {
     // Build index first
     {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
     }
 
     auto reader = dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));

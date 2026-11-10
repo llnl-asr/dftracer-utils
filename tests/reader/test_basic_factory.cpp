@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <checkpoint_indexer_helpers.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
@@ -27,7 +28,7 @@ TEST_CASE("Factory Pattern - Basic GZIP functionality") {
 
     SUBCASE("CheckpointIndexerFactory creates valid indexer") {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, 1024 * 1024);
+            dftu_utils_test::create_indexer(gz_file, idx_file, 1024 * 1024);
         REQUIRE(indexer != nullptr);
         CHECK(dstd::StringView(indexer->archive_path()) == gz_file);
         CHECK(dstd::StringView(indexer->index_path()) == db_root);
@@ -35,9 +36,9 @@ TEST_CASE("Factory Pattern - Basic GZIP functionality") {
 
     SUBCASE("ReaderFactory creates valid reader") {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, 1024 * 1024);
+            dftu_utils_test::create_indexer(gz_file, idx_file, 1024 * 1024);
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
 
         auto reader = dftu_utils_test::ok(ReaderFactory::create(indexer));
         REQUIRE(reader != nullptr);
@@ -49,9 +50,9 @@ TEST_CASE("Factory Pattern - Basic GZIP functionality") {
     SUBCASE("Reader factory from files") {
         // First create index
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, 1024 * 1024);
+            dftu_utils_test::create_indexer(gz_file, idx_file, 1024 * 1024);
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
 
         // Then create reader from files
         auto reader = dftu_utils_test::ok(
@@ -71,9 +72,9 @@ TEST_CASE("Basic Reading Operations") {
     dstd::String idx_file = env.get_index_path(gz_file);
 
     auto indexer =
-        CheckpointIndexerFactory::create(gz_file, idx_file, 512 * 1024);
+        dftu_utils_test::create_indexer(gz_file, idx_file, 512 * 1024);
     REQUIRE(indexer != nullptr);
-    indexer->build();
+    dftu_utils_test::build_indexer(*indexer);
 
     auto reader = dftu_utils_test::ok(ReaderFactory::create(indexer));
     REQUIRE(reader != nullptr);

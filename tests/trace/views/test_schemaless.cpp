@@ -99,13 +99,16 @@ dstd::String dft_line(int pid, int tid, const char* name, std::int64_t ts,
 dataframe::DataFrame scan_only(const views::detail::scan::ScanPlan& p) {
     Runtime rt;
     dataframe::DataFrame out;
-    dftu_utils_test::ok(rt.block_on(coro::named(
-        "scan-only",
-        coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-            auto st = co_await views::detail::build_engine_agg_state(*p);
-            out = views::detail::finalize_engine_result(*st, *p);
-        }))));
-    return views::detail::apply_agg_post_ops(std::move(out), *p);
+    dftu_utils_test::ok(rt.block_on(
+        coro::named("scan-only",
+                    coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                        auto st = dftu_utils_test::ok(
+                            co_await views::detail::build_engine_agg_state(*p));
+                        out = dftu_utils_test::ok(
+                            views::detail::finalize_engine_result(*st, *p));
+                    }))));
+    return dftu_utils_test::ok(
+        views::detail::apply_agg_post_ops(std::move(out), *p));
 }
 
 // Fills `st` when the chunk partials answer `p`.
@@ -116,7 +119,8 @@ bool partials_serve(const views::detail::scan::ScanPlan& p,
     bool served = false;
     dftu_utils_test::ok(rt.block_on(coro::named(
         "partials", coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-            served = co_await views::detail::partials_collect(*p, st);
+            served = dftu_utils_test::ok(
+                co_await views::detail::partials_collect(*p, st));
         }))));
     return served;
 }
@@ -125,8 +129,9 @@ bool partials_serve(const views::detail::scan::ScanPlan& p,
 dataframe::DataFrame tier_only(const views::detail::scan::ScanPlan& p) {
     dataframe::AggStatePtr st;
     REQUIRE(partials_serve(p, st));
-    return views::detail::apply_agg_post_ops(
-        views::detail::finalize_engine_result(*st, *p), *p);
+    return dftu_utils_test::ok(views::detail::apply_agg_post_ops(
+        dftu_utils_test::ok(views::detail::finalize_engine_result(*st, *p)),
+        *p));
 }
 
 // Whether the chunk partials answer the events and profiles of `p`.
@@ -139,8 +144,9 @@ bool typed_serve(const views::detail::scan::ScanPlan& p,
     dftu_utils_test::ok(rt.block_on(
         coro::named("typed-partials",
                     coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                        served = co_await views::detail::partials_collect_typed(
-                            *p, regular, profiles);
+                        served = dftu_utils_test::ok(
+                            co_await views::detail::partials_collect_typed(
+                                *p, regular, profiles));
                     }))));
     return served;
 }
@@ -672,7 +678,7 @@ fields:
                 dstd::String(gz),
                 dstd::String(dstd::String(determine_index_path(gz, ""))))
                 .record_schema("generic");
-        CHECK(v.schema_tree().size() < 300);
+        CHECK(dftu_utils_test::ok(v.schema_tree()).size() < 300);
         CHECK(count_of(v, "where big[500] == 505") == 1);
         CHECK(count_of(v, "where big[999] >= 999") == 20);
         CHECK(count_of(v, "where exists(big[999])") == 20);
@@ -1189,6 +1195,84 @@ fields:
         const dataframe::DataFrame o =
             run(v.duql("agg { n = sum(len(objs)) }").lazy().collect());
         CHECK(bnum(o, 0, "n") == 80);
+    }
+
+    TEST_CASE("a boolean field groups and aggregates") {
+        TestEnvironment env(10);
+        dstd::Vector<dstd::String> lines;
+        for (int i = 0; i < 40; ++i)
+            lines.push_back(R"({"k":)" + dstd::to_string(i) + R"(,"flag":)" +
+                            dstd::String(i % 4 ? "true" : "false") +
+                            R"(,"v":)" + dstd::to_string(i) + "}");
+        const dstd::String gz = write_indexed(env, "bools", lines, 256);
+        const View v =
+            View::from_file(
+                dstd::String(gz),
+                dstd::String(dstd::String(determine_index_path(gz, ""))))
+                .record_schema("generic");
+        const dataframe::DataFrame f =
+            run(v.duql("group flag { n = count(), s = sum(v) } | sort flag")
+                    .lazy()
+                    .collect());
+        REQUIRE(f.num_rows() == 2);
+        CHECK(bnum(f, 0, "n") + bnum(f, 1, "n") == 40);
+        const dataframe::DataFrame g =
+            dftu_utils_test::ok(v.group_by({GroupKey::field("flag")})
+                                    .agg({{AggOp::Count, "", "n"}})
+                                    .collect()
+                                    .get());
+        REQUIRE(g.num_rows() == 2);
+        const dataframe::DataFrame m =
+            run(v.duql("agg { t = sum(flag), lo = min(flag), hi = max(flag) }")
+                    .lazy()
+                    .collect());
+        REQUIRE(m.num_rows() == 1);
+    }
+
+    TEST_CASE("a transformed group key over a float or boolean field") {
+        TestEnvironment env(10);
+        dstd::Vector<dstd::String> lines;
+        for (int i = 0; i < 20; ++i)
+            lines.push_back(R"({"k":)" + dstd::to_string(i) + R"(,"x":)" +
+                            dstd::to_string(i % 3) + R"(.5,"flag":)" +
+                            dstd::String(i % 2 ? "true" : "false") + "}");
+        const dstd::String gz = write_indexed(env, "tkeys", lines, 256);
+        const View v =
+            View::from_file(
+                dstd::String(gz),
+                dstd::String(dstd::String(determine_index_path(gz, ""))))
+                .record_schema("generic");
+        for (const char* field : {"x", "flag"}) {
+            CAPTURE(field);
+            GroupKey key = GroupKey::field(field);
+            key.transform = GroupKey::Transform::Lower;
+            const auto g = v.group_by({key})
+                               .agg({{AggOp::Count, "", "n"}})
+                               .collect()
+                               .get();
+            CHECK(g.has_value());
+        }
+        dstd::Vector<dstd::String> dft;
+        for (int i = 0; i < 20; ++i)
+            dft.push_back(R"({"ph":"X","name":"read","cat":"POSIX","pid":1,)"
+                          R"("tid":1,"ts":)" +
+                          dstd::to_string(1000 + i) + R"(,"dur":5,"args":{)" +
+                          R"("x":)" + dstd::to_string(i % 3) + R"(.5,"flag":)" +
+                          dstd::String(i % 2 ? "true" : "false") + "}}");
+        const dstd::String dgz = write_indexed(env, "tkeys_dft", dft, 256);
+        const View d = View::from_file(
+            dstd::String(dgz),
+            dstd::String(dstd::String(determine_index_path(dgz, ""))));
+        for (const char* arg : {"x", "flag"}) {
+            CAPTURE(arg);
+            GroupKey key = GroupKey::of_arg(arg);
+            key.transform = GroupKey::Transform::Lower;
+            const auto g = d.group_by({key})
+                               .agg({{AggOp::Count, "", "n"}})
+                               .collect()
+                               .get();
+            CHECK(g.has_value());
+        }
     }
 
     TEST_CASE("a field of mixed JSON types is a JSON column") {

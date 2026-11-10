@@ -381,7 +381,10 @@ dstd::Result<dstd::Optional<dataframe::DataFrame>> find_subsuming_rollup(
     }
 
     auto coarse = dataframe::agg_regroup(**fine, keep, bucket_recut);
-    return trace::views::detail::finalize_engine_result(*coarse, plan);
+    auto finalized =
+        trace::views::detail::finalize_engine_result(*coarse, plan);
+    if (!finalized) return finalized.error();
+    return dstd::Optional<dataframe::DataFrame>(std::move(*finalized));
 }
 
 dstd::String cache_dir(const trace::views::detail::ViewPlan& plan) {

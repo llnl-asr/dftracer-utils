@@ -84,6 +84,7 @@ const dftracer::utils::index::RecordSchema& plan_record_schema(
 }
 
 dstd::Result<void> resolve_record_schema(const ViewPlan& plan) {
+    if (plan.error) return *plan.error;
     plan_record_schema(plan);
     if (plan.record_schema_error) return *plan.record_schema_error;
     return {};
@@ -539,13 +540,14 @@ bool any_file_missing_catalog(const ViewPlan& plan) {
 
 }  // namespace
 
-dstd::Vector<dstd::UniquePtr<Fold>> select_index_folds(
+dstd::Result<dstd::Vector<dstd::UniquePtr<Fold>>> select_index_folds(
     const ViewPlan& plan, const ViewDefinition& vdef,
     dftracer::utils::dstd::StringIntern& intern) {
     dstd::Vector<dstd::UniquePtr<Fold>> kept;
-    if (plan.files.empty() || !any_file_missing_bloom(plan) ||
-        is_past_pin(plan))
-        return kept;
+    if (plan.files.empty() || !any_file_missing_bloom(plan)) return kept;
+    const auto past_pin = is_past_pin(plan);
+    if (!past_pin.has_value()) return past_pin.error();
+    if (*past_pin) return kept;
 
     const ScanShape shape = scan_shape(vdef);
     auto bloom =
@@ -556,16 +558,19 @@ dstd::Vector<dstd::UniquePtr<Fold>> select_index_folds(
     return kept;
 }
 
-dstd::UniquePtr<Fold> select_catalog_fold(
+dstd::Result<dstd::UniquePtr<Fold>> select_catalog_fold(
     const ViewPlan& plan, const ViewDefinition& vdef,
     dftracer::utils::dstd::StringIntern& intern) {
-    if (plan.files.empty() || !any_file_missing_catalog(plan) ||
-        is_past_pin(plan))
-        return nullptr;
-    auto fold = dstd::make_unique<index::extensions::CatalogFold>(
-        intern, index::build::for_schema({}, plan_record_schema(plan))
-                    .params_hash(index::store::IndexExtension::Catalog));
-    if (!fold->accepts(scan_shape(vdef))) return nullptr;
+    if (plan.files.empty() || !any_file_missing_catalog(plan))
+        return dstd::UniquePtr<Fold>();
+    const auto past_pin = is_past_pin(plan);
+    if (!past_pin.has_value()) return past_pin.error();
+    if (*past_pin) return dstd::UniquePtr<Fold>();
+    dstd::UniquePtr<Fold> fold =
+        dstd::make_unique<index::extensions::CatalogFold>(
+            intern, index::build::for_schema({}, plan_record_schema(plan))
+                        .params_hash(index::store::IndexExtension::Catalog));
+    if (!fold->accepts(scan_shape(vdef))) return dstd::UniquePtr<Fold>();
     return fold;
 }
 

@@ -88,7 +88,7 @@ TEST_SUITE("GenericView") {
                   .num_rows() == deep);
 
         dstd::Set<dstd::String> schema;
-        for (const auto& c : view_of(gz).column_info())
+        for (const auto& c : dftu_utils_test::ok(view_of(gz).column_info()))
             schema.insert(dstd::String(c.name));
         CHECK(schema == paths);
     }
@@ -195,10 +195,48 @@ TEST_SUITE("GenericView") {
             dstd::String(status.error().message()).find("one record schema") !=
             dstd::String::npos);
         CHECK(v.lazy().output_schema().fields.empty());
-        const auto names = v.record_schema("generic").columns();
+        const auto names =
+            dftu_utils_test::ok(v.record_schema("generic").columns());
         CHECK(v.record_schema("generic").schema_status().has_value());
         CHECK(std::find(names.begin(), names.end(), "lat") != names.end());
         CHECK(std::find(names.begin(), names.end(), "dur") == names.end());
+    }
+
+    TEST_CASE("every terminal over files of two schemas returns the error") {
+        TestEnvironment env(10);
+        const auto gz = write_ndjson(env, "t");
+        const auto dft = create_mixed_trace(env, 5, 5);
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+                                    {dstd::String(dstd::StringView(dft))}))
+                .build());
+        const View v = View::from_files(
+            {{dstd::String(gz),
+              dstd::String(dstd::String(determine_index_path(gz, "")))},
+             {dstd::String(dft),
+              dstd::String(dstd::String(determine_index_path(dft, "")))}});
+        const View counted = v.group_by({GroupKey::field("name")})
+                                 .agg({{AggOp::Count, "", "n"}});
+        auto mixed = [](const auto& result) {
+            REQUIRE_FALSE(result.has_value());
+            const dstd::String what = dstd::String(result.error().message());
+            CAPTURE(what);
+            CHECK(what.find("one record schema") != dstd::String::npos);
+        };
+        StringSink sink;
+        mixed(counted.merge_partials({}));
+        mixed(counted.merge_counter_partials({}, sink));
+        mixed(counted.reconstruct_if_cached());
+        mixed(counted.materialize_dir());
+        mixed(counted.mv_source());
+        mixed(v.export_would_bootstrap());
+        mixed(counted.collect_would_bootstrap());
+        mixed(counted.materialize_partials({}).get());
+        mixed(counted.aggregate_partial().collect().get());
+        mixed(counted.collect().get());
+        mixed(v.collect_typed().get());
+        mixed(v.materialize().get());
+        mixed(counted.sink_counters(sink).get());
     }
 
     TEST_CASE("from_directory finds JSON lines files") {

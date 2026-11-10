@@ -257,11 +257,12 @@ struct ChunkIndexerOutput {
     dstd::StringViewMap<index::extensions::ScalableBloomFilter> bloom_filters;
     index::schemas::dft::ChunkStatistics statistics;
     std::size_t events_processed = 0;
-    bool success = false;
 };
 
 struct ChunkIndexer {
-    coro::CoroTask<ChunkIndexerOutput> operator()(
+    /// Scans one chunk. The error is the failure to open the file, the reader
+    /// or the stream, or to scan the chunk.
+    coro::CoroTask<dstd::Result<ChunkIndexerOutput>> operator()(
         const ChunkIndexerInput& input);
 };
 

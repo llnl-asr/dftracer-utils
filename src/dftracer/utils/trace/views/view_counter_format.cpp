@@ -128,9 +128,12 @@ double col_cell_double(const dftracer::utils::dataframe::Series& c,
 
 }  // namespace
 
-void emit_counters_from_state(const dftracer::utils::dataframe::AggState& state,
-                              const ViewPlan& plan, ExportSink& sink) {
-    dataframe::DataFrame f = finalize_engine_result(state, plan);
+dstd::Result<void> emit_counters_from_state(
+    const dftracer::utils::dataframe::AggState& state, const ViewPlan& plan,
+    ExportSink& sink) {
+    auto finalized = finalize_engine_result(state, plan);
+    if (!finalized) return finalized.error();
+    dataframe::DataFrame f = std::move(*finalized);
 
     dstd::Vector<dstd::String> group_cols;
     if (plan.time_bucket_us > 0) group_cols.push_back("time_bucket");
@@ -209,6 +212,7 @@ void emit_counters_from_state(const dftracer::utils::dataframe::AggState& state,
             counter_line(group_cols, keys, value_cols, values, entity, lane));
         sink.write("\n");
     }
+    return {};
 }
 
 }  // namespace dftracer::utils::trace::views::detail

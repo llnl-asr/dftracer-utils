@@ -753,7 +753,7 @@ PyObject* tv_columns(PyObject* self, PyObject*) {
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> cols;
     if (!run_blocking([&] {
             common::unwrap(tv_of(self).schema_status());
-            cols = tv_of(self).columns();
+            cols = common::unwrap(tv_of(self).columns());
         }))
         return nullptr;
     return str_list_dstd(cols);
@@ -763,7 +763,7 @@ PyObject* tv_column_info(PyObject* self, PyObject*) {
     dftracer::utils::dstd::Vector<trace::views::ColumnInfo> info;
     if (!run_blocking([&] {
             common::unwrap(tv_of(self).schema_status());
-            info = tv_of(self).column_info();
+            info = common::unwrap(tv_of(self).column_info());
         }))
         return nullptr;
     PyObject* d = PyDict_New();
@@ -784,7 +784,8 @@ PyObject* tv_schema_tree(PyObject* self, PyObject*) {
     dftracer::utils::dstd::String json;
     if (!run_blocking([&] {
             common::unwrap(tv_of(self).schema_status());
-            json = trace::views::schema_tree_json(tv_of(self).schema_tree());
+            json = trace::views::schema_tree_json(
+                common::unwrap(tv_of(self).schema_tree()));
         }))
         return nullptr;
     return PyUnicode_FromStringAndSize(json.data(),
@@ -1056,7 +1057,8 @@ PyObject* tv_materialize_partials(PyObject* self, PyObject* args,
 
 PyObject* tv_reconstruct_if_cached(PyObject* self, PyObject*) {
     dftracer::utils::dstd::Optional<DataFrame> out;
-    if (!run_blocking([&] { out = tv_of(self).reconstruct_if_cached(); }))
+    if (!run_blocking(
+            [&] { out = common::unwrap(tv_of(self).reconstruct_if_cached()); }))
         return nullptr;
     if (!out) Py_RETURN_NONE;
     return python::wrap_dataframe(std::move(*out));
@@ -1064,13 +1066,15 @@ PyObject* tv_reconstruct_if_cached(PyObject* self, PyObject*) {
 
 PyObject* tv_mv_source(PyObject* self, PyObject*) {
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> out;
-    if (!run_blocking([&] { out = tv_of(self).mv_source(); })) return nullptr;
+    if (!run_blocking([&] { out = common::unwrap(tv_of(self).mv_source()); }))
+        return nullptr;
     return str_list_dstd(out);
 }
 
 PyObject* tv_materialize_dir(PyObject* self, PyObject*) {
     dftracer::utils::dstd::String out;
-    if (!run_blocking([&] { out = tv_of(self).materialize_dir(); }))
+    if (!run_blocking(
+            [&] { out = common::unwrap(tv_of(self).materialize_dir()); }))
         return nullptr;
     return PyUnicode_FromStringAndSize(out.data(),
                                        static_cast<Py_ssize_t>(out.size()));
@@ -1081,7 +1085,8 @@ PyObject* tv_register_materialized(PyObject* self, PyObject* arg) {
     if (!dir) return nullptr;
     const dftracer::utils::dstd::String d{
         dftracer::utils::dstd::StringView(dir)};
-    if (!run_blocking([&] { tv_of(self).register_materialized(d); }))
+    if (!run_blocking(
+            [&] { common::unwrap(tv_of(self).register_materialized(d)); }))
         return nullptr;
     Py_RETURN_NONE;
 }

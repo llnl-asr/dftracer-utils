@@ -73,7 +73,7 @@ dstd::String tier_field(const ViewPlan& plan, dstd::StringView f) {
 
 // The tier folds a missing or negative role value as 0 where the scan reads
 // null, so every chunk's zone must show the role present in every record.
-bool roles_complete(const ViewPlan& plan) {
+dstd::Result<bool> roles_complete(const ViewPlan& plan) {
     const index::Roles& r = plan_record_schema(plan).roles;
     dstd::Vector<dstd::StringView> paths;
     for (const dstd::String* p :
@@ -83,35 +83,38 @@ bool roles_complete(const ViewPlan& plan) {
     dstd::Map<dstd::String, index::Snapshot> snapshots;
     for (const auto& f : plan.files) {
         auto at = snapshots.find(f.index_path);
-        if (at == snapshots.end())
-            at = snapshots
-                     .emplace(f.index_path,
-                              common::unwrap(snapshot_of(plan, f.index_path)))
-                     .first;
+        if (at == snapshots.end()) {
+            auto opened = snapshot_of(plan, f.index_path);
+            if (!opened) return opened.error();
+            at = snapshots.emplace(f.index_path, std::move(*opened)).first;
+        }
         const index::Snapshot& snapshot = at->second;
         const auto file = snapshot.file(get_logical_path(f.file_path));
         if (!file ||
             !index::extension_current(snapshot, *file,
                                       index::store::IndexExtension::Zonemap))
             return false;
-        const auto spans = common::unwrap(index::spans(snapshot, *file));
+        const auto spans = index::spans(snapshot, *file);
+        if (!spans) return spans.error();
         for (dstd::StringView p : paths) {
             dstd::HashMap<std::uint64_t,
                           dftracer::utils::index::extensions::kinds::Zone>
                 zones;
-            for (const auto& [granule, bytes] : common::unwrap(
-                     index::granules(snapshot, *file,
-                                     index::store::IndexExtension::Zonemap, p)))
+            const auto granules = index::granules(
+                snapshot, *file, index::store::IndexExtension::Zonemap, p);
+            if (!granules) return granules.error();
+            for (const auto& [granule, bytes] : *granules)
                 if (auto z =
                         dftracer::utils::index::extensions::kinds::decode_zone(
                             bytes))
                     zones.emplace(granule, std::move(*z));
-            for (std::uint64_t i = 0; i < spans.size(); ++i) {
-                if (spans[i].first_line_num == 0 ||
-                    spans[i].last_line_num < spans[i].first_line_num)
+            for (std::uint64_t i = 0; i < spans->size(); ++i) {
+                const auto& span = (*spans)[i];
+                if (span.first_line_num == 0 ||
+                    span.last_line_num < span.first_line_num)
                     continue;
                 const std::uint64_t lines =
-                    spans[i].last_line_num - spans[i].first_line_num + 1;
+                    span.last_line_num - span.first_line_num + 1;
                 const auto z = zones.find(i);
                 if (z == zones.end() || z->second.observed != lines ||
                     z->second.present != lines ||
@@ -382,24 +385,31 @@ struct Prepared {
     bool by_path = false;
 };
 
-dstd::NullOpt declined(const dstd::String& why) {
+void log_declined(const dstd::String& why) {
     DFTRACER_UTILS_LOG_DEBUG(
         "View: the index partials cannot answer this query ({}); the traces "
         "are scanned",
         why);
-    return dstd::nullopt;
+}
+
+using Preparation = dstd::Result<dstd::Optional<Prepared>>;
+
+Preparation declined(const dstd::String& why) {
+    log_declined(why);
+    return dstd::Optional<Prepared>();
 }
 
 enum class PrepSource { Partials, Trace };
 
-// nullopt when the partials cannot answer `plan`. With Trace a file the index
-// does not hold, a stale tier and an unreadable index leave the file to be read
-// whole instead of declining the plan.
-dstd::Optional<Prepared> prepare(const ViewPlan& plan, bool typed,
-                                 PrepSource from) {
+// An empty result when the partials cannot answer `plan`. With Trace a file
+// the index does not hold, a stale tier and an unreadable index leave the file
+// to be read whole instead of declining the plan.
+Preparation prepare(const ViewPlan& plan, bool typed, PrepSource from) {
     const bool trace = from == PrepSource::Trace;
     if (plan.files.empty()) return declined("no files");
-    if (is_past_pin(plan)) return declined("an index past the view's pin");
+    const auto past_pin = is_past_pin(plan);
+    if (!past_pin.has_value()) return past_pin.error();
+    if (*past_pin) return declined("an index past the view's pin");
     if (!plan.computed.empty()) return declined("computed columns");
     if (plan.time_range) return declined("a time range");
     if (plan.all_records) return declined("every record is asked for");
@@ -438,8 +448,11 @@ dstd::Optional<Prepared> prepare(const ViewPlan& plan, bool typed,
     // frame path.
     if (trace && wants_quantiles(plan))
         return declined("a quantile aggregate of a scanned trace");
-    if (p.by_path && !roles_complete(plan))
-        return declined("a schema without every trace role");
+    if (p.by_path) {
+        const auto complete = roles_complete(plan);
+        if (!complete.has_value()) return complete.error();
+        if (!*complete) return declined("a schema without every trace role");
+    }
 
     AggQuery& q = p.query;
     std::uint64_t interval_us = q.config.time_interval_us;
@@ -455,59 +468,62 @@ dstd::Optional<Prepared> prepare(const ViewPlan& plan, bool typed,
         if (f.index_path.empty()) {
             if (!trace) return declined("a file with no index");
         } else {
-            try {
+            // The reason this file declines the plan, empty when it does not.
+            auto reason = [&]() -> dstd::Result<const char*> {
                 auto it = root_of.find(f.index_path);
                 if (it == root_of.end()) {
-                    auto snapshot =
-                        common::unwrap(snapshot_of(plan, f.index_path));
-                    const auto config = common::unwrap(
-                        index::schemas::dft::agg::tier::read_config(snapshot));
-                    if (!config && !trace)
-                        return declined("an index with no aggregation config");
+                    auto snapshot = snapshot_of(plan, f.index_path);
+                    if (!snapshot) return snapshot.error();
+                    const auto config =
+                        index::schemas::dft::agg::tier::read_config(*snapshot);
+                    if (!config) return config.error();
+                    if (!*config && !trace)
+                        return "an index with no aggregation config";
                     AggQuerySource src;
                     src.index_path =
                         dstd::String(f.index_path.data(), f.index_path.size());
-                    if (config) {
-                        src.params_hash = config->params_hash;
+                    if (*config) {
+                        src.params_hash = (*config)->params_hash;
                         if (!config_seen) {
                             config_seen = true;
-                            interval_us = config->time_interval_us;
-                            build_extra = config->extra_group_keys;
+                            interval_us = (*config)->time_interval_us;
+                            build_extra = (*config)->extra_group_keys;
                         } else if (!trace &&
-                                   config->extra_group_keys != build_extra) {
+                                   (*config)->extra_group_keys != build_extra) {
                             // The sources keep their extra values under other
                             // keys.
-                            return declined(
-                                "indexes with other extra group keys");
+                            return "indexes with other extra group keys";
                         }
                     }
                     src.snapshot =
-                        dstd::make_shared<const index::Snapshot>(snapshot);
+                        dstd::make_shared<const index::Snapshot>(*snapshot);
                     it = root_of.emplace(f.index_path, q.sources.size()).first;
                     q.sources.push_back(std::move(src));
-                    snapshots.emplace(f.index_path, std::move(snapshot));
+                    snapshots.emplace(f.index_path, std::move(*snapshot));
                 }
                 at = it->second;
                 indexed = true;
                 const index::Snapshot& snapshot = snapshots.at(f.index_path);
                 const auto file = snapshot.file(get_logical_path(f.file_path));
                 if (!file) {
-                    if (!trace)
-                        return declined("a file missing from its index");
+                    if (!trace) return "a file missing from its index";
                 } else if (!trace) {
                     if (snapshot.extension(*file,
                                            index::store::IndexExtension::Agg,
                                            *q.sources[at].params_hash) !=
                         index::Freshness::Current)
-                        return declined(
-                            "a file whose aggregation data is stale");
+                        return "a file whose aggregation data is stale";
                 }
-            } catch (const std::exception& e) {
+                return static_cast<const char*>(nullptr);
+            }();
+            if (!reason) {
                 // The scan reports an unreadable index.
                 if (!trace)
-                    return declined(dstd::String("an unreadable index: ") +
-                                    e.what());
+                    return declined(dstd::fmt<"an unreadable index: {}">(
+                        reason.error().message()));
                 indexed = false;
+            } else if (*reason) {
+                return declined(*reason);
             }
         }
         if (!indexed) {
@@ -597,7 +613,7 @@ dstd::Optional<Prepared> prepare(const ViewPlan& plan, bool typed,
             q.filter = *plan.query;
         }
     }
-    return p;
+    return dstd::Optional<Prepared>(std::move(p));
 }
 
 // A path record's int field is signed where dftracer's is unsigned.
@@ -638,7 +654,8 @@ bool key_is_resolved(GroupKey::Kind kind) {
 
 class Seeder {
    public:
-    Seeder(const ViewPlan& plan, const dstd::Vector<GroupKey>& keys,
+    Seeder(const ViewPlan& plan, AggInputSpec spec,
+           const dstd::Vector<GroupKey>& keys,
            const dstd::Vector<dstd::String>& extra, bool quantiles,
            const dstd::StringIntern& texts)
         : keys_(keys),
@@ -647,8 +664,8 @@ class Seeder {
           texts_(texts),
           has_bucket_(plan.time_bucket_us > 0),
           domain_(plan_by_path(plan) ? dataframe::FieldStatDomain::I64
-                                     : dataframe::FieldStatDomain::U64) {
-        spec_ = make_agg_input_spec(plan);
+                                     : dataframe::FieldStatDomain::U64),
+          spec_(std::move(spec)) {
         lowered_ = dataframe::lower_group_aggs(spec_.gaggs);
         cols_ = value_cols(plan, lowered_.value_names);
         sketches_.resize(cols_.size());
@@ -792,11 +809,6 @@ class Seeder {
     const dftracer::utils::index::plan::GroupResolver* resolver_ = nullptr;
 };
 
-AggQueryResult run_or_throw(dstd::Result<AggQueryResult>&& r) {
-    if (!r) throw common::DFTUtilsException(r.error());
-    return std::move(*r);
-}
-
 void log_answer(const AggQueryStats& st) {
     DFTRACER_UTILS_LOG_DEBUG(
         "View: the index partials answered over {} files: {} partials read, {} "
@@ -807,13 +819,13 @@ void log_answer(const AggQueryStats& st) {
         static_cast<unsigned long long>(st.events_read), st.unanswered);
 }
 
-dataframe::AggStatePtr seed_rows_of(const ViewPlan& plan,
+dataframe::AggStatePtr seed_rows_of(const ViewPlan& plan, AggInputSpec spec,
                                     const dstd::Vector<GroupKey>& keys,
                                     const dstd::Vector<dstd::String>& extra,
                                     bool quantiles,
                                     const dstd::StringIntern& texts,
                                     const AggQueryResult::Rows& rows) {
-    Seeder seeder(plan, keys, extra, quantiles, texts);
+    Seeder seeder(plan, std::move(spec), keys, extra, quantiles, texts);
     auto state = seeder.new_state();
     dstd::Vector<dstd::String> texts_of_row;
     dstd::Vector<bool> nulls;
@@ -827,88 +839,107 @@ dataframe::AggStatePtr seed_rows_of(const ViewPlan& plan,
     return state;
 }
 
-dataframe::AggStatePtr seed_all(const ViewPlan& plan, const Prepared& prep,
+dataframe::AggStatePtr seed_all(const ViewPlan& plan, AggInputSpec spec,
+                                const Prepared& prep,
                                 const AggQueryResult& result) {
-    return seed_rows_of(plan, prep.keys, prep.extra, prep.query.quantiles,
-                        result.strings(), result.rows);
+    return seed_rows_of(plan, std::move(spec), prep.keys, prep.extra,
+                        prep.query.quantiles, result.strings(), result.rows);
 }
 
 }  // namespace
 
-dstd::Optional<AggQuery> trace_fold_query(const ViewPlan& plan) {
+dstd::Result<dstd::Optional<AggQuery>> trace_fold_query(const ViewPlan& plan) {
     auto prep = prepare(plan, /*typed=*/false, PrepSource::Trace);
-    if (!prep) return {};
-    prep->query.cancelled = plan.cancelled;
-    return std::move(prep->query);
+    if (!prep) return prep.error();
+    if (!*prep) return dstd::Optional<AggQuery>();
+    (*prep)->query.cancelled = plan.cancelled;
+    return dstd::Optional<AggQuery>(std::move((*prep)->query));
 }
 
-dataframe::AggStatePtr seed_rows(const ViewPlan& plan, const AggQuery& query,
+dataframe::AggStatePtr seed_rows(const ViewPlan& plan, AggInputSpec spec,
+                                 const AggQuery& query,
                                  const dstd::StringIntern& texts,
                                  const AggQueryResult::Rows& rows) {
     auto keys = partial_keys(plan);
     dstd::Vector<dstd::String> extra;
     for (const auto& k : query.config.extra_group_keys) extra.emplace_back(k);
-    return seed_rows_of(plan, keys ? *keys : dstd::Vector<GroupKey>{}, extra,
+    return seed_rows_of(plan, std::move(spec),
+                        keys ? *keys : dstd::Vector<GroupKey>{}, extra,
                         query.quantiles, texts, rows);
 }
 
-coro::CoroTask<bool> partials_collect(const ViewPlan& plan,
-                                      dataframe::AggStatePtr& out) {
-    auto prep = prepare(plan, /*typed=*/false, PrepSource::Partials);
-    if (!prep) co_return false;
-    auto ran = co_await run_agg_query(prep->query);
-    AggQueryResult result = run_or_throw(std::move(ran));
+coro::CoroTask<dstd::Result<bool>> partials_collect(
+    const ViewPlan& plan, dataframe::AggStatePtr& out) {
+    auto prepared = prepare(plan, /*typed=*/false, PrepSource::Partials);
+    if (!prepared) co_return prepared.error();
+    if (!*prepared) co_return false;
+    Prepared& prep = **prepared;
+    auto spec = make_agg_input_spec(plan);
+    if (!spec) co_return spec.error();
+    auto ran = co_await run_agg_query(prep.query);
+    if (!ran) co_return ran.error();
+    AggQueryResult result = std::move(*ran);
     log_answer(result.stats);
     if (result.stats.unanswered != 0) {
-        declined(
+        log_declined(
             "partials that only a re-read could answer, which the "
             "query may not do");
         co_return false;
     }
-    out = seed_all(plan, *prep, result);
+    out = seed_all(plan, std::move(*spec), prep, result);
     co_return true;
 }
 
-coro::CoroTask<bool> partials_scan_collect(const ViewPlan& plan,
-                                           dataframe::AggStatePtr& out) {
-    auto prep = prepare(plan, /*typed=*/false, PrepSource::Trace);
-    if (!prep) co_return false;
-    prep->query.cancelled = plan.cancelled;
-    auto ran = co_await run_agg_query(prep->query);
-    AggQueryResult result = run_or_throw(std::move(ran));
+coro::CoroTask<dstd::Result<bool>> partials_scan_collect(
+    const ViewPlan& plan, dataframe::AggStatePtr& out) {
+    auto prepared = prepare(plan, /*typed=*/false, PrepSource::Trace);
+    if (!prepared) co_return prepared.error();
+    if (!*prepared) co_return false;
+    Prepared& prep = **prepared;
+    prep.query.cancelled = plan.cancelled;
+    auto spec = make_agg_input_spec(plan);
+    if (!spec) co_return spec.error();
+    auto ran = co_await run_agg_query(prep.query);
+    if (!ran) co_return ran.error();
+    AggQueryResult result = std::move(*ran);
     DFTRACER_UTILS_LOG_DEBUG(
         "View: the trace answered over {} files: {} events in {} chunks",
         result.stats.files,
         static_cast<unsigned long long>(result.stats.events_read),
         result.stats.chunks_reread);
-    out = seed_all(plan, *prep, result);
+    out = seed_all(plan, std::move(*spec), prep, result);
     co_return true;
 }
 
-coro::CoroTask<bool> partials_collect_typed(
+coro::CoroTask<dstd::Result<bool>> partials_collect_typed(
     const ViewPlan& plan, dataframe::DataFrame& out_regular,
     dataframe::DataFrame& out_aggregated, int shard_begin, int shard_end,
     const ProgressFn* progress) {
-    auto prep = prepare(plan, /*typed=*/true, PrepSource::Partials);
-    if (!prep) co_return false;
+    auto prepared = prepare(plan, /*typed=*/true, PrepSource::Partials);
+    if (!prepared) co_return prepared.error();
+    if (!*prepared) co_return false;
+    Prepared& prep = **prepared;
     const int shards = index::schemas::dft::agg::AGG_KEY_NUM_SHARDS;
     if (shard_end <= 0) shard_end = shards;
     const bool whole = shard_begin <= 0 && shard_end >= shards;
     const auto total = static_cast<std::size_t>(shard_end - shard_begin);
     if (progress && *progress) (*progress)(0, total);
 
-    auto ran = co_await run_agg_query(prep->query);
-    AggQueryResult result = run_or_throw(std::move(ran));
+    auto spec = make_agg_input_spec(plan);
+    if (!spec) co_return spec.error();
+    auto ran = co_await run_agg_query(prep.query);
+    if (!ran) co_return ran.error();
+    AggQueryResult result = std::move(*ran);
     log_answer(result.stats);
     if (result.stats.unanswered != 0) {
-        declined(
+        log_declined(
             "partials that only a re-read could answer, which the "
             "query may not do");
         co_return false;
     }
 
-    Seeder seeder(plan, prep->keys, prep->extra, prep->query.quantiles,
-                  result.strings());
+    Seeder seeder(plan, std::move(*spec), prep.keys, prep.extra,
+                  prep.query.quantiles, result.strings());
     auto events = seeder.new_state();
     auto profiles = seeder.new_state();
     dstd::Vector<dstd::String> keys;
@@ -933,8 +964,12 @@ coro::CoroTask<bool> partials_collect_typed(
     }
     dataframe::agg_seed_finalize(*events);
     dataframe::agg_seed_finalize(*profiles);
-    out_regular = finalize_engine_result(*events, plan);
-    out_aggregated = finalize_engine_result(*profiles, plan);
+    auto regular = finalize_engine_result(*events, plan);
+    if (!regular) co_return regular.error();
+    auto aggregated = finalize_engine_result(*profiles, plan);
+    if (!aggregated) co_return aggregated.error();
+    out_regular = std::move(*regular);
+    out_aggregated = std::move(*aggregated);
     if (progress && *progress) (*progress)(total, total);
     co_return true;
 }

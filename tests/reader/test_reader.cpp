@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <checkpoint_indexer_helpers.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -36,18 +37,18 @@ TEST_CASE("C++ Indexer - Basic functionality") {
 
     SUBCASE("Build index") {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(1.0));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(1.0));
         REQUIRE(indexer != nullptr);
-        CHECK_NOTHROW(indexer->build());
+        CHECK_NOTHROW(dftu_utils_test::build_indexer(*indexer));
     }
 
     SUBCASE("Check rebuild needed") {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(1.0));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(1.0));
         REQUIRE(indexer != nullptr);
         CHECK(indexer->need_rebuild());  // Should need rebuild initially
 
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
         CHECK_FALSE(
             indexer->need_rebuild());  // Should not need rebuild after building
     }
@@ -55,7 +56,7 @@ TEST_CASE("C++ Indexer - Basic functionality") {
     SUBCASE("Getter methods") {
         std::size_t ckpt_size = mb_to_b(1.5);
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, ckpt_size);
+            dftu_utils_test::create_indexer(gz_file, idx_file, ckpt_size);
         REQUIRE(indexer != nullptr);
 
         // Test getter methods
@@ -63,15 +64,14 @@ TEST_CASE("C++ Indexer - Basic functionality") {
         CHECK(dstd::StringView(indexer->index_path()) == idx_file);
 
         // Build index first before accessing metadata
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
 
         // size will be adjusted
         CHECK(indexer->checkpoint_size() <= ckpt_size);
     }
 
     SUBCASE("Move semantics") {
-        auto indexer1 =
-            CheckpointIndexerFactory::create(gz_file, idx_file, 1.0);
+        auto indexer1 = dftu_utils_test::create_indexer(gz_file, idx_file, 1.0);
         REQUIRE(indexer1 != nullptr);
 
         // Move constructor
@@ -95,9 +95,9 @@ TEST_CASE("C++ Reader - Basic functionality") {
     // Build index first
     {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
     }
 
     SUBCASE("Constructor and destructor") {
@@ -180,14 +180,11 @@ TEST_CASE("C++ Reader - Basic functionality") {
 
 TEST_CASE("C++ API - Error handling") {
     SUBCASE("Invalid indexer creation") {
-        try {
-            (void)CheckpointIndexerFactory::create(
-                "/nonexistent/path.gz", "/nonexistent/path.idx",
-                static_cast<std::uint64_t>(1.0));
-            FAIL("create did not throw");
-        } catch (const common::DFTUtilsException& e) {
-            CHECK(e.error().is_code(common::ErrorCode::Indexer));
-        }
+        auto created = index::gzip::CheckpointIndexerFactory::try_create(
+            "/nonexistent/path.gz", "/nonexistent/path.idx",
+            static_cast<std::uint64_t>(1.0));
+        REQUIRE_FALSE(created.has_value());
+        CHECK(created.error().is_code(common::ErrorCode::Indexer));
     }
 
     SUBCASE("Invalid reader creation") {
@@ -210,9 +207,9 @@ TEST_CASE("C++ API - Data range reading") {
     // Build index first
     {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
     }
 
     // Create reader
@@ -248,9 +245,9 @@ TEST_CASE("C++ API - Edge cases") {
     // Build index first
     {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
     }
 
     // Create reader
@@ -292,9 +289,9 @@ TEST_CASE("C++ API - Integration test") {
     {
         // Build index
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
 
         // Read data
         auto reader =
@@ -352,9 +349,9 @@ TEST_CASE("C++ API - Memory safety stress test" * doctest::test_suite("vg")) {
     // Build index
     {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
     }
 
     // Multiple reads with streaming API
@@ -390,13 +387,10 @@ TEST_CASE("C++ API - Exception handling comprehensive tests") {
     dstd::String idx_file = env.get_index_path(gz_file);
 
     SUBCASE("Indexer with invalid chunk size should throw in constructor") {
-        try {
-            (void)CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                   mb_to_b(0.0));
-            FAIL("create did not throw");
-        } catch (const common::DFTUtilsException& e) {
-            CHECK(e.error().is_code(common::ErrorCode::Indexer));
-        }
+        auto created = index::gzip::CheckpointIndexerFactory::try_create(
+            gz_file, idx_file, mb_to_b(0.0));
+        REQUIRE_FALSE(created.has_value());
+        CHECK(created.error().is_code(common::ErrorCode::Indexer));
     }
 
     SUBCASE("Reader with invalid paths should throw in constructor") {
@@ -409,10 +403,10 @@ TEST_CASE("C++ API - Exception handling comprehensive tests") {
     SUBCASE("Reader operations on invalid reader should throw") {
         // Build a valid index first
         {
-            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                            mb_to_b(0.5));
+            auto indexer = dftu_utils_test::create_indexer(gz_file, idx_file,
+                                                           mb_to_b(0.5));
             REQUIRE(indexer != nullptr);
-            indexer->build();
+            dftu_utils_test::build_indexer(*indexer);
         }
 
         auto reader =
@@ -435,10 +429,10 @@ TEST_CASE("C++ API - Exception handling comprehensive tests") {
     SUBCASE("Invalid read parameters should throw") {
         // Build a valid index first
         {
-            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                            mb_to_b(0.5));
+            auto indexer = dftu_utils_test::create_indexer(gz_file, idx_file,
+                                                           mb_to_b(0.5));
             REQUIRE(indexer != nullptr);
-            indexer->build();
+            dftu_utils_test::build_indexer(*indexer);
         }
 
         auto reader =
@@ -467,13 +461,13 @@ TEST_CASE("C++ API - Advanced indexer functionality") {
 
     SUBCASE("Multiple indexer instances for same file") {
         auto indexer1 =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(1.0));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(1.0));
         auto indexer2 =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(1.0));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(1.0));
 
         // Both should work independently
-        CHECK_NOTHROW(indexer1->build());
-        CHECK_NOTHROW(indexer2->build());
+        CHECK_NOTHROW(dftu_utils_test::build_indexer(*indexer1));
+        CHECK_NOTHROW(dftu_utils_test::build_indexer(*indexer2));
 
         // After first build, rebuild should not be needed
         CHECK_FALSE(indexer1->need_rebuild());
@@ -481,13 +475,13 @@ TEST_CASE("C++ API - Advanced indexer functionality") {
     }
 
     SUBCASE("Different checkpoint sizes") {
-        auto indexer_small = CheckpointIndexerFactory::create(
+        auto indexer_small = dftu_utils_test::create_indexer(
             gz_file, idx_file + "_small", mb_to_b(0.1));
-        auto indexer_large = CheckpointIndexerFactory::create(
+        auto indexer_large = dftu_utils_test::create_indexer(
             gz_file, idx_file + "_large", mb_to_b(10.0));
 
-        CHECK_NOTHROW(indexer_small->build());
-        CHECK_NOTHROW(indexer_large->build());
+        CHECK_NOTHROW(dftu_utils_test::build_indexer(*indexer_small));
+        CHECK_NOTHROW(dftu_utils_test::build_indexer(*indexer_large));
 
         // Both should create valid indices
         CHECK_NOTHROW(dftu_utils_test::ok(
@@ -498,16 +492,16 @@ TEST_CASE("C++ API - Advanced indexer functionality") {
 
     SUBCASE("Indexer state after operations") {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(1.0));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(1.0));
         REQUIRE(indexer != nullptr);
 
         CHECK(indexer->need_rebuild());
 
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
         CHECK_FALSE(indexer->need_rebuild());  // Should not need rebuild
 
         // Can build again
-        CHECK_NOTHROW(indexer->build());
+        CHECK_NOTHROW(dftu_utils_test::build_indexer(*indexer));
     }
 }
 
@@ -524,9 +518,9 @@ TEST_CASE("C++ API - Advanced reader functionality" *
     // Build index first
     {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
     }
 
     SUBCASE("Multiple readers for same file") {
@@ -699,9 +693,9 @@ TEST_CASE("C++ API - JSON boundary detection") {
     // Build index first
     {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
     }
 
     // Create reader
@@ -832,10 +826,10 @@ TEST_CASE("C++ API - Regression and stress tests") {
 
         // Build index
         {
-            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                            mb_to_b(1.0));
+            auto indexer = dftu_utils_test::create_indexer(gz_file, idx_file,
+                                                           mb_to_b(1.0));
             REQUIRE(indexer != nullptr);
-            CHECK_NOTHROW(indexer->build());
+            CHECK_NOTHROW(dftu_utils_test::build_indexer(*indexer));
         }
 
         // Test large reads
@@ -911,9 +905,9 @@ TEST_CASE("C++ API - Regression and stress tests") {
 
         // Build index
         {
-            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                            mb_to_b(32.0));
-            indexer->build();
+            auto indexer = dftu_utils_test::create_indexer(gz_file, idx_file,
+                                                           mb_to_b(32.0));
+            dftu_utils_test::build_indexer(*indexer);
         }
 
         // Create reader
@@ -991,9 +985,9 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
     // Build index first
     {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
     }
 
     SUBCASE("Basic raw read functionality") {
@@ -1316,8 +1310,8 @@ TEST_CASE("C++ Reader - Line reading functionality" *
     // Build index first with smaller chunk size to force checkpoint creation
     {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.1));
-        indexer->build();
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.1));
+        dftu_utils_test::build_indexer(*indexer);
 
         // Verify the indexer has line counts and members
         std::size_t total_lines = indexer->line_count();
@@ -1448,7 +1442,7 @@ TEST_CASE("C++ Reader - Line reading functionality" *
 
         // Get number of lines from indexer
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.1));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.1));
         std::size_t total_line_count = indexer->line_count();
 
         if (total_line_count > 100) {
@@ -1477,7 +1471,7 @@ TEST_CASE("C++ Reader - Line reading functionality" *
 
         // Get number of lines from indexer
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.1));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.1));
         std::size_t total_lines = indexer->line_count();
 
         if (total_lines > 10) {
@@ -1504,7 +1498,7 @@ TEST_CASE("C++ Reader - Line reading functionality" *
 
         // Get number of lines from indexer
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.1));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.1));
         std::size_t total_lines = indexer->line_count();
 
         // Test single line reads at different positions
@@ -1545,9 +1539,9 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
     SUBCASE("Indexer with various checkpoint sizes") {
         for (double ckpt_size_mb : {0.1, 0.5, 1.0, 2.0, 5.0}) {
             std::size_t ckpt_size = mb_to_b(ckpt_size_mb);
-            auto indexer = CheckpointIndexerFactory::create(
+            auto indexer = dftu_utils_test::create_indexer(
                 gz_file, idx_file + dstd::to_string(ckpt_size_mb), ckpt_size);
-            CHECK_NOTHROW(indexer->build());
+            CHECK_NOTHROW(dftu_utils_test::build_indexer(*indexer));
             CHECK(indexer->checkpoint_size() <= ckpt_size);
             dstd::fs::remove(idx_file + dstd::to_string(ckpt_size_mb))
                 .discard();
@@ -1557,9 +1551,9 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
     SUBCASE("Reader with different range sizes to trigger various code paths") {
         // Build index first
         {
-            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                            mb_to_b(0.1));
-            indexer->build();
+            auto indexer = dftu_utils_test::create_indexer(gz_file, idx_file,
+                                                           mb_to_b(0.1));
+            dftu_utils_test::build_indexer(*indexer);
         }
 
         auto reader =
@@ -1600,16 +1594,17 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
 
     SUBCASE("Force rebuild scenarios") {
         // Test force rebuild functionality
-        auto indexer1 = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                         mb_to_b(1.0), false);
-        indexer1->build();
+        auto indexer1 = dftu_utils_test::create_indexer(gz_file, idx_file,
+                                                        mb_to_b(1.0), false);
+        dftu_utils_test::build_indexer(*indexer1);
         CHECK_FALSE(indexer1->need_rebuild());
 
         // Force rebuild should rebuild even if not needed
-        auto indexer2 = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                         mb_to_b(1.0), true);
+        auto indexer2 = dftu_utils_test::create_indexer(gz_file, idx_file,
+                                                        mb_to_b(1.0), true);
         // Force rebuild affects behavior during construction/build
-        CHECK_NOTHROW(indexer2->build());  // Should succeed even if forced
+        CHECK_NOTHROW(dftu_utils_test::build_indexer(
+            *indexer2));  // Should succeed even if forced
         // Note: force_rebuild flag behavior needs further investigation
         CHECK_FALSE(
             indexer2
@@ -1619,10 +1614,10 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
     SUBCASE("Multiple readers on same index") {
         // Build index once
         {
-            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                            mb_to_b(1.0));
+            auto indexer = dftu_utils_test::create_indexer(gz_file, idx_file,
+                                                           mb_to_b(1.0));
             REQUIRE(indexer != nullptr);
-            indexer->build();
+            dftu_utils_test::build_indexer(*indexer);
         }
 
         // Create multiple readers
@@ -1655,10 +1650,10 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
     SUBCASE("Edge case: Reading near file boundaries") {
         // Build index
         {
-            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                            mb_to_b(0.5));
+            auto indexer = dftu_utils_test::create_indexer(gz_file, idx_file,
+                                                           mb_to_b(0.5));
             REQUIRE(indexer != nullptr);
-            indexer->build();
+            dftu_utils_test::build_indexer(*indexer);
         }
 
         auto reader =
@@ -1707,9 +1702,9 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
 
         // Build index with small chunks to force more complex compression
         {
-            auto indexer = CheckpointIndexerFactory::create(large_gz, large_idx,
-                                                            mb_to_b(0.1));
-            indexer->build();
+            auto indexer = dftu_utils_test::create_indexer(large_gz, large_idx,
+                                                           mb_to_b(0.1));
+            dftu_utils_test::build_indexer(*indexer);
         }
 
         auto reader =

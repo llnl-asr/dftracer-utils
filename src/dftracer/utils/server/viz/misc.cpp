@@ -102,8 +102,12 @@ coro::CoroTask<HttpResponse> handle_viz_columns(const HttpRequest& /*req*/,
                (!fields.by_path &&
                 (name == fields.entity || name == fields.lane));
     };
+    auto info = v.column_info();
+    if (!info)
+        co_return HttpResponse::bad_request(
+            dstd::String(info.error().message()));
     dstd::Vector<views::ColumnInfo> schema;
-    for (auto& c : v.column_info())
+    for (auto& c : *info)
         if (!axis(c.name)) schema.push_back(std::move(c));
 
     auto& b = scratch_json_builder();

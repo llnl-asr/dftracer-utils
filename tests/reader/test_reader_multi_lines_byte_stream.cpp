@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <checkpoint_indexer_helpers.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
@@ -89,10 +90,10 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Sequential Read Tests") {
 
         // Build index
         {
-            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                            mb_to_b(0.5));
+            auto indexer = dftu_utils_test::create_indexer(gz_file, idx_file,
+                                                           mb_to_b(0.5));
             REQUIRE(indexer != nullptr);
-            indexer->build();
+            dftu_utils_test::build_indexer(*indexer);
         }
 
         auto reader =
@@ -141,9 +142,9 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Sequential Read Tests") {
         dstd::String idx_file = env.get_index_path(gz_file);
 
         {
-            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                            mb_to_b(1.0));
-            indexer->build();
+            auto indexer = dftu_utils_test::create_indexer(gz_file, idx_file,
+                                                           mb_to_b(1.0));
+            dftu_utils_test::build_indexer(*indexer);
         }
 
         auto reader =
@@ -221,8 +222,8 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Sequential Read Tests") {
 
         {
             auto indexer =
-                CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(1));
-            indexer->build();
+                dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(1));
+            dftu_utils_test::build_indexer(*indexer);
         }
 
         auto reader =
@@ -322,9 +323,9 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Sequential Read Tests") {
         dstd::String idx_file = env.get_index_path(gz_file);
 
         {
-            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                            mb_to_b(0.5));
-            indexer->build();
+            auto indexer = dftu_utils_test::create_indexer(gz_file, idx_file,
+                                                           mb_to_b(0.5));
+            dftu_utils_test::build_indexer(*indexer);
         }
 
         auto reader =
@@ -405,9 +406,9 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Parallel/Threaded Tests" *
         dstd::String idx_file = env.get_index_path(gz_file);
 
         {
-            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                            mb_to_b(2.0));
-            indexer->build();
+            auto indexer = dftu_utils_test::create_indexer(gz_file, idx_file,
+                                                           mb_to_b(2.0));
+            dftu_utils_test::build_indexer(*indexer);
         }
 
         std::size_t max_bytes;
@@ -519,9 +520,9 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Parallel/Threaded Tests" *
         dstd::String idx_file = env.get_index_path(gz_file);
 
         {
-            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                            mb_to_b(4.0));
-            indexer->build();
+            auto indexer = dftu_utils_test::create_indexer(gz_file, idx_file,
+                                                           mb_to_b(4.0));
+            dftu_utils_test::build_indexer(*indexer);
         }
 
         std::size_t max_bytes;
@@ -629,9 +630,9 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Specific Boundary Tests" *
         dstd::String idx_file = env.get_index_path(gz_file);
 
         {
-            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                            mb_to_b(2.0));
-            indexer->build();
+            auto indexer = dftu_utils_test::create_indexer(gz_file, idx_file,
+                                                           mb_to_b(2.0));
+            dftu_utils_test::build_indexer(*indexer);
         }
 
         auto reader =
@@ -720,9 +721,9 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Specific Boundary Tests" *
         dstd::String idx_file = env.get_index_path(gz_file);
 
         {
-            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                            mb_to_b(1.0));
-            indexer->build();
+            auto indexer = dftu_utils_test::create_indexer(gz_file, idx_file,
+                                                           mb_to_b(1.0));
+            dftu_utils_test::build_indexer(*indexer);
         }
 
         auto reader =
@@ -813,9 +814,9 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Variable Worker Counts") {
         dstd::String idx_file = env.get_index_path(gz_file);
 
         {
-            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                            mb_to_b(3.0));
-            indexer->build();
+            auto indexer = dftu_utils_test::create_indexer(gz_file, idx_file,
+                                                           mb_to_b(3.0));
+            dftu_utils_test::build_indexer(*indexer);
         }
 
         auto reader =
@@ -930,9 +931,9 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Buffer Size Tests") {
         dstd::String idx_file = env.get_index_path(gz_file);
 
         {
-            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                            mb_to_b(2.0));
-            indexer->build();
+            auto indexer = dftu_utils_test::create_indexer(gz_file, idx_file,
+                                                           mb_to_b(2.0));
+            dftu_utils_test::build_indexer(*indexer);
         }
 
         auto reference_reader =
@@ -1029,9 +1030,9 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Buffer Size Tests") {
         dstd::String idx_file = env.get_index_path(gz_file);
 
         {
-            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                            mb_to_b(1.5));
-            indexer->build();
+            auto indexer = dftu_utils_test::create_indexer(gz_file, idx_file,
+                                                           mb_to_b(1.5));
+            dftu_utils_test::build_indexer(*indexer);
         }
 
         std::size_t max_bytes;

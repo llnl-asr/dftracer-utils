@@ -83,7 +83,6 @@ TEST_SUITE("ChunkIndexer") {
         ChunkIndexer indexer;
         auto output = dftu_utils_test::ok(indexer(input).get());
 
-        CHECK(output.success == true);
         CHECK(output.events_processed == 50);
         CHECK(output.checkpoint_idx == 0);
 
@@ -144,7 +143,6 @@ TEST_SUITE("ChunkIndexer") {
         ChunkIndexer indexer;
         auto output = dftu_utils_test::ok(indexer(input).get());
 
-        CHECK(output.success == true);
         CHECK(output.events_processed == 20);
 
         // Extra dimensions should have bloom filters
@@ -202,11 +200,29 @@ TEST_SUITE("ChunkIndexer") {
         ChunkIndexer indexer;
         auto output = dftu_utils_test::ok(indexer(input).get());
 
-        CHECK(output.success == true);
         CHECK(output.events_processed == 2);
         CHECK(output.bloom_filters.at("fhash").possibly_contains("def456"));
         CHECK(output.statistics.total_events == 2);
 
+        dstd::fs::remove_all(test_dir).discard();
+    }
+
+    TEST_CASE("ChunkIndexer - A missing file is an error") {
+        dstd::String test_dir = "test_chunk_indexer_missing";
+        dstd::fs::create_directories(test_dir).discard();
+        ChunkIndexerConfig config;
+        ChunkIndexerInput input;
+        input.with_file_path(test_dir + "/absent.pfw.gz")
+            .with_index_path("")
+            .with_checkpoint_size(1024)
+            .with_checkpoint_idx(0)
+            .with_byte_range(0, 1024)
+            .with_config(config)
+            .with_batch_size(4 * 1024);
+
+        ChunkIndexer indexer;
+        const auto result = indexer(input).get();
+        CHECK_FALSE(result.has_value());
         dstd::fs::remove_all(test_dir).discard();
     }
 

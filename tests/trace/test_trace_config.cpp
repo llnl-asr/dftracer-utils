@@ -9,6 +9,7 @@
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
 #include <refused_lines.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <fstream>
@@ -116,11 +117,11 @@ TEST_SUITE("trace-config") {
         body += end_event(1, true) + "\n";
         dstd::String gz = make_gz(env, body);
 
-        auto cfgs =
+        auto cfgs = dftu_utils_test::ok(
             View::from_file(
                 dstd::String(gz),
                 dstd::String(dstd::String(determine_index_path(gz, ""))))
-                .config();
+                .config());
         REQUIRE(cfgs.size() == 1);
         CHECK(cfgs[0].args["app.model"].get<dstd::StringView>() == "resnet50");
     }
@@ -139,8 +140,8 @@ TEST_SUITE("trace-config") {
 
         REQUIRE(read_trace_config(dstd::String(gz))
                     .empty());  // tail probe alone misses it
-        auto cfgs =
-            View::from_file(dstd::String(gz), dstd::String(idx)).config();
+        auto cfgs = dftu_utils_test::ok(
+            View::from_file(dstd::String(gz), dstd::String(idx)).config());
         REQUIRE(cfgs.size() == 1);
         CHECK(cfgs[0].pid == 5);
         CHECK(cfgs[0].args["num_events"].get<std::uint64_t>() == 41);

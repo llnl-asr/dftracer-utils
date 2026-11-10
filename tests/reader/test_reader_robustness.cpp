@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <checkpoint_indexer_helpers.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/future.h>
 #include <dftracer/utils/dstd/map.h>
@@ -217,12 +218,12 @@ struct Prepared {
         REQUIRE(!gz_file.empty());
         idx_file = env.get_index_path(gz_file);
         auto indexer =
-            with_lines ? CheckpointIndexerFactory::create(
+            with_lines ? dftu_utils_test::create_indexer(
                              gz_file, idx_file, mb_to_b(checkpoint_mb), true)
-                       : CheckpointIndexerFactory::create(
+                       : dftu_utils_test::create_indexer(
                              gz_file, idx_file, mb_to_b(checkpoint_mb));
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
         if (with_lines) total_lines = indexer->line_count();
     }
 };
@@ -1363,8 +1364,8 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
 
         // Get total lines from indexer
         {
-            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                            mb_to_b(2.0));
+            auto indexer = dftu_utils_test::create_indexer(gz_file, idx_file,
+                                                           mb_to_b(2.0));
             REQUIRE(indexer != nullptr);
             total_lines = indexer->line_count();
         }
@@ -1436,8 +1437,8 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
 
         // Get total lines from indexer
         {
-            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                            mb_to_b(2.0));
+            auto indexer = dftu_utils_test::create_indexer(gz_file, idx_file,
+                                                           mb_to_b(2.0));
             REQUIRE(indexer != nullptr);
             total_lines = indexer->line_count();
         }
@@ -1504,8 +1505,8 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
 
         // Get total lines from indexer
         {
-            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                            mb_to_b(2.0));
+            auto indexer = dftu_utils_test::create_indexer(gz_file, idx_file,
+                                                           mb_to_b(2.0));
             REQUIRE(indexer != nullptr);
             total_lines = indexer->line_count();
         }
@@ -1561,8 +1562,8 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
 
         // Get total lines from indexer
         {
-            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                            mb_to_b(2.0));
+            auto indexer = dftu_utils_test::create_indexer(gz_file, idx_file,
+                                                           mb_to_b(2.0));
             REQUIRE(indexer != nullptr);
             total_lines = indexer->line_count();
         }
@@ -1620,8 +1621,8 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
 
         // Get total lines from indexer
         {
-            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                            mb_to_b(2.0));
+            auto indexer = dftu_utils_test::create_indexer(gz_file, idx_file,
+                                                           mb_to_b(2.0));
             REQUIRE(indexer != nullptr);
             total_lines = indexer->line_count();
         }

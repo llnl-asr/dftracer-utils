@@ -142,7 +142,7 @@ dstd::Result<bool> AggSpiller::maybe_spill(AggStatePtr& state) {
         return written.error();
     }
     DFTRACER_UTILS_LOG_DEBUG(
-        "Aggregation spilled run %d (%lld groups) past the %llu byte budget",
+        "Aggregation spilled run {} ({} groups) past the {} byte budget",
         impl_->next_id - 1, static_cast<long long>(agg_group_count(*state)),
         static_cast<unsigned long long>(impl_->budget));
     state = agg_new(std::move(specs));

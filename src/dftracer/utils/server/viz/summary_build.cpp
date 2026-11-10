@@ -1358,8 +1358,8 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
     for (const auto& lane : summary->levels.back().lanes)
         cells += lane.cells.size();
     DFTRACER_UTILS_LOG_INFO(
-        "viz: built activity summary (%zu lanes, %zu levels, finest %.0f us "
-        "with %zu cells, %zu long events, %zu idle gaps)",
+        "viz: built activity summary ({} lanes, {} levels, finest {:.0f} us "
+        "with {} cells, {} long events, {} idle gaps)",
         b.lane_keys.size(), summary->levels.size(),
         summary->levels.back().bucket_us, cells, summary->long_events.size(),
         summary->idle_gaps.size());

@@ -30,8 +30,8 @@ time_t get_file_modification_time(dstd::CStringView file_path) {
 std::uint64_t calculate_file_hash(dstd::CStringView file_path) {
     auto file = dstd::File::open(dstd::PathView(file_path), {});
     if (!file) {
-        DFTRACER_UTILS_LOG_ERROR("Cannot open file for hash calculation: %s",
-                                 file_path.c_str());
+        DFTRACER_UTILS_LOG_ERROR("Cannot open file for hash calculation: {}",
+                                 file_path);
         return 0;
     }
 

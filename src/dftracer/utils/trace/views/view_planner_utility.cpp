@@ -171,8 +171,8 @@ coro::CoroTask<dstd::Result<ViewPlannerOutput>> ViewPlannerUtility::operator()(
         } else if (total_checkpoints == 1) {
             // One chunk is the whole file, so no byte cut can misplace it.
             DFTRACER_UTILS_LOG_DEBUG(
-                "ViewPlanner: %s has no chunk table entry; read it whole",
-                input.file_path.c_str());
+                "ViewPlanner: {} has no chunk table entry; read it whole",
+                input.file_path);
             candidate.start_byte = 0;
             candidate.end_byte = input.uncompressed_size;
         } else {

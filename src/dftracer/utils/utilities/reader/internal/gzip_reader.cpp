@@ -78,8 +78,8 @@ GzipReader::GzipReader(dstd::StringView gz_path, dstd::StringView idx_path,
         is_open_ = true;
 
         DFTRACER_UTILS_LOG_DEBUG(
-            "Successfully created GZIP reader for gz: %s and index: %s",
-            gz_path_.c_str(), index_path_.c_str());
+            "Successfully created GZIP reader for gz: {} and index: {}",
+            gz_path_, index_path_);
     } catch (const std::exception &e) {
         throw ReaderError(ReaderError::InitializationError,
                           "Failed to initialize reader with indexer: " +
@@ -101,8 +101,8 @@ GzipReader::GzipReader(
 }
 
 GzipReader::~GzipReader() {
-    DFTRACER_UTILS_LOG_DEBUG("Destroying GZIP reader for gz: %s and index: %s",
-                             gz_path_.c_str(), index_path_.c_str());
+    DFTRACER_UTILS_LOG_DEBUG("Destroying GZIP reader for gz: {} and index: {}",
+                             gz_path_, index_path_);
     reset();
     is_open_ = false;
 }
@@ -132,14 +132,14 @@ std::size_t GzipReader::max_bytes() const {
     check_reader_state(is_open_, indexer_.get());
     std::size_t max_bytes =
         static_cast<std::size_t>(indexer_.get()->max_bytes());
-    DFTRACER_UTILS_LOG_DEBUG("Maximum bytes available: %zu", max_bytes);
+    DFTRACER_UTILS_LOG_DEBUG("Maximum bytes available: {}", max_bytes);
     return max_bytes;
 }
 
 std::size_t GzipReader::line_count() const {
     check_reader_state(is_open_, indexer_.get());
     std::size_t line_count = static_cast<std::size_t>(indexer_->line_count());
-    DFTRACER_UTILS_LOG_DEBUG("Total lines available: %zu", line_count);
+    DFTRACER_UTILS_LOG_DEBUG("Total lines available: {}", line_count);
     return line_count;
 }
 
@@ -165,14 +165,14 @@ coro::CoroTask<std::size_t> GzipReader::read_async(std::size_t start_bytes,
                         indexer_.get()->max_bytes());
 
     DFTRACER_UTILS_LOG_DEBUG(
-        "GzipReader::read - request: start_bytes=%zu, end_bytes=%zu, "
-        "buffer_size=%zu",
+        "GzipReader::read - request: start_bytes={}, end_bytes={}, "
+        "buffer_size={}",
         start_bytes, end_bytes, buffer_size);
 
     // Check if we can reuse cached stream
     if (!stream_cache_.can_continue(StreamType::Bytes, gz_path_, start_bytes,
                                     end_bytes)) {
-        DFTRACER_UTILS_LOG_DEBUG("%s",
+        DFTRACER_UTILS_LOG_DEBUG("{}",
                                  "GzipReader::read - creating new byte stream");
         auto new_stream = stream(StreamConfig()
                                      .stream_type(StreamType::Bytes)
@@ -183,12 +183,12 @@ coro::CoroTask<std::size_t> GzipReader::read_async(std::size_t start_bytes,
                              start_bytes, end_bytes);
     } else {
         DFTRACER_UTILS_LOG_DEBUG(
-            "%s", "GzipReader::read - reusing cached byte stream");
+            "{}", "GzipReader::read - reusing cached byte stream");
     }
 
     std::size_t result =
         co_await stream_cache_.get()->read_async(buffer, buffer_size);
-    DFTRACER_UTILS_LOG_DEBUG("GzipReader::read - returned %zu bytes", result);
+    DFTRACER_UTILS_LOG_DEBUG("GzipReader::read - returned {} bytes", result);
 
     // Update position for next potential read
     stream_cache_.update_position(start_bytes + result);
@@ -424,8 +424,7 @@ dstd::UniquePtr<ReaderStream> GzipReader::stream(const StreamConfig &config) {
             end_bytes = indexer_->max_bytes();
             actual_start_line = 1;
             DFTRACER_UTILS_LOG_DEBUG(
-                "No member covers lines %zu-%zu, using full file: "
-                "end_bytes=%zu",
+                "No member covers lines {}-{}, using full file: end_bytes={}",
                 start, end, end_bytes);
         } else {
             // Members are line-aligned (each written member is a whole-line
@@ -465,8 +464,8 @@ dstd::UniquePtr<ReaderStream> GzipReader::stream(const StreamConfig &config) {
             end_bytes = last_overlap_end;
 
             DFTRACER_UTILS_LOG_DEBUG(
-                "Lines %zu-%zu -> byte range %zu-%zu, actual_start_line=%zu",
-                start, end, start_bytes, end_bytes, actual_start_line);
+                "Lines {}-{} -> byte range {}-{}, actual_start_line={}", start,
+                end, start_bytes, end_bytes, actual_start_line);
         }
     }
 

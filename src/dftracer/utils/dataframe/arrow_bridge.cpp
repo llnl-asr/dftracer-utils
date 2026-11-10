@@ -180,7 +180,7 @@ bool from_arrow_type(const ArrowSchemaView& view, TypeId& out) {
             return true;
         default:
             DFTRACER_UTILS_LOG_ERROR(
-                "Arrow import: unsupported type '%s'",
+                "Arrow import: unsupported type '{}'",
                 ArrowTypeString(view.type) ? ArrowTypeString(view.type) : "?");
             return false;
     }

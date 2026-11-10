@@ -315,9 +315,9 @@ static coro::CoroTask<void> auto_index_and_resolve(
 
         for (const auto& result : batch_result.results) {
             if (!result.success && !result.error_message.empty()) {
-                DFTRACER_UTILS_LOG_ERROR("Auto-indexing failed for %s: %s",
-                                         result.file_path.c_str(),
-                                         result.error_message.c_str());
+                DFTRACER_UTILS_LOG_ERROR("Auto-indexing failed for {}: {}",
+                                         result.file_path,
+                                         result.error_message);
             }
         }
     }
@@ -367,8 +367,8 @@ static coro::CoroTask<int> run_info(const InfoArgParse* cli) {
 
         if (!directory.empty()) {
             if (!common::input_exists(directory)) {
-                DFTRACER_UTILS_LOG_ERROR("Directory does not exist: %s",
-                                         directory.c_str());
+                DFTRACER_UTILS_LOG_ERROR("Directory does not exist: {}",
+                                         directory);
                 co_return 1;
             }
 
@@ -453,7 +453,7 @@ static coro::CoroTask<int> run_info(const InfoArgParse* cli) {
     }
 
     if (files.empty()) {
-        DFTRACER_UTILS_LOG_ERROR("%s", "No files found. Use --help for usage.");
+        DFTRACER_UTILS_LOG_ERROR("{}", "No files found. Use --help for usage.");
         co_return 1;
     }
 

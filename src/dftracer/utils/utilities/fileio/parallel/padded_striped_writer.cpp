@@ -280,8 +280,8 @@ class PaddedStripedWriter : public ParallelWriter {
         ssize_t fd = co_await ::dftracer::utils::runtime::io::open(
             s.path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (fd < 0) {
-            DFTRACER_UTILS_LOG_ERROR("Failed to open padded output: %s",
-                                     s.path.c_str());
+            DFTRACER_UTILS_LOG_ERROR("Failed to open padded output: {}",
+                                     s.path);
             co_return -1;
         }
         s.file = dstd::File::from_native_handle(static_cast<int>(fd));
@@ -325,7 +325,7 @@ class PaddedStripedWriter : public ParallelWriter {
         PaddedStripedImpl& s = *impl_;
         if (data.size() + PAD_MEMBER_FIXED_OVERHEAD > s.stripe_size) {
             DFTRACER_UTILS_LOG_ERROR(
-                "padded writer: header %zu + pad overhead exceeds stripe %zu",
+                "padded writer: header {} + pad overhead exceeds stripe {}",
                 data.size(), s.stripe_size);
             co_return -1;
         }
@@ -342,7 +342,7 @@ class PaddedStripedWriter : public ParallelWriter {
                                     dstd::ByteView data) override {
         PaddedStripedImpl& s = *impl_;
         if (worker_idx >= s.producers.size()) {
-            DFTRACER_UTILS_LOG_ERROR("padded writer: worker_idx %zu >= %zu",
+            DFTRACER_UTILS_LOG_ERROR("padded writer: worker_idx {} >= {}",
                                      worker_idx, s.producers.size());
             co_return -1;
         }

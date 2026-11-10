@@ -540,8 +540,8 @@ void TraceReader::count_dropped(std::size_t& local,
 
 void TraceReader::warn_dropped(std::size_t local) const {
     if (local == 0) return;
-    DFTRACER_UTILS_LOG_WARN("%s: %zu line(s) could not be read in full",
-                            config_.file_path.c_str(), local);
+    DFTRACER_UTILS_LOG_WARN("{}: {} line(s) could not be read in full",
+                            config_.file_path, local);
 }
 
 dstd::SharedPtr<internal::Reader> TraceReader::make_indexed_reader() {

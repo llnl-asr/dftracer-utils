@@ -249,7 +249,7 @@ dstd::Result<void> Runtime::set_default_task_timeout(
 void Runtime::shutdown() {
     if (process_runtime_) {
         DFTRACER_UTILS_LOG_DEBUG(
-            "%s",
+            "{}",
             "shutdown() of the process runtime ignored; it stops at exit");
         return;
     }
@@ -259,14 +259,14 @@ void Runtime::shutdown() {
 void Runtime::configure(const RuntimeSettings& settings) {
     if (settings.io_backend != runtime::io::IoBackendType::Auto &&
         settings.io_backend != io_backend_) {
-        DFTRACER_UTILS_LOG_WARN("%s",
+        DFTRACER_UTILS_LOG_WARN("{}",
                                 "runtime: the I/O backend is fixed when the "
                                 "runtime is made; the request is ignored");
     }
     if (settings.io_batch_threshold != 0 &&
         settings.io_batch_threshold != io_batch_threshold_) {
         DFTRACER_UTILS_LOG_WARN(
-            "%s",
+            "{}",
             "runtime: the I/O batch threshold is fixed when "
             "the runtime is made; the request is ignored");
     }

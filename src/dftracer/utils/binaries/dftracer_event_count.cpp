@@ -92,8 +92,8 @@ IndexedCounts count_from_index(dstd::StringView index_path,
         }
     } catch (const std::exception& e) {
         DFTRACER_UTILS_LOG_WARN(
-            "Cannot read index %.*s (%s); streaming its files",
-            static_cast<int>(index_path.size()), index_path.data(), e.what());
+            "Cannot read index {} ({}); streaming its files", index_path,
+            e.what());
         counts = IndexedCounts{};
         for (const auto& entry : entries)
             counts.to_stream.push_back(entry.file_path);
@@ -211,8 +211,8 @@ coro::CoroTask<std::size_t> stream_count(dstd::String path) {
         }
     }
     if (counter.dropped_count() > 0)
-        DFTRACER_UTILS_LOG_WARN("%s: %zu line(s) could not be read in full",
-                                path.c_str(), counter.dropped_count());
+        DFTRACER_UTILS_LOG_WARN("{}: {} line(s) could not be read in full",
+                                path, counter.dropped_count());
     co_return counter.count();
 }
 
@@ -245,14 +245,13 @@ static int run_event_count(const EventCountArgParse* cli) {
 
     auto resolved = resolver(resolve_input).get();
     if (!resolved) {
-        DFTRACER_UTILS_LOG_ERROR("%s", resolved.error().format().c_str());
+        DFTRACER_UTILS_LOG_ERROR("{}", resolved.error().format());
         return 1;
     }
     auto& resolve_result = *resolved;
 
     if (resolve_result.all_files.empty()) {
-        DFTRACER_UTILS_LOG_ERROR("No trace files found in: %s",
-                                 log_dir.c_str());
+        DFTRACER_UTILS_LOG_ERROR("No trace files found in: {}", log_dir);
         return 1;
     }
 
@@ -306,8 +305,8 @@ static int run_event_count(const EventCountArgParse* cli) {
                             files_processed_ptr->fetch_add(
                                 1, std::memory_order_relaxed);
                         } catch (const std::exception& e) {
-                            DFTRACER_UTILS_LOG_ERROR("Cannot count %s: %s",
-                                                     path.c_str(), e.what());
+                            DFTRACER_UTILS_LOG_ERROR("Cannot count {}: {}",
+                                                     path, e.what());
                             failed_ptr->store(true, std::memory_order_relaxed);
                         }
                     });
@@ -323,8 +322,8 @@ static int run_event_count(const EventCountArgParse* cli) {
 
     std::printf("%zu\n", total_events.load());
 
-    DFTRACER_UTILS_LOG_DEBUG("Completed in %.2f ms", duration.count());
-    DFTRACER_UTILS_LOG_DEBUG("Files processed: %zu", files_processed.load());
+    DFTRACER_UTILS_LOG_DEBUG("Completed in {:.2f} ms", duration.count());
+    DFTRACER_UTILS_LOG_DEBUG("Files processed: {}", files_processed.load());
 
     return 0;
 }

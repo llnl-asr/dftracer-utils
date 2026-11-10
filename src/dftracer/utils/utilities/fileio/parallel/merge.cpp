@@ -18,8 +18,8 @@ coro::CoroTask<int> stream_shard_to_fd(int out_fd, dstd::CStringView shard) {
     ssize_t in_fd = co_await ::dftracer::utils::runtime::io::open(shard.c_str(),
                                                                   O_RDONLY, 0);
     if (in_fd < 0) {
-        DFTRACER_UTILS_LOG_ERROR("merge_shards: failed to open shard: %s",
-                                 shard.c_str());
+        DFTRACER_UTILS_LOG_ERROR("merge_shards: failed to open shard: {}",
+                                 shard);
         co_return -1;
     }
     dstd::Vector<char> buf(COPY_BUFFER_BYTES);
@@ -30,8 +30,7 @@ coro::CoroTask<int> stream_shard_to_fd(int out_fd, dstd::CStringView shard) {
         if (n < 0) {
             co_await ::dftracer::utils::runtime::io::close(
                 static_cast<int>(in_fd));
-            DFTRACER_UTILS_LOG_ERROR("merge_shards: read failed on %s",
-                                     shard.c_str());
+            DFTRACER_UTILS_LOG_ERROR("merge_shards: read failed on {}", shard);
             co_return -1;
         }
         std::size_t remaining = static_cast<std::size_t>(n);
@@ -43,8 +42,7 @@ coro::CoroTask<int> stream_shard_to_fd(int out_fd, dstd::CStringView shard) {
                 co_await ::dftracer::utils::runtime::io::close(
                     static_cast<int>(in_fd));
                 DFTRACER_UTILS_LOG_ERROR(
-                    "merge_shards: write failed while draining %s",
-                    shard.c_str());
+                    "merge_shards: write failed while draining {}", shard);
                 co_return -1;
             }
             remaining -= static_cast<std::size_t>(w);
@@ -64,8 +62,8 @@ coro::CoroTask<int> merge_shards(dstd::CStringView target,
     ssize_t out_fd = co_await ::dftracer::utils::runtime::io::open(
         target.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (out_fd < 0) {
-        DFTRACER_UTILS_LOG_ERROR("merge_shards: failed to open target: %s",
-                                 target.c_str());
+        DFTRACER_UTILS_LOG_ERROR("merge_shards: failed to open target: {}",
+                                 target);
         co_return -1;
     }
 

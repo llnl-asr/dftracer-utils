@@ -95,8 +95,8 @@ coro::CoroTask<bool> CatalogFold::finalize(
                                                  IndexExtension::Catalog))
                 continue;
         } catch (const std::exception& e) {
-            DFTRACER_UTILS_LOG_WARN("catalog check failed for %s: %s",
-                                    fs.index_path.c_str(), e.what());
+            DFTRACER_UTILS_LOG_WARN("catalog check failed for {}: {}",
+                                    fs.index_path, e.what());
             continue;
         }
 
@@ -117,8 +117,8 @@ coro::CoroTask<bool> CatalogFold::finalize(
             failure = dstd::String(build.error().message());
         }
         if (!failure.empty()) {
-            DFTRACER_UTILS_LOG_WARN("catalog write skipped for %s: %s",
-                                    fs.index_path.c_str(), failure.c_str());
+            DFTRACER_UTILS_LOG_WARN("catalog write skipped for {}: {}",
+                                    fs.index_path, failure);
             continue;
         }
         wrote = true;

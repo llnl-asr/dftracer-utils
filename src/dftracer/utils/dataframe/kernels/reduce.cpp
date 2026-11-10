@@ -419,12 +419,12 @@ dftu_scalar dftu_series_product(const dftu_series* v) {
     out.kind = DFTU_SCALAR_TAG_I64;
     if (v->encoding != dftracer::utils::dataframe::Encoding::Flat) return out;
     if (is_temporal_type(v->type)) {
-        DFTRACER_UTILS_LOG_ERROR("product: not defined for temporal type '%s'",
+        DFTRACER_UTILS_LOG_ERROR("product: not defined for temporal type '{}'",
                                  type_name(v->type));
         return out;
     }
     if (!is_arithmetic_type(v->type)) {
-        DFTRACER_UTILS_LOG_ERROR("product: no meaning for type '%s'",
+        DFTRACER_UTILS_LOG_ERROR("product: no meaning for type '{}'",
                                  type_name(v->type));
         return out;
     }
@@ -475,7 +475,7 @@ int64_t dftu_series_arg_min(const dftu_series* v) {
         return idx;
     }
     if (!is_arithmetic_type(v->type)) {
-        DFTRACER_UTILS_LOG_ERROR("arg_min: no meaning for type '%s'",
+        DFTRACER_UTILS_LOG_ERROR("arg_min: no meaning for type '{}'",
                                  type_name(v->type));
         return -1;
     }
@@ -504,7 +504,7 @@ int64_t dftu_series_arg_max(const dftu_series* v) {
         return idx;
     }
     if (!is_arithmetic_type(v->type)) {
-        DFTRACER_UTILS_LOG_ERROR("arg_max: no meaning for type '%s'",
+        DFTRACER_UTILS_LOG_ERROR("arg_max: no meaning for type '{}'",
                                  type_name(v->type));
         return -1;
     }
@@ -534,7 +534,7 @@ dftu_scalar dftu_series_mode(const dftu_series* v) {
         return out;
     }
     if (!is_arithmetic_type(v->type)) {
-        DFTRACER_UTILS_LOG_ERROR("mode: no meaning for type '%s'",
+        DFTRACER_UTILS_LOG_ERROR("mode: no meaning for type '{}'",
                                  type_name(v->type));
         return out;
     }

@@ -259,10 +259,8 @@ static int run_pgzip(const PgzipArgParse& cli) {
                                 const dstd::StringView name =
                                     dstd::PathView(path).filename();
                                 DFTRACER_UTILS_LOG_DEBUG(
-                                    "Compressed %.*s: %zu -> %zu "
-                                    "bytes (%.1f%%)",
-                                    static_cast<int>(name.size()), name.data(),
-                                    result.original_size,
+                                    "Compressed {}: {} -> {} bytes ({:.1f}%)",
+                                    name, result.original_size,
                                     result.compressed_size, ratio);
                             }
 
@@ -272,7 +270,7 @@ static int run_pgzip(const PgzipArgParse& cli) {
                                         dstd::fs::remove(dstd::PathView(path)));
                                 } catch (const std::exception& e) {
                                     DFTRACER_UTILS_LOG_ERROR(
-                                        "Failed to remove %s: %s", path.c_str(),
+                                        "Failed to remove {}: {}", path,
                                         e.what());
                                 }
                             }
@@ -306,9 +304,8 @@ static int run_pgzip(const PgzipArgParse& cli) {
             total_original += r.original_size;
             total_compressed += r.compressed_size;
         } else {
-            DFTRACER_UTILS_LOG_ERROR("Failed to compress %s: %s",
-                                     r.input_path.c_str(),
-                                     r.error_message.c_str());
+            DFTRACER_UTILS_LOG_ERROR("Failed to compress {}: {}", r.input_path,
+                                     r.error_message);
         }
     }
 

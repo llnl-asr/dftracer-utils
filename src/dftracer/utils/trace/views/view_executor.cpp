@@ -346,8 +346,8 @@ coro::CoroTask<bool> commit_bootstrap(
     dftracer::utils::index::build::FileGroup& group) {
     auto result = co_await group.commit();
     for (const auto& failure : result.failures)
-        DFTRACER_UTILS_LOG_ERROR("bootstrap index write failed for %s: %s",
-                                 failure.path.c_str(), failure.message.c_str());
+        DFTRACER_UTILS_LOG_ERROR("bootstrap index write failed for {}: {}",
+                                 failure.path, failure.message);
     co_return result.failures.empty();
 }
 
@@ -464,9 +464,8 @@ coro::CoroTask<bool> try_export_bootstrap(const ViewPlan& plan,
         }
         driver.seal();
         if (!started.build) {
-            DFTRACER_UTILS_LOG_ERROR("bootstrap index write failed for %s: %s",
-                                     f.file_path.c_str(),
-                                     started.failure.c_str());
+            DFTRACER_UTILS_LOG_ERROR("bootstrap index write failed for {}: {}",
+                                     f.file_path, started.failure);
             continue;
         }
         fill_bootstrap_file(*started.build, arts, schema, bloom, rowsets,
@@ -476,8 +475,8 @@ coro::CoroTask<bool> try_export_bootstrap(const ViewPlan& plan,
             dftracer::utils::index::store::internal::get_logical_path(
                 f.file_path));
         if (!staging.empty()) {
-            DFTRACER_UTILS_LOG_ERROR("bootstrap index write failed for %s: %s",
-                                     f.file_path.c_str(), staging.c_str());
+            DFTRACER_UTILS_LOG_ERROR("bootstrap index write failed for {}: {}",
+                                     f.file_path, staging);
             continue;
         }
         if (pending[slot].full()) co_await commit_bootstrap(pending[slot]);
@@ -768,8 +767,8 @@ coro::CoroTask<BootstrapFile> bootstrap_file(
                 f.file_path)),
         source);
     if (!started.build) {
-        DFTRACER_UTILS_LOG_ERROR("bootstrap index write failed for %s: %s",
-                                 f.file_path.c_str(), started.failure.c_str());
+        DFTRACER_UTILS_LOG_ERROR("bootstrap index write failed for {}: {}",
+                                 f.file_path, started.failure);
         co_return out;
     }
     dstd::UniquePtr<IndexRuleFold> rule_agg;
@@ -818,8 +817,8 @@ coro::CoroTask<BootstrapFile> bootstrap_file(
         std::move(*started.build), 0,
         dftracer::utils::index::store::internal::get_logical_path(f.file_path));
     if (!failure.empty()) {
-        DFTRACER_UTILS_LOG_ERROR("bootstrap index write failed for %s: %s",
-                                 f.file_path.c_str(), failure.c_str());
+        DFTRACER_UTILS_LOG_ERROR("bootstrap index write failed for {}: {}",
+                                 f.file_path, failure);
         co_return out;
     }
     if (run->keep_state) {
@@ -1067,7 +1066,7 @@ coro::CoroTask<ExportStats> run_materialize(const ViewPlan& plan,
                     *db, dftracer::utils::index::cache::plan_signature(plan)))
                 co_return ExportStats{};
         } catch (const std::exception& e) {
-            DFTRACER_UTILS_LOG_WARN("rollup check skipped: %s", e.what());
+            DFTRACER_UTILS_LOG_WARN("rollup check skipped: {}", e.what());
         }
     }
 
@@ -1085,7 +1084,7 @@ coro::CoroTask<ExportStats> run_materialize(const ViewPlan& plan,
                     dftracer::utils::index::cache::rest_signature(plan),
                     plan.time_bucket_us, plan.group_by, *state);
         } catch (const std::exception& e) {
-            DFTRACER_UTILS_LOG_WARN("rollup materialize skipped: %s", e.what());
+            DFTRACER_UTILS_LOG_WARN("rollup materialize skipped: {}", e.what());
         }
     }
     co_return ExportStats{};
@@ -1116,7 +1115,7 @@ dstd::Optional<dataframe::DataFrame> try_serve_rollup(const ViewPlan& plan) {
     } catch (const std::exception& e) {
         // A locked/unreadable rollup just falls through to a normal compute;
         // never fail the query over the cache.
-        DFTRACER_UTILS_LOG_WARN("rollup read skipped: %s", e.what());
+        DFTRACER_UTILS_LOG_WARN("rollup read skipped: {}", e.what());
     }
     return dstd::nullopt;
 }
@@ -1719,7 +1718,7 @@ coro::CoroTask<void> run_materialize_partials(
                 dftracer::utils::index::cache::rest_signature(plan),
                 plan.time_bucket_us, plan.group_by, *state);
     } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_WARN("rollup materialize (partials) skipped: %s",
+        DFTRACER_UTILS_LOG_WARN("rollup materialize (partials) skipped: {}",
                                 e.what());
     }
     co_return;
@@ -1878,7 +1877,7 @@ void add_materialize_branch(ViewSessionState& state,
                     dftracer::utils::index::cache::rest_signature(*plan),
                     plan->time_bucket_us, plan->group_by, *state_out);
         } catch (const std::exception& e) {
-            DFTRACER_UTILS_LOG_WARN("fused rollup materialize skipped: %s",
+            DFTRACER_UTILS_LOG_WARN("fused rollup materialize skipped: {}",
                                     e.what());
         }
     };

@@ -197,8 +197,8 @@ int main(int argc, char** argv) {
                 cli.indexing.checkpoint_size);
             if (scanned.empty()) {
                 DFTRACER_UTILS_LOG_ERROR(
-                    "No trace files found in %s; cannot generate DLIO config",
-                    dstd::String(cli.inputs.directory).c_str());
+                    "No trace files found in {}; cannot generate DLIO config",
+                    dstd::String(cli.inputs.directory));
                 return 1;
             }
             const dstd::String index_path =
@@ -216,7 +216,7 @@ int main(int argc, char** argv) {
                     utilities::dlio::load_event_map(dstd::String(cli.event_map),
                                                     loader_opts);
                 } catch (const std::exception& e) {
-                    DFTRACER_UTILS_LOG_ERROR("%s", e.what());
+                    DFTRACER_UTILS_LOG_ERROR("{}", e.what());
                     return 1;
                 }
             }
@@ -230,8 +230,7 @@ int main(int argc, char** argv) {
                 const auto resolved =
                     index::build::Resolver{}(resolver_input).get();
                 if (!resolved) {
-                    DFTRACER_UTILS_LOG_ERROR("%s",
-                                             resolved.error().format().c_str());
+                    DFTRACER_UTILS_LOG_ERROR("{}", resolved.error().format());
                     return 1;
                 }
                 dstd::Vector<dstd::String> files;
@@ -239,18 +238,16 @@ int main(int argc, char** argv) {
                 traces = utilities::dlio::load_aggregated_traces(
                     index_path, files, query_config, loader_opts);
             } catch (const std::exception& e) {
-                DFTRACER_UTILS_LOG_ERROR("Failed to query the aggregation: %s",
+                DFTRACER_UTILS_LOG_ERROR("Failed to query the aggregation: {}",
                                          e.what());
                 return 1;
             }
             if (!traces.any_data) {
                 DFTRACER_UTILS_LOG_ERROR(
-                    "No DLIO events (%s/%s, %s/%s) found in %s",
-                    loader_opts.fetch_block.cat.c_str(),
-                    loader_opts.fetch_block.name.c_str(),
-                    loader_opts.preprocess.cat.c_str(),
-                    loader_opts.preprocess.name.c_str(),
-                    dstd::String(cli.inputs.directory).c_str());
+                    "No DLIO events ({}/{}, {}/{}) found in {}",
+                    loader_opts.fetch_block.cat, loader_opts.fetch_block.name,
+                    loader_opts.preprocess.cat, loader_opts.preprocess.name,
+                    dstd::String(cli.inputs.directory));
                 return 1;
             }
             std::printf("\n");
@@ -342,8 +339,8 @@ int main(int argc, char** argv) {
             const dstd::String out_path(cli.output);
             dstd::ScopedFile out(std::fopen(out_path.c_str(), "w"));
             if (!out) {
-                DFTRACER_UTILS_LOG_ERROR("Cannot open %s for writing",
-                                         out_path.c_str());
+                DFTRACER_UTILS_LOG_ERROR("Cannot open {} for writing",
+                                         out_path);
                 return 1;
             }
             dstd::String yaml =
@@ -352,8 +349,7 @@ int main(int argc, char** argv) {
             const bool wrote = std::fwrite(yaml.data(), 1, yaml.size(),
                                            out.get()) == yaml.size();
             if (!wrote || std::fclose(out.release()) != 0) {
-                DFTRACER_UTILS_LOG_ERROR("Failed to write %s",
-                                         out_path.c_str());
+                DFTRACER_UTILS_LOG_ERROR("Failed to write {}", out_path);
                 return 1;
             }
             std::printf("  Wrote DLIO config: %s\n",

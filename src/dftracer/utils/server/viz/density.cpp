@@ -538,8 +538,8 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
             if (!s->has_aggregated) {
                 if (const VizSummary::Level* level = s->level_for(threshold)) {
                     DFTRACER_UTILS_LOG_DEBUG(
-                        "viz: density threshold %.0f us served from level "
-                        "%.0f us",
+                        "viz: density threshold {:.0f} us served from level "
+                        "{:.0f} us",
                         threshold, level->bucket_us);
                     co_return HttpResponse::ok(serve_density_from_summary(
                         *s, *level, params, begin, end, original_begin,
@@ -758,8 +758,8 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
                                                     : cfg_native - agg_interval;
             if (diff > 0.5 * cfg_native)
                 DFTRACER_UTILS_LOG_WARN(
-                    "viz: aggregated interval inferred %.0f differs from cfg "
-                    "%.0f",
+                    "viz: aggregated interval inferred {:.0f} differs from cfg "
+                    "{:.0f}",
                     agg_interval, cfg_native);
         }
     }

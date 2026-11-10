@@ -92,7 +92,7 @@ void warn_skipped(dstd::StringView dir, dstd::StringView name,
     const dstd::String path = path_string(dir, name);
     const bool unsupported = error.is(dstd::Condition::Unsupported);
     DFTRACER_UTILS_LOG_WARN(
-        "store: skipping data file %s: %s", path.c_str(),
+        "store: skipping data file {}: {}", path,
         unsupported ? "unsupported version" : "cannot be read");
 }
 

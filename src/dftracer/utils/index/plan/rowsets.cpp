@@ -151,9 +151,9 @@ const RecordSchema& files_schema(const dstd::Vector<RowSetFile>& files) {
             if (!p && trace_exists(f.trace)) p = &detect_trace_schema(f);
             if (!p) {
                 DFTRACER_UTILS_LOG_WARN(
-                    "rowsets: %s is missing and has no recorded schema; "
-                    "assume dftracer",
-                    f.trace.c_str());
+                    "rowsets: {} is missing and has no recorded schema; assume "
+                    "dftracer",
+                    f.trace);
                 p = &get_schema("dftracer");
             }
             schemas[i] = p;
@@ -202,8 +202,8 @@ const RecordSchema& files_schema(const dstd::Vector<RowSetFile>& files) {
     // No file holds a record, so no file votes. Detection leaves such a file
     // to the schema of its objects, else generic.
     const RecordSchema& chosen = fallback ? *fallback : get_schema("generic");
-    DFTRACER_UTILS_LOG_DEBUG("rowsets: no file holds a record; use schema %s",
-                             chosen.id.c_str());
+    DFTRACER_UTILS_LOG_DEBUG("rowsets: no file holds a record; use schema {}",
+                             chosen.id);
     return chosen;
 }
 

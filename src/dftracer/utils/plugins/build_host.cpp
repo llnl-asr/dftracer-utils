@@ -169,23 +169,27 @@ dftu_str build_intern(void* h, const char*, std::uint32_t) {
 
 void build_log(void* h, std::uint8_t level, const char* s, std::uint32_t n) {
     const char* name = self_of(h).plugin_name().c_str();
-    const int len = static_cast<int>(n);
     const char* msg = s ? s : "";
     switch (level) {
         case DFTU_LOG_ERROR:
-            DFTRACER_UTILS_LOG_ERROR("[plugin:%s] %.*s", name, len, msg);
+            DFTRACER_UTILS_LOG_ERROR("[plugin:{}] {}", name,
+                                     dstd::StringView(msg, n));
             break;
         case DFTU_LOG_WARN:
-            DFTRACER_UTILS_LOG_WARN("[plugin:%s] %.*s", name, len, msg);
+            DFTRACER_UTILS_LOG_WARN("[plugin:{}] {}", name,
+                                    dstd::StringView(msg, n));
             break;
         case DFTU_LOG_DEBUG:
-            DFTRACER_UTILS_LOG_DEBUG("[plugin:%s] %.*s", name, len, msg);
+            DFTRACER_UTILS_LOG_DEBUG("[plugin:{}] {}", name,
+                                     dstd::StringView(msg, n));
             break;
         case DFTU_LOG_TRACE:
-            DFTRACER_UTILS_LOG_TRACE("[plugin:%s] %.*s", name, len, msg);
+            DFTRACER_UTILS_LOG_TRACE("[plugin:{}] {}", name,
+                                     dstd::StringView(msg, n));
             break;
         default:
-            DFTRACER_UTILS_LOG_INFO("[plugin:%s] %.*s", name, len, msg);
+            DFTRACER_UTILS_LOG_INFO("[plugin:{}] {}", name,
+                                    dstd::StringView(msg, n));
             break;
     }
 }
@@ -206,9 +210,9 @@ void BuildHost::deny(const char* what) {
     if (!denied_.empty()) return;
     denied_ = what ? what : "(null)";
     DFTRACER_UTILS_LOG_ERROR(
-        "[plugin:%s] '%s' is not available at load; the factory host offers "
+        "[plugin:{}] '{}' is not available at load; the factory host offers "
         "registration only",
-        plugin_name_.c_str(), denied_.c_str());
+        plugin_name_, denied_);
 }
 
 }  // namespace dftracer::utils::plugins

@@ -220,9 +220,8 @@ FileDecision decide(const Snapshot& snapshot, const PendingFile& f,
     if (!has_grown &&
         (stored_stat.mtime != mtime || stored_stat.size != size)) {
         DFTRACER_UTILS_LOG_WARN(
-            "Index stale for %s (source changed since indexing); "
-            "rebuilding",
-            f.file_path.c_str());
+            "Index stale for {} (source changed since indexing); rebuilding",
+            f.file_path);
         d.kind = FileDecision::Kind::Stale;
         return d;
     }
@@ -372,7 +371,7 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
         }
     } catch (const std::exception& e) {
         DFTRACER_UTILS_LOG_WARN(
-            "Index resolve failed (%s); falling back to full rebuild",
+            "Index resolve failed ({}); falling back to full rebuild",
             e.what());
         // The tier may be what failed to read, so it is cleared.
         result.aggregation_stale = true;
@@ -572,8 +571,8 @@ coro::CoroTask<ResolverResult> Resolver::operator()(
     }
 
     DFTRACER_UTILS_LOG_INFO(
-        "Resolver: %zu total, %zu cached, %zu need checkpoint, %zu need bloom, "
-        "%zu need aggregation",
+        "Resolver: {} total, {} cached, {} need checkpoint, {} need bloom, {} "
+        "need aggregation",
         result.all_files.size(), result.cached.size(),
         result.needs_checkpoint.size(), result.needs_bloom.size(),
         result.needs_aggregation.size());

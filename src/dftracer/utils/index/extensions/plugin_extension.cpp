@@ -65,8 +65,7 @@ bool register_plugin_extension(dstd::StringView name,
         !vt->destroy_builder || !vt->compile || !vt->may_match ||
         !vt->release) {
         DFTRACER_UTILS_LOG_ERROR(
-            "Index extension '%.*s' refused: a required callback is NULL",
-            static_cast<int>(name.size()), name.data());
+            "Index extension '{}' refused: a required callback is NULL", name);
         return false;
     }
     auto ext = dstd::make_shared<PluginExtension>(
@@ -75,8 +74,8 @@ bool register_plugin_extension(dstd::StringView name,
     std::unique_lock lock(r.mutex);
     if (!r.by_name.emplace(ext->name, std::move(ext)).second) {
         DFTRACER_UTILS_LOG_ERROR(
-            "Index extension '%.*s' refused: that name is already registered",
-            static_cast<int>(name.size()), name.data());
+            "Index extension '{}' refused: that name is already registered",
+            name);
         return false;
     }
     return true;
@@ -111,8 +110,8 @@ PluginBuilders::PluginBuilders(dstd::Vector<PluginExtensionPtr> extensions) {
         void* b = ext->vt.make_builder(ext->self);
         if (!b)
             DFTRACER_UTILS_LOG_WARN(
-                "Index extension '%s' built nothing: make_builder failed",
-                ext->name.c_str());
+                "Index extension '{}' built nothing: make_builder failed",
+                ext->name);
         built_.push_back({std::move(ext), b, false, {}, {}});
     }
 }

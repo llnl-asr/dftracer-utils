@@ -992,7 +992,7 @@ dstd::Result<void> IoUringBackend::start() {
             0;
     if (sq_poll_idle_ms_ != 0 && !is_sq_polled_) {
         ring_.destroy();
-        DFTRACER_UTILS_LOG_INFO("%s",
+        DFTRACER_UTILS_LOG_INFO("{}",
                                 "io_uring: this kernel refuses SQPOLL, "
                                 "running without it");
     }
@@ -1187,7 +1187,7 @@ void IoUringBackend::flush_worker(WorkerRing& worker) noexcept {
         // What it did not take stays pending for the next flush or the park.
         if (entered < 0 && entered != -EAGAIN && entered != -EBUSY &&
             entered != -EINTR) {
-            DFTRACER_UTILS_LOG_ERROR("io_uring_enter failed: %s",
+            DFTRACER_UTILS_LOG_ERROR("io_uring_enter failed: {}",
                                      std::strerror(-entered));
         }
     }
@@ -1546,7 +1546,7 @@ void IoUringBackend::ring_loop() noexcept {
             // for that, so this retries.
             std::this_thread::yield();
         } else if (entered < 0 && entered != -EINTR) {
-            DFTRACER_UTILS_LOG_ERROR("io_uring_enter failed: %s",
+            DFTRACER_UTILS_LOG_ERROR("io_uring_enter failed: {}",
                                      std::strerror(-entered));
             std::this_thread::yield();
         }

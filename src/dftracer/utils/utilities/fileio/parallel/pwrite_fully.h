@@ -23,7 +23,7 @@ inline coro::CoroTask<int> pwrite_fully(int fd, const char* path,
             fd, bytes + written, size - written,
             offset + static_cast<off_t>(written));
         if (n <= 0) {
-            DFTRACER_UTILS_LOG_ERROR("pwrite failed on %s at offset %lld", path,
+            DFTRACER_UTILS_LOG_ERROR("pwrite failed on {} at offset {}", path,
                                      static_cast<long long>(offset));
             co_return -1;
         }

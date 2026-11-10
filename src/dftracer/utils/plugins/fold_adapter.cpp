@@ -104,19 +104,24 @@ void host_log(void* h, std::uint8_t level, const char* s, std::uint32_t n) {
     const char* msg = s ? s : "";
     switch (level) {
         case DFTU_LOG_ERROR:
-            DFTRACER_UTILS_LOG_ERROR("[plugin:%s] %.*s", name, len, msg);
+            DFTRACER_UTILS_LOG_ERROR("[plugin:{}] {}", name,
+                                     dstd::StringView(msg, len));
             break;
         case DFTU_LOG_WARN:
-            DFTRACER_UTILS_LOG_WARN("[plugin:%s] %.*s", name, len, msg);
+            DFTRACER_UTILS_LOG_WARN("[plugin:{}] {}", name,
+                                    dstd::StringView(msg, len));
             break;
         case DFTU_LOG_DEBUG:
-            DFTRACER_UTILS_LOG_DEBUG("[plugin:%s] %.*s", name, len, msg);
+            DFTRACER_UTILS_LOG_DEBUG("[plugin:{}] {}", name,
+                                     dstd::StringView(msg, len));
             break;
         case DFTU_LOG_TRACE:
-            DFTRACER_UTILS_LOG_TRACE("[plugin:%s] %.*s", name, len, msg);
+            DFTRACER_UTILS_LOG_TRACE("[plugin:{}] {}", name,
+                                     dstd::StringView(msg, len));
             break;
         default:
-            DFTRACER_UTILS_LOG_INFO("[plugin:%s] %.*s", name, len, msg);
+            DFTRACER_UTILS_LOG_INFO("[plugin:{}] {}", name,
+                                    dstd::StringView(msg, len));
             break;
     }
 }
@@ -986,9 +991,8 @@ coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
     if (oa->out_ty != ob->in_ty || oa->out_size != ob->in_size) {
         // Return null per the C ABI, but log so a mistyped pipe is not silent.
         DFTRACER_UTILS_LOG_WARN(
-            "compose then: cannot pipe, value mismatch (a out ty=%d/%uB -> b "
-            "in "
-            "ty=%d/%uB)",
+            "compose then: cannot pipe, value mismatch (a out ty={}/{}B -> b "
+            "in ty={}/{}B)",
             static_cast<int>(oa->out_ty), oa->out_size,
             static_cast<int>(ob->in_ty), ob->in_size);
         return nullptr;
@@ -1020,8 +1024,8 @@ coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
         // All fan the same input; the concatenated output is an opaque blob.
         if (!c || c->in_ty != first->in_ty || c->in_size != first->in_size) {
             DFTRACER_UTILS_LOG_WARN(
-                "compose when_all: op %u does not share the input type/size "
-                "(want ty=%d/%uB)",
+                "compose when_all: op {} does not share the input type/size "
+                "(want ty={}/{}B)",
                 i, static_cast<int>(first->in_ty), first->in_size);
             return nullptr;
         }
@@ -1054,7 +1058,7 @@ coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
         if (!c || c->in_ty != first->in_ty || c->in_size != first->in_size ||
             c->out_ty != first->out_ty || c->out_size != first->out_size) {
             DFTRACER_UTILS_LOG_WARN(
-                "compose when_any: op %u does not share the input+output "
+                "compose when_any: op {} does not share the input+output "
                 "type/size of the racers",
                 i);
             return nullptr;  // racers must share one input and output type/size
@@ -1190,8 +1194,8 @@ PluginFold::PluginFold(const dftu_plugin* plugin,
         if (r)
             query_ = std::move(*r);
         else
-            DFTRACER_UTILS_LOG_ERROR("Plugin query '%s' is invalid: %s", q,
-                                     r.error().message.c_str());
+            DFTRACER_UTILS_LOG_ERROR("Plugin query '{}' is invalid: {}", q,
+                                     r.error().message);
     }
 
     // Registered states are handed the SAME frame as the slice, and what they
@@ -1362,9 +1366,9 @@ void PluginFold::step(const FoldBatch& batch) {
     dftu_dataframe_free(cdf);
     if (t)
         DFTRACER_UTILS_LOG_ERROR(
-            "[plugin:%s] on_batch returned a non-null task; the seam is "
+            "[plugin:{}] on_batch returned a non-null task; the seam is "
             "synchronous, dropping it",
-            plugin_name().empty() ? "plugin" : plugin_name().c_str());
+            plugin_name().empty() ? "plugin" : plugin_name());
     pending_ = nullptr;
     reclaim_slice();
 }
@@ -1400,11 +1404,9 @@ dataframe::DataFrame PluginFold::rewritten_batch(
         if (!query_on_rewrite_refused_) {
             query_on_rewrite_refused_ = true;
             DFTRACER_UTILS_LOG_ERROR(
-                "[plugin:%s] its query cannot be applied to a batch an "
-                "earlier plugin rewrote (%s); the rewritten rows pass "
-                "unfiltered",
-                plugin_name().empty() ? "plugin" : plugin_name().c_str(),
-                e.what());
+                "[plugin:{}] its query cannot be applied to a batch an earlier "
+                "plugin rewrote ({}); the rewritten rows pass unfiltered",
+                plugin_name().empty() ? "plugin" : plugin_name(), e.what());
         }
         return df;
     }
@@ -1423,10 +1425,9 @@ void PluginFold::reclaim_slice() {
     if (freed == 0 && !reclaim_refused_) {
         reclaim_refused_ = true;
         DFTRACER_UTILS_LOG_ERROR(
-            "[plugin:%s] slice holds %llu bytes past the %llu byte memory "
-            "budget and %s, so it stays in memory and the budget is not "
-            "honoured",
-            plugin_name().empty() ? "plugin" : plugin_name().c_str(),
+            "[plugin:{}] slice holds {} bytes past the {} byte memory budget "
+            "and {}, so it stays in memory and the budget is not honoured",
+            plugin_name().empty() ? "plugin" : plugin_name(),
             static_cast<unsigned long long>(held),
             static_cast<unsigned long long>(budget),
             plugin_->reclaim ? "reclaim freed nothing" : "declares no reclaim");

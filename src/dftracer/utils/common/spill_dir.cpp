@@ -96,7 +96,7 @@ dstd::Result<dstd::Path> spill_dir() {
                                         local_spill_root(), fallbacks);
     if (dir) {
         static const bool logged = [&] {
-            DFTRACER_UTILS_LOG_INFO("spill directory: %s", dir->c_str());
+            DFTRACER_UTILS_LOG_INFO("spill directory: {}", dir->c_str());
             return true;
         }();
         (void)logged;
@@ -133,10 +133,10 @@ bool spill_dir_in_memory(dstd::CStringView dir) {
     if (in_memory && !known.warned) {
         known.warned = true;
         DFTRACER_UTILS_LOG_WARN(
-            "spill directory '%s' is RAM-backed (tmpfs): spilled bytes stay in "
-            "memory and count toward the memory budget; set %s to a directory "
+            "spill directory '{}' is RAM-backed (tmpfs): spilled bytes stay in "
+            "memory and count toward the memory budget; set {} to a directory "
             "on a disk",
-            dir.c_str(), constants::SPILL_DIR_ENV);
+            dir, constants::SPILL_DIR_ENV);
     }
     return in_memory;
 }

@@ -241,7 +241,7 @@ int32_t dftu_series_group_by(const dftu_series* keys, const dftu_series* values,
         return 0;
     if (!dftracer::utils::dataframe::is_orderable_type(keys->type)) {
         DFTRACER_UTILS_LOG_ERROR(
-            "group_by: key type '%s' has no per-row value to group on",
+            "group_by: key type '{}' has no per-row value to group on",
             dftracer::utils::dataframe::type_name(keys->type));
         return 0;
     }

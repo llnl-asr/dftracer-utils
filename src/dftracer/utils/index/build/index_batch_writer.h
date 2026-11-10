@@ -107,8 +107,8 @@ inline bool fill_index_job(index::FileBuild& build, ParsedIndexJob& job,
     job.success = false;
     job.error_message = failure;
     DFTRACER_UTILS_LOG_ERROR(
-        "Failed to write index for %s: %s; file dropped from index",
-        job.file_path.c_str(), failure.c_str());
+        "Failed to write index for {}: {}; file dropped from index",
+        job.file_path, failure);
     return false;
 }
 

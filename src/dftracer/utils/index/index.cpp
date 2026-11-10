@@ -650,8 +650,8 @@ void release_all_roots() {
     cache::clear_cache_roots();
     retained_roots().clear();
     if (auto closed = dftracer::utils::store::Store::close_all(); !closed) {
-        DFTRACER_UTILS_LOG_ERROR("index: close at exit: %s",
-                                 closed.error().format().c_str());
+        DFTRACER_UTILS_LOG_ERROR("index: close at exit: {}",
+                                 closed.error().format());
     }
 }
 

@@ -3,13 +3,15 @@
 #define DFTRACER_UTILS_COMMON_LOGGING_H
 
 #include <dftracer/utils/common/config.h>
-#include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/common/export.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 
 #include <atomic>
-#include <cstdarg>
+#include <cstddef>
 #include <cstdio>
+#include <cstring>
 
 namespace dftracer::utils::common::logger {
 
@@ -57,15 +59,32 @@ inline bool enabled(Level lvl) noexcept {
     return static_cast<int>(lvl) >= g_level.load(std::memory_order_relaxed);
 }
 
-/// Emit one formatted line. Thread-safe without a lock: the whole line is built
-/// locally and written in a single call (stdio per-stream lock).
-DFTRACER_UTILS_PRINTF_FORMAT(4, 5)
-void write(Level lvl, const char* file, int line, const char* fmt, ...);
+/// Longest message in bytes; a longer one is cut and ends in "...".
+inline constexpr std::size_t MESSAGE_CAP = 1536;
+
+/// Writes one line: timestamp, level, @p msg and, when location is on and
+/// @p file is not null, the file base name and @p line. Thread-safe without a
+/// lock: the whole line is built locally and written in a single call (stdio
+/// per-stream lock).
+void emit(Level lvl, const char* file, int line, dstd::StringView msg);
+
+/// Formats the compile-time format `S` with `a...` and emits it as one line.
+/// A wrong hole count, a bad spec or an argument type that does not fit does
+/// not compile (see @ref dstd::fmt).
+template <dstd::FixedString S, class... A>
+    requires(dstd::fmt_detail::Check<S, A...>::OK)
+DFTRACER_UTILS_NOINLINE void write(Level lvl, const char* file, int line,
+                                   const A&... a) {
+    char msg[MESSAGE_CAP];
+    const dstd::FmtResult r = dstd::fmt_to<S>(msg, sizeof(msg), a...);
+    if (r.truncated) std::memcpy(msg + r.size - 3, "...", 3);
+    emit(lvl, file, line, dstd::StringView(msg, r.size));
+}
 
 /// Open/close a trace scope. The returned handle lives in the @ref ScopeTracer
 /// object so it follows a coroutine across thread migration (a thread-local
 /// stack would not).
-void* scope_open(const char* file, int line, const char* label);
+void* scope_open(const char* file, int line, dstd::StringView label);
 void scope_close(void* handle);
 
 /// Auto coroutine tracing, driven from the @ref dftracer::utils::coro::CoroTask
@@ -85,20 +104,19 @@ class ScopeTracer {
         if (enabled(Level::Trace)) handle_ = scope_open(file, line, func);
     }
 
-    DFTRACER_UTILS_PRINTF_FORMAT(5, 6)
-    ScopeTracer(const char* file, int line, const char* func, const char* fmt,
-                ...) {
+    /// The label is "func: " and the text of the format `S` filled with `a...`.
+    template <dstd::FixedString S, class... A>
+        requires(dstd::fmt_detail::Check<S, A...>::OK)
+    ScopeTracer(const char* file, int line, const char* func, dstd::Format<S>,
+                const A&... a) {
         if (!enabled(Level::Trace)) return;
         char label[256];
-        int off = std::snprintf(label, sizeof(label), "%s: ", func);
-        if (off < 0) off = 0;
-        if (static_cast<std::size_t>(off) < sizeof(label)) {
-            va_list ap;
-            va_start(ap, fmt);
-            std::vsnprintf(label + off, sizeof(label) - off, fmt, ap);
-            va_end(ap);
-        }
-        handle_ = scope_open(file, line, label);
+        const dstd::FmtResult head =
+            dstd::fmt_to<"{}: ">(label, sizeof(label), func);
+        const dstd::FmtResult tail =
+            dstd::fmt_to<S>(label + head.size, sizeof(label) - head.size, a...);
+        handle_ = scope_open(file, line,
+                             dstd::StringView(label, head.size + tail.size));
     }
 
     ~ScopeTracer() {
@@ -116,18 +134,32 @@ class ScopeTracer {
 }  // namespace dftracer::utils::common::logger
 
 /// Emission macros: compile-gated by DFTRACER_UTILS_LOGGER_LEVEL_* and runtime-
-/// gated by the current level. A disabled level costs nothing (compiled out) or
+/// gated by the current level. The first argument is a string literal in the
+/// @ref dstd::fmt syntax; every site is type-checked in every build. A disabled
+/// level costs nothing (its call sits in a discarded `if constexpr` branch) or
 /// one predicted branch with its arguments left unevaluated. Do not put
 /// DEBUG/TRACE in a per-event/per-byte inner loop; guard those with `#if`
 /// instead.
-#define DFTRACER_UTILS_LOG_IMPL(LVL, ...)                            \
+#define DFTRACER_UTILS_LOG_IMPL(LVL, FMT, ...)                       \
     do {                                                             \
         if (::dftracer::utils::common::logger::detail::enabled(LVL)) \
             [[unlikely]] {                                           \
-            ::dftracer::utils::common::logger::detail::write(        \
-                LVL, __FILE__, __LINE__, __VA_ARGS__);               \
+            ::dftracer::utils::common::logger::detail::write<FMT>(   \
+                LVL, __FILE__, __LINE__ __VA_OPT__(, ) __VA_ARGS__); \
         }                                                            \
     } while (0)
+
+#define DFTRACER_UTILS_LOG_OFF_IMPL(LVL, FMT, ...)                   \
+    do {                                                             \
+        if constexpr (false) {                                       \
+            ::dftracer::utils::common::logger::detail::write<FMT>(   \
+                LVL, __FILE__, __LINE__ __VA_OPT__(, ) __VA_ARGS__); \
+        }                                                            \
+    } while (0)
+
+#define DFTRACER_UTILS_DETAIL_SCOPE_ARGS(FMT, ...) \
+    ::dftracer::utils::dstd::Format<FMT> {}        \
+    __VA_OPT__(, ) __VA_ARGS__
 
 #define DFTRACER_UTILS_DETAIL_CONCAT_IMPL(a, b) a##b
 #define DFTRACER_UTILS_DETAIL_CONCAT(a, b) \
@@ -141,16 +173,28 @@ class ScopeTracer {
                             __VA_ARGS__)
 /// Trace the enclosing scope ("-> label" on entry, "<- label [ms]" on exit),
 /// only when Trace is enabled. Label defaults to the function name; extra args
-/// are printf-appended: DFTRACER_UTILS_TRACE_SCOPE("off=%zu", off).
+/// are formatted and appended: DFTRACER_UTILS_TRACE_SCOPE("off={}", off).
 #define DFTRACER_UTILS_TRACE_SCOPE(...)                        \
     ::dftracer::utils::common::logger::detail::ScopeTracer     \
     DFTRACER_UTILS_DETAIL_CONCAT(dftu_trace_scope_, __LINE__)( \
         __FILE__, __LINE__,                                    \
-        static_cast<const char*>(__func__) __VA_OPT__(, ) __VA_ARGS__)
+        static_cast<const char*>(__func__)                     \
+            __VA_OPT__(, DFTRACER_UTILS_DETAIL_SCOPE_ARGS(__VA_ARGS__)))
 #else
 #define DFTRACER_UTILS_LOGGER_TRACE_ENABLED 0
-#define DFTRACER_UTILS_LOG_TRACE(...)
-#define DFTRACER_UTILS_TRACE_SCOPE(...)
+#define DFTRACER_UTILS_LOG_TRACE(...) \
+    DFTRACER_UTILS_LOG_OFF_IMPL(      \
+        ::dftracer::utils::common::logger::Level::Trace, __VA_ARGS__)
+#define DFTRACER_UTILS_TRACE_SCOPE(...)                                    \
+    do {                                                                   \
+        if constexpr (false) {                                             \
+            ::dftracer::utils::common::logger::detail::ScopeTracer         \
+                dftu_trace_scope_off(                                      \
+                    __FILE__, __LINE__,                                    \
+                    static_cast<const char*>(__func__) __VA_OPT__(         \
+                        , DFTRACER_UTILS_DETAIL_SCOPE_ARGS(__VA_ARGS__))); \
+        }                                                                  \
+    } while (0)
 #endif
 #define DFTRACER_UTILS_LOG_TRACE_FORMAT(...) \
     DFTRACER_UTILS_LOG_TRACE(__VA_ARGS__)
@@ -163,7 +207,9 @@ class ScopeTracer {
                             __VA_ARGS__)
 #else
 #define DFTRACER_UTILS_LOGGER_DEBUG_ENABLED 0
-#define DFTRACER_UTILS_LOG_DEBUG(...)
+#define DFTRACER_UTILS_LOG_DEBUG(...) \
+    DFTRACER_UTILS_LOG_OFF_IMPL(      \
+        ::dftracer::utils::common::logger::Level::Debug, __VA_ARGS__)
 #endif
 
 #if defined(DFTRACER_UTILS_LOGGER_LEVEL_INFO) && \
@@ -174,7 +220,9 @@ class ScopeTracer {
                             __VA_ARGS__)
 #else
 #define DFTRACER_UTILS_LOGGER_INFO_ENABLED 0
-#define DFTRACER_UTILS_LOG_INFO(...)
+#define DFTRACER_UTILS_LOG_INFO(...) \
+    DFTRACER_UTILS_LOG_OFF_IMPL(     \
+        ::dftracer::utils::common::logger::Level::Info, __VA_ARGS__)
 #endif
 
 #if defined(DFTRACER_UTILS_LOGGER_LEVEL_WARN) && \
@@ -185,7 +233,9 @@ class ScopeTracer {
                             __VA_ARGS__)
 #else
 #define DFTRACER_UTILS_LOGGER_WARN_ENABLED 0
-#define DFTRACER_UTILS_LOG_WARN(...)
+#define DFTRACER_UTILS_LOG_WARN(...) \
+    DFTRACER_UTILS_LOG_OFF_IMPL(     \
+        ::dftracer::utils::common::logger::Level::Warn, __VA_ARGS__)
 #endif
 
 #if defined(DFTRACER_UTILS_LOGGER_LEVEL_ERROR) && \
@@ -196,7 +246,9 @@ class ScopeTracer {
                             __VA_ARGS__)
 #else
 #define DFTRACER_UTILS_LOGGER_ERROR_ENABLED 0
-#define DFTRACER_UTILS_LOG_ERROR(...)
+#define DFTRACER_UTILS_LOG_ERROR(...) \
+    DFTRACER_UTILS_LOG_OFF_IMPL(      \
+        ::dftracer::utils::common::logger::Level::Error, __VA_ARGS__)
 #endif
 
 /// Unconditional line to stdout (no level gate, no decoration).

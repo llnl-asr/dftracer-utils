@@ -123,7 +123,7 @@ bool refuse_non_numeric(const char* op, TypeId t) {
     if (value_domain(t) == ValueDomain::Numeric || t == TypeId::Decimal128 ||
         t == TypeId::Decimal256)
         return false;
-    DFTRACER_UTILS_LOG_ERROR("%s: no numeric value for type '%s'", op,
+    DFTRACER_UTILS_LOG_ERROR("{}: no numeric value for type '{}'", op,
                              type_name(t));
     return true;
 }

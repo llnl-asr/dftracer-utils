@@ -56,8 +56,8 @@ class GzipByteStream : public GzipStream {
 
         size_t bytes_read;
         DFTRACER_UTILS_LOG_DEBUG(
-            "GzipByteStream::read (zero-copy) - about to read: read_size=%zu, "
-            "current_position_=%zu",
+            "GzipByteStream::read (zero-copy) - about to read: read_size={}, "
+            "current_position_={}",
             read_size, current_position_);
 
         bool result = co_await inflater_.read(
@@ -66,8 +66,8 @@ class GzipByteStream : public GzipStream {
             bytes_read);
 
         DFTRACER_UTILS_LOG_DEBUG(
-            "GzipByteStream::read (zero-copy) - read result: result=%d, "
-            "bytes_read=%zu",
+            "GzipByteStream::read (zero-copy) - read result: result={}, "
+            "bytes_read={}",
             result, bytes_read);
 
         // A decode failure must not pass for clean EOF (which would silently
@@ -85,7 +85,7 @@ class GzipByteStream : public GzipStream {
         current_position_ += bytes_read;
 
         DFTRACER_UTILS_LOG_DEBUG(
-            "Streamed (zero-copy) %zu bytes (position: %zu / %zu)", bytes_read,
+            "Streamed (zero-copy) {} bytes (position: {} / {})", bytes_read,
             current_position_, target_end_bytes_);
 
         co_return dstd::Span<const char>(buffer_.data(), bytes_read);

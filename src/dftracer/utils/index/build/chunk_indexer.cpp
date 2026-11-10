@@ -78,8 +78,8 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexer::operator()(
 
         if (config_changed) {
             DFTRACER_UTILS_LOG_INFO(
-                "ChunkIndexer: Config changed for checkpoint %llu, "
-                "forcing full re-index",
+                "ChunkIndexer: Config changed for checkpoint {}, forcing full "
+                "re-index",
                 static_cast<unsigned long long>(input.checkpoint_idx));
             missing_dims = target_dims;
         }
@@ -87,7 +87,7 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexer::operator()(
         if (missing_dims.empty()) {
             DFTRACER_UTILS_LOG_INFO(
                 "ChunkIndexer: All dimensions already indexed for checkpoint "
-                "%llu, skipping re-scan",
+                "{}, skipping re-scan",
                 static_cast<unsigned long long>(input.checkpoint_idx));
 
             output.bloom_filters.clear();
@@ -98,8 +98,8 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexer::operator()(
         }
 
         DFTRACER_UTILS_LOG_INFO(
-            "ChunkIndexer: Incremental re-scan for checkpoint %llu, "
-            "missing %zu dimensions",
+            "ChunkIndexer: Incremental re-scan for checkpoint {}, missing {} "
+            "dimensions",
             static_cast<unsigned long long>(input.checkpoint_idx),
             missing_dims.size());
     } else {
@@ -130,8 +130,8 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexer::operator()(
 
         if (!reader) {
             DFTRACER_UTILS_LOG_ERROR(
-                "ChunkIndexer: Failed to create reader for %s checkpoint %llu",
-                input.file_path.c_str(),
+                "ChunkIndexer: Failed to create reader for {} checkpoint {}",
+                input.file_path,
                 static_cast<unsigned long long>(input.checkpoint_idx));
             co_return output;
         }
@@ -159,8 +159,8 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexer::operator()(
 
     if (!stream) {
         DFTRACER_UTILS_LOG_ERROR(
-            "ChunkIndexer: Failed to create stream for %s checkpoint %llu",
-            input.file_path.c_str(),
+            "ChunkIndexer: Failed to create stream for {} checkpoint {}",
+            input.file_path,
             static_cast<unsigned long long>(input.checkpoint_idx));
         co_return output;
     }

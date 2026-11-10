@@ -14,9 +14,9 @@ namespace {
 int host_index_register(void*, const char* name, const ::dftu_index_extension*,
                         void*) {
     DFTRACER_UTILS_LOG_ERROR(
-        "Index extension '%s' refused: register from the plugin factory, "
-        "which runs before the scan; the scan-time host does not register "
-        "index extensions",
+        "Index extension '{}' refused: register from the plugin factory, which "
+        "runs before the scan; the scan-time host does not register index "
+        "extensions",
         name ? name : "(null)");
     return -1;
 }
@@ -30,7 +30,7 @@ int detail::register_plugin_index_extension(const char* name,
                                             void* self) {
     if (refuse_plugin_op_name(name)) {
         DFTRACER_UTILS_LOG_ERROR(
-            "Index extension '%s' refused: the bare and 'dftu.' namespaces are "
+            "Index extension '{}' refused: the bare and 'dftu.' namespaces are "
             "host-reserved, so an extension name must be '<plugin>.<name>'",
             name ? name : "(null)");
         return -1;

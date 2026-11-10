@@ -238,9 +238,9 @@ class GzipLineByteStream : public GzipStream {
         std::size_t total_data_size = partial_size + bytes_read;
 
         DFTRACER_UTILS_LOG_DEBUG(
-            "Read %zu bytes from compressed stream, partial_buffer_size=%zu, "
-            "current_position=%zu, target_end=%zu, total_data_size=%zu, "
-            "bytes_returned=%zu",
+            "Read {} bytes from compressed stream, partial_buffer_size={}, "
+            "current_position={}, target_end={}, total_data_size={}, "
+            "bytes_returned={}",
             bytes_read, partial_size, current_position_, target_end_bytes_,
             total_data_size, bytes_returned_);
 
@@ -255,7 +255,7 @@ class GzipLineByteStream : public GzipStream {
 
         if (adjusted_size == 0) {
             DFTRACER_UTILS_LOG_DEBUG(
-                "%s",
+                "{}",
                 "No complete line found in current buffer, will read more data "
                 "on next call");
             co_return 0;
@@ -263,9 +263,8 @@ class GzipLineByteStream : public GzipStream {
 
         bytes_returned_ += adjusted_size;
 
-        DFTRACER_UTILS_LOG_DEBUG(
-            "Returning %zu bytes, total bytes_returned=%zu", adjusted_size,
-            bytes_returned_);
+        DFTRACER_UTILS_LOG_DEBUG("Returning {} bytes, total bytes_returned={}",
+                                 adjusted_size, bytes_returned_);
 
         co_return adjusted_size;
     }

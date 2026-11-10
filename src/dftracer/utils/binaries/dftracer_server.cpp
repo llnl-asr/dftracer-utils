@@ -150,8 +150,7 @@ static coro::CoroTask<int> run_server(const ServerArgParse* cli) {
 
     TcpListener listener(bind_addr, port);
     if (!listener.start()) {
-        DFTRACER_UTILS_LOG_ERROR("Failed to bind to %s:%u", bind_addr.c_str(),
-                                 port);
+        DFTRACER_UTILS_LOG_ERROR("Failed to bind to {}:{}", bind_addr, port);
         co_return 1;
     }
 
@@ -197,7 +196,7 @@ static coro::CoroTask<int> run_server(const ServerArgParse* cli) {
                 try {
                     co_await prewarm_viz_summary(*index_ptr);
                 } catch (const std::exception& e) {
-                    DFTRACER_UTILS_LOG_ERROR("viz prewarm failed: %s",
+                    DFTRACER_UTILS_LOG_ERROR("viz prewarm failed: {}",
                                              e.what());
                 }
             });

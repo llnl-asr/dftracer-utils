@@ -74,8 +74,8 @@ EventCollectorFromMetadataUtility::operator()(
 
     for (const auto& file : input.metadata) {
         if (!file.success) {
-            DFTRACER_UTILS_LOG_WARN("Skipping unsuccessful file: %s",
-                                    file.file_path.c_str());
+            DFTRACER_UTILS_LOG_WARN("Skipping unsuccessful file: {}",
+                                    file.file_path);
             continue;
         }
 
@@ -93,8 +93,8 @@ EventCollectorFromMetadataUtility::operator()(
             auto reader = utilities::reader::internal::ReaderFactory::create(
                 file.file_path, file.index_path);
             if (!reader) {
-                DFTRACER_UTILS_LOG_ERROR("Failed to create reader for file: %s",
-                                         file.file_path.c_str());
+                DFTRACER_UTILS_LOG_ERROR("Failed to create reader for file: {}",
+                                         file.file_path);
                 continue;
             }
             co_await reader->read_lines_with_processor_async(
@@ -113,14 +113,14 @@ EventCollectorFromMetadataUtility::operator()(
         }
 
         if (collector.dropped > 0)
-            DFTRACER_UTILS_LOG_WARN("%s: %zu line(s) could not be read in full",
-                                    file.file_path.c_str(), collector.dropped);
+            DFTRACER_UTILS_LOG_WARN("{}: {} line(s) could not be read in full",
+                                    file.file_path, collector.dropped);
 
 #if DFTRACER_UTILS_LOGGER_DEBUG_ENABLED == 1
         std::size_t events_collected = events.size() - events_before;
         DFTRACER_UTILS_LOG_DEBUG(
-            "Collected %zu events from file %s (expected %zu)",
-            events_collected, file.file_path.c_str(), file.valid_events);
+            "Collected {} events from file {} (expected {})", events_collected,
+            file.file_path, file.valid_events);
 #endif
     }
 
@@ -128,7 +128,7 @@ EventCollectorFromMetadataUtility::operator()(
     std::sort(events.begin(), events.end());
 
     DFTRACER_UTILS_LOG_INFO(
-        "EventCollectorFromMetadata: Collected %zu events from %zu metadata "
+        "EventCollectorFromMetadata: Collected {} events from {} metadata "
         "files",
         events.size(), input.metadata.size());
 

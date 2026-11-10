@@ -76,7 +76,7 @@ coro::CoroTask<ChunkExtractorUtilityOutput> ChunkExtractorUtility::operator()(
     try {
         co_return co_await extract_and_write(input);
     } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_ERROR("Failed to extract chunks of group %d: %s",
+        DFTRACER_UTILS_LOG_ERROR("Failed to extract chunks of group {}: {}",
                                  input.chunk_index, e.what());
         co_return result;
     }
@@ -99,9 +99,9 @@ ChunkExtractorUtility::extract_and_write(
 
     ChunkWriter writer(std::move(writer_config));
     const auto fail = [&](const dstd::Error& error) {
-        DFTRACER_UTILS_LOG_ERROR("Failed to extract chunks of group %d: %s",
+        DFTRACER_UTILS_LOG_ERROR("Failed to extract chunks of group {}: {}",
                                  input.chunk_index,
-                                 dstd::String(error.message()).c_str());
+                                 dstd::String(error.message()));
         return result;
     };
     const auto opened = co_await writer.open();
@@ -146,7 +146,7 @@ ChunkExtractorUtility::extract_and_write(
     result.success = true;
 
     DFTRACER_UTILS_LOG_DEBUG(
-        "Group %d: %zu events in %zu chunk files (hash=0x%zx)",
+        "Group {}: {} events in {} chunk files (hash=0x{:x})",
         input.chunk_index, result.events, result.chunks.size(),
         result.event_hash);
 

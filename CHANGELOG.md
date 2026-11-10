@@ -25,6 +25,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   A `Cursor` must not throw from `try_next`, `out_names` or `resident_bytes`.
 - Build the dataframe library without exceptions.
   The C ABI functions of the library return the same null or error values as before.
+- Write the `DFTRACER_UTILS_LOG_*` macros and `DFTRACER_UTILS_TRACE_SCOPE` with `dstd::fmt` formats (`{}`, `{:x}`, `{:.2f}`) in place of printf formats, checked at compile time in every build.
+  A message over 1536 bytes ends in `...`.
+  The log line layout is unchanged, and a `bool` in a message now prints as `true` or `false`.
 - Return a `dstd::Result` from `LazyFrame::collect`, `stream`, `open_cursor` and `reduce_specs`, from `collect_all` and `LazyResult::collect`, and from `DataFrame::join`, `compare_agg` and `to_ipc`, in place of raising.
   A `LazyFrame` builder keeps its first error: `status()` reads it, and every terminal returns it.
   `Cursor::next` gives a `MorselResult`.

@@ -726,8 +726,8 @@ coro::CoroTask<bool> BloomFold::finalize(
                                          index::store::IndexExtension::Stats))
                 continue;
         } catch (const std::exception& e) {
-            DFTRACER_UTILS_LOG_WARN("bloom delta check failed for %s: %s",
-                                    fs.index_path.c_str(), e.what());
+            DFTRACER_UTILS_LOG_WARN("bloom delta check failed for {}: {}",
+                                    fs.index_path, e.what());
             continue;
         }
 
@@ -754,8 +754,8 @@ coro::CoroTask<bool> BloomFold::finalize(
             if (!committed) failure = dstd::String(committed.error().message());
         }
         if (!failure.empty()) {
-            DFTRACER_UTILS_LOG_WARN("bloom materialization skipped for %s: %s",
-                                    fs.index_path.c_str(), failure.c_str());
+            DFTRACER_UTILS_LOG_WARN("bloom materialization skipped for {}: {}",
+                                    fs.index_path, failure);
             continue;
         }
         wrote = true;

@@ -384,9 +384,9 @@ struct Prepared {
 
 dstd::NullOpt declined(const dstd::String& why) {
     DFTRACER_UTILS_LOG_DEBUG(
-        "View: the index partials cannot answer this query (%s); the traces "
+        "View: the index partials cannot answer this query ({}); the traces "
         "are scanned",
-        why.c_str());
+        why);
     return dstd::nullopt;
 }
 
@@ -799,9 +799,9 @@ AggQueryResult run_or_throw(dstd::Result<AggQueryResult>&& r) {
 
 void log_answer(const AggQueryStats& st) {
     DFTRACER_UTILS_LOG_DEBUG(
-        "View: the index partials answered over %zu files: %zu partials read, "
-        "%zu merged, %zu pruned, %zu split by time bins, %zu re-read in %zu "
-        "chunks (%llu events), %zu unanswered",
+        "View: the index partials answered over {} files: {} partials read, {} "
+        "merged, {} pruned, {} split by time bins, {} re-read in {} chunks ({} "
+        "events), {} unanswered",
         st.files, st.partials_read, st.partials_merged, st.partials_pruned,
         st.partials_binned, st.partials_reread, st.chunks_reread,
         static_cast<unsigned long long>(st.events_read), st.unanswered);
@@ -877,7 +877,7 @@ coro::CoroTask<bool> partials_scan_collect(const ViewPlan& plan,
     auto ran = co_await run_agg_query(prep->query);
     AggQueryResult result = run_or_throw(std::move(ran));
     DFTRACER_UTILS_LOG_DEBUG(
-        "View: the trace answered over %zu files: %llu events in %zu chunks",
+        "View: the trace answered over {} files: {} events in {} chunks",
         result.stats.files,
         static_cast<unsigned long long>(result.stats.events_read),
         result.stats.chunks_reread);

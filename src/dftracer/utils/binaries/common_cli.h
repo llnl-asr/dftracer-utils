@@ -72,8 +72,7 @@ inline void apply_log_level_arg(dstd::StringView name) {
         common::logger::set_level(*level);
     } else {
         DFTRACER_UTILS_LOG_WARN(
-            "Unknown --log-level '%.*s'; keeping '%s'",
-            static_cast<int>(name.size()), name.data(),
+            "Unknown --log-level '{}'; keeping '{}'", name,
             common::logger::level_name(common::logger::level()));
     }
 }
@@ -100,7 +99,7 @@ class ArgParse {
             if (!outcome.out.empty())
                 std::fwrite(outcome.out.data(), 1, outcome.out.size(), stdout);
             if (!outcome.err.empty()) {
-                DFTRACER_UTILS_LOG_ERROR("Error: %s", outcome.err.c_str());
+                DFTRACER_UTILS_LOG_ERROR("Error: {}", outcome.err);
                 std::fprintf(stderr, "%s\n", parser_.help().c_str());
             }
             return outcome.exit_code;
@@ -110,7 +109,7 @@ class ArgParse {
             for (auto* s : schemas_) s->after_parse();
             post_parse();
         } catch (const std::exception& err) {
-            DFTRACER_UTILS_LOG_ERROR("Error: %s", err.what());
+            DFTRACER_UTILS_LOG_ERROR("Error: {}", err.what());
             std::fprintf(stderr, "%s\n", parser_.help().c_str());
             return 1;
         }
@@ -162,8 +161,7 @@ int cli_main(int argc, char** argv, const char* name, const char* description,
     dftracer::utils::common::logger::init();
     if (auto configured = dftracer::utils::common::configure_memory_from_env();
         !configured) {
-        DFTRACER_UTILS_LOG_ERROR("Error: %s",
-                                 configured.error().format().c_str());
+        DFTRACER_UTILS_LOG_ERROR("Error: {}", configured.error().format());
         return 1;
     }
     // Before the parse, so the input paths it checks are stat'ed once.
@@ -177,14 +175,13 @@ int cli_main(int argc, char** argv, const char* name, const char* description,
             return outcome;
         } else {
             if (!outcome) {
-                DFTRACER_UTILS_LOG_ERROR("Error: %s",
-                                         outcome.error().format().c_str());
+                DFTRACER_UTILS_LOG_ERROR("Error: {}", outcome.error().format());
                 return 1;
             }
             return *outcome;
         }
     } catch (const std::exception& err) {
-        DFTRACER_UTILS_LOG_ERROR("Error: %s", err.what());
+        DFTRACER_UTILS_LOG_ERROR("Error: {}", err.what());
         return 1;
     }
 }
@@ -237,19 +234,16 @@ struct InputArgs : CliSchema {
 
     bool validate() override {
         if (folder_only && !files.empty()) {
-            DFTRACER_UTILS_LOG_ERROR(
-                "This tool takes a folder, not files: %.*s",
-                static_cast<int>(files.front().size()), files.front().data());
+            DFTRACER_UTILS_LOG_ERROR("This tool takes a folder, not files: {}",
+                                     files.front());
             return false;
         }
         if (folder_error_) {
-            DFTRACER_UTILS_LOG_ERROR("%s", "Give at most one folder");
+            DFTRACER_UTILS_LOG_ERROR("{}", "Give at most one folder");
             return false;
         }
         if (!missing_.empty()) {
-            DFTRACER_UTILS_LOG_ERROR("Input does not exist: %.*s",
-                                     static_cast<int>(missing_.size()),
-                                     missing_.data());
+            DFTRACER_UTILS_LOG_ERROR("Input does not exist: {}", missing_);
             return false;
         }
         return true;
@@ -303,7 +297,7 @@ struct RuntimeArgs : CliSchema {
     bool validate() override {
         if (executor_threads == 0) {
             DFTRACER_UTILS_LOG_ERROR(
-                "%s", "--executor-threads must be greater than 0");
+                "{}", "--executor-threads must be greater than 0");
             return false;
         }
         return true;
@@ -384,7 +378,7 @@ struct DuqlArgs : CliSchema {
 
     bool validate() override {
         if (macro_error_.empty()) return true;
-        DFTRACER_UTILS_LOG_ERROR("Error: %s", macro_error_.c_str());
+        DFTRACER_UTILS_LOG_ERROR("Error: {}", macro_error_);
         return false;
     }
 
@@ -500,14 +494,12 @@ auto run_on_pool(const char* name, const RuntimeArgs& runtime,
     dog.set_executor(rt.executor());
     dog.set_timeout_callback([&](dstd::StringView why) {
         reason.assign(why.data(), why.size());
-        DFTRACER_UTILS_LOG_ERROR("Watchdog timeout: %s", reason.c_str());
+        DFTRACER_UTILS_LOG_ERROR("Watchdog timeout: {}", reason);
         source.request_stop(rt.executor());
     });
     dog.set_warning_callback(
         [](dstd::StringView task_name, std::int64_t elapsed_ms) {
-            DFTRACER_UTILS_LOG_WARN("Long-running task: %.*s (%lld ms)",
-                                    static_cast<int>(task_name.size()),
-                                    task_name.data(),
+            DFTRACER_UTILS_LOG_WARN("Long-running task: {} ({} ms)", task_name,
                                     static_cast<long long>(elapsed_ms));
         });
     dog.mark_execution_start();
@@ -580,8 +572,8 @@ inline void warn_if_memory_tight(std::size_t required_bytes,
         required_bytes, available_bytes);
     if (!advice.fits) {
         DFTRACER_UTILS_LOG_WARN(
-            "%s", dftracer::utils::common::format_memory_budget_warning(advice)
-                      .c_str());
+            "{}",
+            dftracer::utils::common::format_memory_budget_warning(advice));
     }
 }
 

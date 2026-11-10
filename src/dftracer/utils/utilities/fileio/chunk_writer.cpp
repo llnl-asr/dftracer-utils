@@ -16,8 +16,8 @@ ChunkWriter::ChunkWriter(ChunkWriterConfig config)
 
 ChunkWriter::~ChunkWriter() {
     if (open_) {
-        DFTRACER_UTILS_LOG_WARN("ChunkWriter destroyed while open: %s",
-                                config_.base_name.c_str());
+        DFTRACER_UTILS_LOG_WARN("ChunkWriter destroyed while open: {}",
+                                config_.base_name);
     }
 }
 

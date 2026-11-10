@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
@@ -109,7 +110,7 @@ TEST_CASE("format: level tag, message, and location") {
     auto out = capture_log(
         {.level = dftracer::utils::common::logger::Level::Info,
          .color = dftracer::utils::common::logger::ColorMode::Never},
-        [] { DFTRACER_UTILS_LOG_ERROR("boom %d", 42); });
+        [] { DFTRACER_UTILS_LOG_ERROR("boom {}", 42); });
     CHECK(contains(out, "ERROR"));
     CHECK(contains(out, "boom 42"));
     CHECK(contains(out, "test_logging.cpp:"));  // (basename:line)
@@ -123,6 +124,72 @@ TEST_CASE("show_location=false drops the file:line suffix") {
                     [] { DFTRACER_UTILS_LOG_INFO("no-loc-line"); });
     CHECK(contains(out, "no-loc-line"));
     CHECK_FALSE(contains(out, "test_logging.cpp"));
+}
+
+namespace {
+
+// The text after "[YYYY-MM-DD HH:MM:SS.mmm] ", or an empty view when the line
+// does not start with a 23-byte timestamp.
+dstd::StringView after_stamp(const dstd::String& line) {
+    const dstd::StringView v(line);
+    if (v.size() < 26 || v[0] != '[' || v[24] != ']' || v[25] != ' ') return {};
+    return v.substr(26);
+}
+
+common::logger::Config plain(bool location) {
+    return {.level = common::logger::Level::Info,
+            .color = common::logger::ColorMode::Never,
+            .show_location = location};
+}
+
+}  // namespace
+
+TEST_CASE("line shape: no arguments, no location") {
+    auto out = capture_log(plain(false), [] { DFTRACER_UTILS_LOG_WARN("hi"); });
+    CHECK(after_stamp(out) == "WARN  hi\n");
+}
+
+TEST_CASE("line shape: several arguments and literal braces") {
+    auto out = capture_log(plain(false), [] {
+        DFTRACER_UTILS_LOG_ERROR("a={} b={:04} c={:.2f} d={} e={} {{}}", 1, 42,
+                                 0.5, "str", true);
+    });
+    CHECK(after_stamp(out) == "ERROR a=1 b=0042 c=0.50 d=str e=true {}\n");
+}
+
+TEST_CASE("line shape: location suffix is (basename:line)") {
+    int line = 0;
+    auto out = capture_log(plain(true), [&] {
+        line = __LINE__ + 1;
+        DFTRACER_UTILS_LOG_INFO("x={}", 5);
+    });
+    const dstd::String want =
+        dstd::fmt<"INFO  x=5 (test_logging.cpp:{})\n">(line);
+    CHECK(after_stamp(out) == dstd::StringView(want));
+}
+
+TEST_CASE("line shape: color wraps the stamp and the level") {
+    auto out = capture_log({.level = common::logger::Level::Info,
+                            .color = common::logger::ColorMode::Always,
+                            .show_location = false},
+                           [] { DFTRACER_UTILS_LOG_WARN("c"); });
+    const dstd::StringView v(out);
+    REQUIRE(v.size() > 30);
+    CHECK(v.substr(0, 5) == "\x1b[2m[");
+    CHECK(v.substr(28) == "]\x1b[0m \x1b[33mWARN \x1b[0m c\n");
+}
+
+TEST_CASE("a message over the cap is cut and ends in an ellipsis") {
+    const dstd::String big(3000, 'x');
+    auto out =
+        capture_log(plain(false), [&] { DFTRACER_UTILS_LOG_WARN("{}", big); });
+    const dstd::StringView body = after_stamp(out);
+    REQUIRE(body.size() == 6 + common::logger::detail::MESSAGE_CAP + 1);
+    CHECK(body.substr(0, 6) == "WARN  ");
+    CHECK(
+        body.substr(6, common::logger::detail::MESSAGE_CAP - 3) ==
+        dstd::StringView(big.data(), common::logger::detail::MESSAGE_CAP - 3));
+    CHECK(body.substr(6 + common::logger::detail::MESSAGE_CAP - 3) == "...\n");
 }
 
 TEST_CASE("env DFTRACER_UTILS_LOG_LEVEL overrides the config") {
@@ -144,7 +211,7 @@ TEST_CASE("env DFTRACER_UTILS_LOG_LEVEL overrides the config") {
 }
 
 #if DFTRACER_UTILS_LOGGER_TRACE_ENABLED
-static void inner_scope() { DFTRACER_UTILS_TRACE_SCOPE("k=%d", 7); }
+static void inner_scope() { DFTRACER_UTILS_TRACE_SCOPE("k={}", 7); }
 
 TEST_CASE("TRACE_SCOPE emits nested enter/exit with timing") {
     auto out = capture_log(
@@ -180,7 +247,7 @@ TEST_CASE("TRACE_SCOPE is silent when Trace is disabled") {
 }
 
 static dftracer::utils::coro::CoroTask<int> traced_leaf(int x) {
-    DFTRACER_UTILS_TRACE_SCOPE("leaf x=%d", x);
+    DFTRACER_UTILS_TRACE_SCOPE("leaf x={}", x);
     co_return x * 2;
 }
 

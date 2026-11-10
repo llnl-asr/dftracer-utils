@@ -91,27 +91,26 @@ class GenDistArgParse : public binaries::ArgParse {
 
     bool validate() override {
         if (!output.ends_with(".pfw.gz")) {
-            DFTRACER_UTILS_LOG_ERROR("--output must end with .pfw.gz: %s",
+            DFTRACER_UTILS_LOG_ERROR("--output must end with .pfw.gz: {}",
                                      binaries::c_str(output));
             return false;
         }
         if (memory.memory_budget != 0 &&
             memory.memory_budget < memory::MIN_MEMORY_BUDGET_BYTES) {
             DFTRACER_UTILS_LOG_ERROR(
-                "--memory-budget must be at least %zu bytes (64MB)",
+                "--memory-budget must be at least {} bytes (64MB)",
                 static_cast<std::size_t>(memory::MIN_MEMORY_BUDGET_BYTES));
             return false;
         }
         if (!shard_text.empty() && !parse_shard()) {
-            DFTRACER_UTILS_LOG_ERROR("--shard must be i/N with 0 <= i < N: %s",
+            DFTRACER_UTILS_LOG_ERROR("--shard must be i/N with 0 <= i < N: {}",
                                      binaries::c_str(shard_text));
             return false;
         }
         for (const auto& r : roots) {
             const auto is_dir = dstd::fs::is_directory(dstd::PathView(r));
             if (!is_dir.has_value() || !*is_dir) {
-                DFTRACER_UTILS_LOG_ERROR("Not a directory: %.*s",
-                                         static_cast<int>(r.size()), r.data());
+                DFTRACER_UTILS_LOG_ERROR("Not a directory: {}", r);
                 return false;
             }
         }
@@ -655,9 +654,9 @@ coro::CoroTask<int> run_gen_dist(coro::Scope& ctx, const GenDistArgParse* cli,
         auto opened = co_await utilities::fileio::GzipLineWriter::open(
             dstd::String(path), std::move(opts));
         if (!opened) {
-            DFTRACER_UTILS_LOG_ERROR(
-                "Cannot write %s: %s", binaries::c_str(path),
-                dstd::String(opened.error().message()).c_str());
+            DFTRACER_UTILS_LOG_ERROR("Cannot write {}: {}",
+                                     binaries::c_str(path),
+                                     dstd::String(opened.error().message()));
             co_return dstd::nullopt;
         }
         co_return std::move(*opened);
@@ -752,8 +751,8 @@ coro::CoroTask<int> run_gen_dist(coro::Scope& ctx, const GenDistArgParse* cli,
     dstd::fs::remove(dstd::PathView(head_path)).discard();
     if (io_error || !closed || !appended) {
         DFTRACER_UTILS_LOG_ERROR(
-            "Cannot write %s%s%s", binaries::c_str(output), closed ? "" : ": ",
-            closed ? "" : dstd::String(closed.error().message()).c_str());
+            "Cannot write {}{}{}", binaries::c_str(output), closed ? "" : ": ",
+            closed ? "" : dstd::String(closed.error().message()));
         co_return 1;
     }
     std::sort(skips.begin(), skips.end(), [](const auto& a, const auto& b) {
@@ -834,7 +833,7 @@ int join_parts(dstd::StringView output, const dstd::String& part, int rank,
                MPI_COMM_WORLD);
     if (rank != 0) return copied ? 0 : 1;
     if (!copied) {
-        DFTRACER_UTILS_LOG_ERROR("Cannot write %s", binaries::c_str(output));
+        DFTRACER_UTILS_LOG_ERROR("Cannot write {}", binaries::c_str(output));
         dstd::fs::remove(dstd::PathView(output)).discard();
         return 1;
     }
@@ -872,8 +871,8 @@ int run_mpi(GenDistArgParse& cli) {
     if (!cli.shard_text.empty()) {
         if (rank == 0)
             DFTRACER_UTILS_LOG_ERROR(
-                "--shard cannot be used with more than one MPI rank: the "
-                "ranks take their parts themselves");
+                "--shard cannot be used with more than one MPI rank: the ranks "
+                "take their parts themselves");
         return 1;
     }
     if (cli.memory.memory_budget == 0)

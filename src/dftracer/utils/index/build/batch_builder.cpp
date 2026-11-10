@@ -166,8 +166,8 @@ static coro::CoroTask<void> commit_group(
         (*results)[failure.tag].success = false;
         (*results)[failure.tag].error_message = failure.message;
         DFTRACER_UTILS_LOG_ERROR(
-            "Failed to write index for %s: %s; file dropped from index",
-            failure.path.c_str(), failure.message.c_str());
+            "Failed to write index for {}: {}; file dropped from index",
+            failure.path, failure.message);
     }
     writer->metrics->files_written.fetch_add(result.published,
                                              std::memory_order_relaxed);
@@ -418,8 +418,8 @@ static coro::CoroTask<void> parse_and_write_worker(
                             result.dropped_lines = driver->dropped_lines();
                             if (result.dropped_lines > 0)
                                 DFTRACER_UTILS_LOG_WARN(
-                                    "%s: %zu line(s) could not be read in full",
-                                    pf.file_path.c_str(), result.dropped_lines);
+                                    "{}: {} line(s) could not be read in full",
+                                    pf.file_path, result.dropped_lines);
                         }
                         if (job.bloom_fold) {
                             result.events_processed = static_cast<std::size_t>(
@@ -439,8 +439,8 @@ static coro::CoroTask<void> parse_and_write_worker(
                                                 std::memory_order_relaxed)) {
                                 }
                                 DFTRACER_UTILS_LOG_INFO(
-                                    "IndexBatch: %s spilled %zu runs",
-                                    basename_of(pf.file_path).c_str(),
+                                    "IndexBatch: {} spilled {} runs",
+                                    basename_of(pf.file_path),
                                     job.bloom_fold->spill_runs());
                             }
                         }
@@ -479,13 +479,13 @@ static coro::CoroTask<void> parse_and_write_worker(
                 done_ptr->fetch_add(1, std::memory_order_relaxed) + 1;
             const std::size_t total = prepared_ptr->size();
             DFTRACER_UTILS_LOG_DEBUG(
-                "IndexBatch: parsed %zu/%zu %s (%.1fs, %zu events)", done,
-                total, basename_of(pf.file_path).c_str(),
-                static_cast<double>(file_ns) / 1e9, result.events_processed);
+                "IndexBatch: parsed {}/{} {} ({:.1f}s, {} events)", done, total,
+                basename_of(pf.file_path), static_cast<double>(file_ns) / 1e9,
+                result.events_processed);
             const std::size_t step = total < 20 ? 1 : total / 20;
             if (done == total || done % step == 0) {
-                DFTRACER_UTILS_LOG_INFO("IndexBatch: parsed %zu/%zu files",
-                                        done, total);
+                DFTRACER_UTILS_LOG_INFO("IndexBatch: parsed {}/{} files", done,
+                                        total);
             }
             // Bounds the per-file callback/GIL cost.
             if (progress_ptr) {
@@ -575,8 +575,7 @@ static coro::CoroTask<void> run_streaming_pipeline(BatchWriteState* state) {
     const auto block_starts = dstd::make_shared<dstd::Vector<std::size_t>>(
         cut_blocks(state->file_count, state->file_costs, parse_workers));
     DFTRACER_UTILS_LOG_INFO(
-        "IndexBatch: streaming pipeline begin (%zu files, workers=%zu "
-        "blocks=%zu)",
+        "IndexBatch: streaming pipeline begin ({} files, workers={} blocks={})",
         state->file_count, parse_workers, block_starts->size() - 1);
 
     auto writer_metrics = dstd::make_shared<index::build::BatchWriterMetrics>();
@@ -690,7 +689,7 @@ static coro::CoroTask<void> run_streaming_pipeline(BatchWriteState* state) {
     state->metrics.max_spill_runs =
         admission->max_spill_runs.load(std::memory_order_relaxed);
     DFTRACER_UTILS_LOG_INFO(
-        "IndexBatch: streaming pipeline complete (parsed=%zu written=%zu)",
+        "IndexBatch: streaming pipeline complete (parsed={} written={})",
         state->file_count, state->metrics.files_written);
     co_return;
 }

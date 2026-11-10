@@ -1273,7 +1273,7 @@ dftracer::utils::dataframe::Schema ViewSource::schema() const {
             // An empty schema, not cached: scan() runs the same work again
             // and returns the error.
             DFTRACER_UTILS_LOG_WARN(
-                "view schema failed: %s",
+                "view schema failed: {}",
                 common::error_of_exception(std::current_exception()).c_str());
             return {};
         }

@@ -13,7 +13,7 @@ namespace dftracer::utils::coro {
 Scope::~Scope() {
     if (!joined_ && spawned_.load(std::memory_order_acquire)) {
         DFTRACER_UTILS_LOG_ERROR(
-            "%s", "Scope destroyed without join() after spawning");
+            "{}", "Scope destroyed without join() after spawning");
         std::terminate();
     }
 }

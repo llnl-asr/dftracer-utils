@@ -79,7 +79,7 @@ void post_resumption(Executor* executor, std::coroutine_handle<> handle) {
     // Every task carries an executor, so reaching here is a bug. Dropping
     // the resume would strand the coroutine as a hang far from the cause.
     DFTRACER_UTILS_LOG_ERROR(
-        "%s", "Coroutine resumption has no executor to resume through");
+        "{}", "Coroutine resumption has no executor to resume through");
     std::abort();
 }
 
@@ -175,7 +175,7 @@ ParkOwnerScope::~ParkOwnerScope() {
 
 void abort_zero_channel_capacity() {
     DFTRACER_UTILS_LOG_ERROR(
-        "%s", "Channel capacity must be at least 1; use UnboundedChannel");
+        "{}", "Channel capacity must be at least 1; use UnboundedChannel");
     std::abort();
 }
 

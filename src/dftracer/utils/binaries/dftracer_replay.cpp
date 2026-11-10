@@ -257,7 +257,7 @@ coro::CoroTask<void> task_scan(RunCtx* ctx, coro::Scope& scope) {
 
     auto collected = co_await binaries::collect_input_trace_files(
         scope, ctx->cli->inputs, /*recursive=*/true, [](dstd::StringView in) {
-            DFTRACER_UTILS_LOG_ERROR("Input not found or not accessible: %s",
+            DFTRACER_UTILS_LOG_ERROR("Input not found or not accessible: {}",
                                      binaries::c_str(in));
         });
     for (const auto& file : collected) ctx->trace_files.emplace_back(file);
@@ -431,8 +431,7 @@ coro::CoroTask<void> task_execute(RunCtx* ctx, coro::Scope* scope) {
 int run(int argc, char** argv) {
     common::logger::init();
     if (auto configured = common::configure_memory_from_env(); !configured) {
-        DFTRACER_UTILS_LOG_ERROR("Error: %s",
-                                 configured.error().format().c_str());
+        DFTRACER_UTILS_LOG_ERROR("Error: {}", configured.error().format());
         return 1;
     }
 
@@ -493,12 +492,12 @@ int run(int argc, char** argv) {
                 });
             });
     } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_ERROR("Run failed: %s", e.what());
+        DFTRACER_UTILS_LOG_ERROR("Run failed: {}", e.what());
         return 1;
     }
 
     if (ctx.is_root) {
-        DFTRACER_UTILS_LOG_DEBUG("[done] scan=%.1fms execute=%.1fms",
+        DFTRACER_UTILS_LOG_DEBUG("[done] scan={:.1f}ms execute={:.1f}ms",
                                  ctx.scan_ms, ctx.execute_ms);
     }
 

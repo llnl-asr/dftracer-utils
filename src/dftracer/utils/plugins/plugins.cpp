@@ -522,7 +522,7 @@ dstd::Optional<Query> plugin_union_prune_query(
         dstd::StringView sv{s};
         if (!duql::try_parse(sv)) {
             DFTRACER_UTILS_LOG_DEBUG(
-                "Plugin plan_duql '%s' failed to parse; scanning all", s);
+                "Plugin plan_duql '{}' failed to parse; scanning all", s);
             return dstd::nullopt;
         }
         if (std::find(distinct.begin(), distinct.end(), sv) == distinct.end())

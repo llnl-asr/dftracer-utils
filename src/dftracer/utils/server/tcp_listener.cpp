@@ -35,7 +35,7 @@ bool TcpListener::start(int backlog) {
     listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
 #endif
     if (listen_fd_ < 0) {
-        DFTRACER_UTILS_LOG_ERROR("socket() failed: %s", std::strerror(errno));
+        DFTRACER_UTILS_LOG_ERROR("socket() failed: {}", std::strerror(errno));
         return false;
     }
 #ifndef SOCK_CLOEXEC
@@ -54,8 +54,7 @@ bool TcpListener::start(int backlog) {
         addr.sin_addr.s_addr = INADDR_ANY;
     } else {
         if (::inet_pton(AF_INET, bind_addr_.c_str(), &addr.sin_addr) != 1) {
-            DFTRACER_UTILS_LOG_ERROR("Invalid bind address: %s",
-                                     bind_addr_.c_str());
+            DFTRACER_UTILS_LOG_ERROR("Invalid bind address: {}", bind_addr_);
             ::close(listen_fd_);
             listen_fd_ = -1;
             return false;
@@ -64,15 +63,15 @@ bool TcpListener::start(int backlog) {
 
     if (::bind(listen_fd_, reinterpret_cast<struct sockaddr*>(&addr),
                sizeof(addr)) < 0) {
-        DFTRACER_UTILS_LOG_ERROR("bind(%s:%u) failed: %s", bind_addr_.c_str(),
-                                 port_, std::strerror(errno));
+        DFTRACER_UTILS_LOG_ERROR("bind({}:{}) failed: {}", bind_addr_, port_,
+                                 std::strerror(errno));
         ::close(listen_fd_);
         listen_fd_ = -1;
         return false;
     }
 
     if (::listen(listen_fd_, backlog) < 0) {
-        DFTRACER_UTILS_LOG_ERROR("listen() failed: %s", std::strerror(errno));
+        DFTRACER_UTILS_LOG_ERROR("listen() failed: {}", std::strerror(errno));
         ::close(listen_fd_);
         listen_fd_ = -1;
         return false;
@@ -118,10 +117,10 @@ coro::CoroTask<void> TcpListener::accept_loop(coro::Scope& scope,
             try {
                 co_await (*handler)(fd, addr_copy);
             } catch (const std::exception& e) {
-                DFTRACER_UTILS_LOG_ERROR("connection handler failed: %s",
+                DFTRACER_UTILS_LOG_ERROR("connection handler failed: {}",
                                          e.what());
             } catch (...) {
-                DFTRACER_UTILS_LOG_ERROR("%s", "connection handler failed");
+                DFTRACER_UTILS_LOG_ERROR("{}", "connection handler failed");
             }
             co_await runtime::io::close(fd);
             untrack_active(fd);

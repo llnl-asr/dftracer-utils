@@ -860,13 +860,13 @@ static dftracer::utils::coro::CoroTask<bool> parallel_dispatcher(
             } catch (const std::exception& e) {
                 // The first error is the one rethrown below.
                 DFTRACER_UTILS_LOG_WARN(
-                    "Indexer: a visitor flush failed after an earlier "
-                    "error: %s",
+                    "Indexer: a visitor flush failed after an earlier error: "
+                    "{}",
                     e.what());
             } catch (...) {
                 DFTRACER_UTILS_LOG_WARN(
-                    "Indexer: a visitor flush failed after an earlier "
-                    "error with a non-standard exception");
+                    "Indexer: a visitor flush failed after an earlier error "
+                    "with a non-standard exception");
             }
         }
         std::rethrow_exception(error);
@@ -1045,18 +1045,18 @@ build_gzip_index_artifacts(int fd, dstd::CStringView gz_path,
 
     if (truncated) {
         DFTRACER_UTILS_LOG_WARN(
-            "Indexer: %s ends in a truncated gzip member; recovered %llu bytes "
+            "Indexer: {} ends in a truncated gzip member; recovered {} bytes "
             "up to its last complete line (not checksum-verified).",
-            gz_path.c_str(), static_cast<unsigned long long>(recovered_bytes));
+            gz_path, static_cast<unsigned long long>(recovered_bytes));
     } else if (slice == nullptr && members.empty() && compressed_bytes > 0) {
         unsigned char magic[2] = {0, 0};
         const ssize_t magic_read = co_await runtime::io::pread(fd, magic, 2, 0);
         if (magic_read != 2) magic[0] = 0;
         if (magic[0] == 0x1F && magic[1] == 0x8B) {
             DFTRACER_UTILS_LOG_WARN(
-                "Indexer: no gzip member of %s could be decoded; it is "
+                "Indexer: no gzip member of {} could be decoded; it is "
                 "corrupt, so the index will be empty.",
-                gz_path.c_str());
+                gz_path);
         } else {
             throw common::DFTUtilsException::cat(
                 common::ErrorCode::InvalidArgument, "Indexer: ", gz_path,
@@ -1134,8 +1134,7 @@ GzipIndexer::GzipIndexer(const dstd::String& gz_path,
 }
 
 GzipIndexer::~GzipIndexer() {
-    DFTRACER_UTILS_LOG_DEBUG("Destroying GZIP indexer for %s",
-                             gz_path_.c_str());
+    DFTRACER_UTILS_LOG_DEBUG("Destroying GZIP indexer for {}", gz_path_);
     close();
 }
 
@@ -1320,8 +1319,8 @@ bool GzipIndexer::need_rebuild() const {
                *stored_hash;
     } catch (const std::exception& e) {
         // An unreadable index is stale because the rebuild rewrites it.
-        DFTRACER_UTILS_LOG_WARN("Indexer: index %s is unreadable (%s); rebuild",
-                                index_path_.c_str(), e.what());
+        DFTRACER_UTILS_LOG_WARN("Indexer: index {} is unreadable ({}); rebuild",
+                                index_path_, e.what());
         return true;
     }
 }

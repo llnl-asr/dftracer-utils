@@ -266,7 +266,7 @@ dstd::Vector<dstd::String> collect_inputs(const SplitArgParse& cli,
 bool check_inputs(dstd::Vector<dstd::String>& input_files,
                   const dstd::Path& log_dir) {
     if (input_files.empty()) {
-        DFTRACER_UTILS_LOG_ERROR("No trace files found in %s", log_dir.c_str());
+        DFTRACER_UTILS_LOG_ERROR("No trace files found in {}", log_dir);
         return false;
     }
     std::sort(input_files.begin(), input_files.end());
@@ -303,7 +303,7 @@ class ProbeStage {
         probe.path = std::move(path);
         auto opened = co_await runtime::io::open_file(probe.path, {});
         if (!opened) {
-            DFTRACER_UTILS_LOG_ERROR("Cannot open %s", probe.path.c_str());
+            DFTRACER_UTILS_LOG_ERROR("Cannot open {}", probe.path);
             co_return probe;
         }
         dstd::File sfd = std::move(*opened);
@@ -334,9 +334,9 @@ class ProbeStage {
                               dstd::PathView(probe.path).filename())
                                  .str());
             DFTRACER_UTILS_LOG_WARN(
-                "Input %s is a single large gzip member; rechunking to "
-                "bounded members at %s",
-                probe.path.c_str(), out.c_str());
+                "Input {} is a single large gzip member; rechunking to bounded "
+                "members at {}",
+                probe.path, out);
             co_await utilities::fileio::compress::gzip_rechunk_to_members(
                 dstd::String(probe.path), dstd::String(out), member_size_bytes_,
                 6);
@@ -371,7 +371,7 @@ class GroupStage {
             chunk_size_bytes_, executor_threads_);
         std::size_t file_count = 0;
         for (const auto& group : groups) file_count += group.files.size();
-        DFTRACER_UTILS_LOG_INFO("Split %zu files in %zu groups", file_count,
+        DFTRACER_UTILS_LOG_INFO("Split {} files in {} groups", file_count,
                                 groups.size());
         co_return groups;
     }
@@ -393,7 +393,7 @@ class ExtractStage {
 
     coro::CoroTask<Output> run(Input groups) const {
         const auto& settings = *settings_;
-        DFTRACER_UTILS_LOG_INFO("Splitting %zu groups in parallel...",
+        DFTRACER_UTILS_LOG_INFO("Splitting {} groups in parallel...",
                                 groups.size());
 
         // A running group holds its writer's buffers and its compress workers
@@ -522,7 +522,7 @@ int print_report(const ExtractChunksOutput& split_results,
             chunk_files += result.chunks.size();
             total_events += result.events;
         } else {
-            DFTRACER_UTILS_LOG_ERROR("Failed to split group %d",
+            DFTRACER_UTILS_LOG_ERROR("Failed to split group {}",
                                      result.chunk_index);
             exit_code = 1;
         }
@@ -530,7 +530,7 @@ int print_report(const ExtractChunksOutput& split_results,
     std::printf("  Output: %zu chunk files, %zu events\n", chunk_files,
                 total_events);
     if (chunk_files == 0) {
-        DFTRACER_UTILS_LOG_ERROR("%s", "No chunk files were written");
+        DFTRACER_UTILS_LOG_ERROR("{}", "No chunk files were written");
         exit_code = 1;
     }
 
@@ -576,13 +576,13 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
-    DFTRACER_UTILS_LOG_INFO("%s", "Discovering input files...");
+    DFTRACER_UTILS_LOG_INFO("{}", "Discovering input files...");
 
     dstd::Vector<dstd::String> input_files =
         collect_inputs(*cli, log_dir, output_dir);
     if (!check_inputs(input_files, log_dir)) co_return 1;
 
-    DFTRACER_UTILS_LOG_INFO("Found %zu input files", input_files.size());
+    DFTRACER_UTILS_LOG_INFO("Found {} input files", input_files.size());
 
     const std::size_t input_count = input_files.size();
     RechunkDir rechunk_dir;
@@ -596,7 +596,7 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
     const ExtractStage extract_stage(settings, output_dir_text);
     const VerifyStage verify_stage(settings);
 
-    DFTRACER_UTILS_LOG_INFO("%s", "Running...");
+    DFTRACER_UTILS_LOG_INFO("{}", "Running...");
 
     binaries::run_on_pool(
         "DFTracer Split", cli->runtime_args, cli->watchdog,
@@ -625,8 +625,8 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
 
     if (!rechunk_dir.path.empty() &&
         common::unwrap(dstd::fs::exists(rechunk_dir.path.view()))) {
-        DFTRACER_UTILS_LOG_INFO("Cleaning up temporary rechunk directory: %s",
-                                rechunk_dir.path.c_str());
+        DFTRACER_UTILS_LOG_INFO("Cleaning up temporary rechunk directory: {}",
+                                rechunk_dir.path);
         common::unwrap(dstd::fs::remove_all(rechunk_dir.path.view()));
     }
 

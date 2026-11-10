@@ -19,8 +19,8 @@ dstd::SharedPtr<Reader> ReaderFactory::create(dstd::CStringView archive_path,
     common::ArchiveFormat format = common::FormatDetector::detect(archive_path);
 
     DFTRACER_UTILS_LOG_DEBUG(
-        "ReaderFactory::create_reader - detected format: %d for file: %s",
-        static_cast<int>(format), archive_path.c_str());
+        "ReaderFactory::create_reader - detected format: {} for file: {}",
+        static_cast<int>(format), archive_path);
 
     switch (format) {
         case common::ArchiveFormat::Gzip:

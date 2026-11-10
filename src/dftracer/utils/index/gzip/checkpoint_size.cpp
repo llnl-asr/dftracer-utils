@@ -205,9 +205,9 @@ std::size_t determine_checkpoint_size(std::size_t user_checkpoint_size,
                 dstd::String fname = read_gzip_fname(*file);
                 double ratio = guess_text_ratio_from_ext(fname);
                 DFTRACER_UTILS_LOG_DEBUG(
-                    "checkpoint size: %s has no usable uncompressed size, "
-                    "assume ratio %.1f",
-                    path.c_str(), ratio);
+                    "checkpoint size: {} has no usable uncompressed size, "
+                    "assume ratio {:.1f}",
+                    path, ratio);
                 U = std::max<std::size_t>(
                     comp_bytes, (std::size_t)((long double)comp_bytes * ratio));
             }
@@ -218,25 +218,23 @@ std::size_t determine_checkpoint_size(std::size_t user_checkpoint_size,
     } else {
         // The size only picks a checkpoint size, never the results.
         DFTRACER_UTILS_LOG_DEBUG(
-            "checkpoint size: cannot open %s, assume a ratio of 6",
-            path.c_str());
+            "checkpoint size: cannot open {}, assume a ratio of 6", path);
         U = std::max<std::size_t>(comp_bytes, comp_bytes * 6);
     }
 
     // Honor user size if reasonable (<= uncompressed size)
     if (user_checkpoint_size > 0 && U > 0 && user_checkpoint_size <= U) {
-        DFTRACER_UTILS_LOG_DEBUG("user_checkpoint_size=%zu\n",
+        DFTRACER_UTILS_LOG_DEBUG("user_checkpoint_size={}\n",
                                  user_checkpoint_size);
         std::size_t S = user_checkpoint_size;
         if (S < window) S = window;
         if (S > max_chk) S = max_chk;
-        DFTRACER_UTILS_LOG_DEBUG("final_checkpoint_size=%zu\n", S);
+        DFTRACER_UTILS_LOG_DEBUG("final_checkpoint_size={}\n", S);
         return S;
     }
 
     // Calculate optimal checkpoint size
-    DFTRACER_UTILS_LOG_DEBUG("comp_bytes=%" PRIu64 ", est_uncomp=%zu\n",
-                             comp_bytes, U);
+    DFTRACER_UTILS_LOG_DEBUG("comp_bytes={}, est_uncomp={}\n", comp_bytes, U);
     return choose_divisible_checkpoint(U, user_checkpoint_size, window, max_chk,
                                        max_parts);
 }

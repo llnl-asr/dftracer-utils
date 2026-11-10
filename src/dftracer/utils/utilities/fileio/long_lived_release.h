@@ -20,8 +20,8 @@ coro::CoroTask<void> join_and_delete(Impl* impl) {
     auto settled = co_await coro::settle(std::move(joining));
     if (settled.exception) {
         const dstd::Error error = common::error_of_exception(settled.exception);
-        DFTRACER_UTILS_LOG_ERROR("long-lived scope cleanup failed: %s",
-                                 dstd::String(error.message()).c_str());
+        DFTRACER_UTILS_LOG_ERROR("long-lived scope cleanup failed: {}",
+                                 dstd::String(error.message()));
     }
     dstd::UniquePtr<Impl> owner(impl);
 }
@@ -52,7 +52,7 @@ void release_long_lived(dstd::UniquePtr<Impl> impl, const char* name) {
         return;
     }
     DFTRACER_UTILS_LOG_WARN(
-        "%s: no runtime left to join the writer's scope; leaking its state",
+        "{}: no runtime left to join the writer's scope; leaking its state",
         name);
     (void)impl.release();
 }

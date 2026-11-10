@@ -75,7 +75,7 @@ dstd::Result<bool> IoThreadPool::spawn_locked() {
         if (!spawn_warned_) {
             spawn_warned_ = true;
             DFTRACER_UTILS_LOG_WARN(
-                "I/O thread pool: cannot start a thread: %s",
+                "I/O thread pool: cannot start a thread: {}",
                 "the pool keeps the threads it has");
         }
         return false;

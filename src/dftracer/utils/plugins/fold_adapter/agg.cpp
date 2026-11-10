@@ -37,9 +37,9 @@ void host_agg_accumulate(void* h, ::dftu_agg* a, const ::dftu_dataframe* df) {
 // the host builds its slices from is already settled.
 int host_register_state(void* h, const ::dftu_state_desc* desc, void*) {
     DFTRACER_UTILS_LOG_ERROR(
-        "[plugin:%s] register_state('%s') refused: a state type is registered "
+        "[plugin:{}] register_state('{}') refused: a state type is registered "
         "from the factory, not during the scan",
-        static_cast<PluginFold*>(h)->plugin_name().c_str(),
+        static_cast<PluginFold*>(h)->plugin_name(),
         desc && desc->name ? desc->name : "(null)");
     return -1;
 }
@@ -77,7 +77,7 @@ const void* detail::agg_ext_vtable() { return &g_agg; }
     if (!name || (key_n && !key_names) || spec_n == 0 || !specs) return nullptr;
     if (is_host_namespace(name)) {
         DFTRACER_UTILS_LOG_ERROR(
-            "Plugin agg '%s' refused: the 'dftu.' namespace belongs to the "
+            "Plugin agg '{}' refused: the 'dftu.' namespace belongs to the "
             "host",
             name);
         return nullptr;
@@ -100,13 +100,13 @@ const void* detail::agg_ext_vtable() { return &g_agg; }
     for (std::uint32_t i = 0; i < spec_n; ++i) {
         if (specs[i].op < DFTU_AGG_COUNT || specs[i].op > DFTU_AGG_REGR_R2) {
             DFTRACER_UTILS_LOG_ERROR(
-                "Plugin agg '%s' aggregate %u has an out-of-range op code %d",
+                "Plugin agg '{}' aggregate {} has an out-of-range op code {}",
                 name, i, specs[i].op);
             return nullptr;
         }
         if (!specs[i].out || !specs[i].out[0]) {
             DFTRACER_UTILS_LOG_ERROR(
-                "Plugin agg '%s' aggregate %u is missing an output name", name,
+                "Plugin agg '{}' aggregate {} is missing an output name", name,
                 i);
             return nullptr;
         }
@@ -169,14 +169,13 @@ void PluginFold::agg_accumulate(::dftu_agg* a, const ::dftu_dataframe* df) {
     const auto accumulated = dataframe::agg_accumulate(
         *acc.state, keys, values, 0, dftu_dataframe_num_rows(df));
     if (!accumulated) {
-        DFTRACER_UTILS_LOG_ERROR("Plugin agg '%s' accumulate failed",
-                                 acc.name.c_str());
+        DFTRACER_UTILS_LOG_ERROR("Plugin agg '{}' accumulate failed", acc.name);
         return;
     }
     const auto spilled = acc.spiller.maybe_spill(acc.state);
     if (!spilled.has_value())
-        DFTRACER_UTILS_LOG_ERROR("Plugin agg '%s' spill failed: %s",
-                                 acc.name.c_str(), spilled.error().c_str());
+        DFTRACER_UTILS_LOG_ERROR("Plugin agg '{}' spill failed: {}", acc.name,
+                                 spilled.error().c_str());
 }
 
 // Cross-plugin reads see only what a plugin that already finalized published.
@@ -208,11 +207,11 @@ void PluginFold::publish_aggs() {
         auto owner = results_->owners.find(key);
         if (owner != results_->owners.end() && owner->second != plugin_name_) {
             DFTRACER_UTILS_LOG_ERROR(
-                "Plugin '%s' accumulator '%s' refused: '%s' already published "
+                "Plugin '{}' accumulator '{}' refused: '{}' already published "
                 "that name; agg_result would return whichever finalized last. "
                 "Names are lowercased, so two identifiers differing only in "
                 "case collide here",
-                plugin_name_.c_str(), acc->name.c_str(), owner->second.c_str());
+                plugin_name_, acc->name, owner->second);
             continue;
         }
         results_->aggs[key] = acc.get();

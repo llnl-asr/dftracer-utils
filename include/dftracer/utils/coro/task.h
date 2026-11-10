@@ -963,7 +963,7 @@ void finish_with_error(std::coroutine_handle<Promise> h, E&& error) noexcept {
     auto& p = h.promise();
     if (p.owns_scope) [[unlikely]] {
         DFTRACER_UTILS_LOG_ERROR(
-            "%s", "or_fail ended a task that holds a scope before its join");
+            "{}", "or_fail ended a task that holds a scope before its join");
         std::abort();
     }
     p.return_value(

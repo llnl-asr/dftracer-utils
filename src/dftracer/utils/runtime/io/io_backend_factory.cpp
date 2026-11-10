@@ -108,7 +108,7 @@ dstd::Result<dstd::UniquePtr<IoBackend>> make_io_backend(
 
     // Explicit backend selection (non-AUTO).
     if (backend_type == IoBackendType::Threadpool) {
-        DFTRACER_UTILS_LOG_INFO("I/O backend: using threadpool (%zu threads)",
+        DFTRACER_UTILS_LOG_INFO("I/O backend: using threadpool ({} threads)",
                                 pool_size);
         return dstd::make_unique<ThreadPoolBackend>(pool_size, batch_threshold,
                                                     pool_options);
@@ -117,7 +117,7 @@ dstd::Result<dstd::UniquePtr<IoBackend>> make_io_backend(
 #ifdef __linux__
     if (backend_type == IoBackendType::EpollThreadpool) {
         DFTRACER_UTILS_LOG_INFO(
-            "I/O backend: using epoll+threadpool (%zu threads)", pool_size);
+            "I/O backend: using epoll+threadpool ({} threads)", pool_size);
         return dstd::make_unique<EpollThreadPoolBackend>(
             pool_size, batch_threshold, pool_options);
     }
@@ -127,7 +127,7 @@ dstd::Result<dstd::UniquePtr<IoBackend>> make_io_backend(
     defined(__NetBSD__) || defined(__DragonFly__)
     if (backend_type == IoBackendType::KqueueThreadpool) {
         DFTRACER_UTILS_LOG_INFO(
-            "I/O backend: using kqueue+threadpool (%zu threads)", pool_size);
+            "I/O backend: using kqueue+threadpool ({} threads)", pool_size);
         return dstd::make_unique<KqueueThreadPoolBackend>(
             pool_size, batch_threshold, pool_options);
     }
@@ -137,13 +137,13 @@ dstd::Result<dstd::UniquePtr<IoBackend>> make_io_backend(
     if (backend_type == IoBackendType::IoUring) {
         auto uring = make_io_uring(pool_size, pool_options);
         if (uring->probe()) {
-            DFTRACER_UTILS_LOG_INFO("%s", "I/O backend: using io_uring");
+            DFTRACER_UTILS_LOG_INFO("{}", "I/O backend: using io_uring");
             return uring;
         }
         if (forced) {
             return bad_backend_env("io_uring", "failed its runtime probe");
         }
-        DFTRACER_UTILS_LOG_ERROR("%s",
+        DFTRACER_UTILS_LOG_ERROR("{}",
                                  "io_uring selected but runtime probe failed");
         // Fall through to AUTO detection.
     }
@@ -159,14 +159,14 @@ dstd::Result<dstd::UniquePtr<IoBackend>> make_io_backend(
     {
         auto uring = make_io_uring(pool_size, pool_options);
         if (uring->probe()) {
-            DFTRACER_UTILS_LOG_INFO("%s", "I/O backend: using io_uring");
+            DFTRACER_UTILS_LOG_INFO("{}", "I/O backend: using io_uring");
             return uring;
         }
-        DFTRACER_UTILS_LOG_INFO("%s",
+        DFTRACER_UTILS_LOG_INFO("{}",
                                 "io_uring runtime probe failed, falling back");
     }
 #elif defined(DFTRACER_UTILS_HAVE_IO_URING)
-    DFTRACER_UTILS_LOG_INFO("%s",
+    DFTRACER_UTILS_LOG_INFO("{}",
                             "I/O backend: skipping io_uring (Valgrind mode)");
 #endif
 
@@ -175,23 +175,22 @@ dstd::Result<dstd::UniquePtr<IoBackend>> make_io_backend(
     // under Valgrind use the plain thread pool to avoid an extra instrumented
     // thread and poll fd per executor.
     DFTRACER_UTILS_LOG_INFO(
-        "I/O backend: using threadpool (Valgrind mode, %zu threads)",
-        pool_size);
+        "I/O backend: using threadpool (Valgrind mode, {} threads)", pool_size);
     return dstd::make_unique<ThreadPoolBackend>(pool_size, batch_threshold,
                                                 pool_options);
 #elif defined(__linux__)
-    DFTRACER_UTILS_LOG_INFO("I/O backend: using epoll+threadpool (%zu threads)",
+    DFTRACER_UTILS_LOG_INFO("I/O backend: using epoll+threadpool ({} threads)",
                             pool_size);
     return dstd::make_unique<EpollThreadPoolBackend>(pool_size, batch_threshold,
                                                      pool_options);
 #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || \
     defined(__NetBSD__) || defined(__DragonFly__)
-    DFTRACER_UTILS_LOG_INFO(
-        "I/O backend: using kqueue+threadpool (%zu threads)", pool_size);
+    DFTRACER_UTILS_LOG_INFO("I/O backend: using kqueue+threadpool ({} threads)",
+                            pool_size);
     return dstd::make_unique<KqueueThreadPoolBackend>(
         pool_size, batch_threshold, pool_options);
 #else
-    DFTRACER_UTILS_LOG_INFO("I/O backend: using threadpool (%zu threads)",
+    DFTRACER_UTILS_LOG_INFO("I/O backend: using threadpool ({} threads)",
                             pool_size);
     return dstd::make_unique<ThreadPoolBackend>(pool_size, batch_threshold,
                                                 pool_options);

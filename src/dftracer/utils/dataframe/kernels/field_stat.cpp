@@ -202,7 +202,7 @@ void scalar_reduce(FieldStat& fs, const Series& c, std::int64_t b,
                    std::int64_t e) {
     const TypeId t = c.type();
     if (!is_arithmetic_type(t) && !is_temporal_type(t)) {
-        DFTRACER_UTILS_LOG_ERROR("field_stat: no numeric value for type '%s'",
+        DFTRACER_UTILS_LOG_ERROR("field_stat: no numeric value for type '{}'",
                                  type_name(t));
         return;
     }

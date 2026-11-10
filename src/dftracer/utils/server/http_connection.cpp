@@ -73,7 +73,7 @@ coro::CoroTask<void> handle_connection(int client_fd,
         try {
             resp = co_await router.handle(req);
         } catch (const std::exception& e) {
-            DFTRACER_UTILS_LOG_ERROR("Handler exception: %s", e.what());
+            DFTRACER_UTILS_LOG_ERROR("Handler exception: {}", e.what());
             resp = HttpResponse::internal_error(e.what());
         } catch (...) {
             DFTRACER_UTILS_LOG_ERROR("Handler threw unknown exception");

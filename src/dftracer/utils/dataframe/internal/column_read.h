@@ -140,7 +140,7 @@ inline dstd::StringView read_bytes(const Series& c, std::int64_t i) {
 /// value instead of computing over a zero it never read.
 inline bool refuse_nested_value(const char* op, TypeId t) {
     if (value_domain(t) != ValueDomain::None) return false;
-    DFTRACER_UTILS_LOG_ERROR("%s: no per-row value for nested type '%s'", op,
+    DFTRACER_UTILS_LOG_ERROR("{}: no per-row value for nested type '{}'", op,
                              type_name(t));
     return true;
 }

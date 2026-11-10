@@ -1230,7 +1230,7 @@ void persist_rollup(const ViewPlan& plan, const dataframe::AggState& state) {
                 dftracer::utils::index::cache::rest_signature(plan),
                 plan.time_bucket_us, plan.group_by, state);
     } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_WARN("rollup materialize skipped: %s", e.what());
+        DFTRACER_UTILS_LOG_WARN("rollup materialize skipped: {}", e.what());
     }
 }
 

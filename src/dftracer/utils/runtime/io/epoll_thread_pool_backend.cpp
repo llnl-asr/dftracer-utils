@@ -25,14 +25,14 @@ dstd::Result<void> EpollThreadPoolBackend::start() {
 
     epoll_fd_.reset(::epoll_create1(EPOLL_CLOEXEC));
     if (!epoll_fd_.valid()) {
-        DFTRACER_UTILS_LOG_ERROR("epoll_create1 failed: %s",
+        DFTRACER_UTILS_LOG_ERROR("epoll_create1 failed: {}",
                                  std::strerror(errno));
         return {};
     }
 
     event_fd_.reset(::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC));
     if (!event_fd_.valid()) {
-        DFTRACER_UTILS_LOG_ERROR("eventfd failed: %s", std::strerror(errno));
+        DFTRACER_UTILS_LOG_ERROR("eventfd failed: {}", std::strerror(errno));
         epoll_fd_.reset();
         return {};
     }
@@ -42,12 +42,12 @@ dstd::Result<void> EpollThreadPoolBackend::start() {
     ev.events = EPOLLIN;
     ev.data.fd = event_fd_.get();
     if (::epoll_ctl(epoll_fd_.get(), EPOLL_CTL_ADD, event_fd_.get(), &ev) < 0) {
-        DFTRACER_UTILS_LOG_ERROR("epoll_ctl(eventfd) failed: %s",
+        DFTRACER_UTILS_LOG_ERROR("epoll_ctl(eventfd) failed: {}",
                                  std::strerror(errno));
     }
 
     DFTRACER_UTILS_LOG_DEBUG(
-        "epoll+threadpool backend started (epoll_fd=%d, event_fd=%d)",
+        "epoll+threadpool backend started (epoll_fd={}, event_fd={})",
         epoll_fd_.get(), event_fd_.get());
 
     completion_thread_.start([this] { epoll_loop(); });

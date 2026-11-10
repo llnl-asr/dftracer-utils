@@ -183,14 +183,14 @@ class IndexedFileLineIterator {
             if (config_.end() == 0) {
                 std::size_t line_count = config_.reader()->line_count();
                 DFTRACER_UTILS_LOG_DEBUG(
-                    "IndexedFileLineIterator: end=0, setting to num_lines=%zu",
+                    "IndexedFileLineIterator: end=0, setting to num_lines={}",
                     line_count);
                 config_ = config_.with_line_range(config_.start(), line_count);
             }
 
             DFTRACER_UTILS_LOG_DEBUG(
-                "IndexedFileLineIterator: line range %zu to %zu",
-                config_.start(), config_.end());
+                "IndexedFileLineIterator: line range {} to {}", config_.start(),
+                config_.end());
 
             if (config_.start() < 1 || config_.end() < config_.start()) {
                 throw common::DFTUtilsException(

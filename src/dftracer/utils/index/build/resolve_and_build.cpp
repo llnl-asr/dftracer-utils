@@ -52,7 +52,7 @@ coro::CoroTask<dstd::Vector<ResolverResult::Failure>> build_tier(
     config->schema = schema;
     config->bloom_config = input.bloom_config;
     config->bloom_config.extensions = tier;
-    DFTRACER_UTILS_LOG_INFO("Building the index tier for %zu files",
+    DFTRACER_UTILS_LOG_INFO("Building the index tier for {} files",
                             config->file_paths.size());
     auto batch = co_await BatchBuilder::process(std::move(config));
     dstd::Vector<ResolverResult::Failure> failures;
@@ -78,7 +78,7 @@ coro::CoroTask<dstd::Vector<ResolverResult::Failure>> build_aggregation(
     config->memory_budget = input.memory_budget;
     config->schema = schema;
     config->agg_fold_factory = std::move(run.factory);
-    DFTRACER_UTILS_LOG_INFO("Aggregating %zu files", config->file_paths.size());
+    DFTRACER_UTILS_LOG_INFO("Aggregating {} files", config->file_paths.size());
     auto batch = co_await BatchBuilder::process(std::move(config));
     finish_aggregation(run, batch);
     dstd::Vector<ResolverResult::Failure> failures;
@@ -175,7 +175,7 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
 
     if (!files_needing_work.empty()) {
         DFTRACER_UTILS_LOG_INFO(
-            "Building index for %zu files (checkpoint: %zu, aggregation: %zu)",
+            "Building index for {} files (checkpoint: {}, aggregation: {})",
             files_needing_work.size(), result.needs_checkpoint.size(),
             result.needs_aggregation.size());
 
@@ -207,9 +207,9 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
                     build_index_dir = dstd::String(staged->dir().str());
                     build_index_path = trace::internal::determine_index_path(
                         files_needing_work.front(), build_index_dir);
-                    DFTRACER_UTILS_LOG_INFO("Staging index build at %s -> %s",
-                                            build_index_path.c_str(),
-                                            staged_final_path.c_str());
+                    DFTRACER_UTILS_LOG_INFO("Staging index build at {} -> {}",
+                                            build_index_path,
+                                            staged_final_path);
                     scratch.emplace(std::move(*staged));
                 }
             }
@@ -323,7 +323,7 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
     }
 
     DFTRACER_UTILS_LOG_INFO(
-        "Resolve complete: %zu total, %zu cached, %zu failed checkpoint",
+        "Resolve complete: {} total, {} cached, {} failed checkpoint",
         result.all_files.size(), result.cached.size(),
         result.needs_checkpoint.size());
 
@@ -405,9 +405,9 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
         failure = e.what();
     }
     DFTRACER_UTILS_LOG_WARN(
-        "the aggregation tier of %zu index(es) is corrupt (%s); clearing it "
-        "and aggregating again",
-        roots.size(), failure.c_str());
+        "the aggregation tier of {} index(es) is corrupt ({}); clearing it and "
+        "aggregating again",
+        roots.size(), failure);
     for (const auto& root : roots) {
         const dstd::String store_path = index::store_dir(root);
         auto checking = runtime::fs::exists(dstd::PathView(store_path));

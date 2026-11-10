@@ -222,9 +222,7 @@ ReplayResult ReplayEngine::replay_file_sync(dstd::StringView trace_file,
                                             dstd::StringView index_file) {
     Lane lane = make_lane();
 
-    DFTRACER_UTILS_LOG_DEBUG("Starting replay of file: %.*s",
-                             static_cast<int>(trace_file.size()),
-                             trace_file.data());
+    DFTRACER_UTILS_LOG_DEBUG("Starting replay of file: {}", trace_file);
 
     auto start_time = std::chrono::steady_clock::now();
 
@@ -253,7 +251,7 @@ ReplayResult ReplayEngine::replay_file_sync(dstd::StringView trace_file,
                                                               start_time);
 
     DFTRACER_UTILS_LOG_DEBUG(
-        "Replay completed. Total events: %zu, Executed: %zu, Failed: %zu",
+        "Replay completed. Total events: {}, Executed: {}, Failed: {}",
         result.total_events, result.executed_events, result.failed_events);
 
     return result;
@@ -360,9 +358,8 @@ void ReplayEngine::execute(const Trace& trace, Lane& lane) {
     } else {
         result.failed_events++;
         DFTRACER_UTILS_LOG_DEBUG(
-            "No executor found for function: %.*s (category: %.*s)",
-            static_cast<int>(trace.func_name.size()), trace.func_name.data(),
-            static_cast<int>(trace.cat.size()), trace.cat.data());
+            "No executor found for function: {} (category: {})",
+            trace.func_name, trace.cat);
     }
 }
 
@@ -459,14 +456,14 @@ std::chrono::microseconds ReplayEngine::timing_wait(const Trace& trace,
         const std::uint64_t MAX_SLEEP_US = 10 * 1000 * 1000;
         if (sleep_us > MAX_SLEEP_US) {
             DFTRACER_UTILS_LOG_DEBUG(
-                "Warning: Capping sleep from %.3f ms to %.3f ms",
+                "Warning: Capping sleep from {:.3f} ms to {:.3f} ms",
                 static_cast<double>(sleep_us) / 1000.0,
                 static_cast<double>(MAX_SLEEP_US) / 1000.0);
             sleep_us = MAX_SLEEP_US;
         }
 
         if (sleep_us > 1000) {
-            DFTRACER_UTILS_LOG_DEBUG("Timing sleep: %.3f ms",
+            DFTRACER_UTILS_LOG_DEBUG("Timing sleep: {:.3f} ms",
                                      static_cast<double>(sleep_us) / 1000.0);
         }
 

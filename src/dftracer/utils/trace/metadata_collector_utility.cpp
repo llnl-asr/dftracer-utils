@@ -60,8 +60,8 @@ MetadataCollectorUtility::operator()(
             co_return co_await process_compressed(modified_input);
         }
     } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_ERROR("Failed to collect metadata for %s: %s",
-                                 input.file_path.c_str(), e.what());
+        DFTRACER_UTILS_LOG_ERROR("Failed to collect metadata for {}: {}",
+                                 input.file_path, e.what());
         meta.error_message = e.what();
         co_return meta;
     }
@@ -104,8 +104,7 @@ dstd::Optional<internal::IndexedFile> fresh_index_record(
             dftracer::utils::common::unwrap(index::members(snapshot, *ref))
                 .size()};
     } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_DEBUG("Index of %s unreadable (%s)", file.c_str(),
-                                 e.what());
+        DFTRACER_UTILS_LOG_DEBUG("Index of {} unreadable ({})", file, e.what());
         return dstd::nullopt;
     }
 }
@@ -188,8 +187,8 @@ MetadataCollectorUtility::process_compressed(
                 dstd::SharedPtr<CheckpointIndexer> indexer;
                 if (!meta.has_index || input.force_rebuild) {
                     if (input.force_rebuild && meta.has_index) {
-                        DFTRACER_UTILS_LOG_DEBUG("Removing existing index: %s",
-                                                 input.index_path.c_str());
+                        DFTRACER_UTILS_LOG_DEBUG("Removing existing index: {}",
+                                                 input.index_path);
                         dftracer::utils::index::release_root(input.index_path);
                         const dstd::String store =
                             dftracer::utils::index::store_of(input.index_path);
@@ -197,8 +196,8 @@ MetadataCollectorUtility::process_compressed(
                             dstd::fs::remove_all(dstd::PathView(store)));
                         common::forget_input(store);
                     }
-                    DFTRACER_UTILS_LOG_DEBUG("Building index for: %s",
-                                             input.file_path.c_str());
+                    DFTRACER_UTILS_LOG_DEBUG("Building index for: {}",
+                                             input.file_path);
                     indexer = CheckpointIndexerFactory::create(
                         input.file_path, input.index_path,
                         input.checkpoint_size, true);
@@ -222,8 +221,7 @@ MetadataCollectorUtility::process_compressed(
         meta.line_count = total_lines;
 
         if (total_lines == 0) {
-            DFTRACER_UTILS_LOG_DEBUG("File %s has no lines",
-                                     input.file_path.c_str());
+            DFTRACER_UTILS_LOG_DEBUG("File {} has no lines", input.file_path);
             meta.success = true;
             co_return meta;
         }
@@ -276,9 +274,10 @@ MetadataCollectorUtility::process_compressed(
         meta.success = true;
 
         DFTRACER_UTILS_LOG_DEBUG(
-            "File %s: %.2f MB, %zu valid events from %zu lines, %.8f MB/event",
-            input.file_path.c_str(), meta.size_mb, meta.valid_events,
-            total_lines, meta.size_per_line);
+            "File {}: {:.2f} MB, {} valid events from {} lines, {:.8f} "
+            "MB/event",
+            input.file_path, meta.size_mb, meta.valid_events, total_lines,
+            meta.size_per_line);
 
     } catch (const std::exception& e) {
         meta.error_message = e.what();

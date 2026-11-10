@@ -560,14 +560,14 @@ coro::CoroTask<void> TraceIndex::initialize() {
                 stale = index_is_stale(root, paths);
             } catch (const std::exception& e) {
                 DFTRACER_UTILS_LOG_WARN(
-                    "TraceIndex: stale check failed for %s: %s; rebuilding",
-                    root.c_str(), e.what());
+                    "TraceIndex: stale check failed for {}: {}; rebuilding",
+                    root, e.what());
                 stale = true;
             }
             if (stale) {
                 DFTRACER_UTILS_LOG_WARN(
-                    "TraceIndex: source changed since indexing; rebuilding %s",
-                    root.c_str());
+                    "TraceIndex: source changed since indexing; rebuilding {}",
+                    root);
                 // Drop the cached handle first, as the builder does: a live
                 // handle on a removed directory would serve the old data.
                 index::release_root(root);
@@ -625,7 +625,7 @@ coro::CoroTask<void> TraceIndex::initialize() {
              checkpoint_size](coro::Scope&) -> coro::CoroTask<void> {
             if (!needs_build_ptr->empty()) {
                 DFTRACER_UTILS_LOG_INFO(
-                    "TraceIndex: building index for %zu file(s) ...",
+                    "TraceIndex: building index for {} file(s) ...",
                     needs_build_ptr->size());
 
                 // One batch build per index root; the batch builder assigns
@@ -651,7 +651,7 @@ coro::CoroTask<void> TraceIndex::initialize() {
                             return ix.build(scope);
                         });
                     } catch (const std::exception& e) {
-                        DFTRACER_UTILS_LOG_WARN("TraceIndex: %s", e.what());
+                        DFTRACER_UTILS_LOG_WARN("TraceIndex: {}", e.what());
                     }
 
                     dstd::Optional<index::Snapshot> snapshot;
@@ -681,8 +681,7 @@ coro::CoroTask<void> TraceIndex::initialize() {
                             large_files_ptr->push_back(idx);
                         } else {
                             DFTRACER_UTILS_LOG_WARN(
-                                "TraceIndex: failed to index %s",
-                                info->path.c_str());
+                                "TraceIndex: failed to index {}", info->path);
                         }
                     }
                 }
@@ -746,10 +745,9 @@ coro::CoroTask<void> TraceIndex::initialize() {
                                         }
                                     } catch (const std::exception& e) {
                                         DFTRACER_UTILS_LOG_WARN(
-                                            "TraceIndex: failed to "
-                                            "read time bounds from "
-                                            "%s: %s",
-                                            info->index_path.c_str(), e.what());
+                                            "TraceIndex: failed to read time "
+                                            "bounds from {}: {}",
+                                            info->index_path, e.what());
                                     }
                                 }
 
@@ -796,8 +794,8 @@ coro::CoroTask<void> TraceIndex::initialize() {
         const auto ran = configure_default_runtime(settings).block_on(
             coro::named("TraceIndexInit", coro::with_scope(init_task)));
         if (!ran) {
-            DFTRACER_UTILS_LOG_ERROR("TraceIndex: init failed: %s",
-                                     ran.error().format().c_str());
+            DFTRACER_UTILS_LOG_ERROR("TraceIndex: init failed: {}",
+                                     ran.error().format());
             co_await coro::stop_here();
         }
     }
@@ -812,12 +810,12 @@ coro::CoroTask<void> TraceIndex::initialize() {
             time_metric_ = co_await reader.read_time_metric();
         } catch (const std::exception& e) {
             DFTRACER_UTILS_LOG_WARN(
-                "TraceIndex: failed to resolve time_metric: %s", e.what());
+                "TraceIndex: failed to resolve time_metric: {}", e.what());
         }
         if (time_metric_ != TimeMetric::Us) {
             DFTRACER_UTILS_LOG_INFO(
-                "TraceIndex: trace time unit is %s (scaling viz to us)",
-                dstd::String(time_metric_to_string(time_metric_)).c_str());
+                "TraceIndex: trace time unit is {} (scaling viz to us)",
+                dstd::String(time_metric_to_string(time_metric_)));
         }
     }
 
@@ -838,23 +836,21 @@ coro::CoroTask<void> TraceIndex::initialize() {
                 const auto* schema = file_schemas[i];
                 if (schema && schema->id != record_schema_->id)
                     DFTRACER_UTILS_LOG_WARN(
-                        "TraceIndex: %s has record schema %s, not %s; a "
-                        "viewer serves files of one record schema",
-                        files_[i].path.c_str(), schema->id.c_str(),
-                        record_schema_->id.c_str());
+                        "TraceIndex: {} has record schema {}, not {}; a viewer "
+                        "serves files of one record schema",
+                        files_[i].path, schema->id, record_schema_->id);
             }
         } catch (const std::exception& e) {
             DFTRACER_UTILS_LOG_WARN(
-                "TraceIndex: failed to resolve the record schema: %s",
+                "TraceIndex: failed to resolve the record schema: {}",
                 e.what());
         }
     }
 
-    DFTRACER_UTILS_LOG_INFO("TraceIndex: found %zu trace files in %s",
-                            files_.size(), directory_.c_str());
+    DFTRACER_UTILS_LOG_INFO("TraceIndex: found {} trace files in {}",
+                            files_.size(), directory_);
     if (global_max_ts_ > 0) {
-        DFTRACER_UTILS_LOG_INFO("TraceIndex: global time range [%" PRIu64
-                                ", %" PRIu64 "] us",
+        DFTRACER_UTILS_LOG_INFO("TraceIndex: global time range [{}, {}] us",
                                 global_min_ts_, global_max_ts_);
     }
 
@@ -945,11 +941,11 @@ bool TraceIndex::load_persisted_viz_summary() {
         if (!deserialize_summary(r, *summary)) return false;
 
         set_viz_summary(std::move(summary));
-        DFTRACER_UTILS_LOG_INFO("TraceIndex: loaded cached viz summary from %s",
-                                path.c_str());
+        DFTRACER_UTILS_LOG_INFO("TraceIndex: loaded cached viz summary from {}",
+                                path);
         return true;
     } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_WARN("TraceIndex: viz summary cache load failed: %s",
+        DFTRACER_UTILS_LOG_WARN("TraceIndex: viz summary cache load failed: {}",
                                 e.what());
         return false;
     }
@@ -982,7 +978,7 @@ void TraceIndex::persist_viz_summary() const {
         }
     } catch (const std::exception& e) {
         DFTRACER_UTILS_LOG_WARN(
-            "TraceIndex: viz summary cache write failed: %s", e.what());
+            "TraceIndex: viz summary cache write failed: {}", e.what());
     }
 }
 
@@ -1023,8 +1019,8 @@ dstd::SharedPtr<const TraceIndex::FileChunkMeta> TraceIndex::chunk_meta(
             }
         } catch (const std::exception& e) {
             DFTRACER_UTILS_LOG_WARN(
-                "TraceIndex: chunk metadata read failed for %s: %s",
-                file.path.c_str(), e.what());
+                "TraceIndex: chunk metadata read failed for {}: {}", file.path,
+                e.what());
         }
     }
 

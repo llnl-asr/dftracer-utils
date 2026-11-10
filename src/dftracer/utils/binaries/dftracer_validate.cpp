@@ -143,7 +143,7 @@ static coro::CoroTask<int> run_validate(const ValidateArgParse* cli) {
 
     if (results.empty()) {
         DFTRACER_UTILS_LOG_ERROR(
-            "%s", "No trace files to validate (pass -d or --files)");
+            "{}", "No trace files to validate (pass -d or --files)");
         co_return 1;
     }
 
@@ -154,25 +154,24 @@ static coro::CoroTask<int> run_validate(const ValidateArgParse* cli) {
         total_lines += r.total_lines;
         if (r.ok) {
             ++passed;
-            DFTRACER_UTILS_LOG_DEBUG("valid: %s (%zu lines)", r.path.c_str(),
+            DFTRACER_UTILS_LOG_DEBUG("valid: {} ({} lines)", r.path,
                                      r.total_lines);
         } else {
             ++failed;
             if (!r.error.empty()) {
-                DFTRACER_UTILS_LOG_ERROR("unreadable: %s (%s)", r.path.c_str(),
-                                         r.error.c_str());
+                DFTRACER_UTILS_LOG_ERROR("unreadable: {} ({})", r.path,
+                                         r.error);
             } else {
                 DFTRACER_UTILS_LOG_ERROR(
-                    "invalid: %s (%zu of %zu lines bad, first at line %zu)",
-                    r.path.c_str(), r.invalid_lines, r.total_lines,
-                    r.first_bad_line);
+                    "invalid: {} ({} of {} lines bad, first at line {})",
+                    r.path, r.invalid_lines, r.total_lines, r.first_bad_line);
             }
         }
     }
 
     std::printf("Validated %zu file(s): %zu passed, %zu failed, %zu lines\n",
                 results.size(), passed, failed, total_lines);
-    DFTRACER_UTILS_LOG_DEBUG("Completed in %.2f ms", duration.count());
+    DFTRACER_UTILS_LOG_DEBUG("Completed in {:.2f} ms", duration.count());
 
     co_return failed == 0 ? 0 : 1;
 }

@@ -53,8 +53,8 @@ ThreadPoolExecutor::ThreadPoolExecutor(const ExecutorConfig& config)
     max_live_.store(threads + MAX_BLOCKING_REPLACEMENTS,
                     std::memory_order_relaxed);
     DFTRACER_UTILS_LOG_DEBUG(
-        "Executor created with %zu threads, idle_timeout=%lld s, "
-        "deadlock_timeout=%lld s",
+        "Executor created with {} threads, idle_timeout={} s, "
+        "deadlock_timeout={} s",
         threads, static_cast<long long>(idle_timeout_.count()),
         static_cast<long long>(config.deadlock_timeout.count()));
 }
@@ -67,7 +67,7 @@ ThreadPoolExecutor::~ThreadPoolExecutor() {
 
 dstd::Result<void> ThreadPoolExecutor::start() {
     if (running_) {
-        DFTRACER_UTILS_LOG_WARN("%s", "Executor already running");
+        DFTRACER_UTILS_LOG_WARN("{}", "Executor already running");
         return {};
     }
     coro::detail::install_monitor_from_env();
@@ -138,8 +138,8 @@ dstd::Result<void> ThreadPoolExecutor::start() {
     // Reclaims permits from long blocks; blocking can occur in any mode.
     sysmon_thread_ = dstd::Thread([this] { sysmon_loop(); });
 
-    DFTRACER_UTILS_LOG_DEBUG(
-        "Executor started with %zu worker threads (cap %zu)", floor, threads);
+    DFTRACER_UTILS_LOG_DEBUG("Executor started with {} worker threads (cap {})",
+                             floor, threads);
     return {};
 }
 
@@ -151,7 +151,7 @@ void ThreadPoolExecutor::shutdown() {
         return;
     }
 
-    DFTRACER_UTILS_LOG_DEBUG("%s", "Shutting down executor");
+    DFTRACER_UTILS_LOG_DEBUG("{}", "Shutting down executor");
     cancel_in_flight();
     quiesce();
     running_ = false;
@@ -218,7 +218,7 @@ void ThreadPoolExecutor::shutdown() {
     // coroutines whose FinalAwaiter ran on the main thread).
     coro::drain_thread_local_destroys();
 
-    DFTRACER_UTILS_LOG_DEBUG("%s", "Executor shutdown complete");
+    DFTRACER_UTILS_LOG_DEBUG("{}", "Executor shutdown complete");
 }
 
 void ThreadPoolExecutor::cancel_in_flight() {
@@ -239,7 +239,7 @@ void ThreadPoolExecutor::cancel_in_flight() {
             last_progress = Clock::now();
         } else if (Clock::now() - last_progress > NO_PROGRESS_GRACE) {
             DFTRACER_UTILS_LOG_WARN(
-                "Executor shutdown: %zu suspended frames did not wake when "
+                "Executor shutdown: {} suspended frames did not wake when "
                 "cancelled and are abandoned",
                 left);
             return;
@@ -534,7 +534,7 @@ void ThreadPoolExecutor::set_threads(std::size_t threads,
     while (live_workers_.load(std::memory_order_acquire) < floor &&
            spawn_worker(floor, /*best_effort=*/false)) {
     }
-    DFTRACER_UTILS_LOG_DEBUG("Executor threads %zu -> %zu (floor %zu)", old,
+    DFTRACER_UTILS_LOG_DEBUG("Executor threads {} -> {} (floor {})", old,
                              threads, floor);
 }
 
@@ -598,7 +598,7 @@ void ThreadPoolExecutor::monitor_loop() {
 }
 
 void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
-    DFTRACER_UTILS_LOG_DEBUG("Worker %zu started", context->worker_id);
+    DFTRACER_UTILS_LOG_DEBUG("Worker {} started", context->worker_id);
 
     set_current_worker_context(context);
     coro::CurrentScope current_scope{*this};
@@ -720,7 +720,7 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
     set_current_backend(nullptr);
     set_current_worker_context(nullptr);
 
-    DFTRACER_UTILS_LOG_DEBUG("Worker %zu terminated", context->worker_id);
+    DFTRACER_UTILS_LOG_DEBUG("Worker {} terminated", context->worker_id);
 }
 
 bool ThreadPoolExecutor::drive_until(
@@ -1152,8 +1152,8 @@ bool ThreadPoolExecutor::is_responsive() const {
     if (stalled > std::chrono::seconds(
                       deadlock_timeout_s_.load(std::memory_order_relaxed))) {
         DFTRACER_UTILS_LOG_WARN(
-            "Executor appears deadlocked: %zu threads, work pending, nothing "
-            "resumed for %lld ms",
+            "Executor appears deadlocked: {} threads, work pending, nothing "
+            "resumed for {} ms",
             thread_count_.load(std::memory_order_relaxed),
             static_cast<long long>(
                 std::chrono::duration_cast<std::chrono::milliseconds>(stalled)

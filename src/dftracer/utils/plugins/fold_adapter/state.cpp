@@ -36,8 +36,8 @@ const dstd::Path& SpillDir::path() {
         auto made =
             dftracer::utils::common::ScopedSpillSubdir::create("dftu_state");
         if (!made) {
-            DFTRACER_UTILS_LOG_ERROR("Plugin state spill directory: %s",
-                                     made.error().format().c_str());
+            DFTRACER_UTILS_LOG_ERROR("Plugin state spill directory: {}",
+                                     made.error().format());
             return empty_;
         }
         dir_.emplace(std::move(*made));
@@ -59,8 +59,8 @@ StateAccum::StateAccum(const RegisteredState& reg, std::uint64_t budget)
       budget_(dftracer::utils::memory::resolve_spill_budget(budget)) {
     state_ = reg.desc.init(reg.self);
     if (!state_)
-        DFTRACER_UTILS_LOG_ERROR("Plugin state '%s' init returned null",
-                                 reg.name.c_str());
+        DFTRACER_UTILS_LOG_ERROR("Plugin state '{}' init returned null",
+                                 reg.name);
 }
 
 StateAccum::~StateAccum() {
@@ -71,8 +71,8 @@ void StateAccum::update(const ::dftu_dataframe* df) {
     if (!state_ || !df) return;
     ::dftu_error err{};
     if (reg_->desc.update(state_, df, &err) != 0) {
-        DFTRACER_UTILS_LOG_ERROR("Plugin state '%s' update failed: %s",
-                                 reg_->name.c_str(), err_text(err));
+        DFTRACER_UTILS_LOG_ERROR("Plugin state '{}' update failed: {}",
+                                 reg_->name, err_text(err));
         return;
     }
     maybe_spill();
@@ -89,10 +89,10 @@ void StateAccum::maybe_spill() {
         if (!spill_refused_) {
             spill_refused_ = true;
             DFTRACER_UTILS_LOG_ERROR(
-                "Plugin state '%s' ran past the %llu byte memory budget but "
+                "Plugin state '{}' ran past the {} byte memory budget but "
                 "declares no serialize/deserialize pair, so the host cannot "
                 "spill it; it stays in memory and the budget is not honoured",
-                reg_->name.c_str(), static_cast<unsigned long long>(budget_));
+                reg_->name, static_cast<unsigned long long>(budget_));
         }
         return;
     }
@@ -101,8 +101,8 @@ void StateAccum::maybe_spill() {
     ::dftu_error err{};
     if (reg_->desc.serialize(state_, &out, &err) != 0 || !out.data) {
         if (out.free_fn) out.free_fn(const_cast<void*>(out.data), out.ud);
-        DFTRACER_UTILS_LOG_ERROR("Plugin state '%s' serialize failed: %s",
-                                 reg_->name.c_str(), err_text(err));
+        DFTRACER_UTILS_LOG_ERROR("Plugin state '{}' serialize failed: {}",
+                                 reg_->name, err_text(err));
         return;
     }
 
@@ -121,15 +121,14 @@ void StateAccum::maybe_spill() {
     }
     if (out.free_fn) out.free_fn(const_cast<void*>(out.data), out.ud);
     if (!written) {
-        DFTRACER_UTILS_LOG_ERROR("Plugin state '%s' could not write a run",
-                                 reg_->name.c_str());
+        DFTRACER_UTILS_LOG_ERROR("Plugin state '{}' could not write a run",
+                                 reg_->name);
         return;
     }
 
     DFTRACER_UTILS_LOG_DEBUG(
-        "Plugin state '%s' spilled run %zu past the %llu byte budget",
-        reg_->name.c_str(), runs_.size() - 1,
-        static_cast<unsigned long long>(budget_));
+        "Plugin state '{}' spilled run {} past the {} byte budget", reg_->name,
+        runs_.size() - 1, static_cast<unsigned long long>(budget_));
     reg_->desc.destroy(state_);
     state_ = reg_->desc.init(reg_->self);
 }
@@ -138,8 +137,8 @@ void StateAccum::merge(StateAccum& other) {
     if (!state_ || !other.state_) return;
     ::dftu_error err{};
     if (reg_->desc.merge(state_, other.state_, &err) != 0)
-        DFTRACER_UTILS_LOG_ERROR("Plugin state '%s' merge failed: %s",
-                                 reg_->name.c_str(), err_text(err));
+        DFTRACER_UTILS_LOG_ERROR("Plugin state '{}' merge failed: {}",
+                                 reg_->name, err_text(err));
     spill_refused_ = spill_refused_ || other.spill_refused_;
     adopt_runs(other);
     maybe_spill();
@@ -161,8 +160,7 @@ void StateAccum::drain_runs() {
         const auto read = dstd::fs::read_file(path.view());
         if (!read) {
             DFTRACER_UTILS_LOG_ERROR(
-                "Plugin state '%s' could not read run '%s'", reg_->name.c_str(),
-                path.c_str());
+                "Plugin state '{}' could not read run '{}'", reg_->name, path);
             continue;
         }
         const dstd::String& buf = *read;
@@ -171,13 +169,13 @@ void StateAccum::drain_runs() {
         ::dftu_error err{};
         void* run_state = reg_->desc.deserialize(reg_->self, in, &err);
         if (!run_state) {
-            DFTRACER_UTILS_LOG_ERROR("Plugin state '%s' deserialize failed: %s",
-                                     reg_->name.c_str(), err_text(err));
+            DFTRACER_UTILS_LOG_ERROR("Plugin state '{}' deserialize failed: {}",
+                                     reg_->name, err_text(err));
             continue;
         }
         if (reg_->desc.merge(state_, run_state, &err) != 0)
-            DFTRACER_UTILS_LOG_ERROR("Plugin state '%s' run merge failed: %s",
-                                     reg_->name.c_str(), err_text(err));
+            DFTRACER_UTILS_LOG_ERROR("Plugin state '{}' run merge failed: {}",
+                                     reg_->name, err_text(err));
         reg_->desc.destroy(run_state);
     }
     runs_.clear();
@@ -188,8 +186,8 @@ bool StateAccum::finalize(::dftu_result_value* out) {
     drain_runs();
     ::dftu_error err{};
     if (reg_->desc.finalize(state_, out, &err) != 0) {
-        DFTRACER_UTILS_LOG_ERROR("Plugin state '%s' finalize failed: %s",
-                                 reg_->name.c_str(), err_text(err));
+        DFTRACER_UTILS_LOG_ERROR("Plugin state '{}' finalize failed: {}",
+                                 reg_->name, err_text(err));
         return false;
     }
     return true;

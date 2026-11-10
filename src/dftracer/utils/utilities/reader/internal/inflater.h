@@ -100,10 +100,9 @@ class ReaderInflater {
         int fd, off_t& offset,
         const dftracer::utils::index::gzip::GzipMemberRecord& member,
         dstd::StringView window, std::size_t expected_out = 0) {
-        DFTRACER_UTILS_LOG_DEBUG("Seeking to member %" PRIu64
-                                 ": c_offset=%" PRIu64 ", uc_offset=%" PRIu64,
-                                 member.member_idx, member.c_offset,
-                                 member.uc_offset);
+        DFTRACER_UTILS_LOG_DEBUG(
+            "Seeking to member {}: c_offset={}, uc_offset={}",
+            member.member_idx, member.c_offset, member.uc_offset);
         reset();
         const auto begin_at_ok =
             co_await begin_at(fd, offset, member.c_offset, expected_out);

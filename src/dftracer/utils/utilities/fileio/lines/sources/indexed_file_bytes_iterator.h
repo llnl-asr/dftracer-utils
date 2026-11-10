@@ -92,7 +92,7 @@ class IndexedFileBytesIterator {
         stream_buffer_.resize(buffer_size_);
 
         DFTRACER_UTILS_LOG_DEBUG(
-            "IndexedFileBytesIterator: byte range %zu to %zu", start_byte_,
+            "IndexedFileBytesIterator: byte range {} to {}", start_byte_,
             end_byte_);
 
         // Create a LINE_BYTES stream for byte-range iteration

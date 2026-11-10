@@ -310,8 +310,8 @@ std::mutex& registry_mutex() {
 
 void close_all_at_shutdown() noexcept {
     if (auto closed = Store::close_all(); !closed) {
-        DFTRACER_UTILS_LOG_ERROR("store: close at exit: %s",
-                                 closed.error().format().c_str());
+        DFTRACER_UTILS_LOG_ERROR("store: close at exit: {}",
+                                 closed.error().format());
     }
 }
 
@@ -323,8 +323,8 @@ void Store::register_shutdown_close() {
     // The exit check registers here, so it runs after the hook that this adds
     // has stopped what holds memory.
     if (auto configured = common::configure_memory_from_env(); !configured) {
-        DFTRACER_UTILS_LOG_ERROR("store: memory settings: %s",
-                                 configured.error().format().c_str());
+        DFTRACER_UTILS_LOG_ERROR("store: memory settings: {}",
+                                 configured.error().format());
     }
     dstd::add_shutdown_hook(dstd::ShutdownStage::CloseStores,
                             &close_all_at_shutdown);

@@ -119,8 +119,8 @@ class StatsArgParse : public dftracer::utils::binaries::ArgParse {
         if (!duql_str.empty()) {
             auto result = Query::from_string(dstd::String(duql_str));
             if (!result) {
-                DFTRACER_UTILS_LOG_ERROR("Invalid --query: %s",
-                                         result.error().format().c_str());
+                DFTRACER_UTILS_LOG_ERROR("Invalid --query: {}",
+                                         result.error().format());
                 return false;
             }
             config.query = std::move(*result);
@@ -179,8 +179,8 @@ class StatsArgParse : public dftracer::utils::binaries::ArgParse {
             "top-names", "top-categories", "detailed"};
         if (std::find(valid_reports.begin(), valid_reports.end(), report_str) ==
             valid_reports.end()) {
-            DFTRACER_UTILS_LOG_ERROR("Invalid --report value: %s",
-                                     dstd::String(report_str).c_str());
+            DFTRACER_UTILS_LOG_ERROR("Invalid --report value: {}",
+                                     dstd::String(report_str));
             return false;
         }
 
@@ -190,9 +190,9 @@ class StatsArgParse : public dftracer::utils::binaries::ArgParse {
             if (std::find(valid_dims.begin(), valid_dims.end(), dim) ==
                 valid_dims.end()) {
                 DFTRACER_UTILS_LOG_ERROR(
-                    "Invalid --group-by dimension: %s. Valid: name, cat, pid, "
+                    "Invalid --group-by dimension: {}. Valid: name, cat, pid, "
                     "tid, fhash, hhash, pid_tid",
-                    dstd::String(dim).c_str());
+                    dstd::String(dim));
                 return false;
             }
         }
@@ -714,8 +714,8 @@ static coro::CoroTask<void> process_file_detailed(
                 }
             }
         } catch (const std::exception& e) {
-            DFTRACER_UTILS_LOG_WARN("Hash resolution failed for %s: %s",
-                                    file_path.c_str(), e.what());
+            DFTRACER_UTILS_LOG_WARN("Hash resolution failed for {}: {}",
+                                    file_path, e.what());
         }
     }
 
@@ -862,8 +862,7 @@ static coro::CoroTask<dstd::Vector<dstd::String>> collect_files(
     dstd::String directory) {
     if (!directory.empty()) {
         if (!common::input_exists(directory)) {
-            DFTRACER_UTILS_LOG_ERROR("Directory does not exist: %s",
-                                     directory.c_str());
+            DFTRACER_UTILS_LOG_ERROR("Directory does not exist: {}", directory);
             co_return dstd::Vector<dstd::String>{};
         }
 
@@ -872,8 +871,7 @@ static coro::CoroTask<dstd::Vector<dstd::String>> collect_files(
                 ctx, directory, /*recursive=*/true);
 
         if (files.empty()) {
-            DFTRACER_UTILS_LOG_ERROR("No trace files found in: %s",
-                                     directory.c_str());
+            DFTRACER_UTILS_LOG_ERROR("No trace files found in: {}", directory);
         }
         dstd::Vector<dstd::String> converted;
         converted.reserve(files.size());
@@ -883,7 +881,7 @@ static coro::CoroTask<dstd::Vector<dstd::String>> collect_files(
 
     if (cli_files.empty()) {
         DFTRACER_UTILS_LOG_ERROR(
-            "%s", "No files or directory specified. Use --help for usage.");
+            "{}", "No files or directory specified. Use --help for usage.");
     }
     co_return cli_files;
 }
@@ -986,10 +984,9 @@ static coro::CoroTask<void> auto_index_files(IndexPartition& partition,
         auto batch_result = co_await run_batch_build(std::move(batch_config));
 
         DFTRACER_UTILS_LOG_INFO(
-            "Shared root auto-index metrics: root=%s files=%zu "
-            "enqueued=%zu parsed=%zu written=%zu "
-            "parse=%.2fms writer_db=%.2fms",
-            index_path.c_str(), partition.files_needing_index.size(),
+            "Shared root auto-index metrics: root={} files={} enqueued={} "
+            "parsed={} written={} parse={:.2f}ms writer_db={:.2f}ms",
+            index_path, partition.files_needing_index.size(),
             batch_result.metrics.files_enqueued,
             batch_result.metrics.files_parsed,
             batch_result.metrics.files_written,
@@ -998,9 +995,9 @@ static coro::CoroTask<void> auto_index_files(IndexPartition& partition,
 
         for (const auto& result : batch_result.results) {
             if (!result.success && !result.error_message.empty()) {
-                DFTRACER_UTILS_LOG_ERROR("Auto-indexing failed for %s: %s",
-                                         result.file_path.c_str(),
-                                         result.error_message.c_str());
+                DFTRACER_UTILS_LOG_ERROR("Auto-indexing failed for {}: {}",
+                                         result.file_path,
+                                         result.error_message);
             }
         }
 
@@ -1325,7 +1322,7 @@ static coro::CoroTask<void> process_index_group(
             indexed_stats_ptr->emplace_back(rf->file_index, std::move(stats));
         }
     } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_ERROR("Indexed stats batch failed for %s: %s",
+        DFTRACER_UTILS_LOG_ERROR("Indexed stats batch failed for {}: {}",
                                  index_path_ptr->c_str(), e.what());
         if (needs_per_file_results) {
             std::lock_guard<std::mutex> lock(*stats_mutex_ptr);
@@ -1466,7 +1463,7 @@ static coro::CoroTask<int> output_aggregate_stats(
             print_text_query_output(agg->total, output);
         }
         DFTRACER_UTILS_LOG_INFO(
-            "Stats read metrics: report=%d elapsed=%.2fms",
+            "Stats read metrics: report={} elapsed={:.2f}ms",
             static_cast<int>(config_ptr->report_type),
             static_cast<double>(agg->read_elapsed_ns) / 1'000'000.0);
         std::printf("  Processing Time: %.2f ms\n", duration_ms);
@@ -1517,9 +1514,9 @@ static coro::CoroTask<int> run_stats(coro::Scope& ctx,
                 common::unwrap(dstd::fs::exists(dstd::PathView(
                     dftracer::utils::index::store_dir(trusted_index_path))));
             DFTRACER_UTILS_LOG_DEBUG(
-                "Stats direct-index decision: directory=%s index_path=%s "
-                "exists=%d json=%d report=%d",
-                config.directory.c_str(), trusted_index_path.c_str(),
+                "Stats direct-index decision: directory={} index_path={} "
+                "exists={} json={} report={}",
+                config.directory, trusted_index_path,
                 trusted_index_exists ? 1 : 0, config.json_output ? 1 : 0,
                 static_cast<int>(config.report_type));
             if (trusted_index_exists) {
@@ -1557,8 +1554,8 @@ static coro::CoroTask<int> run_stats(coro::Scope& ctx,
     if (!partition.files_needing_index.empty()) {
         if (config.no_auto_index) {
             DFTRACER_UTILS_LOG_ERROR(
-                "Missing index for %zu file(s) and --no-auto-index is "
-                "set. Run dftracer_index first.",
+                "Missing index for {} file(s) and --no-auto-index is set. Run "
+                "dftracer_index first.",
                 partition.files_needing_index.size());
             for (const auto& f : partition.files_needing_index) {
                 std::fprintf(stderr, "  Missing index: %s\n",

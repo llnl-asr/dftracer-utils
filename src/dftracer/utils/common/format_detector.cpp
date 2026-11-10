@@ -18,8 +18,8 @@ ArchiveFormat FormatDetector::detect(dstd::StringView file_path) {
     const dstd::String path(file_path);
     dstd::ScopedFile file(std::fopen(path.c_str(), "rb"));
     if (!file) {
-        DFTRACER_UTILS_LOG_ERROR("Failed to open file for format detection: %s",
-                                 path.c_str());
+        DFTRACER_UTILS_LOG_ERROR("Failed to open file for format detection: {}",
+                                 path);
         return ArchiveFormat::Unknown;
     }
 

@@ -37,14 +37,13 @@ const StringMatch& resolve_string_match(dstd::StringView request,
     if (request == "jcc") {
         if (const StringMatch* jcc = jcc_table()) return *jcc;
         DFTRACER_UTILS_LOG_WARN(
-            "%s=jcc, but this build has no jcc string kernels; using plain",
+            "{}=jcc, but this build has no jcc string kernels; using plain",
             common::constants::string_kernel_settings::KERNEL_ENV);
         return plain::table();
     }
     DFTRACER_UTILS_LOG_WARN(
-        "%s=%.*s is not plain, jcc or auto; using auto",
-        common::constants::string_kernel_settings::KERNEL_ENV,
-        static_cast<int>(request.size()), request.data());
+        "{}={} is not plain, jcc or auto; using auto",
+        common::constants::string_kernel_settings::KERNEL_ENV, request);
     return auto_table(cpu_affected);
 }
 

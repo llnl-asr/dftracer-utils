@@ -79,7 +79,7 @@ const ::dftu_op_desc* host_ops_find(void*, const char* name) {
 // morsel first. Talk to a peer during the scan through ports instead.
 int host_ops_register(void*, const ::dftu_op_desc* desc) {
     DFTRACER_UTILS_LOG_ERROR(
-        "Plugin op '%s' refused: register from the plugin factory, which runs "
+        "Plugin op '{}' refused: register from the plugin factory, which runs "
         "before the scan; the scan-time host does not register ops",
         desc && desc->name ? desc->name : "(null)");
     return -1;
@@ -94,7 +94,7 @@ const ::dftu_svc_ops g_ops = {host_ops_run,       host_ops_run_aggregate,
 int detail::register_plugin_op(const ::dftu_op_desc* desc) {
     if (desc && refuse_plugin_op_name(desc->name)) {
         DFTRACER_UTILS_LOG_ERROR(
-            "Plugin op '%s' refused: the bare and 'dftu.' namespaces hold the "
+            "Plugin op '{}' refused: the bare and 'dftu.' namespaces hold the "
             "host's built-in ops, so a plugin op must be '<plugin>.<name>'",
             desc->name ? desc->name : "(null)");
         return -1;

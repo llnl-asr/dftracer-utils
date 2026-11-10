@@ -1806,7 +1806,7 @@ class NodeCursor final : public Cursor {
             auto awaited = co_await std::move(awaiting);
             awaited_ok = awaited.has_value();
             if (!awaited_ok)
-                DFTRACER_UTILS_LOG_WARN("plugin node narrow failed: %s",
+                DFTRACER_UTILS_LOG_WARN("plugin node narrow failed: {}",
                                         awaited.error().c_str());
         }
         ::dftu_expr_free(h);
@@ -5708,7 +5708,7 @@ class GuardCursor final : public Cursor {
         if (settled.stopped) co_await coro::stop_here();
         if (settled.exception)
             DFTRACER_UTILS_LOG_WARN(
-                "source narrow failed: %s",
+                "source narrow failed: {}",
                 common::error_of_exception(settled.exception).c_str());
         co_return settled.value.has_value() && *settled.value;
     }
@@ -5723,7 +5723,7 @@ class GuardCursor final : public Cursor {
         if (settled.stopped) co_await coro::stop_here();
         if (settled.exception)
             DFTRACER_UTILS_LOG_WARN(
-                "source reclaim failed: %s",
+                "source reclaim failed: {}",
                 common::error_of_exception(settled.exception).c_str());
         co_return settled.value.has_value() ? *settled.value : 0;
     }

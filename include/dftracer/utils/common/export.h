@@ -27,4 +27,12 @@
 
 #define DFTU_PLUGIN_EXPORT DFTU_EXPORT
 
+#if defined(_MSC_VER)
+#define DFTRACER_UTILS_NOINLINE __declspec(noinline)
+#elif defined(__GNUC__) || defined(__clang__)
+#define DFTRACER_UTILS_NOINLINE __attribute__((noinline))
+#else
+#define DFTRACER_UTILS_NOINLINE
+#endif
+
 #endif  // DFTRACER_UTILS_COMMON_EXPORT_H

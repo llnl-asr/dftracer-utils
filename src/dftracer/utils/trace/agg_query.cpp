@@ -549,8 +549,8 @@ coro::CoroTask<void> Runner::file_task(std::size_t source, std::size_t file,
         co_return;
     });
     if (dropped.load() > 0)
-        DFTRACER_UTILS_LOG_WARN("%s: %zu line(s) could not be read in full",
-                                path.c_str(), dropped.load());
+        DFTRACER_UTILS_LOG_WARN("{}: {} line(s) could not be read in full",
+                                path, dropped.load());
 }
 
 coro::CoroTask<void> Runner::chunk_task(Source* source,

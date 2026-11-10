@@ -36,9 +36,7 @@ bool PosixExecutor::execute(const Trace& trace, const ReplayConfig& config) {
     dstd::StringView func_name = trace.func_name;
 
     if (config.dry_run) {
-        DFTRACER_UTILS_LOG_DEBUG("DRY RUN: Would execute POSIX %.*s",
-                                 static_cast<int>(func_name.size()),
-                                 func_name.data());
+        DFTRACER_UTILS_LOG_DEBUG("DRY RUN: Would execute POSIX {}", func_name);
         return true;
     }
 
@@ -59,9 +57,7 @@ bool PosixExecutor::execute(const Trace& trace, const ReplayConfig& config) {
         return execute_stat(trace, config);
     }
 
-    DFTRACER_UTILS_LOG_DEBUG("Unsupported POSIX function: %.*s",
-                             static_cast<int>(func_name.size()),
-                             func_name.data());
+    DFTRACER_UTILS_LOG_DEBUG("Unsupported POSIX function: {}", func_name);
     return false;
 }
 
@@ -92,15 +88,13 @@ bool PosixExecutor::execute_open(const Trace& trace,
                                        {.access = dstd::Access::ReadWrite,
                                         .creation = dstd::Creation::IfNeeded});
         if (opened) {
-            DFTRACER_UTILS_LOG_DEBUG("Opened file %s with fd %d",
-                                     file_path.c_str(),
+            DFTRACER_UTILS_LOG_DEBUG("Opened file {} with fd {}", file_path,
                                      opened->native_handle());
             open_files_[trace.fhash] = OpenFile{std::move(*opened), 0};
             return true;
         } else {
-            DFTRACER_UTILS_LOG_ERROR("Failed to open file %s: %s",
-                                     file_path.c_str(),
-                                     opened.error().format().c_str());
+            DFTRACER_UTILS_LOG_ERROR("Failed to open file {}: {}", file_path,
+                                     opened.error().format());
             return false;
         }
     }
@@ -115,9 +109,7 @@ bool PosixExecutor::execute_close(const Trace& trace,
     auto it = open_files_.find(trace.fhash);
     if (it != open_files_.end()) {
         open_files_.erase(it);
-        DFTRACER_UTILS_LOG_DEBUG("Closed file with hash %.*s",
-                                 static_cast<int>(trace.fhash.size()),
-                                 trace.fhash.data());
+        DFTRACER_UTILS_LOG_DEBUG("Closed file with hash {}", trace.fhash);
     }
 
     return true;
@@ -131,7 +123,7 @@ void PosixExecutor::ensure_io_buffer(std::size_t size) {
 
 bool PosixExecutor::execute_read(const Trace& trace,
                                  const ReplayConfig& config) {
-    DFTRACER_UTILS_LOG_DEBUG("Executing POSIX read (size: %lld)",
+    DFTRACER_UTILS_LOG_DEBUG("Executing POSIX read (size: {})",
                              static_cast<long long>(trace.size));
 
     auto it = open_files_.find(trace.fhash);
@@ -146,7 +138,7 @@ bool PosixExecutor::execute_read(const Trace& trace,
                 reinterpret_cast<std::uint8_t*>(io_buffer_.data()), n));
         if (bytes_read) open.position += *bytes_read;
         DFTRACER_UTILS_LOG_DEBUG(
-            "Read %zd bytes",
+            "Read {} bytes",
             bytes_read ? static_cast<ssize_t>(*bytes_read) : ssize_t{-1});
     }
 
@@ -155,7 +147,7 @@ bool PosixExecutor::execute_read(const Trace& trace,
 
 bool PosixExecutor::execute_write(const Trace& trace,
                                   const ReplayConfig& config) {
-    DFTRACER_UTILS_LOG_DEBUG("Executing POSIX write (size: %lld)",
+    DFTRACER_UTILS_LOG_DEBUG("Executing POSIX write (size: {})",
                              static_cast<long long>(trace.size));
 
     auto it = open_files_.find(trace.fhash);
@@ -168,7 +160,7 @@ bool PosixExecutor::execute_write(const Trace& trace,
             open.position, dstd::ByteView(io_buffer_.data(), write_size));
         if (bytes_written) open.position += *bytes_written;
         DFTRACER_UTILS_LOG_DEBUG(
-            "Wrote %zd bytes",
+            "Wrote {} bytes",
             bytes_written ? static_cast<ssize_t>(*bytes_written) : ssize_t{-1});
     }
 
@@ -177,13 +169,13 @@ bool PosixExecutor::execute_write(const Trace& trace,
 
 bool PosixExecutor::execute_seek(const Trace& trace,
                                  [[maybe_unused]] const ReplayConfig& config) {
-    DFTRACER_UTILS_LOG_DEBUG("Executing POSIX seek (offset: %lld)",
+    DFTRACER_UTILS_LOG_DEBUG("Executing POSIX seek (offset: {})",
                              static_cast<long long>(trace.offset));
 
     auto it = open_files_.find(trace.fhash);
     if (it != open_files_.end() && trace.offset >= 0) {
         it->second.position = static_cast<std::uint64_t>(trace.offset);
-        DFTRACER_UTILS_LOG_DEBUG("Seek to offset %lld",
+        DFTRACER_UTILS_LOG_DEBUG("Seek to offset {}",
                                  static_cast<long long>(trace.offset));
     }
 
@@ -195,9 +187,7 @@ bool PosixExecutor::execute_stat([[maybe_unused]] const Trace& trace,
     DFTRACER_UTILS_LOG_DEBUG("Executing POSIX stat");
 
     if (!trace.fhash.empty()) {
-        DFTRACER_UTILS_LOG_DEBUG("Would stat file with hash %.*s",
-                                 static_cast<int>(trace.fhash.size()),
-                                 trace.fhash.data());
+        DFTRACER_UTILS_LOG_DEBUG("Would stat file with hash {}", trace.fhash);
     }
 
     return true;
@@ -224,16 +214,13 @@ bool DFTracerExecutor::execute(const Trace& trace, const ReplayConfig& config) {
     if (config.no_sleep) {
         if (duration_us >= 100000.0) {
             DFTRACER_UTILS_LOG_DEBUG(
-                "DFTracer would sleep for %.3f ms for %.*s (skipped)",
-                duration_us / 1000.0, static_cast<int>(trace.func_name.size()),
-                trace.func_name.data());
+                "DFTracer would sleep for {:.3f} ms for {} (skipped)",
+                duration_us / 1000.0, trace.func_name);
         }
     } else {
         if (duration_us >= 100.0) {
-            DFTRACER_UTILS_LOG_DEBUG("DFTracer sleeping for %.3f ms for %.*s",
-                                     duration_us / 1000.0,
-                                     static_cast<int>(trace.func_name.size()),
-                                     trace.func_name.data());
+            DFTRACER_UTILS_LOG_DEBUG("DFTracer sleeping for {:.3f} ms for {}",
+                                     duration_us / 1000.0, trace.func_name);
         }
         sleep_for_duration(duration_us);
     }

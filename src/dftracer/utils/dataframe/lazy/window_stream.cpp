@@ -663,11 +663,10 @@ class WindowStreamCursor : public Cursor {
                     planned_ = true;
                     if (mode_ == Carry::Aligned)
                         DFTRACER_UTILS_LOG_DEBUG(
-                            "window: whole partitions, because of %s",
-                            why_.c_str());
+                            "window: whole partitions, because of {}", why_);
                     else
                         DFTRACER_UTILS_LOG_DEBUG(
-                            "window: chunks cut inside partitions (%s)",
+                            "window: chunks cut inside partitions ({})",
                             mode_ == Carry::Seed ? "seed row" : "context rows");
                     if (mode_ != Carry::Aligned && seq_) {
                         auto sorting = sort_pass(std::move(*m), max_rows);

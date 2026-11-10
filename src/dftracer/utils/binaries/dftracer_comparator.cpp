@@ -131,8 +131,8 @@ static coro::CoroTask<void> aggregate_all(
         static_cast<std::uint64_t>(config.defaults.time_interval_ms * 1000.0),
         workers, strings);
     if (!result) {
-        DFTRACER_UTILS_LOG_ERROR("Aggregation failed: %s",
-                                 result.error().format().c_str());
+        DFTRACER_UTILS_LOG_ERROR("Aggregation failed: {}",
+                                 result.error().format());
         failed = true;
         co_return;
     }
@@ -164,7 +164,7 @@ coro::CoroTask<void> resolve_and_build(const ComparisonConfig& config,
                                        dstd::Vector<dstd::String>& out_files,
                                        std::size_t parallelism) {
     if (!common::input_exists(path)) {
-        DFTRACER_UTILS_LOG_ERROR("Path does not exist: %s", path.c_str());
+        DFTRACER_UTILS_LOG_ERROR("Path does not exist: {}", path);
         co_return;
     }
 
@@ -186,13 +186,12 @@ coro::CoroTask<void> resolve_and_build(const ComparisonConfig& config,
         out_files.emplace_back(f.data(), f.size());
 
     if (out_files.empty()) {
-        DFTRACER_UTILS_LOG_ERROR("No trace files found in: %s", path.c_str());
+        DFTRACER_UTILS_LOG_ERROR("No trace files found in: {}", path);
         co_return;
     }
     for (const auto& failure : result.failures) {
-        DFTRACER_UTILS_LOG_WARN("Could not index %s: %s",
-                                failure.file_path.c_str(),
-                                failure.message.c_str());
+        DFTRACER_UTILS_LOG_WARN("Could not index {}: {}", failure.file_path,
+                                failure.message);
     }
 }
 
@@ -352,7 +351,7 @@ static dstd::Optional<ComparisonConfig> build_comparison_config(
         dstd::String error;
         auto parsed = ComparisonConfig::from_json_file(config_path, error);
         if (!parsed) {
-            DFTRACER_UTILS_LOG_ERROR("Config error: %s", error.c_str());
+            DFTRACER_UTILS_LOG_ERROR("Config error: {}", error);
             return dstd::nullopt;
         }
         config = std::move(*parsed);
@@ -365,8 +364,8 @@ static dstd::Optional<ComparisonConfig> build_comparison_config(
         auto parsed =
             ComparisonConfig::from_preset(preset, baseline_path, variant_path);
         if (!parsed) {
-            DFTRACER_UTILS_LOG_ERROR("Unknown preset: %s. Supported: dlio",
-                                     preset.c_str());
+            DFTRACER_UTILS_LOG_ERROR("Unknown preset: {}. Supported: dlio",
+                                     preset);
             return dstd::nullopt;
         }
         config = std::move(*parsed);
@@ -433,16 +432,15 @@ static bool build_agg_plans(const ComparisonConfig& config,
             if (!visitor->composed_query.empty()) {
                 auto query = duql::Query::from_string(visitor->composed_query);
                 if (!query) {
-                    DFTRACER_UTILS_LOG_ERROR("Invalid query for node '%s': %s",
-                                             visitor->name.c_str(),
-                                             query.error().format().c_str());
+                    DFTRACER_UTILS_LOG_ERROR("Invalid query for node '{}': {}",
+                                             visitor->name,
+                                             query.error().format());
                     return false;
                 }
                 auto translated = filter_from_query(*query);
                 if (!translated) {
-                    DFTRACER_UTILS_LOG_ERROR(
-                        "Node '%s': %s", visitor->name.c_str(),
-                        translated.error().format().c_str());
+                    DFTRACER_UTILS_LOG_ERROR("Node '{}': {}", visitor->name,
+                                             translated.error().format());
                     return false;
                 }
                 filter = std::move(*translated);
@@ -495,7 +493,7 @@ static int run_comparator(const ComparatorArgParse* cli) {
                 co_return co_await compare_sides(state, same_files);
             });
     } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_ERROR("Run failed: %s", e.what());
+        DFTRACER_UTILS_LOG_ERROR("Run failed: {}", e.what());
         return 1;
     }
 }

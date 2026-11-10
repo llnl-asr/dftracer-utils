@@ -177,9 +177,7 @@ dstd::SharedPtr<CacheStore> CacheStore::open(dstd::StringView path, Mode mode) {
                 if (!closed) {
                     const dstd::String text = closed.error().format();
                     DFTRACER_UTILS_LOG_WARN(
-                        "cache store: close the removed %.*s: %.*s",
-                        static_cast<int>(path.size()), path.data(),
-                        static_cast<int>(text.size()), text.data());
+                        "cache store: close the removed {}: {}", path, text);
                 }
                 all.roots.erase(held);
                 held = all.roots.end();

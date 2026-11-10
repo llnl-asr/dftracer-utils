@@ -311,7 +311,7 @@ static coro::CoroTask<void> verify_output(const dstd::String& final_output,
     ExportStats vs = co_await v.sink_json(ns);
     if (vs.events_matched != expected_events) {
         DFTRACER_UTILS_LOG_ERROR(
-            "Verify failed: wrote %llu events but re-scan found %llu",
+            "Verify failed: wrote {} events but re-scan found {}",
             (unsigned long long)expected_events,
             (unsigned long long)vs.events_matched);
         verify_failed = true;
@@ -422,10 +422,8 @@ static bool parse_agg(dstd::StringView spec, dstd::Vector<AggSpec>& out) {
                        dstd::StringView::npos) {
             // pNN shorthand: p50/p90/p99/p999 -> the 0.NN quantile of FIELD.
             if (field.empty()) {
-                DFTRACER_UTILS_LOG_ERROR("%.*s needs a field, e.g. %.*s:dur",
-                                         static_cast<int>(op.size()), op.data(),
-                                         static_cast<int>(op.size()),
-                                         op.data());
+                DFTRACER_UTILS_LOG_ERROR("{} needs a field, e.g. {}:dur", op,
+                                         op);
                 return false;
             }
             double denom = 1.0;
@@ -436,8 +434,7 @@ static bool parse_agg(dstd::StringView spec, dstd::Vector<AggSpec>& out) {
                                   text(op) + "_" + text(field), "",
                                   digits / denom));
         } else {
-            DFTRACER_UTILS_LOG_ERROR("Unknown --agg reducer: %.*s",
-                                     static_cast<int>(tok.size()), tok.data());
+            DFTRACER_UTILS_LOG_ERROR("Unknown --agg reducer: {}", tok);
             return false;
         }
     }
@@ -510,15 +507,14 @@ static bool resolve_view_definition(const ViewArgParse& cli,
             view = ViewDefinition::dlio_view();
         } else {
             DFTRACER_UTILS_LOG_ERROR(
-                "Unknown preset: %s. Use: io, compute, "
-                "dlio",
-                dstd::String(preset).c_str());
+                "Unknown preset: {}. Use: io, compute, dlio",
+                dstd::String(preset));
             return false;
         }
     } else if (!recipe_path.empty()) {
         if (!common::unwrap(dstd::fs::exists(dstd::PathView(recipe_path)))) {
-            DFTRACER_UTILS_LOG_ERROR("Recipe file not found: %s",
-                                     dstd::String(recipe_path).c_str());
+            DFTRACER_UTILS_LOG_ERROR("Recipe file not found: {}",
+                                     dstd::String(recipe_path));
             return false;
         }
         auto json_content =
@@ -536,14 +532,14 @@ static bool parse_params(const ViewArgParse& cli, duql::Params& out) {
         const dstd::String kv(param);
         const auto eq = kv.find('=');
         if (eq == dstd::String::npos || eq == 0) {
-            DFTRACER_UTILS_LOG_ERROR("Invalid --param '%s': use name=value",
-                                     kv.c_str());
+            DFTRACER_UTILS_LOG_ERROR("Invalid --param '{}': use name=value",
+                                     kv);
             return false;
         }
         auto value = duql::parse_param(dstd::StringView(kv).substr(eq + 1));
         if (!value) {
-            DFTRACER_UTILS_LOG_ERROR("Invalid --param '%s': %s", kv.c_str(),
-                                     value.error().message.c_str());
+            DFTRACER_UTILS_LOG_ERROR("Invalid --param '{}': {}", kv,
+                                     value.error().message);
             return false;
         }
         out.insert_or_assign(kv.substr(0, eq), std::move(*value));
@@ -607,9 +603,9 @@ static bool parse_phase(dstd::StringView phase, Phase& out) {
         out = Phase::Any;
     else {
         DFTRACER_UTILS_LOG_ERROR(
-            "Unknown --phase: %s. Use events, counters, aggregated, "
-            "metadata, or any.",
-            dstd::String(phase).c_str());
+            "Unknown --phase: {}. Use events, counters, aggregated, metadata, "
+            "or any.",
+            dstd::String(phase));
         return false;
     }
     return true;
@@ -623,8 +619,8 @@ static bool collect_input_files(const ViewArgParse& cli,
         // Self-describing: ShardedView enumerates files from each shard index.
     } else if (!directory.empty()) {
         if (!common::input_exists(dstd::CStringView(directory.data()))) {
-            DFTRACER_UTILS_LOG_ERROR("Directory does not exist: %s",
-                                     dstd::String(directory).c_str());
+            DFTRACER_UTILS_LOG_ERROR("Directory does not exist: {}",
+                                     dstd::String(directory));
             return false;
         }
 
@@ -638,15 +634,15 @@ static bool collect_input_files(const ViewArgParse& cli,
         std::sort(files.begin(), files.end());
 
         if (files.empty()) {
-            DFTRACER_UTILS_LOG_ERROR("No trace files found in: %s",
-                                     dstd::String(directory).c_str());
+            DFTRACER_UTILS_LOG_ERROR("No trace files found in: {}",
+                                     dstd::String(directory));
             return false;
         }
     }
     for (const auto file : cli.inputs.files) files.emplace_back(file);
     if (shard_set_root.empty() && files.empty()) {
         DFTRACER_UTILS_LOG_ERROR(
-            "%s", "No files or folder specified. Use --help for usage.");
+            "{}", "No files or folder specified. Use --help for usage.");
         return false;
     }
     return true;
@@ -669,8 +665,7 @@ static bool check_missing_indexes(const dstd::Vector<dstd::String>& files,
     if (!files_needing_index.empty()) {
         if (no_auto_index) {
             DFTRACER_UTILS_LOG_ERROR(
-                "Missing .dftindex store for %zu file(s) and --no-auto-index "
-                "is "
+                "Missing .dftindex store for {} file(s) and --no-auto-index is "
                 "set. Run dftracer_index first.",
                 files_needing_index.size());
             for (const auto& f : files_needing_index) {
@@ -857,7 +852,7 @@ dstd::Optional<int> ViewRun::probe_duql() {
             probe = probe.record_schema(dstd::String(cli->record_schema));
         plan = probe.explain_duql(duql_str, duql_params);
     } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_ERROR("Invalid --duql: %s", e.what());
+        DFTRACER_UTILS_LOG_ERROR("Invalid --duql: {}", e.what());
         return 1;
     }
     if (cli->explain) {
@@ -930,8 +925,8 @@ coro::CoroTask<void> ViewRun::run_distributed_aggregate(
                     consolidate_shard_set(idx_root);
                 } catch (const std::exception& e) {
                     index_merge_failed = true;
-                    DFTRACER_UTILS_LOG_ERROR("shards not merged into %s: %s",
-                                             idx_root.c_str(), e.what());
+                    DFTRACER_UTILS_LOG_ERROR("shards not merged into {}: {}",
+                                             idx_root, e.what());
                 }
             }
         }
@@ -987,8 +982,8 @@ coro::CoroTask<void> ViewRun::run_distributed_write(
         const auto merge_rc =
             co_await fileio::parallel::merge_shards(final_output, rank_outs);
         if (merge_rc != 0) {
-            DFTRACER_UTILS_LOG_ERROR("merge_shards failed for %s",
-                                     final_output.c_str());
+            DFTRACER_UTILS_LOG_ERROR("merge_shards failed for {}",
+                                     final_output);
         } else if (!no_index) {
             dstd::String file_arg{dstd::StringView(final_output)};
             dstd::String dir_arg{dstd::StringView(index_dir)};
@@ -1120,12 +1115,12 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
 
     if (!parse_params(*cli, run.duql_params)) co_return 1;
     if (cli->explain && run.duql_str.empty()) {
-        DFTRACER_UTILS_LOG_ERROR("%s", "--explain needs --query.");
+        DFTRACER_UTILS_LOG_ERROR("{}", "--explain needs --query.");
         co_return 1;
     }
     if (!run.duql_str.empty() && !save_recipe.empty()) {
         DFTRACER_UTILS_LOG_ERROR(
-            "%s",
+            "{}",
             "--save-recipe does not store --duql; write the filter "
             "into the recipe instead.");
         co_return 1;
@@ -1151,7 +1146,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
 
     if (run.mv_mode && !run.aggregate) {
         DFTRACER_UTILS_LOG_ERROR(
-            "%s", "--materialize needs an aggregation (--group-by/--agg).");
+            "{}", "--materialize needs an aggregation (--group-by/--agg).");
         co_return 1;
     }
 
@@ -1162,7 +1157,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
         !run.aggregate && !run.merge && !run.typed_mode && !run.mv_mode &&
         !run.ct_mode && !run.fg_mode) {
         DFTRACER_UTILS_LOG_ERROR(
-            "%s",
+            "{}",
             "Nothing to do. Use --preset, --recipe, --duql, --time-range, "
             "--merge, --call-tree, --flamegraph, or --group-by/--agg.");
         co_return 1;
@@ -1187,7 +1182,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
 
     if (!run.shard_set_root.empty() && !run.aggregate && !run.counters) {
         DFTRACER_UTILS_LOG_ERROR(
-            "%s",
+            "{}",
             "A shard set supports only aggregate/counter queries "
             "(--group-by/--agg/--counters).");
         co_return 1;
@@ -1208,7 +1203,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
         (run.aggregate || run.counters || run.typed_mode || run.mv_mode ||
          run.ct_mode || run.fg_mode || run.merge)) {
         DFTRACER_UTILS_LOG_ERROR(
-            "%s",
+            "{}",
             "--duql stages after the scan do not combine with "
             "aggregation, counters, typed, materialize, call-tree, "
             "flamegraph or merge output.");
@@ -1234,8 +1229,8 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
     if (!run.final_output.empty() && !run.write_trace) {
         run.out_file = std::fopen(run.final_output.c_str(), "w");
         if (!run.out_file) {
-            DFTRACER_UTILS_LOG_ERROR("Failed to open output file: %s",
-                                     run.final_output.c_str());
+            DFTRACER_UTILS_LOG_ERROR("Failed to open output file: {}",
+                                     run.final_output);
             co_return 1;
         }
     }
@@ -1251,7 +1246,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                                   co_await run.run();
                               });
     } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_ERROR("Run failed: %s", e.what());
+        DFTRACER_UTILS_LOG_ERROR("Run failed: {}", e.what());
         co_return 1;
     }
 
@@ -1278,13 +1273,13 @@ int main(int argc, char** argv) {
             try {
                 auto code = run_view(&cli).get();
                 if (!code) {
-                    DFTRACER_UTILS_LOG_ERROR("Fatal: %s",
-                                             code.error().format().c_str());
+                    DFTRACER_UTILS_LOG_ERROR("Fatal: {}",
+                                             code.error().format());
                     return 1;
                 }
                 return *code;
             } catch (const std::exception& e) {
-                DFTRACER_UTILS_LOG_ERROR("Fatal: %s", e.what());
+                DFTRACER_UTILS_LOG_ERROR("Fatal: {}", e.what());
                 return 1;
             }
         });

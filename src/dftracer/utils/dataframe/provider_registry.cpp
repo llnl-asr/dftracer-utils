@@ -252,7 +252,7 @@ class ProviderCursor final : public Cursor {
             auto awaited = co_await std::move(awaiting);
             awaited_ok = awaited.has_value();
             if (!awaited_ok)
-                DFTRACER_UTILS_LOG_WARN("provider narrow failed: %s",
+                DFTRACER_UTILS_LOG_WARN("provider narrow failed: {}",
                                         awaited.error().c_str());
         }
         ::dftu_expr_free(h);

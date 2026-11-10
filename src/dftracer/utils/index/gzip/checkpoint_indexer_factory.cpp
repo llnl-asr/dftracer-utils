@@ -28,8 +28,8 @@ dstd::SharedPtr<CheckpointIndexer> CheckpointIndexerFactory::create(
         case common::ArchiveFormat::Unknown:
         default:
             DFTRACER_UTILS_LOG_ERROR(
-                "Unsupported or unrecognized archive format for file: %s",
-                archive_path.c_str());
+                "Unsupported or unrecognized archive format for file: {}",
+                archive_path);
             return nullptr;
     }
 }
@@ -52,8 +52,8 @@ dstd::String CheckpointIndexerFactory::generate_index_path(
         case common::ArchiveFormat::Unknown:
         default:
             DFTRACER_UTILS_LOG_WARN(
-                "Unknown format for %s, using root-local .dftindex",
-                archive_path.c_str());
+                "Unknown format for {}, using root-local .dftindex",
+                archive_path);
             return trace::internal::determine_index_path(archive_path, "");
     }
 }

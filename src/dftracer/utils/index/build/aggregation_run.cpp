@@ -46,8 +46,7 @@ void finish_aggregation(AggRun& run, IndexBuildBatchResult& batch) {
 }
 
 void clear_aggregation(const dstd::String& index_path) {
-    DFTRACER_UTILS_LOG_INFO("Clearing the aggregation tier of %s",
-                            index_path.c_str());
+    DFTRACER_UTILS_LOG_INFO("Clearing the aggregation tier of {}", index_path);
     auto target = common::unwrap(
         index::Index::open(index::normalize_index_root(index_path)));
     index::schemas::dft::agg::tier::clear(target);

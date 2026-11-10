@@ -15,8 +15,8 @@ Watchdog::Watchdog(std::chrono::milliseconds check_interval,
       default_task_timeout_(default_task_timeout),
       warning_threshold_(warning_threshold) {
     DFTRACER_UTILS_LOG_DEBUG(
-        "Watchdog created: check_interval=%lld ms, global_timeout=%lld ms, "
-        "task_timeout=%lld ms, warning_threshold=%lld ms",
+        "Watchdog created: check_interval={} ms, global_timeout={} ms, "
+        "task_timeout={} ms, warning_threshold={} ms",
         static_cast<long long>(check_interval_.count()),
         static_cast<long long>(global_timeout_.count()),
         static_cast<long long>(default_task_timeout_.count()),
@@ -27,7 +27,7 @@ Watchdog::~Watchdog() { stop(); }
 
 void Watchdog::start() {
     if (running_.load()) {
-        DFTRACER_UTILS_LOG_WARN("%s", "Watchdog already running");
+        DFTRACER_UTILS_LOG_WARN("{}", "Watchdog already running");
         return;
     }
 
@@ -35,7 +35,7 @@ void Watchdog::start() {
     shutdown_requested_ = false;
     watchdog_thread_ = dstd::Thread([this] { watchdog_loop(); });
 
-    DFTRACER_UTILS_LOG_DEBUG("%s", "Watchdog started");
+    DFTRACER_UTILS_LOG_DEBUG("{}", "Watchdog started");
 }
 
 void Watchdog::stop() {
@@ -53,13 +53,13 @@ void Watchdog::stop() {
         watchdog_thread_.join();
     }
 
-    DFTRACER_UTILS_LOG_DEBUG("%s", "Watchdog stopped");
+    DFTRACER_UTILS_LOG_DEBUG("{}", "Watchdog stopped");
 }
 
 void Watchdog::mark_execution_start() {
     execution_start_time_ = std::chrono::steady_clock::now();
 
-    DFTRACER_UTILS_LOG_DEBUG("%s", "Watchdog: execution started");
+    DFTRACER_UTILS_LOG_DEBUG("{}", "Watchdog: execution started");
 }
 
 void Watchdog::register_task_start(common::TaskIndex task_id,
@@ -81,9 +81,8 @@ void Watchdog::register_task_start(common::TaskIndex task_id,
     active_tasks_[task_id] = exec;
 
     DFTRACER_UTILS_LOG_DEBUG(
-        "Watchdog: registered task '%s' (ID: %ld) with timeout: %lld ms",
-        exec.name.c_str(), task_id,
-        static_cast<long long>(effective_timeout.count()));
+        "Watchdog: registered task '{}' (ID: {}) with timeout: {} ms",
+        exec.name, task_id, static_cast<long long>(effective_timeout.count()));
 }
 
 void Watchdog::unregister_task(common::TaskIndex task_id) {
@@ -91,8 +90,8 @@ void Watchdog::unregister_task(common::TaskIndex task_id) {
 
     auto it = active_tasks_.find(task_id);
     if (it != active_tasks_.end()) {
-        DFTRACER_UTILS_LOG_DEBUG("Watchdog: unregistered task '%s' (ID: %ld)",
-                                 it->second.name.c_str(), task_id);
+        DFTRACER_UTILS_LOG_DEBUG("Watchdog: unregistered task '{}' (ID: {})",
+                                 it->second.name, task_id);
 
         active_tasks_.erase(it);
     }
@@ -122,7 +121,7 @@ size_t Watchdog::active_task_count() const {
 }
 
 void Watchdog::watchdog_loop() {
-    DFTRACER_UTILS_LOG_DEBUG("%s", "Watchdog loop started");
+    DFTRACER_UTILS_LOG_DEBUG("{}", "Watchdog loop started");
 
     while (running_.load()) {
         // Interruptible sleep using condition variable
@@ -138,19 +137,19 @@ void Watchdog::watchdog_loop() {
 
         // Check global timeout
         if (check_global_timeout()) {
-            DFTRACER_UTILS_LOG_ERROR("%s", "Watchdog detected global timeout");
+            DFTRACER_UTILS_LOG_ERROR("{}", "Watchdog detected global timeout");
             break;
         }
 
         // Check task timeouts
         if (check_task_timeouts()) {
-            DFTRACER_UTILS_LOG_ERROR("%s", "Watchdog detected task timeout");
+            DFTRACER_UTILS_LOG_ERROR("{}", "Watchdog detected task timeout");
             break;
         }
 
         // Check executor responsiveness
         if (check_executor_responsiveness()) {
-            DFTRACER_UTILS_LOG_ERROR("%s",
+            DFTRACER_UTILS_LOG_ERROR("{}",
                                      "Watchdog detected unresponsive executor");
             trigger_timeout("Executor became unresponsive");
             break;
@@ -174,7 +173,7 @@ bool Watchdog::check_global_timeout() {
             std::chrono::duration_cast<std::chrono::milliseconds>(elapsed);
 
         DFTRACER_UTILS_LOG_ERROR(
-            "Global timeout exceeded: %lld ms elapsed (limit: %lld ms)",
+            "Global timeout exceeded: {} ms elapsed (limit: {} ms)",
             static_cast<long long>(elapsed_ms.count()),
             static_cast<long long>(global_timeout_.count()));
 
@@ -201,9 +200,8 @@ bool Watchdog::check_task_timeouts() {
         // Check timeout
         if (execution.timeout.count() > 0 && elapsed > execution.timeout) {
             DFTRACER_UTILS_LOG_ERROR(
-                "Task timeout: '%s' (ID: %ld) ran for %lld ms (limit: %lld "
-                "ms)",
-                execution.name.c_str(), task_id,
+                "Task timeout: '{}' (ID: {}) ran for {} ms (limit: {} ms)",
+                execution.name, task_id,
                 static_cast<long long>(elapsed_ms.count()),
                 static_cast<long long>(execution.timeout.count()));
 
@@ -227,9 +225,8 @@ bool Watchdog::check_task_timeouts() {
             execution.warning_logged = true;
 
             DFTRACER_UTILS_LOG_WARN(
-                "Long-running task: '%s' (ID: %ld) has been running for %lld "
-                "ms",
-                execution.name.c_str(), task_id,
+                "Long-running task: '{}' (ID: {}) has been running for {} ms",
+                execution.name, task_id,
                 static_cast<long long>(elapsed_ms.count()));
 
             trigger_warning(execution.name.c_str(), elapsed_ms.count());
@@ -254,7 +251,7 @@ bool Watchdog::check_executor_responsiveness() {
 
     if (!executor_->is_responsive()) {
         DFTRACER_UTILS_LOG_ERROR(
-            "%s", "Executor is unresponsive (hung, deadlocked, or crashed)");
+            "{}", "Executor is unresponsive (hung, deadlocked, or crashed)");
         return true;
     }
 

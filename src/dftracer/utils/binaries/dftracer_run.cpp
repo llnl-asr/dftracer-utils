@@ -56,7 +56,7 @@ static bool prescan_plugin_args(int argc, char** argv,
         auto take_value = [&](const char* flag,
                               dstd::StringView& value) -> bool {
             if (i + 1 >= argc) {
-                DFTRACER_UTILS_LOG_ERROR("%s requires a value", flag);
+                DFTRACER_UTILS_LOG_ERROR("{} requires a value", flag);
                 return false;
             }
             value = argv[++i];
@@ -78,7 +78,7 @@ static bool prescan_plugin_args(int argc, char** argv,
             }
             if (out.blocks.empty()) {
                 DFTRACER_UTILS_LOG_ERROR(
-                    "%s",
+                    "{}",
                     "--parg must follow a --plugin; use --shared-parg for "
                     "shared args");
                 return false;
@@ -92,7 +92,7 @@ static bool prescan_plugin_args(int argc, char** argv,
                 file = arg.substr(10);
             }
             if (out.blocks.empty()) {
-                DFTRACER_UTILS_LOG_ERROR("%s",
+                DFTRACER_UTILS_LOG_ERROR("{}",
                                          "--pconfig must follow a --plugin; "
                                          "use --shared-pconfig for "
                                          "a shared config file");
@@ -217,14 +217,14 @@ static dstd::String join_or_none(const dstd::Vector<dstd::String>& names) {
 // the output is greppable, and exit without touching any trace file.
 static int describe_plugins(const PluginArgs& plugin_args) {
     if (plugin_args.blocks.empty()) {
-        DFTRACER_UTILS_LOG_ERROR("%s",
+        DFTRACER_UTILS_LOG_ERROR("{}",
                                  "No plugins specified. Use --plugin path.so.");
         return 1;
     }
 
     auto plugins = build_plugins(plugin_args);
     if (!plugins) {
-        DFTRACER_UTILS_LOG_ERROR("%s", plugins.error().format().c_str());
+        DFTRACER_UTILS_LOG_ERROR("{}", plugins.error().format());
         return 1;
     }
 
@@ -262,7 +262,7 @@ static coro::CoroTask<int> run_plugins(const RunArgParse* cli,
     const bool no_auto_index = cli->no_auto_index;
 
     if (plugin_args->blocks.empty()) {
-        DFTRACER_UTILS_LOG_ERROR("%s",
+        DFTRACER_UTILS_LOG_ERROR("{}",
                                  "No plugins specified. Use --plugin path.so.");
         co_return 1;
     }
@@ -276,14 +276,14 @@ static coro::CoroTask<int> run_plugins(const RunArgParse* cli,
     for (const auto file : cli->inputs.files) files.emplace_back(file);
 
     if (files.empty()) {
-        DFTRACER_UTILS_LOG_ERROR("%s", "No trace files found.");
+        DFTRACER_UTILS_LOG_ERROR("{}", "No trace files found.");
         co_return 1;
     }
 
     // A load or fold-ordering failure must stop the run before any scanning.
     auto plugins = build_plugins(*plugin_args);
     if (!plugins) {
-        DFTRACER_UTILS_LOG_ERROR("%s", plugins.error().format().c_str());
+        DFTRACER_UTILS_LOG_ERROR("{}", plugins.error().format());
         co_return 1;
     }
 
@@ -301,24 +301,23 @@ static coro::CoroTask<int> run_plugins(const RunArgParse* cli,
 
     ExportStats stats;
     try {
-        binaries::run_on_pool("DFTracer Run", cli->runtime_args, cli->watchdog,
-                              [&](coro::Scope&) -> coro::CoroTask<void> {
-                                  if (!no_auto_index)
-                                      co_await dftracer::utils::index::build::
-                                          ensure_indexes_fresh("", files,
-                                                               index_dir);
-                                  View view = View::from_files(view_files);
-                                  auto run = co_await plugins->run(view);
-                                  if (!run) {
-                                      DFTRACER_UTILS_LOG_ERROR(
-                                          "%s", run.error().format().c_str());
-                                      co_return;
-                                  }
-                                  stats = run->stats;
-                                  co_return;
-                              });
+        binaries::run_on_pool(
+            "DFTracer Run", cli->runtime_args, cli->watchdog,
+            [&](coro::Scope&) -> coro::CoroTask<void> {
+                if (!no_auto_index)
+                    co_await dftracer::utils::index::build::
+                        ensure_indexes_fresh("", files, index_dir);
+                View view = View::from_files(view_files);
+                auto run = co_await plugins->run(view);
+                if (!run) {
+                    DFTRACER_UTILS_LOG_ERROR("{}", run.error().format());
+                    co_return;
+                }
+                stats = run->stats;
+                co_return;
+            });
     } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_ERROR("Run failed: %s", e.what());
+        DFTRACER_UTILS_LOG_ERROR("Run failed: {}", e.what());
         co_return 1;
     }
 
@@ -353,13 +352,13 @@ int main(int argc, char** argv) {
             try {
                 auto code = run_plugins(&cli, &plugin_args).get();
                 if (!code) {
-                    DFTRACER_UTILS_LOG_ERROR("Fatal: %s",
-                                             code.error().format().c_str());
+                    DFTRACER_UTILS_LOG_ERROR("Fatal: {}",
+                                             code.error().format());
                     return 1;
                 }
                 return *code;
             } catch (const std::exception& e) {
-                DFTRACER_UTILS_LOG_ERROR("Fatal: %s", e.what());
+                DFTRACER_UTILS_LOG_ERROR("Fatal: {}", e.what());
                 return 1;
             }
         });

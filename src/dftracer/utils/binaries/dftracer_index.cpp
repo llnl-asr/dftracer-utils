@@ -108,7 +108,7 @@ class IndexArgParse : public binaries::ArgParse {
 
     bool validate() override {
         if (!(stats_share > 0 && stats_share <= 1)) {
-            DFTRACER_UTILS_LOG_ERROR("--stats-share must be in (0, 1], got %g",
+            DFTRACER_UTILS_LOG_ERROR("--stats-share must be in (0, 1], got {}",
                                      stats_share);
             return false;
         }
@@ -170,8 +170,8 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
         for (const auto& path : cli->plugins) builder.add(dstd::String(path));
         auto built = builder.build();
         if (!built) {
-            DFTRACER_UTILS_LOG_ERROR("Failed to load plugins: %s",
-                                     built.error().format().c_str());
+            DFTRACER_UTILS_LOG_ERROR("Failed to load plugins: {}",
+                                     built.error().format());
             co_return 1;
         }
         loaded.emplace(std::move(*built));
@@ -226,7 +226,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     auto log_stage = [&stage_start](const char* name) {
         const auto now = StageClock::now();
         DFTRACER_UTILS_LOG_DEBUG(
-            "dftracer_index: stage=%s ms=%.2f", name,
+            "dftracer_index: stage={} ms={:.2f}", name,
             std::chrono::duration<double, std::milli>(now - stage_start)
                 .count());
         stage_start = now;
@@ -237,11 +237,10 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
 
     const auto start_time = std::chrono::high_resolution_clock::now();
     if (matched_entries.empty()) {
-        DFTRACER_UTILS_LOG_ERROR("No trace files found in: %s",
-                                 log_dir.c_str());
+        DFTRACER_UTILS_LOG_ERROR("No trace files found in: {}", log_dir);
         co_return 1;
     }
-    DFTRACER_UTILS_LOG_INFO("Found %zu input files", matched_entries.size());
+    DFTRACER_UTILS_LOG_INFO("Found {} input files", matched_entries.size());
     log_stage("scan");
 
     std::size_t skipped_fresh = 0;
@@ -348,8 +347,9 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     finish_aggregation(agg_run, batch_result);
     log_stage("aggregate");
     DFTRACER_UTILS_LOG_DEBUG(
-        "dftracer_index: thread_ms parse=%.2f schema=%.2f sink_commit=%.2f "
-        "files_in_flight_max=%zu files_spilled=%zu spill_runs_max=%zu",
+        "dftracer_index: thread_ms parse={:.2f} schema={:.2f} "
+        "sink_commit={:.2f} files_in_flight_max={} files_spilled={} "
+        "spill_runs_max={}",
         static_cast<double>(batch_result.metrics.parse_ns) / 1e6,
         static_cast<double>(batch_result.metrics.schema_ns) / 1e6,
         static_cast<double>(batch_result.metrics.write_ns) / 1e6,
@@ -368,9 +368,8 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
 
     for (const auto& r : batch_result.results) {
         if (!r.success && !r.was_skipped) {
-            DFTRACER_UTILS_LOG_ERROR("Failed to index %s: %s",
-                                     r.file_path.c_str(),
-                                     r.error_message.c_str());
+            DFTRACER_UTILS_LOG_ERROR("Failed to index {}: {}", r.file_path,
+                                     r.error_message);
         }
     }
     co_return batch_result.failed > 0 ? 1 : 0;

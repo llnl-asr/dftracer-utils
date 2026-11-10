@@ -93,8 +93,8 @@ class GzipStream : public StreamBase {
             buffer_pos_ += copy_size;
 
             DFTRACER_UTILS_LOG_DEBUG(
-                "Copied %zu bytes from existing buffer (pos %zu/%zu)",
-                copy_size, buffer_pos_, valid_bytes_);
+                "Copied {} bytes from existing buffer (pos {}/{})", copy_size,
+                buffer_pos_, valid_bytes_);
 
             co_return copy_size;
         }
@@ -114,8 +114,8 @@ class GzipStream : public StreamBase {
         buffer_pos_ = copy_size;
 
         DFTRACER_UTILS_LOG_DEBUG(
-            "Got new chunk via zero-copy, copied %zu bytes (total in buffer: "
-            "%zu)",
+            "Got new chunk via zero-copy, copied {} bytes (total in buffer: "
+            "{})",
             copy_size, valid_bytes_);
 
         co_return copy_size;
@@ -209,8 +209,7 @@ class GzipStream : public StreamBase {
             mid_line_start_ = use_member_ && piece_starts_mid_line();
             if (use_member_)
                 DFTRACER_UTILS_LOG_DEBUG(
-                    "Using member %" PRIu64 " at uncompressed offset %" PRIu64
-                    " for target %zu",
+                    "Using member {} at uncompressed offset {} for target {}",
                     member_.member_idx, member_.uc_offset, start_bytes_);
         }
 

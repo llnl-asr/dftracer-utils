@@ -12,7 +12,6 @@
 #include <dftracer/utils/trace/views/view.h>
 
 #include <cstdio>
-#include <exception>
 #include <utility>
 
 using namespace dftracer::utils;

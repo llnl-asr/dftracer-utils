@@ -25,7 +25,6 @@
 
 #include <cstdio>
 #include <cstdlib>
-#include <exception>
 #include <limits>
 
 // MPI is compiled in only when the build enabled it (config.h macro). The same
@@ -947,7 +946,7 @@ coro::CoroTask<dstd::Result<void>> ViewRun::run_distributed_aggregate(
                     idx_root, static_cast<std::size_t>(r)));
                 auto shard_exists = dstd::fs::exists(
                     dstd::PathView(dftracer::utils::index::store_dir(d)));
-                if (!shard_exists) co_return shard_exists.error();
+                if (!shard_exists.has_value()) co_return shard_exists.error();
                 if (*shard_exists) shard_dirs.push_back(std::move(d));
             }
             if (!shard_dirs.empty()) {

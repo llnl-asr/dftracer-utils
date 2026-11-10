@@ -29,7 +29,6 @@
 #include <chrono>
 #include <cinttypes>
 #include <ctime>
-#include <exception>
 #include <mutex>
 
 using namespace dftracer::utils;

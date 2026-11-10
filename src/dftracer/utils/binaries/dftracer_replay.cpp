@@ -37,7 +37,6 @@
 #include <cinttypes>
 #include <cstdio>
 #include <cstdlib>
-#include <stdexcept>
 #include <utility>
 
 using namespace dftracer::utils;

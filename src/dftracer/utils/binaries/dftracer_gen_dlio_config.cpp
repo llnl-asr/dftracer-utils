@@ -21,7 +21,6 @@
 
 #include <algorithm>
 #include <cstdio>
-#include <exception>
 #include <type_traits>
 #include <variant>
 

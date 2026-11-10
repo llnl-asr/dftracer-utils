@@ -395,6 +395,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Add a second build of the string-match kernels with branch padding against the Intel JCC erratum, picked at run time on an affected CPU and set with `DFTRACER_UTILS_STRING_KERNEL` (`plain`, `jcc` or `auto`).
 - Add `dstd::fmt`, which formats text with the format fixed at compile time (`dstd::fmt<"open {}: {}">(path, err)` or `dstd::fmt("open {}: {}"_f, path, err)`), in one allocation, and `dstd::fmt_to`, which writes into a caller buffer with no allocation.
   It takes `{}`, hex, zero-padded width and fixed float precision, and a wrong argument count or a bad spec does not compile.
+- Add `dstd::fmt_join<"\t">(a, b, c)`, which formats its arguments with one separator between them, and `dstd::fmt_join_to`, which writes the same text into a caller buffer.
 - Add `common::make_error<"...">(code, args...)`, which writes the formatted message straight into the error.
 - Add `coro::fail_with`, which ends a task with a stored exception without a throw, for code built without exceptions.
 - Add `coro::or_fail` and `CoroTask::or_fail()`, which give the value of a `dstd::Expected` or of a task that returns one, or end the calling task with its error, with no exception.

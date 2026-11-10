@@ -502,6 +502,49 @@ FmtResult fmt_to(char* buf, std::size_t cap, Format<S>, const A&... a) {
     return fmt_to<S>(buf, cap, a...);
 }
 
+namespace fmt_detail {
+
+template <FixedString Sep, std::size_t K>
+consteval auto join_format() {
+    constexpr std::size_t SEP = sizeof(Sep.v) - 1;
+    constexpr std::size_t N = K == 0 ? 1 : 2 * K + (K - 1) * SEP + 1;
+    char out[N]{};
+    std::size_t d = 0;
+    for (std::size_t i = 0; i < K; ++i) {
+        if (i > 0)
+            for (std::size_t j = 0; j < SEP; ++j) out[d++] = Sep.v[j];
+        out[d++] = '{';
+        out[d++] = '}';
+    }
+    return FixedString<N>(out);
+}
+
+template <FixedString Sep>
+consteval bool plain_separator() {
+    for (std::size_t i = 0; i + 1 < sizeof(Sep.v); ++i)
+        if (Sep.v[i] == '{' || Sep.v[i] == '}') return false;
+    return true;
+}
+
+}  // namespace fmt_detail
+
+/// Formats each argument as a plain `{}` hole with `Sep` between them, such as
+/// one TSV row: `fmt_join<"\t">(a, b, c)` is `fmt<"{}\t{}\t{}">(a, b, c)`.
+template <FixedString Sep, class... A>
+String fmt_join(const A&... a) {
+    static_assert(fmt_detail::plain_separator<Sep>(),
+                  "dstd::fmt_join: the separator must not hold a brace");
+    return fmt<fmt_detail::join_format<Sep, sizeof...(A)>()>(a...);
+}
+
+/// @ref fmt_join into `buf`, with the contract of @ref fmt_to.
+template <FixedString Sep, class... A>
+FmtResult fmt_join_to(char* buf, std::size_t cap, const A&... a) {
+    static_assert(fmt_detail::plain_separator<Sep>(),
+                  "dstd::fmt_join_to: the separator must not hold a brace");
+    return fmt_to<fmt_detail::join_format<Sep, sizeof...(A)>()>(buf, cap, a...);
+}
+
 }  // namespace dftracer::utils::dstd
 
 namespace dftracer::utils {

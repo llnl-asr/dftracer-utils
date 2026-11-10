@@ -266,3 +266,24 @@ TEST_CASE("fmt_to keeps its canaries for every cap") {
     check_text<"{}">("(null)", static_cast<const char*>(nullptr));
     check_text<"{} {:.2f}">("q 1.50", dstd::String("q"), 1.5);
 }
+
+TEST_CASE("fmt_join puts the separator between plain holes") {
+    CHECK(dstd::fmt_join<"\t">(1, "b", 2.5, true) == "1\tb\t2.5\ttrue");
+    CHECK(dstd::fmt_join<", ">(dstd::String("x")) == "x");
+    CHECK(dstd::fmt_join<",">().empty());
+    CHECK(dstd::fmt_join<"">('a', 'b') == "ab");
+    CHECK(dstd::fmt_join<"\t">(1, 2, 3) == dstd::fmt<"{}\t{}\t{}">(1, 2, 3));
+}
+
+TEST_CASE("fmt_join_to writes the joined text and reports a cut") {
+    char buf[8];
+    const dstd::FmtResult whole =
+        dstd::fmt_join_to<",">(buf, sizeof buf, 1, 22);
+    CHECK(whole.size == 4);
+    CHECK_FALSE(whole.truncated);
+    CHECK(dstd::StringView(buf, whole.size) == "1,22");
+    const dstd::FmtResult cut = dstd::fmt_join_to<", ">(buf, 5, "abc", "def");
+    CHECK(cut.size == 5);
+    CHECK(cut.truncated);
+    CHECK(dstd::StringView(buf, cut.size) == "abc, ");
+}

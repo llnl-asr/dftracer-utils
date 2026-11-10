@@ -699,16 +699,15 @@ Status Applier::join_lookup(const duql::TermRef& t, const duql::Term* term) {
                     if (dstd::StringView(f.names[i]) == n) return &f.columns[i];
                 return nullptr;
             };
-            dstd::Vector<dataframe::Series> keys;
+            dstd::Vector<dataframe::Series> key_series;
             for (const auto& k : left) {
                 const dataframe::Series* s = at(k);
                 if (!s)
                     return refuse<"the join of '{}' lost column '{}'">(sub, k);
-                keys.push_back(s->materialize());
+                key_series.push_back(s->materialize());
             }
-            // Series*>
             dstd::Vector<const dataframe::Series*> ptrs;
-            for (const auto& k : keys) ptrs.push_back(&k);
+            for (const auto& k : key_series) ptrs.push_back(&k);
             const dataframe::Series* marked = at(matched);
             if (!marked)
                 return refuse<"the join of '{}' lost column '{}'">(sub,

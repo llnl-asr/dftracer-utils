@@ -106,11 +106,12 @@ Memory and kernels
        run can take longer, because freed pages must be mapped again. A higher
        value is more relaxed: runs can be a little faster and peak memory
        rises. Tune it when the default does not fit your memory limit.
-   * - ``DFTRACER_UTILS_STRING_KERNEL``
+   * - ``DFTRACER_UTILS_JCC_KERNELS``
      - ``auto``
-     - ``plain``, ``jcc`` or ``auto``. Picks the build of the string-match
-       kernels (equals, contains, starts with, ends with, like, search and
-       matches), read once at the first call. ``jcc`` is the same code
+     - ``plain``, ``jcc`` or ``auto``. Picks the build of the hot kernels:
+       the string-match kernels (equals, contains, starts with, ends with,
+       like, search and matches) and the trace prefilter that tests a line
+       before it is parsed. Read once at the first call. ``jcc`` is the same code
        assembled with branch padding against the Intel Jump Conditional Code
        erratum, on x86-64 builds whose compiler supports it. ``auto`` uses it
        on an affected Intel CPU and ``plain`` elsewhere. ``jcc`` on a build

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/cpu_features.h>
-#include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/kernels/string_match.h>
 
@@ -21,49 +20,33 @@ const StringMatch* jcc_table() {
 #endif
 }
 
-const StringMatch& auto_table(bool cpu_affected) {
-    const StringMatch* jcc = jcc_table();
-    return cpu_affected && jcc ? *jcc : plain::table();
-}
-
 }  // namespace
 
-const StringMatch& resolve_string_match(dstd::StringView request,
+const StringMatch& resolve_string_match(common::JccKernels request,
                                         bool cpu_affected) {
-    if (request.empty() ||
-        request == common::constants::string_kernel_settings::DEFAULT_KERNEL)
-        return auto_table(cpu_affected);
-    if (request == "plain") return plain::table();
-    if (request == "jcc") {
-        if (const StringMatch* jcc = jcc_table()) return *jcc;
+    if (!common::prefers_jcc_kernels(request, cpu_affected))
+        return plain::table();
+    if (const StringMatch* jcc = jcc_table()) return *jcc;
+    if (request == common::JccKernels::Jcc)
         DFTRACER_UTILS_LOG_WARN(
             "{}=jcc, but this build has no jcc string kernels; using plain",
-            common::constants::string_kernel_settings::KERNEL_ENV);
-        return plain::table();
-    }
-    DFTRACER_UTILS_LOG_WARN(
-        "{}={} is not plain, jcc or auto; using auto",
-        common::constants::string_kernel_settings::KERNEL_ENV, request);
-    return auto_table(cpu_affected);
+            common::constants::jcc_kernel_settings::KERNELS_ENV);
+    return plain::table();
 }
 
 const StringMatch& string_match() {
-    static const StringMatch& chosen = []() -> const StringMatch& {
-        const auto request = common::Env::get(
-            common::constants::string_kernel_settings::KERNEL_ENV);
-        return resolve_string_match(request ? *request : dstd::StringView{},
-                                    common::cpu_has_jcc_erratum());
-    }();
+    static const StringMatch& chosen = resolve_string_match(
+        common::jcc_kernels_request(), common::cpu_has_jcc_erratum());
     return chosen;
 }
 
-const StringMatch* string_match_variant(StringKernel kind) {
+const StringMatch* string_match_variant(common::JccKernels kind) {
     switch (kind) {
-        case StringKernel::Plain:
+        case common::JccKernels::Plain:
             return &plain::table();
-        case StringKernel::Jcc:
+        case common::JccKernels::Jcc:
             return jcc_table();
-        case StringKernel::Auto:
+        case common::JccKernels::Auto:
             break;
     }
     return nullptr;

@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/cpu_features.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -10,13 +13,16 @@
 #include <dftracer/utils/duql/pattern_engine.h>
 #include <dftracer/utils/index/plan/condition.h>
 #include <dftracer/utils/index/plan/prefilter.h>
+#include <dftracer/utils/index/plan/prefilter_kernel.h>
 
 #include <algorithm>
-#include <charconv>
-#include <cmath>
-#include <cstring>
+#include <cstdint>
 #include <type_traits>
 #include <variant>
+
+#ifndef DFTRACER_UTILS_HAS_JCC_VARIANT
+#define DFTRACER_UTILS_HAS_JCC_VARIANT 0
+#endif
 
 namespace dftracer::utils::index::plan {
 
@@ -182,92 +188,6 @@ void ranges_of(const duql::detail::QueryNode& node,
     out.push_back({path, dstd::String(key) + "\"", std::move(bounds), pivot});
 }
 
-bool holds(duql::CompareOp op, int cmp) {
-    switch (op) {
-        case duql::CompareOp::Gt:
-            return cmp > 0;
-        case duql::CompareOp::Ge:
-            return cmp >= 0;
-        case duql::CompareOp::Lt:
-            return cmp < 0;
-        case duql::CompareOp::Le:
-            return cmp <= 0;
-        default:
-            return true;
-    }
-}
-
-// Doubles past this may round across the bound; such a value keeps the line.
-constexpr double EXACT_DOUBLE = 9007199254740992.0;
-
-// Whether the number from `p` (just after a key's colon) satisfies every bound
-// of `r`; true when it cannot be read exactly, since only a certain failure
-// may drop the line.
-bool number_holds(const char* p, const char* end, const Prefilter::Range& r) {
-    while (p < end && (*p == ' ' || *p == '\t')) ++p;
-    const char* tok = p;
-    bool integer = true;
-    while (p < end && ((*p >= '0' && *p <= '9') || *p == '-' || *p == '+' ||
-                       *p == '.' || *p == 'e' || *p == 'E')) {
-        if (*p == '.' || *p == 'e' || *p == 'E') integer = false;
-        ++p;
-    }
-    if (p == tok) return false;
-    std::int64_t iv = 0;
-    double dv = 0;
-    if (integer) {
-        auto [q, ec] = dstd::from_chars(tok, p, iv);
-        if (ec != std::errc() || q != p) return true;
-    } else {
-        auto [q, ec] = dstd::from_chars_double(tok, p, dv);
-        if (ec != std::errc() || q != p || std::fabs(dv) >= EXACT_DOUBLE)
-            return true;
-    }
-    for (const auto& b : r.bounds) {
-        int cmp = 0;
-        if (integer && b.integral) {
-            cmp = iv < b.ibound ? -1 : (iv > b.ibound ? 1 : 0);
-        } else {
-            const double v = integer ? static_cast<double>(iv) : dv;
-            const double x =
-                b.integral ? static_cast<double>(b.ibound) : b.dbound;
-            if (std::fabs(v) >= EXACT_DOUBLE || std::fabs(x) >= EXACT_DOUBLE)
-                continue;
-            cmp = v < x ? -1 : (v > x ? 1 : 0);
-        }
-        if (!holds(b.op, cmp)) return false;
-    }
-    return true;
-}
-
-}  // namespace
-
-// A key ending in the segment of `r` sits at `start`, preceded by its opening
-// quote or a dot, followed by the closing quote, spaces and a colon.
-bool Prefilter::range_may_hold(dstd::StringView line, const Range& r) {
-    const dstd::String& seg = r.segment;
-    const std::size_t n = seg.size() - 1;
-    const char* begin = line.data();
-    const char* end = begin + line.size();
-    const std::size_t p = r.pivot;
-    for (const char* cur = begin + 1 + p; cur + (seg.size() - p) <= end;) {
-        const char* hit = static_cast<const char*>(std::memchr(
-            cur, seg[p], static_cast<std::size_t>(end - cur) - (n - p)));
-        if (!hit) return false;
-        const char* start = hit - p;
-        cur = hit + 1;
-        if ((start[-1] != '"' && start[-1] != '.') ||
-            std::memcmp(start, seg.data(), seg.size()) != 0)
-            continue;
-        const char* q = start + seg.size();
-        while (q < end && (*q == ' ' || *q == '\t')) ++q;
-        if (q < end && *q == ':' && number_holds(q + 1, end, r)) return true;
-    }
-    return false;
-}
-
-namespace {
-
 // JSON lines are mostly structure, digits and lowercase keys; a needle's
 // byte outside those is rare, so memchr on it stops seldom.
 int rarity(unsigned char c) {
@@ -287,41 +207,25 @@ std::size_t pivot_of(const dstd::String& n) {
     return best;
 }
 
-// memchr on the pivot byte, then compare: several times faster than memmem
-// or string_view::find, which cost more per line than parsing it.
-bool contains(dstd::StringView line, const dstd::String& n, std::size_t p) {
-    if (line.size() < n.size()) return false;
-    const char* begin = line.data();
-    const char* last = begin + (line.size() - n.size()) + p;
-    for (const char* cur = begin + p; cur <= last;) {
-        const char* hit = static_cast<const char*>(
-            std::memchr(cur, n[p], static_cast<std::size_t>(last - cur) + 1));
-        if (!hit) return false;
-        if (std::memcmp(hit - p, n.data(), n.size()) == 0) return true;
-        cur = hit + 1;
-    }
-    return false;
-}
-
 }  // namespace
 
-Prefilter::Prefilter(const duql::Query& q)
-    : clauses_(clauses_of(duql::detail::QueryAccess::root(q))) {
-    ranges_of(duql::detail::QueryAccess::root(q), ranges_);
-    pivots_.reserve(clauses_.size());
-    for (const auto& clause : clauses_) {
-        auto& p = pivots_.emplace_back();
+Prefilter::Prefilter(const duql::Query& q) : kernel_(&prefilter_kernel()) {
+    parts_.clauses = clauses_of(duql::detail::QueryAccess::root(q));
+    ranges_of(duql::detail::QueryAccess::root(q), parts_.ranges);
+    parts_.pivots.reserve(parts_.clauses.size());
+    for (const auto& clause : parts_.clauses) {
+        auto& p = parts_.pivots.emplace_back();
         for (const auto& n : clause) p.push_back(pivot_of(n));
     }
     std::size_t widest = 0;
-    for (const auto& clause : clauses_)
+    for (const auto& clause : parts_.clauses)
         widest = std::max(widest, clause.size());
     if (!duql::LiteralSet::AVAILABLE || widest < HS_MIN_ALTERNATIVES) return;
     dstd::HashMap<dstd::String, unsigned> seen;
     dstd::Vector<dstd::StringView> literals;
-    ids_.reserve(clauses_.size());
-    for (const auto& clause : clauses_) {
-        auto& ids = ids_.emplace_back();
+    parts_.ids.reserve(parts_.clauses.size());
+    for (const auto& clause : parts_.clauses) {
+        auto& ids = parts_.ids.emplace_back();
         for (const auto& n : clause) {
             auto [it, fresh] =
                 seen.try_emplace(n, static_cast<unsigned>(literals.size()));
@@ -329,51 +233,63 @@ Prefilter::Prefilter(const duql::Query& q)
             ids.push_back(it->second);
         }
     }
-    literals_ = duql::LiteralSet::make(literals);
+    parts_.literals = duql::LiteralSet::make(literals);
 }
 
-bool Prefilter::may_match_per_needle(dstd::StringView line) const {
-    for (std::size_t c = 0; c < clauses_.size(); ++c) {
-        bool any = false;
-        for (std::size_t k = 0; k < clauses_[c].size(); ++k)
-            if (contains(line, clauses_[c][k], pivots_[c][k])) {
-                any = true;
-                break;
-            }
-        if (!any) return false;
+namespace {
+
+const PrefilterKernel* jcc_kernel() {
+#if DFTRACER_UTILS_HAS_JCC_VARIANT
+    return &jcc::kernel();
+#else
+    return nullptr;
+#endif
+}
+
+}  // namespace
+
+const PrefilterKernel& resolve_prefilter_kernel(common::JccKernels request,
+                                                bool cpu_affected) {
+    if (!common::prefers_jcc_kernels(request, cpu_affected))
+        return plain::kernel();
+    if (const PrefilterKernel* jcc = jcc_kernel()) return *jcc;
+    if (request == common::JccKernels::Jcc)
+        DFTRACER_UTILS_LOG_WARN(
+            "{}=jcc, but this build has no jcc prefilter kernel; using plain",
+            common::constants::jcc_kernel_settings::KERNELS_ENV);
+    return plain::kernel();
+}
+
+const PrefilterKernel& prefilter_kernel() {
+    static const PrefilterKernel& chosen = resolve_prefilter_kernel(
+        common::jcc_kernels_request(), common::cpu_has_jcc_erratum());
+    return chosen;
+}
+
+const PrefilterKernel* prefilter_kernel_variant(common::JccKernels kind) {
+    switch (kind) {
+        case common::JccKernels::Plain:
+            return &plain::kernel();
+        case common::JccKernels::Jcc:
+            return jcc_kernel();
+        case common::JccKernels::Auto:
+            break;
     }
-    for (const auto& r : ranges_)
-        if (!range_may_hold(line, r)) return false;
-    return true;
+    return nullptr;
+}
+
+Prefilter::Prefilter() : kernel_(&prefilter_kernel()) {}
+
+bool Prefilter::may_match_per_needle(dstd::StringView line) const {
+    return kernel_->may_match_per_needle(parts_, line);
 }
 
 bool Prefilter::may_match(dstd::StringView line) const {
-    if (!literals_) return may_match_per_needle(line);
-    const std::uint64_t* const bits = literals_.scan(line);
-    if (!bits) return may_match_per_needle(line);
-    for (const auto& ids : ids_) {
-        bool any = false;
-        for (const unsigned id : ids)
-            if ((bits[id >> 6] >> (id & 63)) & 1) {
-                any = true;
-                break;
-            }
-        if (!any) return false;
-    }
-    for (const auto& r : ranges_)
-        if (!range_may_hold(line, r)) return false;
-    return true;
+    return kernel_->may_match(parts_, line);
 }
 
 bool Prefilter::Gate::may_match(dstd::StringView line) {
-    if (!on_) return true;
-    const bool pass = p_->may_match(line);
-    passed_ += pass ? 1 : 0;
-    if (++checked_ == CHECK_WINDOW &&
-        static_cast<double>(passed_) >
-            MAX_PASS_RATE * static_cast<double>(checked_))
-        on_ = false;
-    return pass;
+    return p_->kernel_->gate_may_match(p_->parts_, state_, line);
 }
 
 }  // namespace dftracer::utils::index::plan

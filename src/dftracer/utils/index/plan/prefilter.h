@@ -12,6 +12,8 @@
 
 namespace dftracer::utils::index::plan {
 
+struct PrefilterKernel;
+
 /// Byte tests a line must pass to match a query, run before the line is
 /// parsed. A line may match only when each clause has one of its needles in
 /// it and each range holds for some number written after its key; with no
@@ -26,30 +28,37 @@ namespace dftracer::utils::index::plan {
 class Prefilter {
    public:
     /// No clauses: every line may match.
-    Prefilter() = default;
+    Prefilter();
     explicit Prefilter(const duql::Query& q);
 
-    bool empty() const { return clauses_.empty() && ranges_.empty(); }
+    bool empty() const {
+        return parts_.clauses.empty() && parts_.ranges.empty();
+    }
     /// `line` may be a whole chunk of lines.
     bool may_match(dstd::StringView line) const;
     /// The per-needle reference path of `may_match`; same result.
     bool may_match_per_needle(dstd::StringView line) const;
     const dstd::Vector<dstd::Vector<dstd::String>>& clauses() const {
-        return clauses_;
+        return parts_.clauses;
     }
+
+    /// What a Gate counts; see PrefilterKernel::gate_may_match.
+    struct GateState {
+        bool on;
+        std::size_t checked = 0;
+        std::size_t passed = 0;
+    };
 
     /// One scan unit's use of a prefilter: after CHECK_WINDOW lines, a pass
     /// rate above MAX_PASS_RATE turns it off for the rest of the unit.
     class Gate {
        public:
-        explicit Gate(const Prefilter& p) : p_(&p), on_(!p.empty()) {}
+        explicit Gate(const Prefilter& p) : p_(&p), state_{!p.empty()} {}
         bool may_match(dstd::StringView line);
 
        private:
         const Prefilter* p_;
-        bool on_;
-        std::size_t checked_ = 0;
-        std::size_t passed_ = 0;
+        GateState state_;
     };
 
     static constexpr std::size_t CHECK_WINDOW = 1024;
@@ -75,18 +84,26 @@ class Prefilter {
         std::size_t pivot = 0;
     };
 
-   private:
-    static bool range_may_hold(dstd::StringView line, const Range& r);
+    /// What the per-line kernels read.
+    struct Parts {
+        dstd::Vector<dstd::Vector<dstd::String>> clauses;
+        dstd::Vector<Range> ranges;
+        /// One literal set over the distinct needles; empty with none, or
+        /// when no clause has HS_MIN_ALTERNATIVES needles.
+        duql::LiteralSet literals;
+        /// Per clause needle, its id in `literals`.
+        dstd::Vector<dstd::Vector<unsigned>> ids;
+        /// Per needle, the offset of its rarest byte, which memchr looks for.
+        dstd::Vector<dstd::Vector<std::size_t>> pivots;
+    };
 
-    dstd::Vector<dstd::Vector<dstd::String>> clauses_;
-    dstd::Vector<Range> ranges_;
-    /// One literal set over the distinct needles; empty with none, or when
-    /// no clause has HS_MIN_ALTERNATIVES needles.
-    duql::LiteralSet literals_;
-    /// Per clause needle, its id in `literals_`.
-    dstd::Vector<dstd::Vector<unsigned>> ids_;
-    /// Per needle, the offset of its rarest byte, which memchr looks for.
-    dstd::Vector<dstd::Vector<std::size_t>> pivots_;
+    const Parts& parts() const { return parts_; }
+
+   private:
+    Parts parts_;
+    /// The build of the per-line code this process uses, fixed at
+    /// construction.
+    const PrefilterKernel* kernel_;
 };
 
 }  // namespace dftracer::utils::index::plan

@@ -2,8 +2,8 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_KERNELS_STRING_MATCH_H
 #define DFTRACER_UTILS_DATAFRAME_KERNELS_STRING_MATCH_H
 
+#include <dftracer/utils/common/cpu_features.h>
 #include <dftracer/utils/dataframe/abi.h>
-#include <dftracer/utils/dstd/string.h>
 
 #include <cstdint>
 
@@ -30,10 +30,6 @@ struct StringMatch {
                               std::int32_t suffix_size);
 };
 
-/// Which build of the kernels to use. Auto takes Jcc on a CPU with the Intel
-/// JCC erratum when that build exists, else Plain.
-enum class StringKernel { Auto, Plain, Jcc };
-
 // The kernels of each build: the same code, the second one assembled with
 // branch padding against the JCC erratum. jcc::table exists only when the
 // build defines DFTRACER_UTILS_HAS_JCC_VARIANT as 1.
@@ -44,19 +40,17 @@ namespace jcc {
 const StringMatch& table();
 }
 
-/// The build named by @p request ("plain", "jcc" or "auto"; empty is "auto")
-/// on a CPU that has the erratum when @p cpu_affected. An unknown request logs
-/// a warning and means auto; "jcc" without that build logs a warning and
-/// gives plain.
-const StringMatch& resolve_string_match(dstd::StringView request,
+/// The build @p request names on a CPU that has the erratum when
+/// @p cpu_affected. Jcc without that build logs a warning and gives plain.
+const StringMatch& resolve_string_match(common::JccKernels request,
                                         bool cpu_affected);
 
-/// The kernels this process uses: @ref resolve_string_match of the
-/// DFTRACER_UTILS_STRING_KERNEL variable and the CPU, chosen on first use.
+/// The kernels this process uses: @ref resolve_string_match of
+/// @ref common::jcc_kernels_request and the CPU, chosen on first use.
 const StringMatch& string_match();
 
 /// The build @p kind names, or null when it was not built (Jcc) or is Auto.
-const StringMatch* string_match_variant(StringKernel kind);
+const StringMatch* string_match_variant(common::JccKernels kind);
 
 }  // namespace dftracer::utils::dataframe::kernels
 

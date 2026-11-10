@@ -16,16 +16,20 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/pattern_engine.h>
 #include <doctest/doctest.h>
+#include <memory/fresh_process.h>
 
 #include <cstdint>
+#include <cstdlib>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::dataframe;
 
 using common::jcc_erratum_affected;
+using common::JccKernels;
+using common::parse_jcc_kernels;
+using common::prefers_jcc_kernels;
 using dataframe::kernels::resolve_string_match;
 using dataframe::kernels::string_match_variant;
-using dataframe::kernels::StringKernel;
 using dataframe::kernels::StringMatch;
 
 namespace {
@@ -203,7 +207,7 @@ TEST_SUITE("string match") {
     }
 
     TEST_CASE("the plain kernels match the per-row reference") {
-        const StringMatch* plain = string_match_variant(StringKernel::Plain);
+        const StringMatch* plain = string_match_variant(JccKernels::Plain);
         REQUIRE(plain != nullptr);
         check_variant(*plain, "plain");
     }
@@ -212,14 +216,14 @@ TEST_SUITE("string match") {
     // toolchain without the branch-padding flag would drop it silently.
     TEST_CASE("a Linux x86-64 build carries the jcc kernels") {
 #if defined(__linux__) && defined(__x86_64__)
-        CHECK(string_match_variant(StringKernel::Jcc) != nullptr);
+        CHECK(string_match_variant(JccKernels::Jcc) != nullptr);
 #else
         MESSAGE("only a Linux x86-64 build must carry the jcc kernels");
 #endif
     }
 
     TEST_CASE("the jcc kernels match the per-row reference when built") {
-        const StringMatch* jcc = string_match_variant(StringKernel::Jcc);
+        const StringMatch* jcc = string_match_variant(JccKernels::Jcc);
         if (!jcc) {
             MESSAGE("jcc variant not built in this configuration");
             return;
@@ -228,15 +232,48 @@ TEST_SUITE("string match") {
     }
 
     TEST_CASE("a request picks its variant") {
-        const StringMatch* plain = string_match_variant(StringKernel::Plain);
-        const StringMatch* jcc = string_match_variant(StringKernel::Jcc);
+        const StringMatch* plain = string_match_variant(JccKernels::Plain);
+        const StringMatch* jcc = string_match_variant(JccKernels::Jcc);
         const StringMatch* on_affected = jcc ? jcc : plain;
-        CHECK(&resolve_string_match("plain", true) == plain);
-        CHECK(&resolve_string_match("jcc", false) == on_affected);
-        CHECK(&resolve_string_match("auto", true) == on_affected);
-        CHECK(&resolve_string_match("", true) == on_affected);
-        CHECK(&resolve_string_match("auto", false) == plain);
-        CHECK(&resolve_string_match("bogus", true) == on_affected);
-        CHECK(&resolve_string_match("bogus", false) == plain);
+        CHECK(&resolve_string_match(JccKernels::Plain, true) == plain);
+        CHECK(&resolve_string_match(JccKernels::Jcc, false) == on_affected);
+        CHECK(&resolve_string_match(JccKernels::Auto, true) == on_affected);
+        CHECK(&resolve_string_match(JccKernels::Auto, false) == plain);
+    }
+
+    TEST_CASE("the request text names plain, jcc or auto") {
+        CHECK(parse_jcc_kernels("plain") == JccKernels::Plain);
+        CHECK(parse_jcc_kernels("jcc") == JccKernels::Jcc);
+        CHECK(parse_jcc_kernels("auto") == JccKernels::Auto);
+        CHECK(parse_jcc_kernels("") == JccKernels::Auto);
+        CHECK(parse_jcc_kernels("bogus") == JccKernels::Auto);
+        CHECK(prefers_jcc_kernels(JccKernels::Jcc, false));
+        CHECK(prefers_jcc_kernels(JccKernels::Auto, true));
+        CHECK_FALSE(prefers_jcc_kernels(JccKernels::Auto, false));
+        CHECK_FALSE(prefers_jcc_kernels(JccKernels::Plain, true));
+    }
+
+    // The choice is cached on first use, so each request runs in a new process.
+    TEST_CASE("the request in the environment picks the kernels" *
+              doctest::skip()) {
+        fresh_process::announce();
+        const char* request = std::getenv("DFTRACER_UTILS_JCC_KERNELS");
+        REQUIRE(request != nullptr);
+        const StringMatch* want = string_match_variant(
+            dstd::StringView(request) == "jcc" ? JccKernels::Jcc
+                                               : JccKernels::Plain);
+        if (!want) want = string_match_variant(JccKernels::Plain);
+        CHECK(&dataframe::kernels::string_match() == want);
+    }
+
+    TEST_CASE("DFTRACER_UTILS_JCC_KERNELS picks the string kernels") {
+        for (const char* request : {"plain", "jcc"}) {
+            CAPTURE(request);
+            ::setenv("DFTRACER_UTILS_JCC_KERNELS", request, 1);
+            const auto result = fresh_process::run(
+                "the request in the environment picks the kernels");
+            ::unsetenv("DFTRACER_UTILS_JCC_KERNELS");
+            CHECK(result.ok());
+        }
     }
 }

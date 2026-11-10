@@ -115,7 +115,7 @@ int main(int argc, char** argv) {
     std::printf("string kernel: %s\n",
                 &dataframe::kernels::string_match() ==
                         dataframe::kernels::string_match_variant(
-                            dataframe::kernels::StringKernel::Jcc)
+                            dftracer::utils::common::JccKernels::Jcc)
                     ? "jcc"
                     : "plain");
 

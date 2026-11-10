@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/cpu_features.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/plan/prefilter.h>
+#include <dftracer/utils/index/plan/prefilter_kernel.h>
 #include <doctest/doctest.h>
+#include <memory/fresh_process.h>
 #include <task_result.h>
 
+#include <cstdlib>
 #include <initializer_list>
 
 using namespace dftracer::utils;
@@ -226,5 +230,111 @@ TEST_SUITE("Prefilter") {
         CHECK_FALSE(r.may_match(R"({"name":"read","ts":5})"));
         CHECK_FALSE(r.may_match(R"({"name":"write","ts":6})"));
         CHECK_FALSE(r.may_match(""));
+    }
+
+    TEST_CASE("the plain and jcc kernels give the same answers") {
+        const char* queries[] = {
+            R"(name == "read")",
+            R"(name == "read" and cat in ["POSIX", "STDIO"] and pid == 1234)",
+            R"(name in ["read", "write", "open", "close", "fsync"])",
+            R"(name == "read" and ts > 5)",
+            R"(ts >= 10 and ts < 20.5 and dur != 3)",
+            R"(name like "%abcde%" and cat like "%cde%")",
+            R"((name == "read" or pid == 1234) and cat == "POSIX")",
+            R"(pid in [100, 101, 102, 103, 104, 105])"};
+        const char* lines[] = {
+            R"({"name":"read","cat":"POSIX","pid":1234,"ts":6,"dur":3})",
+            R"({"name":"write","cat":"STDIO","pid":1234,"ts":12})",
+            R"({"name":"fsync","cat":"MPI","pid":103,"ts":20.5})",
+            R"({"name":"read","cat":"POSIX","pid":12,"ts":5})",
+            R"({"name":"open","args":{"ts":15},"ts":"x"})",
+            R"({"ts": 11.5, "dur": 4, "name":"close"})",
+            R"(abcde cde)",
+            R"(abcd cde)",
+            R"("read" "POSIX")",
+            R"(1234 "POSIX")",
+            "104",
+            "",
+            "ts"};
+        const plan::PrefilterKernel* plain =
+            plan::prefilter_kernel_variant(common::JccKernels::Plain);
+        const plan::PrefilterKernel* jcc =
+            plan::prefilter_kernel_variant(common::JccKernels::Jcc);
+        REQUIRE(plain != nullptr);
+        if (!jcc) MESSAGE("jcc variant not built in this configuration");
+        for (const char* q : queries) {
+            CAPTURE(q);
+            const auto p = of(q);
+            for (const char* l : lines) {
+                CAPTURE(l);
+                const bool expect = plain->may_match_per_needle(p.parts(), l);
+                CHECK(plain->may_match(p.parts(), l) == expect);
+                if (!jcc) continue;
+                CHECK(jcc->may_match(p.parts(), l) == expect);
+                CHECK(jcc->may_match_per_needle(p.parts(), l) == expect);
+            }
+            if (!jcc) continue;
+            plan::Prefilter::GateState a{!p.empty()};
+            plan::Prefilter::GateState b{!p.empty()};
+            for (std::size_t i = 0; i < 2 * plan::Prefilter::CHECK_WINDOW;
+                 ++i) {
+                const char* l = lines[i % (sizeof(lines) / sizeof(lines[0]))];
+                CHECK(plain->gate_may_match(p.parts(), a, l) ==
+                      jcc->gate_may_match(p.parts(), b, l));
+            }
+            CHECK(a.on == b.on);
+        }
+    }
+
+    TEST_CASE("a request picks its kernel") {
+        const plan::PrefilterKernel* plain =
+            plan::prefilter_kernel_variant(common::JccKernels::Plain);
+        const plan::PrefilterKernel* jcc =
+            plan::prefilter_kernel_variant(common::JccKernels::Jcc);
+        const plan::PrefilterKernel* on_affected = jcc ? jcc : plain;
+        CHECK(&plan::resolve_prefilter_kernel(common::JccKernels::Plain,
+                                              true) == plain);
+        CHECK(&plan::resolve_prefilter_kernel(common::JccKernels::Jcc, false) ==
+              on_affected);
+        CHECK(&plan::resolve_prefilter_kernel(common::JccKernels::Auto, true) ==
+              on_affected);
+        CHECK(&plan::resolve_prefilter_kernel(common::JccKernels::Auto,
+                                              false) == plain);
+    }
+
+    // A Linux x86-64 build (the wheels) must carry the padded copy; a
+    // toolchain without the branch-padding flag would drop it silently.
+    TEST_CASE("a Linux x86-64 build carries the jcc prefilter kernel") {
+#if defined(__linux__) && defined(__x86_64__)
+        CHECK(plan::prefilter_kernel_variant(common::JccKernels::Jcc) !=
+              nullptr);
+#else
+        MESSAGE("only a Linux x86-64 build must carry the jcc kernel");
+#endif
+    }
+
+    // The choice is cached on first use, so each request runs in a new process.
+    TEST_CASE("the request in the environment picks the kernel" *
+              doctest::skip()) {
+        fresh_process::announce();
+        const char* request = std::getenv("DFTRACER_UTILS_JCC_KERNELS");
+        REQUIRE(request != nullptr);
+        const plan::PrefilterKernel* want = plan::prefilter_kernel_variant(
+            dstd::StringView(request) == "jcc" ? common::JccKernels::Jcc
+                                               : common::JccKernels::Plain);
+        if (!want)
+            want = plan::prefilter_kernel_variant(common::JccKernels::Plain);
+        CHECK(&plan::prefilter_kernel() == want);
+    }
+
+    TEST_CASE("DFTRACER_UTILS_JCC_KERNELS picks the prefilter kernel") {
+        for (const char* request : {"plain", "jcc"}) {
+            CAPTURE(request);
+            ::setenv("DFTRACER_UTILS_JCC_KERNELS", request, 1);
+            const auto result = fresh_process::run(
+                "the request in the environment picks the kernel");
+            ::unsetenv("DFTRACER_UTILS_JCC_KERNELS");
+            CHECK(result.ok());
+        }
     }
 }

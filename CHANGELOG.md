@@ -402,7 +402,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
-- Add a second build of the string-match kernels with branch padding against the Intel JCC erratum, picked at run time on an affected CPU and set with `DFTRACER_UTILS_STRING_KERNEL` (`plain`, `jcc` or `auto`).
+- Add a second build of the string-match kernels and of the trace prefilter's per-line code with branch padding against the Intel JCC erratum, picked at run time on an affected CPU and set with `DFTRACER_UTILS_JCC_KERNELS` (`plain`, `jcc` or `auto`).
 - Add `dstd::fmt`, which formats text with the format fixed at compile time (`dstd::fmt<"open {}: {}">(path, err)` or `dstd::fmt("open {}: {}"_f, path, err)`), in one allocation, and `dstd::fmt_to`, which writes into a caller buffer with no allocation.
   It takes `{}`, hex, zero-padded width and fixed float precision, and a wrong argument count or a bad spec does not compile.
 - Add `dstd::fmt_join<"\t">(a, b, c)`, which formats its arguments with one separator between them, and `dstd::fmt_join_to`, which writes the same text into a caller buffer.

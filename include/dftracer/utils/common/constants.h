@@ -52,12 +52,13 @@ inline constexpr const char* REPORT_ENV = "DFTRACER_UTILS_MEMORY_REPORT";
 inline constexpr bool DEFAULT_REPORT = false;
 }  // namespace memory_settings
 
-namespace string_kernel_settings {
-/// plain, jcc or auto. jcc is the string-match kernels built with branch
-/// padding against the Intel JCC erratum; auto picks it on an affected CPU.
-inline constexpr const char* KERNEL_ENV = "DFTRACER_UTILS_STRING_KERNEL";
-inline constexpr const char* DEFAULT_KERNEL = "auto";
-}  // namespace string_kernel_settings
+namespace jcc_kernel_settings {
+/// plain, jcc or auto. jcc is the hot kernels (string match, trace prefilter)
+/// built with branch padding against the Intel JCC erratum; auto picks it on
+/// an affected CPU.
+inline constexpr const char* KERNELS_ENV = "DFTRACER_UTILS_JCC_KERNELS";
+inline constexpr const char* DEFAULT_KERNELS = "auto";
+}  // namespace jcc_kernel_settings
 
 namespace io_settings {
 /// auto, io_uring, epoll, kqueue or threadpool.

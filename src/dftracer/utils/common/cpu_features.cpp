@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/cpu_features.h>
+#include <dftracer/utils/common/env.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/platform_compat.h>
 
 #include <cstring>
@@ -55,6 +58,31 @@ bool cpu_has_jcc_erratum() {
         return jcc_erratum_affected(family, model, eax & 0xF);
     }();
     return affected;
+}
+
+JccKernels parse_jcc_kernels(dstd::StringView request) {
+    if (request.empty() ||
+        request == constants::jcc_kernel_settings::DEFAULT_KERNELS)
+        return JccKernels::Auto;
+    if (request == "plain") return JccKernels::Plain;
+    if (request == "jcc") return JccKernels::Jcc;
+    DFTRACER_UTILS_LOG_WARN("{}={} is not plain, jcc or auto; using auto",
+                            constants::jcc_kernel_settings::KERNELS_ENV,
+                            request);
+    return JccKernels::Auto;
+}
+
+bool prefers_jcc_kernels(JccKernels request, bool cpu_affected) {
+    return request == JccKernels::Jcc ||
+           (request == JccKernels::Auto && cpu_affected);
+}
+
+JccKernels jcc_kernels_request() {
+    static const JccKernels request = [] {
+        const auto text = Env::get(constants::jcc_kernel_settings::KERNELS_ENV);
+        return parse_jcc_kernels(text ? *text : dstd::StringView{});
+    }();
+    return request;
 }
 
 }  // namespace dftracer::utils::common

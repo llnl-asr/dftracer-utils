@@ -65,6 +65,25 @@ set(DFTU_PC_PRIVATE_dataframe "-lsimdjson -ldftracer_hwy_contrib -ldftracer_hwy 
 set(DFTU_PC_PRIVATE_trace "-lsimdjson -lyaml-cpp -ldftracer_zlib -ldeflate -lzstd ${DFTU_PC_NANOARROW}")
 set(DFTU_PC_PRIVATE_utilities "-lyaml-cpp ${DFTU_PC_NANOARROW}")
 
+# Branch padding against the Intel JCC erratum. The flag acts on the assembler,
+# so a padded kernel is a second compile of the same source (string_match_jcc.cpp,
+# prefilter_kernel_jcc.cpp); a dispatch file picks one copy at run time.
+set(DFTU_HAS_JCC_VARIANT 0)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+  include(CheckCXXCompilerFlag)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    set(DFTU_JCC_FLAG "-mbranches-within-32B-boundaries")
+  elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    set(DFTU_JCC_FLAG "-Wa,-mbranches-within-32B-boundaries")
+  endif()
+  if(DFTU_JCC_FLAG)
+    check_cxx_compiler_flag("${DFTU_JCC_FLAG}" DFTU_COMPILER_HAS_JCC_FLAG)
+    if(DFTU_COMPILER_HAS_JCC_FLAG)
+      set(DFTU_HAS_JCC_VARIANT 1)
+    endif()
+  endif()
+endif()
+
 # ##############################################################################
 # Libraries
 # ##############################################################################
@@ -264,6 +283,7 @@ set(DFTRACER_UTILS_INDEX_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/plan/conditions.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/plan/file_index_data.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/plan/prefilter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/plan/prefilter_kernel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/plan/prune.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/plan/rowsets.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/plan/view_resolver.cpp
@@ -1256,30 +1276,17 @@ set(DFTRACER_UTILS_DATAFRAME_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/plan.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/mask_abi.cpp)
 
-# A second build of the string-match kernels with branch padding against the
-# Intel JCC erratum (string_match_jcc.cpp); the dispatch file picks one at run
-# time. It is the same source compiled by the same target, so every setting of
-# the dataframe objects applies to it.
-set(DFTU_HAS_JCC_VARIANT 0)
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
-  include(CheckCXXCompilerFlag)
-  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    set(DFTU_JCC_FLAG "-mbranches-within-32B-boundaries")
-  elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    set(DFTU_JCC_FLAG "-Wa,-mbranches-within-32B-boundaries")
-  endif()
-  if(DFTU_JCC_FLAG)
-    check_cxx_compiler_flag("${DFTU_JCC_FLAG}" DFTU_COMPILER_HAS_JCC_FLAG)
-    if(DFTU_COMPILER_HAS_JCC_FLAG)
-      set(DFTU_HAS_JCC_VARIANT 1)
-      set(DFTU_JCC_SOURCE
-          ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/string_match_jcc.cpp
-      )
-      list(APPEND DFTRACER_UTILS_DATAFRAME_SOURCES ${DFTU_JCC_SOURCE})
-      set_source_files_properties(${DFTU_JCC_SOURCE}
-                                  PROPERTIES COMPILE_OPTIONS "${DFTU_JCC_FLAG}")
-    endif()
-  endif()
+# A second build of the string-match kernels with branch padding (see
+# DFTU_JCC_FLAG above); the dispatch file picks one at run time. It is the same
+# source compiled by the same target, so every setting of the dataframe objects
+# applies to it.
+if(DFTU_HAS_JCC_VARIANT)
+  set(DFTU_JCC_SOURCE
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/string_match_jcc.cpp
+  )
+  list(APPEND DFTRACER_UTILS_DATAFRAME_SOURCES ${DFTU_JCC_SOURCE})
+  set_source_files_properties(${DFTU_JCC_SOURCE}
+                              PROPERTIES COMPILE_OPTIONS "${DFTU_JCC_FLAG}")
 endif()
 set_source_files_properties(
   ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/string_match_dispatch.cpp
@@ -1378,6 +1385,21 @@ set_source_files_properties(
   ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/fold.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_scanner_utility.cpp
   PROPERTIES COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:GNU>:-Wno-strict-overflow>")
+
+# The padded copy of the prefilter's per-line code (prefilter_kernel_jcc.cpp),
+# built like the string-match one in the dataframe library.
+if(DFTU_HAS_JCC_VARIANT)
+  set(DFTU_PREFILTER_JCC_SOURCE
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/plan/prefilter_kernel_jcc.cpp
+  )
+  list(APPEND DFTRACER_UTILS_TRACE_SOURCES ${DFTU_PREFILTER_JCC_SOURCE})
+  set_source_files_properties(${DFTU_PREFILTER_JCC_SOURCE}
+                              PROPERTIES COMPILE_OPTIONS "${DFTU_JCC_FLAG}")
+endif()
+set_source_files_properties(
+  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/plan/prefilter.cpp
+  PROPERTIES COMPILE_DEFINITIONS
+             DFTRACER_UTILS_HAS_JCC_VARIANT=${DFTU_HAS_JCC_VARIANT})
 
 create_library(
   NAME

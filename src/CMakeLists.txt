@@ -1447,7 +1447,7 @@ create_library(
 # The one file that reads YAML catches yaml-cpp's exceptions.
 set_source_files_properties(
   ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/record_schema_yaml.cpp
-  PROPERTIES COMPILE_OPTIONS -fexceptions)
+  PROPERTIES COMPILE_OPTIONS -fexceptions SKIP_PRECOMPILE_HEADERS ON)
 
 foreach(variant objects shared static)
   dftu_variant_target(VARIANT_TARGET dftracer_utils_trace ${variant})
@@ -1468,6 +1468,8 @@ foreach(variant objects shared static)
     endif()
     if(variant STREQUAL "objects")
       target_set_warnings(dftracer_utils_trace_objects)
+      target_compile_options(dftracer_utils_trace_objects
+                             PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
     elseif(COVERAGE_LINK_OPTIONS)
       target_link_libraries(${VARIANT_TARGET}
                             PRIVATE ${COVERAGE_LINK_OPTIONS})

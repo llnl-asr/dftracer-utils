@@ -15,13 +15,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Report the first input error of the duql builder from `Pipe::text()` and `Source::text()`, which now give a `dstd::Expected<dstd::String, DuqlError>`, in place of raising `std::invalid_argument`.
   A `Col`, `Pipe` or `Source` keeps the first error of the calls that built it, such as a number that is not finite or a `bucket` with a bad mode.
   `error()` reads it.
-  `View::duql(pipe)` throws `INVALID_ARGUMENT` for a `Pipe` that holds an error.
+  `View::duql(pipe)` returns the error for a `Pipe` that holds an error.
 - Remove `duql::parse_or_throw`.
   Use `Query::from_string`, which gives a `dstd::Expected`, or `try_parse`.
 - Return a `dstd::Result` from `duql::load_macros` and `duql::path_macros` in place of raising.
   The Python `duql.load_path` still raises the same exception.
 - Build the json and duql libraries without exceptions.
 - Build the io library without exceptions.
+- Build the trace library without exceptions.
+  Only the file that reads YAML keeps exceptions, to catch the ones of yaml-cpp.
+  Python keeps its exception types.
+- Return a `dstd::Result` from `View::export_would_bootstrap`, `collect_would_bootstrap`, `materialize_dir`, `register_materialized`, `mv_source` and `reconstruct_if_cached`, and from `rows<T>`.
+- Return the first builder error of a `View` from every terminal, in place of raising.
+  A view over files of more than one record schema returns the mixed record schema error, in place of falling back to the dftracer schema.
+  The server `columns` endpoint answers 400 when the column info fails.
+- Return a `dstd::Result` from the `Indexer` and the index build, in place of raising.
 - Return a `dstd::Result` from `Source::scan` and `Source::open_batch`.
   A source that cannot open a scan returns the error and the collect ends with it.
   A `Cursor` must not throw from `try_next`, `out_names` or `resident_bytes`.

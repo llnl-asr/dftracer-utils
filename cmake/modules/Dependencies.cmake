@@ -212,6 +212,7 @@ function(need_simdjson)
       target_compile_features(simdjson_static PUBLIC cxx_std_17)
       # Suppress warnings from simdjson (third-party code)
       target_compile_options(simdjson_static PRIVATE -w)
+      target_compile_definitions(simdjson_static PRIVATE SIMDJSON_EXCEPTIONS=0)
       set_target_properties(
         simdjson_static
         PROPERTIES OUTPUT_NAME simdjson
@@ -231,6 +232,7 @@ function(need_simdjson)
       target_compile_features(simdjson_shared PUBLIC cxx_std_17)
       # Suppress warnings from simdjson (third-party code)
       target_compile_options(simdjson_shared PRIVATE -w)
+      target_compile_definitions(simdjson_shared PRIVATE SIMDJSON_EXCEPTIONS=0)
       set_target_properties(
         simdjson_shared
         PROPERTIES OUTPUT_NAME simdjson

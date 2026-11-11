@@ -126,7 +126,7 @@ function(install_private_static_deps)
   set(deps_targets)
   foreach(target hwy hwy_contrib utf8proc_static)
     if(TARGET ${target})
-      set_target_properties(${target} PROPERTIES OUTPUT_NAME dftracer_${target})
+      set_target_properties(${target} PROPERTIES OUTPUT_NAME dftracer_utils_${target})
       list(APPEND deps_targets ${target})
     endif()
   endforeach()
@@ -145,7 +145,7 @@ function(install_private_static_deps)
 
   if(TARGET dftracer_utils_vectorscan::hs)
     get_target_property(hs_lib dftracer_utils_vectorscan::hs IMPORTED_LOCATION)
-    set(hs_name ${CMAKE_STATIC_LIBRARY_PREFIX}dftracer_hs${CMAKE_STATIC_LIBRARY_SUFFIX})
+    set(hs_name ${CMAKE_STATIC_LIBRARY_PREFIX}dftracer_utils_hs${CMAKE_STATIC_LIBRARY_SUFFIX})
     install(FILES "${hs_lib}" DESTINATION ${CMAKE_INSTALL_LIBDIR}
             RENAME ${hs_name})
     set(hs_config ${CMAKE_BINARY_DIR}/dftracer_utils_vectorscan/dftracer_utils_vectorscanConfig.cmake)
@@ -361,7 +361,7 @@ function(need_zlib)
   endif()
   set_target_properties(
     ${_zng}
-    PROPERTIES OUTPUT_NAME dftracer_zlib
+    PROPERTIES OUTPUT_NAME dftracer_utils_zlib
                ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
                POSITION_INDEPENDENT_CODE ON
                C_VISIBILITY_PRESET hidden

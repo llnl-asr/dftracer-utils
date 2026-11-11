@@ -627,7 +627,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   Fix a hang when one plan of a streamed `collect_all` or session stopped early (`head(1)`) while a small memory budget held the others: the senders still waiting on its budget never woke.
   The cost: each ordered row plan in a batch now reads on its own, and a join or concat child reads apart from the streamed roots, so those cost one more scan than before.
 - Fix `find_package` for the installed shared and static libraries: a project that links one now finds Threads, simdjson, nanoarrow, pcre2, highway, utf8proc, vectorscan, zlib-ng, zstd and libdeflate from the same prefix with no extra flags.
-  The private static archives install as `libdftracer_hs.a`, `libdftracer_hwy.a`, `libdftracer_hwy_contrib.a` and `libdftracer_utf8proc_static.a`, and the `zlib` package is now `dftracer_utils_zlib`.
+  The private static archives install as `libdftracer_utils_hs.a`, `libdftracer_utils_hwy.a`, `libdftracer_utils_hwy_contrib.a`, `libdftracer_utils_utf8proc_static.a` and `libdftracer_utils_zlib.a`, and the `zlib` package is now `dftracer_utils_zlib`.
 - Read a line of any size: a line longer than the read buffer no longer fails the read of its file.
   The buffer doubles for that line and stays that size for the lines after it.
 - Index every line the DOM parser refuses, with a number too large for a double, an invalid escape, a 20-digit integer, bad UTF-8, a raw control byte in a string or a nesting deeper than 1024 levels.

@@ -37,7 +37,7 @@ set(DFTU_PC_VECTORSCAN)
 set(DFTU_VECTORSCAN_PACKAGES)
 if(DFTRACER_UTILS_ENABLE_VECTORSCAN)
   set(DFTU_VECTORSCAN_PACKAGES dftracer_utils_vectorscan)
-  set(DFTU_PC_VECTORSCAN "-ldftracer_hs")
+  set(DFTU_PC_VECTORSCAN "-ldftracer_utils_hs")
 endif()
 set(DFTU_PC_PRIVATE_memory "-lpthread -ldl")
 set(DFTU_PC_PRIVATE_common "-lpthread")
@@ -45,7 +45,7 @@ if(DFTRACER_UTILS_HAVE_LUSTREAPI)
   set(DFTU_PC_PRIVATE_common "${DFTU_PC_PRIVATE_common} -llustreapi")
 endif()
 set(DFTU_PC_PRIVATE_json "-lsimdjson")
-set(DFTU_PC_PRIVATE_fileio "-ldftracer_zlib -ldeflate")
+set(DFTU_PC_PRIVATE_fileio "-ldftracer_utils_zlib -ldeflate")
 set(DFTU_PC_PRIVATE_store "-ldeflate -lzstd")
 # Keep the static Vectorscan archive's symbols out of a shared library's
 # dynamic symbol table (GNU-style linkers only).
@@ -60,9 +60,9 @@ function(dftu_exclude_vectorscan_symbols target)
   endif()
 endfunction()
 
-set(DFTU_PC_PRIVATE_duql "-lsimdjson -lpcre2-8 ${DFTU_PC_VECTORSCAN} -ldftracer_hwy")
-set(DFTU_PC_PRIVATE_dataframe "-lsimdjson -ldftracer_hwy_contrib -ldftracer_hwy -ldftracer_utf8proc_static -lzstd ${DFTU_PC_NANOARROW}")
-set(DFTU_PC_PRIVATE_trace "-lsimdjson -ldftracer_zlib -ldeflate -lzstd ${DFTU_PC_NANOARROW}")
+set(DFTU_PC_PRIVATE_duql "-lsimdjson -lpcre2-8 ${DFTU_PC_VECTORSCAN} -ldftracer_utils_hwy")
+set(DFTU_PC_PRIVATE_dataframe "-lsimdjson -ldftracer_utils_hwy_contrib -ldftracer_utils_hwy -ldftracer_utils_utf8proc_static -lzstd ${DFTU_PC_NANOARROW}")
+set(DFTU_PC_PRIVATE_trace "-lsimdjson -ldftracer_utils_zlib -ldeflate -lzstd ${DFTU_PC_NANOARROW}")
 set(DFTU_PC_PRIVATE_domains "${DFTU_PC_NANOARROW}")
 
 # Branch padding against the Intel JCC erratum. The flag acts on the assembler,
@@ -438,7 +438,7 @@ set(PKG_CONFIG_LIBS_PRIVATE "")
 set(PKG_CONFIG_LIBS_PRIVATE "${PKG_CONFIG_LIBS_PRIVATE} -lpthread")
 
 # The static utilities library needs the zlib-ng archive it was built with.
-set(PKG_CONFIG_LIBS_PRIVATE "${PKG_CONFIG_LIBS_PRIVATE} -ldftracer_zlib")
+set(PKG_CONFIG_LIBS_PRIVATE "${PKG_CONFIG_LIBS_PRIVATE} -ldftracer_utils_zlib")
 
 # Add other dependencies built with CPM
 set(PKG_CONFIG_LIBS_PRIVATE "${PKG_CONFIG_LIBS_PRIVATE} -lsimdjson")

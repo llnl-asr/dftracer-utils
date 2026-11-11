@@ -214,7 +214,9 @@ struct RawText {
     StringView s;
 };
 
-/// Escape policy: `bound(s)` is the most bytes `write(dst, s)` may write.
+/// Escape policy: `bound(s)` is the most bytes `write(dst, s)` may write; a
+/// policy may count the exact size for a long string, as json::JsonEscape
+/// does from 64 bytes.
 struct PlainEscape {
     static std::size_t bound(StringView s) { return s.size(); }
     static char* write(char* d, StringView s) {
@@ -487,6 +489,32 @@ String fmt_with(const A&... a) {
     char* const end = fmt_detail::write<E>(FORMAT, first, a...);
     out.resize(static_cast<std::size_t>(end - first));
     return out;
+}
+
+/// @ref fmt_with that appends to `out`: grows it by the bound of the
+/// arguments, writes at the old end and trims to the written size. The bytes
+/// before the old end are kept. No argument may point into `out`: growing it
+/// can move its bytes.
+template <class E, FixedString S, class... A>
+void fmt_append_with(String& out, const A&... a) {
+    static_assert(fmt_detail::Check<S, A...>::OK);
+    constexpr fmt_detail::Static<S> FORMAT{};
+    const std::size_t at = out.size();
+    out.resize(at + fmt_detail::bound<E>(FORMAT, a...));
+    char* const first = out.data() + at;
+    char* const end = fmt_detail::write<E>(FORMAT, first, a...);
+    out.resize(at + static_cast<std::size_t>(end - first));
+}
+
+/// @ref fmt that appends to `out`, as @ref fmt_append_with.
+template <FixedString S, class... A>
+void fmt_append(String& out, const A&... a) {
+    fmt_append_with<fmt_detail::PlainEscape, S>(out, a...);
+}
+
+template <FixedString S, class... A>
+void fmt_append(String& out, Format<S>, const A&... a) {
+    fmt_append<S>(out, a...);
 }
 
 /// Formats into a dstd::String sized once from the bound of the arguments.

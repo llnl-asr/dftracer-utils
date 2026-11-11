@@ -4,6 +4,11 @@
 
 #include <dftracer/utils/dstd/string.h>
 
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+
 namespace dftracer::utils::json {
 
 /// Append the JSON-escaped form of `s` (quotes, backslash, the standard
@@ -51,54 +56,86 @@ inline void append_json_escaped(dstd::String& out, dstd::StringView s) {
     }
 }
 
-/// Like append_json_escaped, into `dst` with room for 6 * s.size() bytes.
+namespace detail {
+
+/// What a byte becomes in a JSON string: itself, a backslash and one letter,
+/// or `\u00XX`.
+inline constexpr std::uint8_t ESCAPE_NONE = 0;
+inline constexpr std::uint8_t ESCAPE_UNICODE = 1;
+
+constexpr std::array<char, 256> make_escape_letters() {
+    std::array<char, 256> t{};
+    t[static_cast<unsigned char>('"')] = '"';
+    t[static_cast<unsigned char>('\\')] = '\\';
+    t[static_cast<unsigned char>('\b')] = 'b';
+    t[static_cast<unsigned char>('\f')] = 'f';
+    t[static_cast<unsigned char>('\n')] = 'n';
+    t[static_cast<unsigned char>('\r')] = 'r';
+    t[static_cast<unsigned char>('\t')] = 't';
+    return t;
+}
+
+/// The letter after the backslash for a byte with a short escape, 0 for any
+/// other byte.
+inline constexpr std::array<char, 256> ESCAPE_LETTER = make_escape_letters();
+
+/// Bytes an escaped byte adds to its own: 0 for a byte written as is, 1 for a
+/// short escape, 5 for `\u00XX`.
+constexpr std::array<std::uint8_t, 256> make_escape_extra() {
+    std::array<std::uint8_t, 256> t{};
+    for (std::size_t i = 0; i < 256; ++i) {
+        if (ESCAPE_LETTER[i] != 0)
+            t[i] = 1;
+        else if (i < 0x20)
+            t[i] = 5;
+    }
+    return t;
+}
+
+inline constexpr std::array<std::uint8_t, 256> ESCAPE_EXTRA =
+    make_escape_extra();
+
+}  // namespace detail
+
+/// The exact size of the JSON-escaped form of `s`, in one pass over it.
+inline std::size_t escaped_json_size(dstd::StringView s) {
+    std::size_t extra = 0;
+    for (const char c : s)
+        extra += detail::ESCAPE_EXTRA[static_cast<unsigned char>(c)];
+    return s.size() + extra;
+}
+
+/// Like append_json_escaped, into `dst` with room for the escaped size of `s`
+/// (at most 6 * s.size() bytes). Copies each run of plain bytes at once.
 /// Returns the end of the written bytes.
 inline char* escape_json_to(char* dst, dstd::StringView s) {
     static constexpr char HEX[] = "0123456789abcdef";
-    for (char c : s) {
-        const unsigned char u = static_cast<unsigned char>(c);
-        switch (c) {
-            case '"':
-                *dst++ = '\\';
-                *dst++ = '"';
-                break;
-            case '\\':
-                *dst++ = '\\';
-                *dst++ = '\\';
-                break;
-            case '\b':
-                *dst++ = '\\';
-                *dst++ = 'b';
-                break;
-            case '\f':
-                *dst++ = '\\';
-                *dst++ = 'f';
-                break;
-            case '\n':
-                *dst++ = '\\';
-                *dst++ = 'n';
-                break;
-            case '\r':
-                *dst++ = '\\';
-                *dst++ = 'r';
-                break;
-            case '\t':
-                *dst++ = '\\';
-                *dst++ = 't';
-                break;
-            default:
-                if (u < 0x20) {
-                    *dst++ = '\\';
-                    *dst++ = 'u';
-                    *dst++ = '0';
-                    *dst++ = '0';
-                    *dst++ = HEX[u >> 4];
-                    *dst++ = HEX[u & 15];
-                } else {
-                    *dst++ = c;
-                }
-                break;
+    const char* const end = s.data() + s.size();
+    const char* run = s.data();
+    for (const char* p = run; p != end; ++p) {
+        const unsigned char u = static_cast<unsigned char>(*p);
+        if (detail::ESCAPE_EXTRA[u] == 0) continue;
+        const std::size_t clean = static_cast<std::size_t>(p - run);
+        if (clean != 0) {
+            std::memcpy(dst, run, clean);
+            dst += clean;
         }
+        run = p + 1;
+        *dst++ = '\\';
+        if (const char letter = detail::ESCAPE_LETTER[u]; letter != 0) {
+            *dst++ = letter;
+        } else {
+            *dst++ = 'u';
+            *dst++ = '0';
+            *dst++ = '0';
+            *dst++ = HEX[u >> 4];
+            *dst++ = HEX[u & 15];
+        }
+    }
+    const std::size_t clean = static_cast<std::size_t>(end - run);
+    if (clean != 0) {
+        std::memcpy(dst, run, clean);
+        dst += clean;
     }
     return dst;
 }

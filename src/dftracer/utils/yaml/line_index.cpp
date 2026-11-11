@@ -707,6 +707,9 @@ class Builder {
     bool begin_scalar(std::uint32_t j, const LineParts& pt, std::int32_t limit,
                       bool is_strict);
     bool begin_next_line(std::uint32_t j, const LineParts& pt);
+    bool deeper_line(std::uint32_t j, const LineParts& pt);
+    Step continue_plain(std::uint32_t j, std::uint32_t start, std::uint32_t end,
+                        std::uint8_t cr);
     Step open_line(std::uint32_t j, std::uint32_t start, std::uint32_t end,
                    std::uint8_t cr);
     Step plain_line(std::uint32_t j, std::uint32_t start, std::uint32_t end,
@@ -1280,6 +1283,37 @@ bool Builder::finish_open() {
     }
 }
 
+// A line deeper than the value that ended before it goes on in that value,
+// which the line index declines, unless a key holds the value: then it is an
+// error.
+bool Builder::deeper_line(std::uint32_t j, const LineParts& pt) {
+    if (after_end_) return false;
+    has_content_ = true;
+    any_content_ = true;
+    if (cont_strict_)
+        return fail(j, ix_.entries[j].start + pt.indent,
+                    "a complete value cannot go on in a deeper line");
+    return false;
+}
+
+// The plain value of the line `owner_` goes on in the line `j`, or may do so
+// after it: the scalar opens at the owner, which is read again.
+Step Builder::continue_plain(std::uint32_t j, std::uint32_t start,
+                             std::uint32_t end, std::uint8_t cr) {
+    plain_pending_ = false;
+    LineParts first;
+    classify_line(t_, ix_.entries[owner_].start, ix_.line_end(owner_), first);
+    first_line_ = owner_;
+    limit_ = static_cast<std::int32_t>(cont_limit_);
+    is_strict_ = cont_strict_;
+    first_s_ = first.val_s;
+    first_e_ = first.val_e;
+    last_ = owner_;
+    last_e_ = first.val_e;
+    open_ = Open::Plain;
+    return plain_line(j, start, end, cr);
+}
+
 bool Builder::structure(std::uint32_t j, const LineParts& pt) {
     if (after_end_) return false;
     const std::uint32_t n = pt.indent;
@@ -1290,14 +1324,6 @@ bool Builder::structure(std::uint32_t j, const LineParts& pt) {
         return begin_next_line(j, pt);
     has_content_ = true;
     any_content_ = true;
-    if (cont_active_ && n > cont_limit_) {
-        // A value that ended goes on in a deeper line, which the line index
-        // declines, unless a key holds the value: then it is an error.
-        if (cont_strict_)
-            return fail(j, ix_.entries[j].start + n,
-                        "a complete value cannot go on in a deeper line");
-        return false;
-    }
     cont_active_ = false;
     plain_pending_ = false;
     if (is_root) {
@@ -1368,9 +1394,9 @@ bool Builder::structure(std::uint32_t j, const LineParts& pt) {
         if ((pt.flags & line_flag::VAL_EMPTY) != 0) {
             pending_ = j;
             pending_col_ = limit;
-        } else if (pt.open == LineOpen::NONE &&
-                   (pt.flags & (line_flag::VAL_QUOTED | line_flag::FLOW_EMPTY |
-                                line_flag::COMMENT)) == 0) {
+        } else if (((pt.flags & (line_flag::VAL_QUOTED | line_flag::FLOW_EMPTY |
+                                 line_flag::COMMENT)) |
+                    pt.open) == 0) {
             // A plain value: a deeper line may go on in it, and the scalar
             // opens there.
             owner_ = j;
@@ -1398,38 +1424,25 @@ bool Builder::process_line(std::uint32_t start, std::uint32_t nl_pos) {
     entry.start = start;
     ix_.entries[j + 1].start = nl_pos + 1;
     ix_.next[j] = line_count_;
-    if (open_ != Open::None) {
-        const Step step = open_line(j, start, end, flags);
-        if (step == Step::Consumed) return true;
-        if (step == Step::Fail) return false;
+    if ((static_cast<unsigned>(open_) | static_cast<unsigned>(has_tab_)) != 0)
+        [[unlikely]] {
+        if (open_ != Open::None) {
+            const Step step = open_line(j, start, end, flags);
+            if (step == Step::Consumed) return true;
+            if (step == Step::Fail) return false;
+        }
+        if (has_tab_ && std::memchr(t_ + start, '\t', end - start) != nullptr)
+            return false;
     }
-    if (has_tab_ && std::memchr(t_ + start, '\t', end - start) != nullptr)
-        return false;
     LineParts pt;
     const bool plain = batch_ != nullptr && start >= batch_->base &&
                        classify_plain(*batch_, t_, start, end, pt);
-    const bool is_classified = plain || classify_line(t_, start, end, pt);
-    if (plain_pending_ && (!is_classified || pt.kind != LineKind::Comment) &&
-        (pt.indent > cont_limit_ ||
-         (is_classified && pt.kind == LineKind::Blank))) {
-        // The plain value goes on in this line, or may do so after it.
-        plain_pending_ = false;
-        LineParts first;
-        classify_line(t_, ix_.entries[owner_].start, ix_.line_end(owner_),
-                      first);
-        first_line_ = owner_;
-        limit_ = static_cast<std::int32_t>(cont_limit_);
-        is_strict_ = cont_strict_;
-        first_s_ = first.val_s;
-        first_e_ = first.val_e;
-        last_ = owner_;
-        last_e_ = first.val_e;
-        open_ = Open::Plain;
-        const Step step = plain_line(j, start, end, flags);
-        if (step == Step::Consumed) return true;
-        if (step == Step::Fail) return false;
-    }
-    if (!is_classified) {
+    if (!plain && !classify_line(t_, start, end, pt)) {
+        if (plain_pending_ && pt.indent > cont_limit_) {
+            const Step step = continue_plain(j, start, end, flags);
+            if (step == Step::Consumed) return true;
+            if (step == Step::Fail) return false;
+        }
         // A line that goes on a value that ended may hold any text.
         if (cont_active_ && pt.indent > cont_limit_) {
             if (cont_strict_ && pt.error == LineError::NONE &&
@@ -1459,6 +1472,10 @@ bool Builder::process_line(std::uint32_t start, std::uint32_t nl_pos) {
     entry.flags = static_cast<std::uint8_t>(flags | pt.flags);
     switch (pt.kind) {
         case LineKind::Blank:
+            if (plain_pending_) {
+                const Step step = continue_plain(j, start, end, flags);
+                return step == Step::Consumed;
+            }
             return true;
         case LineKind::Comment:
             plain_pending_ = false;
@@ -1472,14 +1489,24 @@ bool Builder::process_line(std::uint32_t start, std::uint32_t nl_pos) {
         default:
             break;
     }
-    // A line that goes on a value that ended is text, not a scalar to decode.
-    if (cont_active_ && pt.indent > cont_limit_) return structure(j, pt);
-    if ((pt.flags & line_flag::KEY_ESC) != 0 &&
-        !decode_into(j, false, pt.key_s, pt.key_e))
-        return false;
-    if ((pt.flags & line_flag::VAL_ESC) != 0 && pt.open == LineOpen::NONE &&
-        !decode_into(j, true, pt.val_s, pt.val_e))
-        return false;
+    if (cont_active_ && pt.indent > cont_limit_) {
+        if (plain_pending_) {
+            const Step step = continue_plain(j, start, end, flags);
+            if (step == Step::Consumed) return true;
+            if (step == Step::Fail) return false;
+        }
+        // A line that goes on a value that ended is text, not a scalar to
+        // decode.
+        return deeper_line(j, pt);
+    }
+    if ((pt.flags & (line_flag::KEY_ESC | line_flag::VAL_ESC)) != 0) {
+        if ((pt.flags & line_flag::KEY_ESC) != 0 &&
+            !decode_into(j, false, pt.key_s, pt.key_e))
+            return false;
+        if ((pt.flags & line_flag::VAL_ESC) != 0 && pt.open == LineOpen::NONE &&
+            !decode_into(j, true, pt.val_s, pt.val_e))
+            return false;
+    }
     return structure(j, pt);
 }
 

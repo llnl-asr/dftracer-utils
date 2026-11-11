@@ -5,18 +5,18 @@
 #include <Python.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/python/py_str_helpers.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_config.h>
 
 namespace dftracer::utils::python {
 
 /// The aggregation config a Python AggregationConfig describes; a missing or
 /// unreadable attribute keeps the standard value. Builders and the coordinator
 /// of a distributed build use it alike, so they agree on the params hash.
-inline index::schemas::dft::agg::AggregationConfig agg_config_from_py(
+inline trace::index::schemas::dft::agg::AggregationConfig agg_config_from_py(
     PyObject *obj) {
-    index::schemas::dft::agg::AggregationConfig cfg =
-        index::schemas::dft::agg::standard_aggregation_config();
+    trace::index::schemas::dft::agg::AggregationConfig cfg =
+        trace::index::schemas::dft::agg::standard_aggregation_config();
     auto attr = [obj](const char *name) -> PyObject * {
         PyObject *v = PyObject_GetAttrString(obj, name);
         if (!v || v == Py_None) {

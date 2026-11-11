@@ -44,12 +44,8 @@ PyObject* Series_arrow_c_array(PyObject* self, PyObject* /*args*/) {
     if (!a) return nullptr;
     dftracer::utils::dstd::UniquePtr<ArrowSchema> schema;
     dftracer::utils::dstd::UniquePtr<ArrowArray> array;
-    try {
-        schema = dftracer::utils::dstd::make_unique<ArrowSchema>();
-        array = dftracer::utils::dstd::make_unique<ArrowArray>();
-    } catch (const std::bad_alloc&) {
-        return PyErr_NoMemory();
-    }
+    schema = dftracer::utils::dstd::make_unique<ArrowSchema>();
+    array = dftracer::utils::dstd::make_unique<ArrowArray>();
     try {
         dataframe::to_arrow(*a, schema.get(), array.get());
     } catch (const std::exception& e) {
@@ -206,12 +202,7 @@ PyObject* vec_from_numpy(PyObject* /*self*/, PyObject* call_args) {
     PyObject* obj = nullptr;
     PyObject* mask_obj = Py_None;
     if (!PyArg_ParseTuple(call_args, "O|O", &obj, &mask_obj)) return nullptr;
-    dftracer::utils::dstd::UniquePtr<Py_buffer> view_owner;
-    try {
-        view_owner = dftracer::utils::dstd::make_unique<Py_buffer>();
-    } catch (const std::bad_alloc&) {
-        return PyErr_NoMemory();
-    }
+    auto view_owner = dftracer::utils::dstd::make_unique<Py_buffer>();
     Py_buffer* view = view_owner.get();
     if (PyObject_GetBuffer(obj, view,
                            PyBUF_FORMAT | PyBUF_ND | PyBUF_STRIDES) != 0) {

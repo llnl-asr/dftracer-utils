@@ -4,7 +4,6 @@
 #include <dftracer/utils/coro/async_mutex.h>
 #include <dftracer/utils/coro/async_once.h>
 #include <dftracer/utils/coro/async_semaphore.h>
-#include <dftracer/utils/coro/cancelled.h>
 #include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/coro/completion_latch.h>
 #include <dftracer/utils/coro/detail/coro.h>
@@ -50,6 +49,17 @@ struct Probe {
     std::atomic<bool> entered{false};
     std::atomic<bool> finished{false};
     std::atomic<bool> cancelled{false};
+};
+
+// A frame that a cancelled wait stops never resumes, so its locals tell how it
+// ended: `reached_end` is set by the code after the wait.
+struct Witness {
+    Probe& probe;
+    bool reached_end{false};
+    ~Witness() {
+        probe.cancelled.store(!reached_end);
+        probe.finished.store(true);
+    }
 };
 
 // A hang fails the test and ends the process: the stuck threads cannot be
@@ -128,13 +138,10 @@ TEST_CASE("a frame blocked on each awaitable completes at shutdown") {
         coro::AsyncSemaphore semaphore(1);
         REQUIRE(semaphore.try_acquire(1));
         auto frame = [&]() -> coro::CoroTask<void> {
+            Witness witness{probe};
             probe.entered.store(true);
-            try {
-                co_await semaphore.acquire(1);
-            } catch (const common::DFTUtilsException& e) {
-                probe.cancelled.store(coro::is_cancelled(e));
-            }
-            probe.finished.store(true);
+            co_await semaphore.acquire(1);
+            witness.reached_end = true;
             co_return;
         };
         rt.submit(frame(), "BlockedOnSemaphore");
@@ -152,13 +159,10 @@ TEST_CASE("a frame blocked on each awaitable completes at shutdown") {
         };
         wait_or_fail(rt.submit(holder(), "HoldsMutex"), "mutex holder");
         auto frame = [&]() -> coro::CoroTask<void> {
+            Witness witness{probe};
             probe.entered.store(true);
-            try {
-                co_await mutex.lock();
-            } catch (const common::DFTUtilsException& e) {
-                probe.cancelled.store(coro::is_cancelled(e));
-            }
-            probe.finished.store(true);
+            co_await mutex.lock();
+            witness.reached_end = true;
             co_return;
         };
         rt.submit(frame(), "BlockedOnMutex");
@@ -169,16 +173,13 @@ TEST_CASE("a frame blocked on each awaitable completes at shutdown") {
     SUBCASE("completion latch") {
         Gate gate;
         auto frame = [&]() -> coro::CoroTask<void> {
+            Witness witness{probe};
             probe.entered.store(true);
             dstd::Vector<coro::CoroTask<void>> children;
             children.push_back(stuck_child(&gate));
             children.push_back(stuck_child(&gate));
-            try {
-                co_await coro::when_all(std::move(children));
-            } catch (const common::DFTUtilsException& e) {
-                probe.cancelled.store(coro::is_cancelled(e));
-            }
-            probe.finished.store(true);
+            co_await coro::when_all(std::move(children));
+            witness.reached_end = true;
             co_return;
         };
         rt.submit(frame(), "BlockedOnLatch");
@@ -194,13 +195,10 @@ TEST_CASE("a frame blocked on each awaitable completes at shutdown") {
 
     SUBCASE("timer") {
         auto frame = [&]() -> coro::CoroTask<void> {
+            Witness witness{probe};
             probe.entered.store(true);
-            try {
-                co_await coro::timeout(1h, rt.executor()->timers());
-            } catch (const common::DFTUtilsException& e) {
-                probe.cancelled.store(coro::is_cancelled(e));
-            }
-            probe.finished.store(true);
+            co_await coro::timeout(1h, rt.executor()->timers());
+            witness.reached_end = true;
             co_return;
         };
         rt.submit(frame(), "BlockedOnTimer");
@@ -238,13 +236,10 @@ TEST_CASE("a frame blocked on each awaitable completes at shutdown") {
     SUBCASE("channel receive") {
         auto channel = dstd::make_shared<coro::Channel<int>>(1);
         auto frame = [&]() -> coro::CoroTask<void> {
+            Witness witness{probe};
             probe.entered.store(true);
-            try {
-                co_await channel->receive();
-            } catch (const common::DFTUtilsException& e) {
-                probe.cancelled.store(coro::is_cancelled(e));
-            }
-            probe.finished.store(true);
+            co_await channel->receive();
+            witness.reached_end = true;
             co_return;
         };
         rt.submit(frame(), "BlockedOnReceive");
@@ -255,13 +250,10 @@ TEST_CASE("a frame blocked on each awaitable completes at shutdown") {
         auto channel = dstd::make_shared<coro::Channel<int>>(1);
         REQUIRE(channel->try_send(1));
         auto frame = [&]() -> coro::CoroTask<void> {
+            Witness witness{probe};
             probe.entered.store(true);
-            try {
-                co_await channel->send(2);
-            } catch (const common::DFTUtilsException& e) {
-                probe.cancelled.store(coro::is_cancelled(e));
-            }
-            probe.finished.store(true);
+            co_await channel->send(2);
+            witness.reached_end = true;
             co_return;
         };
         rt.submit(frame(), "BlockedOnSend");
@@ -273,28 +265,22 @@ TEST_CASE("a frame blocked on each awaitable completes at shutdown") {
         coro::AsyncOnce<int> once;
         Probe leader;
         auto lead = [&]() -> coro::CoroTask<void> {
+            Witness witness{leader};
             leader.entered.store(true);
-            try {
-                co_await once.get([&]() -> coro::CoroTask<int> {
-                    auto v = co_await channel->receive();
-                    co_return v ? *v : 0;
-                });
-            } catch (const common::DFTUtilsException& e) {
-                leader.cancelled.store(coro::is_cancelled(e));
-            }
-            leader.finished.store(true);
+            co_await once.get([&]() -> coro::CoroTask<int> {
+                auto v = co_await channel->receive();
+                co_return v ? *v : 0;
+            });
+            witness.reached_end = true;
             co_return;
         };
         rt.submit(lead(), "OnceLeader");
         wait_until_entered(leader);
         auto frame = [&]() -> coro::CoroTask<void> {
+            Witness witness{probe};
             probe.entered.store(true);
-            try {
-                co_await once.get([]() -> coro::CoroTask<int> { co_return 1; });
-            } catch (const common::DFTUtilsException& e) {
-                probe.cancelled.store(coro::is_cancelled(e));
-            }
-            probe.finished.store(true);
+            co_await once.get([]() -> coro::CoroTask<int> { co_return 1; });
+            witness.reached_end = true;
             co_return;
         };
         rt.submit(frame(), "OnceWaiter");
@@ -306,14 +292,11 @@ TEST_CASE("a frame blocked on each awaitable completes at shutdown") {
         auto state = dstd::make_shared<coro::SharedState<int>>();
         state->executor = rt.executor();
         auto frame = [&]() -> coro::CoroTask<void> {
+            Witness witness{probe};
             probe.entered.store(true);
-            try {
-                coro::SpawnFuture<int> future(state);
-                co_await future;
-            } catch (const common::DFTUtilsException& e) {
-                probe.cancelled.store(coro::is_cancelled(e));
-            }
-            probe.finished.store(true);
+            coro::SpawnFuture<int> future(state);
+            co_await future;
+            witness.reached_end = true;
             co_return;
         };
         rt.submit(frame(), "BlockedOnSpawnFuture");
@@ -325,21 +308,19 @@ TEST_CASE("a frame blocked on each awaitable completes at shutdown") {
         // they wait on and the join follows.
         coro::AsyncSemaphore semaphore(1);
         REQUIRE(semaphore.try_acquire(1));
-        std::atomic<bool> child_cancelled{false};
+        std::atomic<bool> child_cancelled{true};
         auto frame = [&]() -> coro::CoroTask<void> {
             probe.entered.store(true);
             coro::JoinHandle join;
             auto child =
                 [](coro::AsyncSemaphore* sem,
                    std::atomic<bool>* cancelled) -> coro::detail::Coro {
-                try {
-                    co_await sem->acquire(1);
-                } catch (const common::DFTUtilsException& e) {
-                    cancelled->store(coro::is_cancelled(e));
-                }
+                co_await sem->acquire(1);
+                cancelled->store(false);
                 co_return;
             }(&semaphore, &child_cancelled);
             child.handle().promise().executor = rt.executor();
+            child.handle().promise().stoppable = true;
             join.track(child);
             child.release().resume();
             co_await join.join();

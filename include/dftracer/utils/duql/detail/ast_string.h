@@ -8,7 +8,6 @@
 #include <dftracer/utils/duql/detail/string_literal.h>
 
 #include <cstddef>
-#include <cstdio>
 #include <type_traits>
 #include <variant>
 
@@ -54,8 +53,9 @@ inline void literal_to_string(dstd::String& os, const LiteralNode& lit) {
                 os += dstd::int_text(v);
             } else if constexpr (std::is_same_v<T, double>) {
                 char buf[32];
-                const int n = std::snprintf(buf, sizeof(buf), "%g", v);
-                os.append(buf, static_cast<std::size_t>(n));
+                const char* end =
+                    dstd::to_chars_general(buf, buf + sizeof(buf), v, 6);
+                os.append(buf, static_cast<std::size_t>(end - buf));
             }
         },
         lit.value);

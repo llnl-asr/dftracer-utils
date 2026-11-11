@@ -4,6 +4,7 @@
 
 #include <Python.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -47,13 +48,17 @@ inline dftracer::utils::dataframe::GroupAgg group_agg_from_spec(
         start = colon + 1;
     }
     dataframe::GroupAgg a;
-    a.op = dataframe::agg_from_string(parts[0]);
+    const auto op = dataframe::agg_from_string(parts[0]);
+    if (!op) throw std::out_of_range(op.error().c_str());
+    a.op = *op;
     if (parts.size() == 1) {
         a.out = parts[0];
         return a;
     }
     a.column = parts[1];
-    a.out = parts.size() > 2 ? parts[2] : parts[0] + "_" + a.column;
+    a.out = parts.size() > 2
+                ? parts[2]
+                : dftracer::utils::dstd::fmt<"{}_{}">(parts[0], a.column);
     if (parts.size() > 3) a.by = parts[3];
     if (parts.size() > 4 && !parts[4].empty()) a.param = parse_double(parts[4]);
     return a;
@@ -68,9 +73,8 @@ reduce_spec_strings(
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> out;
     out.reserve(aggs.size());
     for (const auto& a : aggs)
-        out.push_back(dftracer::utils::dstd::String(
-                          dftracer::utils::dataframe::to_string(a.op)) +
-                      ":" + a.column + ":" + a.out);
+        out.push_back(dftracer::utils::dstd::fmt<"{}:{}:{}">(
+            dftracer::utils::dataframe::to_string(a.op), a.column, a.out));
     return out;
 }
 

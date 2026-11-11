@@ -3,20 +3,21 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/utilities/fileio/file_compressor_utility.h>
-#include <dftracer/utils/utilities/fileio/file_decompressor_utility.h>
+#include <dftracer/utils/fileio/file_compressor_utility.h>
+#include <dftracer/utils/fileio/file_decompressor_utility.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
 #include <cstddef>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities::fileio;
+using namespace dftracer::utils::fileio;
 
 static dstd::String read_file_content(const dstd::String& path) {
     return dstd::fs::read_file(dstd::PathView(path)).value_or(dstd::String());
@@ -48,7 +49,7 @@ TEST_SUITE("FileDecompressor") {
         SUBCASE("Decompress gzipped text file") {
             dstd::String original_file =
                 dstd::String((test_dir / "test_original.txt").str());
-            dstd::String compressed_file = original_file + ".gz";
+            dstd::String compressed_file = dstd::fmt<"{}.gz">(original_file);
             dstd::String decompressed_file = original_file;
 
             dstd::String original_content =
@@ -57,8 +58,8 @@ TEST_SUITE("FileDecompressor") {
                 "We will compress and decompress it.\n";
 
             dstd::String ofs;
-            ofs += common::str_cat(original_content);
-            (void)dstd::fs::write_file(dstd::PathView(original_file), ofs);
+            ofs += dstd::fmt<"{}">(original_content);
+            dstd::fs::write_file(dstd::PathView(original_file), ofs).discard();
 
             FileCompressorUtility compressor;
             auto compress_input =
@@ -66,7 +67,7 @@ TEST_SUITE("FileDecompressor") {
             auto compress_result = compressor(compress_input).get();
             REQUIRE(compress_result.has_value());
 
-            (void)dstd::fs::remove(original_file);
+            dstd::fs::remove(original_file).discard();
 
             FileDecompressorUtility decompressor;
             auto decompress_input =
@@ -90,19 +91,19 @@ TEST_SUITE("FileDecompressor") {
         SUBCASE("Decompress with custom output path") {
             dstd::String original_file =
                 dstd::String((test_dir / "source.txt").str());
-            dstd::String compressed_file = original_file + ".gz";
+            dstd::String compressed_file = dstd::fmt<"{}.gz">(original_file);
             dstd::String custom_output =
                 dstd::String((test_dir / "custom_decompressed.txt").str());
 
             dstd::String ofs;
             ofs += "Custom output path test";
-            (void)dstd::fs::write_file(dstd::PathView(original_file), ofs);
+            dstd::fs::write_file(dstd::PathView(original_file), ofs).discard();
 
             FileCompressorUtility compressor;
             auto compress_input =
                 FileCompressionUtilityInput::from_file(original_file);
             REQUIRE(compressor(compress_input).get().has_value());
-            (void)dstd::fs::remove(original_file);
+            dstd::fs::remove(original_file).discard();
 
             FileDecompressorUtility decompressor;
             auto decompress_input =
@@ -125,7 +126,7 @@ TEST_SUITE("FileDecompressor") {
         SUBCASE("Compress and decompress preserves content") {
             dstd::String original_file =
                 dstd::String((test_dir / "roundtrip.txt").str());
-            dstd::String compressed_file = original_file + ".gz";
+            dstd::String compressed_file = dstd::fmt<"{}.gz">(original_file);
 
             dstd::String original_content;
             original_content += "Line with spaces    and    tabs\t\there\n";
@@ -136,8 +137,8 @@ TEST_SUITE("FileDecompressor") {
             original_content += "Final line without newline";
 
             dstd::String ofs;
-            ofs += common::str_cat(original_content);
-            (void)dstd::fs::write_file(dstd::PathView(original_file), ofs);
+            ofs += dstd::fmt<"{}">(original_content);
+            dstd::fs::write_file(dstd::PathView(original_file), ofs).discard();
 
             FileCompressorUtility compressor;
             auto compress_result =
@@ -146,7 +147,7 @@ TEST_SUITE("FileDecompressor") {
                     .get();
             REQUIRE(compress_result.has_value());
 
-            (void)dstd::fs::remove(original_file);
+            dstd::fs::remove(original_file).discard();
 
             FileDecompressorUtility decompressor;
             auto decompress_result =
@@ -164,16 +165,16 @@ TEST_SUITE("FileDecompressor") {
         SUBCASE("Large file round-trip") {
             dstd::String original_file =
                 dstd::String((test_dir / "large_roundtrip.txt").str());
-            dstd::String compressed_file = original_file + ".gz";
+            dstd::String compressed_file = dstd::fmt<"{}.gz">(original_file);
 
             dstd::String ofs;
             dstd::String line =
                 "This is a line that will be repeated many times to create a "
                 "large file.\n";
             for (int i = 0; i < 10000; ++i) {
-                ofs += common::str_cat(i, ": ", line);
+                ofs += dstd::fmt<"{}: {}">(i, line);
             }
-            (void)dstd::fs::write_file(dstd::PathView(original_file), ofs);
+            dstd::fs::write_file(dstd::PathView(original_file), ofs).discard();
 
             auto original_size = dstd::fs::file_size(original_file).value();
 
@@ -184,7 +185,7 @@ TEST_SUITE("FileDecompressor") {
                     .get();
             REQUIRE(compress_result.has_value());
 
-            (void)dstd::fs::remove(original_file);
+            dstd::fs::remove(original_file).discard();
 
             FileDecompressorUtility decompressor;
             auto decompress_result =
@@ -225,7 +226,7 @@ TEST_SUITE("FileDecompressor") {
 
             dstd::String ofs;
             ofs += "This is not valid gzip data!";
-            (void)dstd::fs::write_file(dstd::PathView(corrupt_file), ofs);
+            dstd::fs::write_file(dstd::PathView(corrupt_file), ofs).discard();
 
             FileDecompressorUtility decompressor;
             auto input = FileDecompressionUtilityInput::from_file(corrupt_file);
@@ -246,10 +247,10 @@ TEST_SUITE("FileDecompressor") {
         SUBCASE("Empty compressed file") {
             dstd::String empty_file =
                 dstd::String((test_dir / "empty.txt").str());
-            dstd::String compressed_file = empty_file + ".gz";
+            dstd::String compressed_file = dstd::fmt<"{}.gz">(empty_file);
 
             dstd::String ofs;
-            (void)dstd::fs::write_file(dstd::PathView(empty_file), ofs);
+            dstd::fs::write_file(dstd::PathView(empty_file), ofs).discard();
 
             FileCompressorUtility compressor;
             auto compress_result =
@@ -257,7 +258,7 @@ TEST_SUITE("FileDecompressor") {
                     .get();
             REQUIRE(compress_result.has_value());
 
-            (void)dstd::fs::remove(empty_file);
+            dstd::fs::remove(empty_file).discard();
 
             FileDecompressorUtility decompressor;
             auto decompress_result =
@@ -281,7 +282,7 @@ TEST_SUITE("FileDecompressor") {
         SUBCASE("Decompress binary data") {
             dstd::String binary_file =
                 dstd::String((test_dir / "binary.dat").str());
-            dstd::String compressed_file = binary_file + ".gz";
+            dstd::String compressed_file = dstd::fmt<"{}.gz">(binary_file);
 
             dstd::String ofs;
             dstd::Vector<unsigned char> original_data;
@@ -292,7 +293,7 @@ TEST_SUITE("FileDecompressor") {
             }
             ofs.append(reinterpret_cast<const char*>(original_data.data()),
                        original_data.size());
-            (void)dstd::fs::write_file(dstd::PathView(binary_file), ofs);
+            dstd::fs::write_file(dstd::PathView(binary_file), ofs).discard();
 
             FileCompressorUtility compressor;
             auto compress_result =
@@ -300,7 +301,7 @@ TEST_SUITE("FileDecompressor") {
                     .get();
             REQUIRE(compress_result.has_value());
 
-            (void)dstd::fs::remove(binary_file);
+            dstd::fs::remove(binary_file).discard();
 
             FileDecompressorUtility decompressor;
             auto decompress_result =
@@ -330,11 +331,12 @@ TEST_SUITE("FileDecompressor") {
         SUBCASE("the value comes through on success") {
             dstd::String original_file =
                 dstd::String((test_dir / "value.txt").str());
-            dstd::String compressed_file = original_file + ".gz";
+            dstd::String compressed_file = dstd::fmt<"{}.gz">(original_file);
             dstd::String original_content = "happy path content\n";
 
-            (void)dstd::fs::write_file(dstd::PathView(original_file),
-                                       original_content);
+            dstd::fs::write_file(dstd::PathView(original_file),
+                                 original_content)
+                .discard();
 
             FileCompressorUtility compressor;
             auto compress_result =
@@ -342,7 +344,7 @@ TEST_SUITE("FileDecompressor") {
                     FileCompressionUtilityInput::from_file(original_file))
                     .get();
             REQUIRE(compress_result.has_value());
-            (void)dstd::fs::remove(original_file);
+            dstd::fs::remove(original_file).discard();
 
             FileDecompressorUtility decompressor;
             auto input =

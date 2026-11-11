@@ -8,10 +8,13 @@
 #include <dftracer/utils/dstd/variant.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/detail/ast.h>
+#include <dftracer/utils/duql/error.h>
 #include <dftracer/utils/duql/syntax/tree.h>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 #include <variant>
 
 namespace dftracer::utils::duql {
@@ -231,9 +234,25 @@ struct TQuant {
 
 struct LookupTable;
 
+/// The first error that reading the rows of a lookup raised. The row
+/// evaluator returns a value per record, so it records the error here and
+/// carries on; the code that runs the scan reads it after. Threads that fail
+/// together race to record: the first one stays.
+class LookupFailure {
+   public:
+    void set(DuqlError error);
+    dstd::Optional<DuqlError> get() const;
+
+   private:
+    mutable std::mutex mutex_;
+    std::atomic<bool> failed_{false};
+    dstd::Optional<DuqlError> error_;
+};
+
 /// The table a TLookup reads, bound after its side runs; null until then.
 struct LookupSlot {
     dstd::SharedPtr<const LookupTable> table;
+    LookupFailure failure;
 };
 
 /// How a TLookup reads its side: IN tests that some row has the key, ARROW

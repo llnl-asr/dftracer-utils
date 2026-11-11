@@ -384,9 +384,9 @@ TEST_SUITE("dataframe_arrow_public") {
         df.names = {"s"};
         df.columns.push_back(
             Series::strings({"a", "b", "a", "a"}).dictionary_encode());
-        dstd::Vector<std::uint8_t> bytes;
-        CHECK_NOTHROW(bytes = df.to_ipc());
-        CHECK_FALSE(bytes.empty());
+        auto bytes = df.to_ipc();
+        REQUIRE(bytes.has_value());
+        CHECK_FALSE(bytes->empty());
     }
 #endif
 }

@@ -13,8 +13,10 @@ namespace dftracer::utils::duql {
 
 /// The scalar leaf paths a query may read, dotted, as the source writes them
 /// (`args.counters.a.p50`). Called at most once per expansion, and not at all
-/// when the query has no wildcard.
-using LeafPaths = dstd::Function<dstd::Vector<dstd::String>()>;
+/// when the query has no wildcard. An error ends the expansion and comes back
+/// from it as it is.
+using LeafPaths = dstd::Function<
+    dftracer::utils::dstd::Expected<dstd::Vector<dstd::String>, DuqlError>()>;
 
 /// Replaces every wildcard path of `p`, nested pipelines included, with the
 /// leaf paths it matches: a `select`, `drop` or `unpivot` item by one item per

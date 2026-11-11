@@ -9,11 +9,13 @@
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/json/json.h>
 #include <dftracer/utils/trace/internal/utils.h>
+#include <dftracer/utils/trace/reader/trace_reader.h>
 #include <dftracer/utils/trace/views/view_scan.h>
-#include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
 #include <duql/eval_json.h>
+#include <generator_ok.h>
 #include <simdjson.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <cstdint>
@@ -193,11 +195,11 @@ ViewCounts view_counts(const dstd::String& gz, const duql::Query& q) {
         {dstd::String(gz),
          dftracer::utils::trace::internal::determine_index_path(gz, "")});
     vp.query = q;
-    auto vdef = trace::views::detail::make_vdef(vp, false);
+    auto vdef = dftu_utils_test::ok(trace::views::detail::make_vdef(vp, false));
     auto run = [&]() -> dftracer::utils::coro::CoroTask<ViewCounts> {
         std::uint64_t skipped = 0;
-        auto units =
-            co_await trace::views::detail::gather_units(vp, vdef, skipped);
+        auto units = dftu_utils_test::ok(
+            co_await trace::views::detail::gather_units(vp, vdef, skipped));
         ViewCounts out;
         for (const bool prefilter : {true, false}) {
             vdef.prefilter = prefilter;
@@ -207,7 +209,7 @@ ViewCounts view_counts(const dstd::String& gz, const duql::Query& q) {
                                                                     vdef.query);
                 sin.with_batch_size(READ_BUFFER_BYTES);
                 trace::views::ViewScannerUtility scanner;
-                auto gen = scanner(sin);
+                auto gen = dftu_utils_test::ok_items(scanner(sin));
                 while (auto b = co_await gen.next())
                     matched += b->events_matched;
             }
@@ -215,38 +217,22 @@ ViewCounts view_counts(const dstd::String& gz, const duql::Query& q) {
         }
         co_return out;
     };
-    return run().get();
+    return dftu_utils_test::ok(run().get());
 }
 
 std::size_t reader_count(dstd::StringView gz, const dstd::String& text) {
     auto run = [&]() -> dftracer::utils::coro::CoroTask<std::size_t> {
-        utilities::reader::TraceReader r({.file_path = dstd::String(gz)});
-        utilities::reader::ReadConfig cfg;
+        trace::reader::TraceReader r({.file_path = dstd::String(gz)});
+        trace::reader::ReadConfig cfg;
         cfg.query = text;
         cfg.buffer_size = READ_BUFFER_BYTES;
-        auto gen = r.read_json(cfg);
+        auto gen = dftu_utils_test::ok_items(r.read_json(cfg));
         std::size_t n = 0;
         while (auto line = co_await gen.next()) ++n;
         co_return n;
     };
-    return run().get();
+    return dftu_utils_test::ok(run().get());
 }
-
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-std::int64_t arrow_count(dstd::StringView gz, const dstd::String& text) {
-    auto run = [&]() -> dftracer::utils::coro::CoroTask<std::int64_t> {
-        utilities::reader::TraceReader r({.file_path = dstd::String(gz)});
-        utilities::reader::ReadConfig cfg;
-        cfg.query = text;
-        cfg.buffer_size = READ_BUFFER_BYTES;
-        auto gen = r.read_arrow(cfg);
-        std::int64_t n = 0;
-        while (auto b = co_await gen.next()) n += b->num_rows();
-        co_return n;
-    };
-    return run().get();
-}
-#endif
 
 }  // namespace
 
@@ -258,12 +244,12 @@ TEST_CASE("the pre-filter never drops a match") {
     {
         dstd::String out;
         for (const auto& l : lines) out += common::str_cat(l, "\n");
-        (void)dstd::fs::write_file(dstd::PathView(plain), out);
+        dstd::fs::write_file(dstd::PathView(plain), out).discard();
     }
     const dstd::String gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                MEMBER_BYTES));
-    (void)dstd::fs::remove(plain);
+    dstd::fs::remove(plain).discard();
     REQUIRE(dftu_utils_test::build_index(gz));
 
     simdjson::dom::parser parser;
@@ -273,7 +259,8 @@ TEST_CASE("the pre-filter never drops a match") {
     for (int i = 0; i < 300; ++i) {
         const dstd::String text = random_query(rng, 3);
         CAPTURE(text);
-        const duql::Query q = dftracer::utils::duql::parse_or_throw(text);
+        const duql::Query q = dftu_utils_test::ok(
+            dftracer::utils::duql::Query::from_string(text));
         std::uint64_t data = 0, all = 0;
         for (std::size_t k = 0; k < lines.size(); ++k) {
             auto root = parser.parse(padded[k]).value();
@@ -285,9 +272,6 @@ TEST_CASE("the pre-filter never drops a match") {
         CHECK(v.prefiltered == data);
         CHECK(v.plain == data);
         CHECK(reader_count(gz, text) == all);
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-        CHECK(arrow_count(gz, text) == static_cast<std::int64_t>(all));
-#endif
     }
 }
 
@@ -311,12 +295,12 @@ TEST_CASE("the pre-filter never drops a match on generic records") {
     {
         dstd::String out;
         for (const auto& l : lines) out += common::str_cat(l, "\n");
-        (void)dstd::fs::write_file(dstd::PathView(plain), out);
+        dstd::fs::write_file(dstd::PathView(plain), out).discard();
     }
     const dstd::String gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                MEMBER_BYTES));
-    (void)dstd::fs::remove(plain);
+    dstd::fs::remove(plain).discard();
     REQUIRE(dftu_utils_test::build_index(gz));
 
     auto leaf = [&]() -> dstd::String {
@@ -349,7 +333,8 @@ TEST_CASE("the pre-filter never drops a match on generic records") {
         const dstd::String text =
             rng() % 2 ? leaf() : "(" + leaf() + ") and (" + leaf() + ")";
         CAPTURE(text);
-        const duql::Query q = dftracer::utils::duql::parse_or_throw(text);
+        const duql::Query q = dftu_utils_test::ok(
+            dftracer::utils::duql::Query::from_string(text));
         std::uint64_t all = 0;
         for (auto& p : padded)
             all += eval_json(q, dftracer::utils::json::JsonValue(
@@ -360,8 +345,5 @@ TEST_CASE("the pre-filter never drops a match on generic records") {
         CHECK(v.prefiltered == all);
         CHECK(v.plain == all);
         CHECK(reader_count(gz, text) == all);
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-        CHECK(arrow_count(gz, text) == static_cast<std::int64_t>(all));
-#endif
     }
 }

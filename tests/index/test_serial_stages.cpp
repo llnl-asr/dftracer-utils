@@ -10,17 +10,18 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/build/batch_builder.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/fileio/file_helpers.h>
 #include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/runtime/fs/fs_probes.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/build/batch_builder.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_executor.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
 #include <sys/stat.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <algorithm>
@@ -42,7 +43,8 @@ constexpr int VIEW_FILES = 12;
 constexpr std::size_t VIEW_WORKERS = 4;
 
 void write_sized_file(const dstd::String& path, std::size_t bytes) {
-    (void)dstd::fs::write_file(dstd::PathView(path), dstd::String(bytes, 'x'));
+    dstd::fs::write_file(dstd::PathView(path), dstd::String(bytes, 'x'))
+        .discard();
 }
 
 dstd::String write_small_trace(const dstd::String& dir, int n) {
@@ -79,7 +81,7 @@ dstd::Vector<runtime::fs::FoundFile> scan_dir(dstd::StringView dir) {
             REQUIRE(found.has_value());
             entries = std::move(*found);
         });
-    rt.submit(std::move(task), "scan-dir").wait();
+    dftu_utils_test::ok(rt.submit(std::move(task), "scan-dir").wait());
     rt.shutdown();
     return entries;
 }
@@ -95,7 +97,7 @@ coro::CoroTask<dstd::Vector<runtime::fs::FoundFile>> cli_scan_task(
 }
 
 dstd::Vector<runtime::fs::FoundFile> cli_scan(dstd::StringView dir) {
-    return cli_scan_task(dstd::String(dir)).get();
+    return dftu_utils_test::ok(cli_scan_task(dstd::String(dir)).get());
 }
 
 dstd::Vector<dstd::String> write_view_traces(const dstd::String& dir,
@@ -109,7 +111,8 @@ dstd::String write_corrupt_trace(const dstd::String& dir, int n) {
     char name[32];
     std::snprintf(name, sizeof(name), "/t%04d.pfw.gz", n);
     const auto path = dir + name;
-    (void)dstd::fs::write_file(dstd::PathView(path), dstd::String(4096, 'x'));
+    dstd::fs::write_file(dstd::PathView(path), dstd::String(4096, 'x'))
+        .discard();
     return path;
 }
 
@@ -130,9 +133,9 @@ void cold_count(const dstd::Vector<dstd::String>& files,
     const auto view = trace::views::View::from_files(std::move(view_files))
                           .group_by({trace::views::GroupKey::name()})
                           .agg({{trace::views::AggOp::Count, "", "n"}});
-    default_runtime().block_on(coro::named(
+    dftu_utils_test::ok(default_runtime().block_on(coro::named(
         "serial-stages-view",
-        [&]() -> coro::CoroTask<void> { (void)co_await view.collect(); }()));
+        [&]() -> coro::CoroTask<void> { (void)co_await view.collect(); }())));
 }
 
 // Written once and shared by the cases that read it.
@@ -229,18 +232,20 @@ TEST_SUITE("SerialStages") {
             if (!file) continue;
             ++marked;
             INFO("file " << f);
-            CHECK(dftracer::utils::index::extension_current(
-                snapshot, *file, index::store::IndexExtension::Members));
+            CHECK(dftracer::utils::trace::index::extension_current(
+                snapshot, *file, trace::index::store::IndexExtension::Members));
             const auto meta = dftu_utils_test::index_take(
-                dftracer::utils::index::file_metadata(snapshot, *file));
+                dftracer::utils::trace::index::file_metadata(snapshot, *file));
             REQUIRE(meta.has_value());
             CHECK(meta->line_count > 0);
-            CHECK_FALSE(dftu_utils_test::index_take(
-                            dftracer::utils::index::members(snapshot, *file))
-                            .empty());
+            CHECK_FALSE(
+                dftu_utils_test::index_take(
+                    dftracer::utils::trace::index::members(snapshot, *file))
+                    .empty());
             CHECK(dftu_utils_test::pruning_tier_current(snapshot, *file));
-            CHECK(dftracer::utils::index::extension_state(
-                      snapshot, *file, index::store::IndexExtension::Profile)
+            CHECK(dftracer::utils::trace::index::extension_state(
+                      snapshot, *file,
+                      trace::index::store::IndexExtension::Profile)
                       .has_value());
         }
         MESSAGE("marked " << marked << " of " << files.size());

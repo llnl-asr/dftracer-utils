@@ -1,0 +1,209 @@
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/duql/numbers.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
+#include <dftracer/utils/trace/index/extensions/chunk_dimension_stats.h>
+
+#include <algorithm>
+#include <cstring>
+#include <limits>
+#include <system_error>
+
+namespace dftracer::utils::trace::index::extensions {
+
+bool dimension_value_less(dstd::StringView a, dstd::StringView b,
+                          dstd::StringView value_type) {
+    if (value_type == "uint" || value_type == "int" || value_type == "double") {
+        const auto x = duql::parse_number(a);
+        const auto y = duql::parse_number(b);
+        if (x && y) return duql::compare_numbers(*x, *y).value_or(0) < 0;
+    }
+    return a < b;
+}
+
+void ChunkDimensionStats::observe(dstd::StringView value) {
+    ++present;
+    if (last_key != nullptr && *last_key == value) {
+        ++*last_counter;
+        return;
+    }
+
+    if (!value_counts) {
+        value_counts.emplace();
+    }
+
+    auto it = value_counts->find(value);
+    if (it != value_counts->end()) {
+        it->second++;
+        last_key = &it->first;
+        last_counter = &it->second;
+        return;
+    }
+
+    auto [new_it, _] = value_counts->emplace(value, 1);
+    it = new_it;
+    distinct_count = value_counts->size();
+    last_key = &it->first;
+    last_counter = &it->second;
+
+    const dstd::StringView val_ref = it->first;
+
+    if (value_type == "uint") {
+        std::uint64_t val = 0;
+        auto [ptr, ec] =
+            dstd::from_chars(value.data(), value.data() + value.size(), val);
+        if (ec == std::errc()) {
+            if (min_value.empty()) {
+                min_value.assign(val_ref);
+                max_value.assign(val_ref);
+            } else {
+                std::uint64_t cur_min = 0, cur_max = 0;
+                dstd::from_chars(min_value.data(),
+                                 min_value.data() + min_value.size(), cur_min);
+                dstd::from_chars(max_value.data(),
+                                 max_value.data() + max_value.size(), cur_max);
+                if (val < cur_min) min_value.assign(val_ref);
+                if (val > cur_max) max_value.assign(val_ref);
+            }
+            return;
+        }
+    }
+
+    if (min_value.empty() || val_ref < min_value) {
+        min_value.assign(val_ref);
+    }
+    if (max_value.empty() || val_ref > max_value) {
+        max_value.assign(val_ref);
+    }
+}
+
+void ChunkDimensionStats::observe(dstd::StringView value, std::uint32_t& slot) {
+    if (slot != NO_SLOT) {
+        ++present;
+        ++(value_counts->begin() + slot)->second;
+        return;
+    }
+    observe(value);
+    slot = static_cast<std::uint32_t>(value_counts->find(value) -
+                                      value_counts->begin());
+}
+
+void ChunkDimensionStats::observe_range_only(std::uint64_t value) {
+    ++present;
+    distinct_count++;
+    char buf[std::numeric_limits<std::uint64_t>::digits10 + 2];
+    const auto text = [&] {
+        const auto end = dstd::to_chars(buf, buf + sizeof(buf), value).ptr;
+        return dstd::StringView(buf, static_cast<std::size_t>(end - buf));
+    };
+    if (min_value.empty()) {
+        min_value = text();
+        max_value = min_value;
+    } else {
+        std::uint64_t cur_min = 0, cur_max = 0;
+        dstd::from_chars(min_value.data(), min_value.data() + min_value.size(),
+                         cur_min);
+        dstd::from_chars(max_value.data(), max_value.data() + max_value.size(),
+                         cur_max);
+        if (value < cur_min) min_value = text();
+        if (value > cur_max) max_value = text();
+    }
+}
+
+dstd::Vector<std::uint8_t> ChunkDimensionStats::serialize_value_counts() const {
+    if (!value_counts || value_counts->empty()) return {};
+
+    dstd::Vector<std::uint8_t> buf;
+    auto num = static_cast<std::uint32_t>(value_counts->size());
+
+    buf.reserve(4 + num * 20);
+
+    dstd::append_u32_le(buf, num);
+
+    for (const auto& [key, count] : *value_counts) {
+        auto key_size = static_cast<std::uint16_t>(
+            std::min<std::size_t>(key.size(), 0xFFFF));
+
+        dstd::append_u16_le(buf, key_size);
+
+        buf.insert(buf.end(), key.data(), key.data() + key_size);
+
+        dstd::append_u64_le(buf, static_cast<std::uint64_t>(count));
+    }
+
+    return buf;
+}
+
+dstd::Optional<dstd::Vector<std::uint8_t>>
+ChunkDimensionStats::compress_value_counts(std::size_t cap_bytes) const {
+    auto raw = serialize_value_counts();
+    if (raw.empty()) return dstd::nullopt;
+
+    fileio::compress::GzipMemberCompressor compressor;
+    if (!compressor.valid()) return dstd::nullopt;
+
+    auto member = compressor.compress_member(raw.data(), raw.size());
+    if (!member) return dstd::nullopt;
+
+    // Prefix the decoded length so the reader can size the output buffer
+    // exactly instead of guessing.
+    if (4 + member->size() > cap_bytes) return dstd::nullopt;
+    dstd::Vector<std::uint8_t> out(4 + member->size());
+    dstd::write_u32_le(out.data(), static_cast<std::uint32_t>(raw.size()));
+    std::copy(member->begin(), member->end(), out.begin() + 4);
+
+    return out;
+}
+
+dftracer::utils::dstd::StringViewMap<std::uint64_t>
+ChunkDimensionStats::deserialize_value_counts(const std::uint8_t* data,
+                                              std::size_t len) {
+    dftracer::utils::dstd::StringViewMap<std::uint64_t> result;
+    if (!data || len < 4) return result;
+
+    std::size_t pos = 0;
+
+    std::uint32_t num = dstd::read_u32_le(data + pos);
+    pos += 4;
+
+    for (std::uint32_t i = 0; i < num && pos + 2 <= len; ++i) {
+        std::uint16_t key_size = dstd::read_u16_le(data + pos);
+        pos += 2;
+
+        if (pos + key_size + 8 > len) break;
+
+        dstd::String key(reinterpret_cast<const char*>(data + pos), key_size);
+        pos += key_size;
+
+        std::uint64_t count = dstd::read_u64_le(data + pos);
+        pos += 8;
+
+        result[std::move(key)] = count;
+    }
+
+    return result;
+}
+
+dftracer::utils::dstd::StringViewMap<std::uint64_t>
+ChunkDimensionStats::decompress_value_counts(const std::uint8_t* data,
+                                             std::size_t len) {
+    if (!data || len < 4) return {};
+
+    std::uint32_t decoded_size = dstd::read_u32_le(data);
+
+    fileio::compress::GzipMemberDecompressor decompressor;
+    if (!decompressor.valid()) return {};
+
+    dstd::Vector<std::uint8_t> decompressed(decoded_size);
+    auto res = decompressor.decompress(data + 4, len - 4, decompressed.data(),
+                                       decompressed.size());
+    if (!res || res->out_bytes != decoded_size) return {};
+
+    return deserialize_value_counts(decompressed.data(), res->out_bytes);
+}
+
+}  // namespace dftracer::utils::trace::index::extensions

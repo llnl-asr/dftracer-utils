@@ -13,10 +13,10 @@
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/cache/rollup_store.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/trace/comparator/compare_view.h>
+#include <dftracer/utils/trace/index/cache/rollup_store.h>
 #include <dftracer/utils/trace/views/aggfold.h>
+#include <dftracer/utils/trace/views/compare_view.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
@@ -24,6 +24,7 @@
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/groupmap_oracle.h>
 #include <trace/views/test_view_common.h>
@@ -52,16 +53,19 @@ struct CountFold : dftracer::utils::trace::views::detail::Fold {
     slice() const override {
         return dftracer::utils::dstd::make_unique<CountFold>(total);
     }
-    void step(
+    dftracer::utils::dstd::Result<void> step(
         const dftracer::utils::trace::views::detail::FoldBatch& b) override {
         local += b.events.size();
+        return {};
     }
     void seal_unit(
         const dftracer::utils::trace::views::detail::ScanUnit&) override {}
     void drop_unit(
         const dftracer::utils::trace::views::detail::ScanUnit&) override {}
-    void merge(dftracer::utils::trace::views::detail::Fold& o) override {
+    dftracer::utils::dstd::Result<void> merge(
+        dftracer::utils::trace::views::detail::Fold& o) override {
         local += static_cast<CountFold&>(o).local;
+        return {};
     }
     dftracer::utils::coro::CoroTask<bool> finalize(
         const dftracer::utils::trace::views::detail::CoverageSet&) override {
@@ -105,15 +109,17 @@ inline dftracer::utils::dataframe::DataFrame engine_collect(
     // fresh pool per call dominates the run under valgrind.
     static dftracer::utils::Runtime rt;
     dftracer::utils::dataframe::DataFrame result;
-    rt.block_on(dftracer::utils::coro::named(
+    dftu_utils_test::ok(rt.block_on(dftracer::utils::coro::named(
         "engine-collect", dftracer::utils::coro::with_scope(
                               [&](dftracer::utils::coro::Scope&)
                                   -> dftracer::utils::coro::CoroTask<void> {
-                                  result = co_await dftracer::utils::trace::
-                                      views::detail::run_collect_via_engine(*v);
-                              })));
-    return dftracer::utils::trace::views::detail::apply_agg_post_ops(
-        std::move(result), *v);
+                                  result = dftu_utils_test::ok(
+                                      co_await dftracer::utils::trace::views::
+                                          detail::run_collect_via_engine(*v));
+                              }))));
+    return dftu_utils_test::ok(
+        dftracer::utils::trace::views::detail::apply_agg_post_ops(
+            std::move(result), *v));
 }
 
 // Two aggregation frames equal, pairing rows by their composite key text so a
@@ -182,7 +188,7 @@ inline dftracer::utils::dstd::String write_agg_engine_trace(
         }
     }
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    (void)dftracer::utils::dstd::fs::remove(pfw);
+    dftracer::utils::dstd::fs::remove(pfw).discard();
     return gz;
 }
 
@@ -193,15 +199,17 @@ inline dftracer::utils::dataframe::DataFrame collect_engine_plan(
     // run under Valgrind.
     static dftracer::utils::Runtime rt;
     dftracer::utils::dataframe::DataFrame result;
-    rt.block_on(dftracer::utils::coro::named(
+    dftu_utils_test::ok(rt.block_on(dftracer::utils::coro::named(
         "agg-engine", dftracer::utils::coro::with_scope(
                           [&](dftracer::utils::coro::Scope&)
                               -> dftracer::utils::coro::CoroTask<void> {
-                              result = co_await dftracer::utils::trace::views::
-                                  detail::run_collect_via_engine(*v);
-                          })));
-    return dftracer::utils::trace::views::detail::apply_agg_post_ops(
-        std::move(result), *v);
+                              result = dftu_utils_test::ok(
+                                  co_await dftracer::utils::trace::views::
+                                      detail::run_collect_via_engine(*v));
+                          }))));
+    return dftu_utils_test::ok(
+        dftracer::utils::trace::views::detail::apply_agg_post_ops(
+            std::move(result), *v));
 }
 inline dftracer::utils::dataframe::DataFrame collect_groupmap_plan(
     const dftracer::utils::trace::views::detail::scan::ScanPlan& v) {
@@ -211,8 +219,10 @@ inline dftracer::utils::dataframe::DataFrame collect_groupmap_plan(
 inline void check_match(const dftracer::utils::dataframe::DataFrame& a0,
                         const dftracer::utils::dataframe::DataFrame& b0,
                         const dftracer::utils::dstd::String& key) {
-    dftracer::utils::dataframe::DataFrame a = a0.sort_by(key, false);
-    dftracer::utils::dataframe::DataFrame b = b0.sort_by(key, false);
+    dftracer::utils::dataframe::DataFrame a =
+        dftu_utils_test::ok(a0.sort_by(key, false));
+    dftracer::utils::dataframe::DataFrame b =
+        dftu_utils_test::ok(b0.sort_by(key, false));
     REQUIRE(a.names.size() == b.names.size());
     for (std::size_t i = 0; i < a.names.size(); ++i) {
         CHECK(a.names[i] == b.names[i]);

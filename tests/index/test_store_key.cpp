@@ -2,7 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/tuple.h>
-#include <dftracer/utils/index/key.h>
+#include <dftracer/utils/trace/index/key.h>
 #include <doctest/doctest.h>
 
 #include <array>
@@ -16,7 +16,7 @@
 #include <tuple>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::index;
+using namespace dftracer::utils::trace::index;
 
 namespace {
 

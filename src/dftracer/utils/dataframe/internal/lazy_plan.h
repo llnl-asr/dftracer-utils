@@ -8,6 +8,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 
 #include <array>
@@ -45,11 +46,11 @@ LazyFrame optimize_plan(const LazyFrame& lf);
 std::uint64_t plan_fingerprint(const LazyFrame& lf);
 
 // The C++ callbacks of one run of a tap: `rows` on each morsel (its columns
-// under their names), `end` once when the input is drained. Either may throw,
-// which fails the run.
+// under their names), `end` once when the input is drained. An error from
+// either fails the run.
 struct TapRun {
-    dstd::Function<void(const DataFrame&)> rows;
-    dstd::Function<void()> end;
+    dstd::Function<dstd::Result<void>(const DataFrame&)> rows;
+    dstd::Function<dstd::Result<void>()> end;
 };
 
 // A tap: `open` gives the callbacks of each run of the plan. A tap is an
@@ -63,6 +64,10 @@ LazyFrame tap(const LazyFrame& lf, dstd::SharedPtr<const Tap> tap);
 
 // The plan's leaf source.
 const dstd::SharedPtr<const Source>& plan_source(const LazyFrame& lf);
+
+// `lf` with `error` kept as its first error, unless it holds one: what a
+// builder of a type that wraps a LazyFrame returns when it refuses.
+LazyFrame fail_plan(const LazyFrame& lf, dstd::Error error);
 
 // `lf`'s ops and memory budget over `source` instead of its own source.
 LazyFrame rebase(const LazyFrame& lf, dstd::SharedPtr<const Source> source);

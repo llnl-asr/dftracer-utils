@@ -3,6 +3,7 @@
  * abi.h) since they use C99 designated initializers on a union member no
  * C++ literal syntax reaches the same way. Exercised from a plain C TU so
  * the designated-initializer form actually compiles and runs. */
+#undef NDEBUG
 #include <assert.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <string.h>

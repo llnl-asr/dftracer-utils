@@ -5,9 +5,10 @@
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/trace/index/indexer.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -51,9 +52,11 @@ dstd::String write_trace(TestEnvironment& env, const dstd::String& name,
     const auto gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                member_bytes));
-    (void)dstd::fs::remove(plain);
-    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
-        .build();
+    dstd::fs::remove(plain).discard();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                                {dstd::String(dstd::StringView(gz))}))
+            .build());
     return gz;
 }
 
@@ -64,17 +67,18 @@ View view_of(const dstd::String& gz) {
 }
 
 std::int64_t rows_in(const dstd::String& gz, double b, double e) {
-    return view_of(gz).time_range(b, e).collect().get().num_rows();
+    return dftu_utils_test::ok(view_of(gz).time_range(b, e).collect().get())
+        .num_rows();
 }
 
 double agg_in(const dstd::String& gz, double b, double e, AggOp op,
               const dstd::String& field) {
-    auto df = view_of(gz)
-                  .time_range(b, e)
-                  .group_by({GroupKey::name()})
-                  .agg({{op, dstd::String(field), "v"}})
-                  .collect()
-                  .get();
+    auto df = dftu_utils_test::ok(view_of(gz)
+                                      .time_range(b, e)
+                                      .group_by({GroupKey::name()})
+                                      .agg({{op, dstd::String(field), "v"}})
+                                      .collect()
+                                      .get());
     return df.num_rows() == 0 ? 0.0 : bnum(df, 0, "v");
 }
 
@@ -89,14 +93,14 @@ struct Occ {
 };
 
 dstd::Map<dstd::String, Occ> occupancy(const View& v) {
-    auto df = v.group_by({GroupKey::name()})
-                  .agg({{AggOp::Count, "", "n"},
-                        {AggOp::Sum, "dur", "s"},
-                        {AggOp::Busy, "", "b"},
-                        {AggOp::Utilization, "", "u"},
-                        {AggOp::Active, "", "a"}})
-                  .collect()
-                  .get();
+    auto df = dftu_utils_test::ok(v.group_by({GroupKey::name()})
+                                      .agg({{AggOp::Count, "", "n"},
+                                            {AggOp::Sum, "dur", "s"},
+                                            {AggOp::Busy, "", "b"},
+                                            {AggOp::Utilization, "", "u"},
+                                            {AggOp::Active, "", "a"}})
+                                      .collect()
+                                      .get());
     dstd::Map<dstd::String, Occ> out;
     for (std::int64_t r = 0; r < df.num_rows(); ++r) {
         const dstd::String key =
@@ -144,7 +148,8 @@ TEST_SUITE("TimeWindow") {
             events.push_back({1000 + static_cast<std::uint64_t>(i) * 100, 5});
         const auto gz = write_trace(env, "one", events, 1 << 20);
 
-        auto df = view_of(gz).time_range(1200, 1500).collect().get();
+        auto df = dftu_utils_test::ok(
+            view_of(gz).time_range(1200, 1500).collect().get());
         REQUIRE(df.num_rows() == 3);
         dstd::Vector<double> ts;
         for (std::int64_t r = 0; r < df.num_rows(); ++r)
@@ -153,11 +158,11 @@ TEST_SUITE("TimeWindow") {
         CHECK(ts == dstd::Vector<double>{1200, 1300, 1400});
 
         CHECK(agg_in(gz, 1200, 1500, AggOp::Count, "") == 3);
-        CHECK(view_of(gz)
-                  .time_range(1200, 1500)
-                  .duql(R"(name == "read")")
-                  .collect()
-                  .get()
+        CHECK(dftu_utils_test::ok(view_of(gz)
+                                      .time_range(1200, 1500)
+                                      .duql(R"(name == "read")")
+                                      .collect()
+                                      .get())
                   .num_rows() == 3);
         // The end is excluded; an event at the start is kept.
         CHECK(rows_in(gz, 1200, 1300) == 1);
@@ -168,11 +173,11 @@ TEST_SUITE("TimeWindow") {
         const auto gz =
             write_trace(env, "meta", {{1000, 5}, {5000, 5}}, 1 << 20);
         StringSink sink;
-        view_of(gz)
-            .time_range(4000, 6000)
-            .phase(Phase::Any)
-            .sink_json(sink)
-            .get();
+        dftu_utils_test::ok(view_of(gz)
+                                .time_range(4000, 6000)
+                                .phase(Phase::Any)
+                                .sink_json(sink)
+                                .get());
         const auto& lines = sink.lines();
         CHECK(count_containing(lines, "thread_name") == 1);
         CHECK(count_containing(lines, R"("ts":5000)") == 1);
@@ -389,13 +394,14 @@ TEST_SUITE("TimeWindow") {
         TestEnvironment env(10);
         const auto gz =
             write_trace(env, "args", {{900, 400}, {1500, 100}}, 1 << 20);
-        auto df = view_of(gz)
-                      .time_range(1000, 2000)
-                      .group_by({GroupKey::name()})
-                      .agg({{AggOp::Busy, "", "b"}})
-                      .agg_numeric_args({AggSpec(AggOp::Count)})
-                      .collect()
-                      .get();
+        auto df =
+            dftu_utils_test::ok(view_of(gz)
+                                    .time_range(1000, 2000)
+                                    .group_by({GroupKey::name()})
+                                    .agg({{AggOp::Busy, "", "b"}})
+                                    .agg_numeric_args({AggSpec(AggOp::Count)})
+                                    .collect()
+                                    .get());
         REQUIRE(df.num_rows() == 1);
         CHECK(bnum(df, 0, "b") == 400);
         int seen = 0;

@@ -23,7 +23,12 @@ int main(int argc, char** argv) {
     const dftracer::utils::dstd::String index_dir = argc > 2 ? argv[2] : "";
 
     trace::views::View v = trace::views::View::from_file(file, index_dir);
-    trace::views::ContainmentResult both = v.containment().collect().get();
+    auto collected = v.containment().collect().get();
+    if (!collected) {
+        std::fprintf(stderr, "%s\n", collected.error().format().c_str());
+        return 1;
+    }
+    trace::views::ContainmentResult both = std::move(*collected);
 
     // Call tree: every event plus its nesting level and parent row index.
     const dataframe::DataFrame& ct = both.call_tree;

@@ -11,6 +11,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 #include <stdexcept>
@@ -32,9 +33,8 @@ class DynCursor : public dataframe::Cursor {
    public:
     explicit DynCursor(dstd::Vector<dstd::String> dyn) : dyn_(std::move(dyn)) {}
 
-    coro::CoroTask<dstd::Optional<dataframe::Morsel>> next(
-        std::int64_t) override {
-        if (next_ >= MORSELS) co_return dstd::nullopt;
+    coro::CoroTask<dataframe::MorselResult> next(std::int64_t) override {
+        if (next_ >= MORSELS) co_return dataframe::MorselResult(dstd::nullopt);
         dataframe::Morsel m;
         m.rows = ROWS;
         m.batch_index = next_;
@@ -51,7 +51,7 @@ class DynCursor : public dataframe::Cursor {
             base += 1000;
         }
         ++next_;
-        co_return m;
+        co_return dataframe::MorselResult(std::move(m));
     }
 
    private:
@@ -78,7 +78,7 @@ class DynSource : public dataframe::Source {
 
     bool undeclared_columns() const override { return true; }
 
-    dftracer::utils::dataframe::ScanResult scan(
+    dstd::Result<dftracer::utils::dataframe::ScanResult> scan(
         const dftracer::utils::dataframe::ScanRequest& req) const override {
         dftracer::utils::dataframe::ScanResult r;
         r.cursor = dstd::make_unique<DynCursor>(dyn_);
@@ -96,8 +96,13 @@ dataframe::LazyFrame scan(dstd::Vector<dstd::String> dyn = {"x", "y"}) {
         dstd::make_shared<DynSource>(std::move(dyn)));
 }
 
-dataframe::DataFrame run(const dataframe::LazyFrame& lf) {
+dstd::Result<dataframe::DataFrame> collect_result(
+    const dataframe::LazyFrame& lf) {
     return dftracer::utils::default_runtime().submit(lf.collect()).get();
+}
+
+dataframe::DataFrame run(const dataframe::LazyFrame& lf) {
+    return dftu_utils_test::ok(collect_result(lf));
 }
 
 using Names = dstd::Vector<dstd::String>;
@@ -151,21 +156,27 @@ TEST_CASE("rename_columns swaps two names at once") {
 }
 
 TEST_CASE("rename_columns refuses a static collision when planned") {
-    CHECK_THROWS_AS(scan().rename_columns({"a"}, {"b"}).schema(),
-                    std::invalid_argument);
-    CHECK_THROWS_AS(run(scan().rename_columns({"a"}, {"b"})),
-                    std::invalid_argument);
+    using dftracer::utils::common::ErrorCode;
+    dftu_utils_test::expect_error(scan().rename_columns({"a"}, {"b"}).status(),
+                                  ErrorCode::InvalidArgument);
+    dftu_utils_test::expect_error(
+        collect_result(scan().rename_columns({"a"}, {"b"})),
+        ErrorCode::InvalidArgument);
 }
 
 TEST_CASE("rename_columns refuses a dyn collision per morsel") {
-    CHECK_THROWS(run(scan().rename_columns({"x"}, {"a"})));
-    CHECK_THROWS(run(scan().rename_columns({"x"}, {"y"})));
-    CHECK_THROWS(run(scan().rename_columns({"b"}, {"x"})));
+    CHECK_FALSE(
+        collect_result(scan().rename_columns({"x"}, {"a"})).has_value());
+    CHECK_FALSE(
+        collect_result(scan().rename_columns({"x"}, {"y"})).has_value());
+    CHECK_FALSE(
+        collect_result(scan().rename_columns({"b"}, {"x"})).has_value());
 }
 
 TEST_CASE("rename_columns refuses lists of different lengths") {
-    CHECK_THROWS_AS(scan().rename_columns({"a", "b"}, {"c"}),
-                    std::invalid_argument);
+    dftu_utils_test::expect_error(
+        scan().rename_columns({"a", "b"}, {"c"}).status(),
+        dftracer::utils::common::ErrorCode::InvalidArgument);
 }
 
 TEST_CASE("drop and rename_columns on an eager frame") {
@@ -181,7 +192,7 @@ TEST_CASE("drop and rename_columns on an eager frame") {
         run(lf.drop({"b", "zz"}).rename_columns({"c"}, {"C"}));
     CHECK(out.names == Names{"a", "C"});
     CHECK(cell(out, "C", 1) == 21);
-    CHECK_THROWS(run(lf.rename_columns({"a"}, {"c"})));
+    CHECK_FALSE(collect_result(lf.rename_columns({"a"}, {"c"})).has_value());
 }
 
 TEST_CASE("C ABI drop and rename_columns") {

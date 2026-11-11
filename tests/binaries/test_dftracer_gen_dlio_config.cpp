@@ -98,7 +98,7 @@ dstd::String create_dlio_pfw_gz(dftu_utils_test::TestEnvironment& env, int id,
         gzwrite(gz, body.data(), static_cast<unsigned>(body.size()));
         gzclose(gz);
     }
-    (void)dstd::fs::remove(plain_path);
+    dstd::fs::remove(plain_path).discard();
     return gz_path;
 }
 

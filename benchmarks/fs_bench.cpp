@@ -7,6 +7,7 @@
 //                       a serial walk find different files or sizes)
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -52,7 +53,7 @@ Row scan_with_find_all(dstd::StringView root, std::size_t threads,
     settings.threads = threads;
     settings.io_threads = io_threads;
     Row row;
-    configure_default_runtime(settings).block_on(coro::named(
+    auto ran = configure_default_runtime(settings).block_on(coro::named(
         "find_all",
         coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
             runtime::fs::FindOptions options;
@@ -72,6 +73,10 @@ Row scan_with_find_all(dstd::StringView root, std::size_t threads,
                 row.bytes += file.size;
             }
         })));
+    if (!ran) {
+        std::fprintf(stderr, "find_all: %s\n", ran.error().format().c_str());
+        std::exit(2);
+    }
     return row;
 }
 
@@ -94,10 +99,10 @@ int run_smoke() {
     const dstd::Path root(made);
     for (int d = 0; d < 10; ++d) {
         const dstd::Path dir = root / dstd::to_string(d);
-        if (!dstd::fs::create_directories(dir)) return 2;
+        if (!dstd::fs::create_directories(dir).has_value()) return 2;
         for (int f = 0; f < 40; ++f) {
-            const dstd::Path file = dir / dstd::String(dstd::to_string(f) +
-                                                       dstd::String(".pfw.gz"));
+            const dstd::Path file =
+                dir / dstd::String(dstd::fmt<"{}.pfw.gz">(f));
             if (!dstd::fs::write_file(file, "x")) return 2;
         }
     }
@@ -106,7 +111,7 @@ int run_smoke() {
     const bool same = serial.paths.size() == 400 &&
                       hash_paths(serial.paths) == hash_paths(found.paths) &&
                       serial.bytes == found.bytes;
-    (void)dstd::fs::remove_all(root);
+    dstd::fs::remove_all(root).discard();
     if (!same) std::fprintf(stderr, "find_all and the serial walk differ\n");
     return same ? 0 : 1;
 }

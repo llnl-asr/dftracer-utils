@@ -1,26 +1,28 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/domains/workload/trace_gen/fake_trace_writer.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/utilities/reader/trace_reader.h>
-#include <dftracer/utils/utilities/trace_gen/fake_trace_writer.h>
+#include <dftracer/utils/trace/reader/trace_reader.h>
 #include <doctest/doctest.h>
+#include <generator_ok.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <cstdint>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities::reader;
-using namespace dftracer::utils::utilities::trace_gen;
+using namespace dftracer::utils::trace::reader;
+using namespace dftracer::utils::domains::workload::trace_gen;
 using namespace dftracer::utils::coro;
 using namespace dftu_utils_test;
 
 namespace {
 
 CoroTask<dstd::Vector<dstd::String>> collect_lines(
-    AsyncGenerator<dftracer::utils::utilities::fileio::lines::Line> gen) {
+    AsyncGenerator<dftracer::utils::fileio::lines::Line> gen) {
     dstd::Vector<dstd::String> lines;
     while (auto line = co_await gen.next()) {
         lines.emplace_back(line->content);
@@ -62,7 +64,9 @@ TEST_SUITE("trace_gen::TraceWriter") {
         TraceReader reader({.file_path = dstd::String(gz_path)});
         CHECK_FALSE(reader.has_index());
 
-        auto lines = collect_lines(reader.read_lines()).get();
+        auto lines = dftu_utils_test::ok(
+            collect_lines(dftu_utils_test::ok_items(reader.read_lines()))
+                .get());
 
         std::size_t event_lines = 0;
         bool saw_metadata = false;
@@ -72,6 +76,14 @@ TEST_SUITE("trace_gen::TraceWriter") {
         }
         CHECK(event_lines == NUM_EVENTS);
         CHECK(saw_metadata);
+    }
+
+    TEST_CASE("close reports a file that cannot be created") {
+        TestEnvironment env(0);
+        TraceWriter writer(env.dir() + "/missing_dir/x.pfw.gz");
+        writer.write("[\n");
+        CHECK_FALSE(writer.flush().has_value());
+        CHECK_FALSE(writer.close().has_value());
     }
 
     TEST_CASE("escapes control characters in string fields") {
@@ -90,7 +102,9 @@ TEST_SUITE("trace_gen::TraceWriter") {
         }
 
         TraceReader reader({.file_path = dstd::String(gz_path)});
-        auto lines = collect_lines(reader.read_lines()).get();
+        auto lines = dftu_utils_test::ok(
+            collect_lines(dftu_utils_test::ok_items(reader.read_lines()))
+                .get());
 
         REQUIRE(lines.size() == 1);
         CHECK(lines[0].find(R"("name":"a\nb\u0001c\td")") !=

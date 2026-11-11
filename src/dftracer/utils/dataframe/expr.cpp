@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/calendar.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/batch_ops.h>          // concat_columns
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/internal/cell_ops.h>  // cell_to_string
@@ -9,6 +10,8 @@
 #include <dftracer/utils/dataframe/internal/scalar.h>     // scalar_as
 #include <dftracer/utils/dataframe/kernels/string_ops.h>  // str_pattern
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -33,7 +36,6 @@
 #include <optional>
 #include <random>
 #include <span>
-#include <stdexcept>
 #include <string>
 #include <tuple>
 #include <type_traits>
@@ -463,11 +465,12 @@ Expr expr_str_replace(const Expr& a, dftracer::utils::dstd::StringView from,
     return e;
 }
 namespace {
-Expr make_time_node(ExprKind k, std::int32_t part, const Expr& a,
-                    std::int64_t ns_per_unit,
-                    dftracer::utils::dstd::StringView fmt) {
+dstd::Result<Expr> make_time_node(ExprKind k, std::int32_t part, const Expr& a,
+                                  std::int64_t ns_per_unit,
+                                  dftracer::utils::dstd::StringView fmt) {
     if (ns_per_unit <= 0)
-        throw std::invalid_argument("expr: time unit must be positive");
+        return common::make_error(common::ErrorCode::InvalidArgument,
+                                  "expr: time unit must be positive");
     auto n = dstd::make_shared<ExprNode>();
     n->kind = k;
     n->i = part;
@@ -478,20 +481,21 @@ Expr make_time_node(ExprKind k, std::int32_t part, const Expr& a,
     return Expr{std::move(n)};
 }
 }  // namespace
-Expr expr_date_part(const Expr& a, std::int32_t part,
-                    std::int64_t ns_per_unit) {
+dstd::Result<Expr> expr_date_part(const Expr& a, std::int32_t part,
+                                  std::int64_t ns_per_unit) {
     if (!common::is_date_part_code(part))
-        throw std::invalid_argument("expr: unknown date part");
+        return common::make_error(common::ErrorCode::InvalidArgument,
+                                  "expr: unknown date part");
     return make_time_node(ExprKind::DatePart, part, a, ns_per_unit, {});
 }
-Expr expr_format_time(const Expr& a, dftracer::utils::dstd::StringView fmt,
-                      std::int64_t ns_per_unit) {
+dstd::Result<Expr> expr_format_time(const Expr& a,
+                                    dftracer::utils::dstd::StringView fmt,
+                                    std::int64_t ns_per_unit) {
     const dftracer::utils::dstd::StringView bad =
         common::invalid_time_format(fmt);
     if (!bad.empty())
-        throw std::invalid_argument(
-            ("expr: invalid time format directive '" + dstd::String(bad) + "'")
-                .c_str());
+        return common::make_error<"expr: invalid time format directive '{}'">(
+            common::ErrorCode::InvalidArgument, bad);
     return make_time_node(ExprKind::FormatTime, 0, a, ns_per_unit, fmt);
 }
 Expr expr_str_slice(const Expr& a, std::int64_t start, std::int64_t len) {
@@ -565,9 +569,8 @@ namespace {
 Expr fold_args(ExprKind k, std::int32_t i, const dstd::Vector<Expr>& args,
                const char* who) {
     if (args.empty())
-        throw std::invalid_argument(
-            (dstd::String("expr: ") + who + " needs at least one operand")
-                .c_str());
+        dstd::fatal("expr: an n-ary expression needs at least one operand",
+                    who);
     Expr out = args.back();
     for (auto it = args.rbegin() + 1; it != args.rend(); ++it)
         out = make(k, i, {}, it->node(), out.node());
@@ -600,10 +603,12 @@ Expr expr_log(const Expr& a) {
 Expr expr_pow(const Expr& a, const Expr& b) {
     return make(ExprKind::Pow, 0, {}, a.node(), b.node());
 }
-Expr expr_str_pred_col(StrPredOp op, const Expr& a, const Expr& needle) {
+dstd::Result<Expr> expr_str_pred_col(StrPredOp op, const Expr& a,
+                                     const Expr& needle) {
     if (op != StrPredOp::Contains && op != StrPredOp::StartsWith &&
         op != StrPredOp::EndsWith)
-        throw std::invalid_argument(
+        return common::make_error(
+            common::ErrorCode::InvalidArgument,
             "expr: a column needle takes contains, starts_with or ends_with");
     return make(ExprKind::StrPredCol, static_cast<std::int32_t>(op), {},
                 a.node(), needle.node());
@@ -639,11 +644,10 @@ namespace {
 dstd::String pattern_identity() {
     static const dstd::String seed = [] {
         std::random_device rd;
-        return dstd::to_string(rd()) + '.' + dstd::to_string(rd()) + '.' +
-               dstd::to_string(rd());
+        return dstd::fmt<"{}.{}.{}">(rd(), rd(), rd());
     }();
     static std::atomic<std::uint64_t> next{0};
-    return "pattern:" + seed + ':' + dstd::to_string(next++);
+    return dstd::fmt<"pattern:{}:{}">(seed, next++);
 }
 
 Expr pattern_node(
@@ -977,7 +981,13 @@ class Compiler {
                                                              : TypeId::Int64);
     }
 
+    // The first type error. compile() records it and returns an unknown value,
+    // so the rest of the walk is harmless; the caller reads error() after it.
+    bool failed() const { return !error_.empty(); }
+    const dstd::String& error() const { return error_; }
+
     Val compile(const ExprNode* n) {
+        if (failed()) return unknown_val();
         switch (n->kind) {
             case ExprKind::LitI64:
             case ExprKind::LitF64:
@@ -986,8 +996,7 @@ class Compiler {
             case ExprKind::Col: {
                 if (n->i < 0 ||
                     static_cast<std::size_t>(n->i) >= input_types_.size())
-                    throw std::invalid_argument(
-                        "expr: column index out of range");
+                    return fail("expr: column index out of range");
                 const DataType& dt =
                     input_types_[static_cast<std::size_t>(n->i)];
                 if (dt.id == TypeId::Unknown)
@@ -1152,12 +1161,11 @@ class Compiler {
                 Val a0 = compile(n->a.get());
                 if (is_unknown(a0)) return unknown_val();
                 if (!a0.is_scalar && !is_num_type(a0.type))
-                    throw std::invalid_argument(
-                        (dstd::String("expr: ") +
-                         (fmt ? "format_time" : "date_part") +
-                         " needs a time or integer operand, got " +
-                         type_name(a0.type))
-                            .c_str());
+                    return fail(
+                        dstd::fmt<
+                            "expr: {} needs a time or integer operand, got {}">(
+                            (fmt ? "format_time" : "date_part"),
+                            type_name(a0.type)));
                 Val a = num(a0, fmt ? "format_time" : "date_part");
                 SlotOp op;
                 op.opcode = fmt ? OpFormatTime : OpDatePart;
@@ -1183,15 +1191,13 @@ class Compiler {
                 if (is_unknown(a0)) return unknown_val();
                 Val a = as_col(a0, "is_in");
                 if (!n->values.valid())
-                    throw std::invalid_argument(
-                        "expr: is_in needs a values column");
+                    return fail("expr: is_in needs a values column");
                 if (value_domain(a.type) != value_domain(n->values.type()))
-                    throw std::invalid_argument(
-                        (dstd::String("expr: is_in over a ") +
-                         type_name(a.type) + " column needs " +
-                         type_name(a.type) + " values, got " +
-                         type_name(n->values.type()))
-                            .c_str());
+                    return fail(
+                        dstd::fmt<
+                            "expr: is_in over a {} column needs {} values, got "
+                            "{}">(type_name(a.type), type_name(a.type),
+                                  type_name(n->values.type())));
                 SlotOp op;
                 op.opcode = OpIsIn;
                 op.a = a.slot;
@@ -1217,10 +1223,8 @@ class Compiler {
             case ExprKind::LitNull: {
                 const auto t = static_cast<TypeId>(n->i);
                 if (!is_num_type(t) && t != TypeId::Bool && t != TypeId::String)
-                    throw std::invalid_argument(
-                        (dstd::String("expr: no null literal of type ") +
-                         type_name(t))
-                            .c_str());
+                    return fail(dstd::fmt<"expr: no null literal of type {}">(
+                        type_name(t)));
                 return col_val(emit(OpConstNull, -1, -1, n->i, {}), t);
             }
             case ExprKind::Arith: {
@@ -1433,7 +1437,7 @@ class Compiler {
                         scalar(TypeId::Bool)};
             }
         }
-        throw std::invalid_argument("expr: unknown node");
+        dstd::fatal("expr: unknown node kind");
     }
 
     dstd::Vector<SlotOp> program;
@@ -1453,10 +1457,8 @@ class Compiler {
                                            ? TypeId::Uint64
                                            : TypeId::Int64);
         if (!is_num_type(v.type))
-            throw std::invalid_argument((dstd::String("expr: ") + who +
-                                         " needs a numeric operand, got " +
-                                         type_name(v.type))
-                                            .c_str());
+            return fail(dstd::fmt<"expr: {} needs a numeric operand, got {}">(
+                who, type_name(v.type)));
         if (v.type == TypeId::Int64 || v.type == TypeId::Uint64 ||
             v.type == TypeId::Float64)
             return v;
@@ -1470,25 +1472,23 @@ class Compiler {
         return v;
     }
 
-    static void same_domain(const Val& a, const Val& b, const char* who) {
+    void same_domain(const Val& a, const Val& b, const char* who) {
         const bool ok = (is_num_type(a.type) && is_num_type(b.type)) ||
                         (is_text_type(a.type) && is_text_type(b.type)) ||
                         (a.type == TypeId::Bool && b.type == TypeId::Bool);
         if (!ok)
-            throw std::invalid_argument((dstd::String("expr: ") + who + " of " +
-                                         type_name(a.type) + " and " +
-                                         type_name(b.type) + " has no ordering")
-                                            .c_str());
+            fail(dstd::fmt<"expr: {} of {} and {} has no ordering">(
+                who, type_name(a.type), type_name(b.type)));
     }
 
-    static TypeId common_type(const Val& a, const Val& b, const char* who) {
+    TypeId common_type(const Val& a, const Val& b, const char* who) {
         if (is_num_type(a.type) && is_num_type(b.type))
             return promote(a.type, b.type);
-        if (a.type != b.type)
-            throw std::invalid_argument(
-                (dstd::String("expr: ") + who + " needs one type, got " +
-                 type_name(a.type) + " and " + type_name(b.type))
-                    .c_str());
+        if (a.type != b.type) {
+            fail(dstd::fmt<"expr: {} needs one type, got {} and {}">(
+                who, type_name(a.type), type_name(b.type)));
+            return TypeId::Unknown;
+        }
         return a.type;
     }
 
@@ -1501,12 +1501,13 @@ class Compiler {
 
     // The element type of a List operand, which must be known.
     DataType as_list(const Val& v, const char* who) {
-        if (v.is_scalar || v.type != TypeId::List || v.full.fields.size() != 1)
-            throw std::invalid_argument(
-                (dstd::String("expr: ") + who +
-                 " needs a List column with a known element type, got " +
-                 type_name(v.is_scalar ? TypeId::Int64 : v.type))
-                    .c_str());
+        if (v.is_scalar || v.type != TypeId::List ||
+            v.full.fields.size() != 1) {
+            fail(dstd::fmt<"expr: {} needs a List column with a known element "
+                           "type, got {}">(
+                who, type_name(v.is_scalar ? TypeId::Int64 : v.type)));
+            return scalar(TypeId::Unknown);
+        }
         return v.full.fields.front().type;
     }
 
@@ -1523,10 +1524,8 @@ class Compiler {
                                  : "string pattern",
                        !text_out);
         if (replace && !n->subst)
-            throw std::invalid_argument(
-                "expr: a regex replace node needs a substitution");
-        if (!n->pattern)
-            throw std::invalid_argument("expr: a pattern node needs a pattern");
+            return fail("expr: a regex replace node needs a substitution");
+        if (!n->pattern) return fail("expr: a pattern node needs a pattern");
         if (extract_col) {
             Val g0 = compile(n->b.get());
             if (is_unknown(g0)) return unknown_val();
@@ -1541,10 +1540,9 @@ class Compiler {
         const std::int64_t group = n->scalar.value.i;
         if (extract && (group < 0 || static_cast<std::uint64_t>(group) >
                                          duql::capture_count(*n->pattern)))
-            throw std::invalid_argument(("expr: extract group " +
-                                         dstd::to_string(group) +
-                                         " is not in the pattern")
-                                            .c_str());
+            return fail(
+                dstd::fmt<"expr: extract group {} is not in the pattern">(
+                    group));
         SlotOp op;
         op.opcode = extract   ? OpStrExtract
                     : replace ? OpStrRegexReplace
@@ -1563,10 +1561,9 @@ class Compiler {
         Val a = operand(a0, "convert");
         if (!is_num_type(a.type) && !is_text_type(a.type) &&
             a.type != TypeId::Bool)
-            throw std::invalid_argument(
-                (dstd::String("expr: convert needs a scalar operand, got ") +
-                 type_name(a.type))
-                    .c_str());
+            return fail(
+                dstd::fmt<"expr: convert needs a scalar operand, got {}">(
+                    type_name(a.type)));
         const auto op = static_cast<ConvertOp>(n->i);
         if (op == ConvertOp::Int && a.type == TypeId::Int64) return a;
         if (op == ConvertOp::String && a.type == TypeId::String) return a;
@@ -1597,7 +1594,7 @@ class Compiler {
         Val b0{};
         if (fn == StrFn::Cat) {
             if (!n->b)
-                throw std::invalid_argument(
+                return fail(
                     "expr: cat needs another column; the one-column join is "
                     "an aggregate (use Series.str.cat)");
             b0 = compile(n->b.get());
@@ -1608,11 +1605,10 @@ class Compiler {
         if (fn == StrFn::Join) {
             const DataType elem = as_list(a0, "join");
             if (elem.id != TypeId::String)
-                throw std::invalid_argument(
-                    (dstd::String("expr: join needs a List<String> column, got "
-                                  "List<") +
-                     type_name(elem.id) + ">")
-                        .c_str());
+                return fail(
+                    dstd::fmt<
+                        "expr: join needs a List<String> column, got List<{}>">(
+                        type_name(elem.id)));
             return col_val(emit_str_fn(n, a0.slot, -1), TypeId::String);
         }
         if (fn == StrFn::Get && !a0.is_scalar && a0.type == TypeId::List) {
@@ -1650,7 +1646,7 @@ class Compiler {
                 return col_val(emit_str_fn(n, a.slot, -1), TypeId::Int64);
             case StrFn::Get:
                 if (n->scalar.value.i < 0)
-                    throw std::invalid_argument(
+                    return fail(
                         "expr: get with a negative position needs a List "
                         "column; use slice");
                 return col_val(emit_str_fn(n, a.slot, -1), TypeId::String);
@@ -1662,7 +1658,7 @@ class Compiler {
                 break;
             case StrFn::Normalize:
                 if (n->scalar.value.i < 0 || n->scalar.value.i > 3)
-                    throw std::invalid_argument(
+                    return fail(
                         "expr: normalize form must be NFC, NFKC, NFD or NFKD");
                 return col_val(emit_str_fn(n, a.slot, -1), TypeId::String);
             case StrFn::Translate: {
@@ -1672,27 +1668,24 @@ class Compiler {
                     !Series{dftu_series_str_translate(
                                 probe.handle(), from.handle(), to.handle())}
                          .handle())
-                    throw std::invalid_argument(
+                    return fail(
                         "expr: translate table is not one distinct codepoint "
                         "per key");
                 return col_val(emit_str_fn(n, a.slot, -1), TypeId::String);
             }
             case StrFn::Wrap:
                 if (n->scalar.value.i < 1)
-                    throw std::invalid_argument(
-                        "expr: wrap width must be at least 1");
+                    return fail("expr: wrap width must be at least 1");
                 return col_val(emit_str_fn(n, a.slot, -1), TypeId::String);
             default:
                 return col_val(emit_str_fn(n, a.slot, -1), TypeId::String);
         }
-        throw std::invalid_argument("expr: unknown string method");
+        dstd::fatal("expr: unknown string method");
     }
 
     Val as_col(Val v, const char* who) {
         if (v.is_scalar)
-            throw std::invalid_argument(
-                (dstd::String("expr: ") + who + " needs a column operand")
-                    .c_str());
+            return fail(dstd::fmt<"expr: {} needs a column operand">(who));
         return v;
     }
 
@@ -1703,11 +1696,8 @@ class Compiler {
         const bool ok =
             a.type == TypeId::String || (binary_ok && a.type == TypeId::Binary);
         if (!ok)
-            throw std::invalid_argument((dstd::String("expr: ") + who +
-                                         " needs a String" +
-                                         (binary_ok ? " or Binary" : "") +
-                                         " column, got " + type_name(a.type))
-                                            .c_str());
+            return fail(dstd::fmt<"expr: {} needs a String{} column, got {}">(
+                who, (binary_ok ? " or Binary" : ""), type_name(a.type)));
         return a;
     }
 
@@ -1799,10 +1789,9 @@ class Compiler {
             return unknown_val();
         Val c = as_col(c0, "select");
         if (c.type != TypeId::Bool)
-            throw std::invalid_argument(
-                (dstd::String("expr: select needs a Bool condition, got ") +
-                 type_name(c.type))
-                    .c_str());
+            return fail(
+                dstd::fmt<"expr: select needs a Bool condition, got {}">(
+                    type_name(c.type)));
         if (a.is_scalar && b.is_scalar) {
             const bool f = a.scalar.kind == DFTU_SCALAR_TAG_F64 ||
                            b.scalar.kind == DFTU_SCALAR_TAG_F64;
@@ -1818,7 +1807,7 @@ class Compiler {
                                  (!b.is_scalar && b.type == TypeId::String);
             if (str_arm) {
                 if (a.is_scalar || b.is_scalar || a.type != b.type)
-                    throw std::invalid_argument(
+                    return fail(
                         "expr: select needs two String columns for a "
                         "String arm");
             } else if (is_float(a) || is_float(b)) {
@@ -1919,7 +1908,13 @@ class Compiler {
         return slot;
     }
 
+    Val fail(dstd::String message) {
+        if (error_.empty()) error_ = std::move(message);
+        return unknown_val();
+    }
+
     const dstd::Vector<DataType>& input_types_;
+    dstd::String error_;
     dstd::Map<dftracer::utils::dstd::Tuple<
                   int, int, int, int, int, int, std::int64_t, std::int64_t,
                   std::uint32_t, std::uint32_t, dstd::String, dstd::String,
@@ -1933,14 +1928,30 @@ class Compiler {
 Series load_slice(const Series& in, std::int64_t offset, std::int64_t len) {
     if (dftu_series* v = dftu_series_slice(in.handle(), offset, len)) {
         Series s{v};
-        return s.encoding() == Encoding::Chunked ? join_chunks(s)
-                                                 : std::move(s);
+        if (s.encoding() != Encoding::Chunked) return s;
+        // An invalid column is the kernel refusing its input, which
+        // require_evaluated reports.
+        dstd::Result<Series> joined = join_chunks(s);
+        return joined ? std::move(*joined) : Series{};
     }
     dstd::Vector<std::int64_t> idx(static_cast<std::size_t>(len));
     for (std::int64_t i = 0; i < len; ++i)
         idx[static_cast<std::size_t>(i)] = offset + i;
     return in.take(idx);
 }
+
+// A failure a worker raises for the calling thread (index / rindex finding no
+// match); require_evaluated returns it, since a parallel worker cannot. One
+// per eval call, shared by its workers; the first message is kept.
+struct EvalError {
+    std::mutex mutex;
+    dstd::String message;
+
+    void set(dstd::String text) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (message.empty()) message = std::move(text);
+    }
+};
 
 template <class T>
 Series const_fixed(TypeId t, const dftu_scalar& s, std::int64_t len) {
@@ -1950,8 +1961,10 @@ Series const_fixed(TypeId t, const dftu_scalar& s, std::int64_t len) {
 
 // A column of `len` rows of type `t`, every row holding `s` (a select arm
 // given as a literal). Refuses a type with no scalar form rather than build a
-// column whose contents would be a guess.
-Series const_column(TypeId t, const dftu_scalar& s, std::int64_t len) {
+// column whose contents would be a guess: the error goes to the calling thread
+// through `error` and the column is invalid.
+Series const_column(TypeId t, const dftu_scalar& s, std::int64_t len,
+                    EvalError& error) {
     switch (t) {
         case TypeId::Bool: {
             const bool on = scalar_as<std::int64_t>(s) != 0;
@@ -2009,10 +2022,9 @@ Series const_column(TypeId t, const dftu_scalar& s, std::int64_t len) {
         case TypeId::Map:
             break;
     }
-    throw std::invalid_argument(
-        (dstd::String("expr: a literal cannot broadcast to a ") + type_name(t) +
-         " column")
-            .c_str());
+    error.set(dstd::fmt<"expr: a literal cannot broadcast to a {} column">(
+        type_name(t)));
+    return {};
 }
 
 // ---- duql kernels: flat loops over Int64 / Uint64 / Float64, String and Bool
@@ -3241,28 +3253,19 @@ Series list_contains_kernel(const Series& s, const dftu_scalar& v) {
     return c.finish();
 }
 
-// A failure a worker raises for the calling thread (index / rindex finding no
-// match); require_evaluated throws it, since a parallel worker cannot.
-std::mutex g_eval_error_mutex;
-dstd::String g_eval_error;
-
-void set_eval_error(dstd::String message) {
-    std::lock_guard<std::mutex> lock(g_eval_error_mutex);
-    g_eval_error = std::move(message);
-}
-
-Series str_const(dftracer::utils::dstd::StringView t, std::int64_t len) {
+Series str_const(dftracer::utils::dstd::StringView t, std::int64_t len,
+                 EvalError& error) {
     dftu_scalar sc{};
     sc.kind = DFTU_SCALAR_TAG_STR;
     sc.value.s = t.data();
     sc.len = static_cast<std::uint32_t>(t.size());
-    return const_column(TypeId::String, sc, len);
+    return const_column(TypeId::String, sc, len, error);
 }
 
 // The OP_STR_FN runtime: the same C ABI kernels the eager Series.str calls, so
 // an expression gives the eager result.
 Series str_fn_eval(const SlotOp& op, const Series& a, const Series* b,
-                   std::int64_t len) {
+                   std::int64_t len, EvalError& error) {
     const dftu_series* h = a.handle();
     const std::int64_t i0 = op.scalar.value.i;
     const std::int64_t i1 = op.scalar2.value.i;
@@ -3302,7 +3305,7 @@ Series str_fn_eval(const SlotOp& op, const Series& a, const Series* b,
                     ? dftu_series_str_slice(h, 0, 0)
                     : dftu_series_str_slice(h, i1, std::int64_t{1} << 62)};
             if (!head.handle() || !tail.handle()) return Series{};
-            const Series mid = str_const(op.text, len);
+            const Series mid = str_const(op.text, len, error);
             Series hm{dftu_series_str_cat(head.handle(), mid.handle())};
             if (!hm.handle()) return Series{};
             return Series{dftu_series_str_cat(hm.handle(), tail.handle())};
@@ -3347,10 +3350,9 @@ Series str_fn_eval(const SlotOp& op, const Series& a, const Series* b,
             Series miss{
                 dftu_series_compare(r.handle(), DFTU_CMP_EQ, minus_one)};
             if (miss.handle() && dftu_series_any(miss.handle()) != 0) {
-                set_eval_error(
-                    dstd::String(fn == StrFn::Index ? "index" : "rindex") +
-                    ": substring '" + dstd::String(op.text) +
-                    "' not found in every row");
+                error.set(
+                    dstd::fmt<"{}: substring '{}' not found in every row">(
+                        fn == StrFn::Index ? "index" : "rindex", op.text));
                 return Series{};
             }
             return r;
@@ -3374,7 +3376,7 @@ Series str_fn_eval(const SlotOp& op, const Series& a, const Series* b,
             if (b == nullptr) return Series{};
             if (op.text.empty())
                 return Series{dftu_series_str_cat(h, b->handle())};
-            const Series sep = str_const(op.text, len);
+            const Series sep = str_const(op.text, len, error);
             Series ab{dftu_series_str_cat(h, sep.handle())};
             if (!ab.handle()) return Series{};
             return Series{dftu_series_str_cat(ab.handle(), b->handle())};
@@ -3389,7 +3391,8 @@ Series str_fn_eval(const SlotOp& op, const Series& a, const Series* b,
 dstd::Vector<Series> eval_chunk(const dstd::Vector<SlotOp>& prog,
                                 const dstd::Vector<Series>& inputs,
                                 const dstd::Vector<int>& finals,
-                                std::int64_t offset, std::int64_t len) {
+                                std::int64_t offset, std::int64_t len,
+                                EvalError& error) {
     dstd::Vector<Series> s(prog.size());
     for (std::size_t k = 0; k < prog.size(); ++k) {
         const SlotOp& op = prog[k];
@@ -3590,8 +3593,8 @@ dstd::Vector<Series> eval_chunk(const dstd::Vector<SlotOp>& prog,
                                        : dftu_series_valid_mask(A())};
                 break;
             case OpConst:
-                s[k] =
-                    const_column(static_cast<TypeId>(op.param), op.scalar, len);
+                s[k] = const_column(static_cast<TypeId>(op.param), op.scalar,
+                                    len, error);
                 break;
             case OpSelect:
                 s[k] = Series{dftu_series_where(
@@ -3682,7 +3685,8 @@ dstd::Vector<Series> eval_chunk(const dstd::Vector<SlotOp>& prog,
                 s[k] = list_contains_kernel(SA(), op.scalar);
                 break;
             case OpStrFn:
-                s[k] = str_fn_eval(op, SA(), op.b >= 0 ? &SB() : nullptr, len);
+                s[k] = str_fn_eval(op, SA(), op.b >= 0 ? &SB() : nullptr, len,
+                                   error);
                 break;
             default:
                 return {};
@@ -3696,30 +3700,39 @@ dstd::Vector<Series> eval_chunk(const dstd::Vector<SlotOp>& prog,
 }
 
 // eval_chunk returns no columns when a kernel does not take its input type;
-// raised here, on the calling thread, since the parallel workers cannot throw.
-void require_evaluated(const dstd::Vector<Series>& outs) {
+// reported here, on the calling thread, since the parallel workers cannot
+// return an error.
+dstd::Result<void> require_evaluated(const dstd::Vector<Series>& outs,
+                                     EvalError& error) {
     if (outs.empty()) {
         dstd::String message;
         {
-            std::lock_guard<std::mutex> lock(g_eval_error_mutex);
-            message.swap(g_eval_error);
+            std::lock_guard<std::mutex> lock(error.mutex);
+            message.swap(error.message);
         }
-        if (!message.empty()) throw std::invalid_argument(message.c_str());
-        throw std::invalid_argument(
+        if (!message.empty())
+            return common::make_error(common::ErrorCode::InvalidArgument,
+                                      message);
+        return common::make_error(
+            common::ErrorCode::InvalidArgument,
             "expr: an operation does not take its input column type");
     }
+    return {};
 }
 
 constexpr std::int64_t GRAIN = 1 << 16;
 
 }  // namespace
 
-dstd::Vector<Series> eval_many(const dstd::Vector<Expr>& roots,
-                               const dstd::Vector<const Series*>& inputs) {
+dstd::Result<dstd::Vector<Series>> eval_many(
+    const dstd::Vector<Expr>& roots,
+    const dstd::Vector<const Series*>& inputs) {
     if (roots.empty())
-        throw std::invalid_argument("expr: needs at least one expression");
+        return common::make_error(common::ErrorCode::InvalidArgument,
+                                  "expr: needs at least one expression");
     if (inputs.empty())
-        throw std::invalid_argument("expr: needs at least one input column");
+        return common::make_error(common::ErrorCode::InvalidArgument,
+                                  "expr: needs at least one input column");
 
     // Bare column references share the input; the evaluator would slice and
     // concat a copy.
@@ -3745,11 +3758,17 @@ dstd::Vector<Series> eval_many(const dstd::Vector<Expr>& roots,
     input_types.reserve(inputs.size());
     for (const Series* s : inputs) input_types.push_back(s->data_type());
     Compiler c(input_types);
+    EvalError error;
     dstd::Vector<int> finals;
     finals.reserve(roots.size());
     for (const Expr& root : roots) {
-        if (!root.valid()) throw std::invalid_argument("expr: null expression");
+        if (!root.valid())
+            return common::make_error(common::ErrorCode::InvalidArgument,
+                                      "expr: null expression");
         finals.push_back(c.column(c.compile(root.node().get())).slot);
+        if (c.failed())
+            return common::make_error(common::ErrorCode::InvalidArgument,
+                                      c.error());
     }
 
     // Inputs are read in place; each chunk's OP_LOAD slices its rows as a
@@ -3785,8 +3804,9 @@ dstd::Vector<Series> eval_many(const dstd::Vector<Expr>& roots,
     if (!by_chunk) {
         if (n <= GRAIN) {
             dstd::Vector<Series> outs =
-                eval_chunk(c.program, flat, finals, 0, n);
-            require_evaluated(outs);
+                eval_chunk(c.program, flat, finals, 0, n, error);
+            if (auto ok = require_evaluated(outs, error); !ok)
+                return ok.error();
             return outs;
         }
         for (std::int64_t lo = 0; lo < n; lo += GRAIN) bounds.push_back(lo);
@@ -3802,10 +3822,11 @@ dstd::Vector<Series> eval_many(const dstd::Vector<Expr>& roots,
             const std::int64_t lo = bounds[static_cast<std::size_t>(k)];
             const std::int64_t hi = bounds[static_cast<std::size_t>(k) + 1];
             parts[static_cast<std::size_t>(k)] =
-                eval_chunk(c.program, flat, finals, lo, hi - lo);
+                eval_chunk(c.program, flat, finals, lo, hi - lo, error);
         }
     });
-    for (const dstd::Vector<Series>& part : parts) require_evaluated(part);
+    for (const dstd::Vector<Series>& part : parts)
+        if (auto ok = require_evaluated(part, error); !ok) return ok.error();
     dstd::Vector<Series> outs;
     outs.reserve(finals.size());
     for (std::size_t j = 0; j < finals.size(); ++j) {
@@ -3814,28 +3835,42 @@ dstd::Vector<Series> eval_many(const dstd::Vector<Expr>& roots,
             pieces.reserve(parts.size());
             for (const dstd::Vector<Series>& part : parts)
                 pieces.push_back(part[j].share());
-            outs.push_back(chunked_column(std::move(pieces)));
+            dstd::Result<Series> chunked = chunked_column(std::move(pieces));
+            if (!chunked) return chunked.error();
+            outs.push_back(std::move(*chunked));
             continue;
         }
         dstd::Vector<const Series*> ptrs;
         ptrs.reserve(parts.size());
         for (const dstd::Vector<Series>& part : parts) ptrs.push_back(&part[j]);
-        outs.push_back(concat_columns(ptrs));
+        dstd::Result<Series> joined = concat_columns(ptrs);
+        if (!joined) return joined.error();
+        outs.push_back(std::move(*joined));
     }
     return outs;
 }
 
-Series eval(const Expr& root, const dstd::Vector<const Series*>& inputs) {
-    if (!root.valid()) throw std::invalid_argument("expr: null expression");
-    dstd::Vector<Series> outs = eval_many({root}, inputs);
-    return std::move(outs.front());
+dstd::Result<Series> eval(const Expr& root,
+                          const dstd::Vector<const Series*>& inputs) {
+    if (!root.valid())
+        return common::make_error(common::ErrorCode::InvalidArgument,
+                                  "expr: null expression");
+    dstd::Result<dstd::Vector<Series>> outs = eval_many({root}, inputs);
+    if (!outs) return outs.error();
+    return std::move(outs->front());
 }
 
-DataType infer_type(const Expr& root,
-                    const dstd::Vector<DataType>& input_types) {
-    if (!root.valid()) throw std::invalid_argument("expr: null expression");
+dstd::Result<DataType> infer_type(const Expr& root,
+                                  const dstd::Vector<DataType>& input_types) {
+    if (!root.valid())
+        return common::make_error(common::ErrorCode::InvalidArgument,
+                                  "expr: null expression");
     Compiler c(input_types);
-    return c.column(c.compile(root.node().get())).full;
+    DataType type = c.column(c.compile(root.node().get())).full;
+    if (c.failed())
+        return common::make_error(common::ErrorCode::InvalidArgument,
+                                  c.error());
+    return type;
 }
 
 }  // namespace dftracer::utils::dataframe
@@ -3973,8 +4008,9 @@ dftu_expr* dftu_expr_str_pred_col(int32_t op, const dftu_expr* a,
         op != static_cast<int32_t>(dataframe::StrPredOp::StartsWith) &&
         op != static_cast<int32_t>(dataframe::StrPredOp::EndsWith))
         return nullptr;
-    return wrap(dataframe::expr_str_pred_col(
-        static_cast<dataframe::StrPredOp>(op), unwrap(a), unwrap(needle)));
+    auto e = dataframe::expr_str_pred_col(static_cast<dataframe::StrPredOp>(op),
+                                          unwrap(a), unwrap(needle));
+    return e ? wrap(std::move(*e)) : nullptr;
 }
 dftu_expr* dftu_expr_str_replace_col(const dftu_expr* a, const dftu_expr* from,
                                      const dftu_expr* to) {
@@ -4043,7 +4079,8 @@ dftu_expr* dftu_expr_date_part(const dftu_expr* a, int32_t part,
     if (!a || !dftracer::utils::common::is_date_part_code(part) ||
         ns_per_unit <= 0)
         return nullptr;
-    return wrap(dataframe::expr_date_part(unwrap(a), part, ns_per_unit));
+    auto e = dataframe::expr_date_part(unwrap(a), part, ns_per_unit);
+    return e ? wrap(std::move(*e)) : nullptr;
 }
 dftu_expr* dftu_expr_format_time(const dftu_expr* a, const char* fmt,
                                  int32_t fmt_size, int64_t ns_per_unit) {
@@ -4053,7 +4090,8 @@ dftu_expr* dftu_expr_format_time(const dftu_expr* a, const char* fmt,
         fmt ? fmt : "", static_cast<std::size_t>(fmt_size));
     if (!dftracer::utils::common::invalid_time_format(f).empty())
         return nullptr;
-    return wrap(dataframe::expr_format_time(unwrap(a), f, ns_per_unit));
+    auto e = dataframe::expr_format_time(unwrap(a), f, ns_per_unit);
+    return e ? wrap(std::move(*e)) : nullptr;
 }
 dftu_expr* dftu_expr_str_slice(const dftu_expr* a, int64_t start, int64_t len) {
     if (!a) return nullptr;
@@ -4182,11 +4220,7 @@ dftu_series* dftu_expr_eval(const dftu_expr* root,
         cols.push_back(&owned.back());
     }
     dftu_series* out = nullptr;
-    try {
-        out = dataframe::eval(unwrap(root), cols).release();
-    } catch (const std::exception&) {
-        out = nullptr;
-    }
+    if (auto r = dataframe::eval(unwrap(root), cols)) out = r->release();
     for (dataframe::Series& c : owned)
         c.release();  // borrowed inputs, do not free
     return out;
@@ -4211,13 +4245,10 @@ int32_t dftu_expr_eval_many(const dftu_expr* const* roots, int32_t n_roots,
         cols.push_back(&owned.back());
     }
     int32_t written = -1;
-    try {
-        dftracer::utils::dstd::Vector<dataframe::Series> res =
-            dataframe::eval_many(exprs, cols);
-        for (std::size_t i = 0; i < res.size(); ++i) out[i] = res[i].release();
-        written = static_cast<int32_t>(res.size());
-    } catch (const std::exception&) {
-        written = -1;
+    if (auto res = dataframe::eval_many(exprs, cols)) {
+        for (std::size_t i = 0; i < res->size(); ++i)
+            out[i] = (*res)[i].release();
+        written = static_cast<int32_t>(res->size());
     }
     for (dataframe::Series& c : owned)
         c.release();  // borrowed inputs, do not free

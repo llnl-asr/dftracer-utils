@@ -73,7 +73,7 @@ class RunLoop final : public Executor {
 
    private:
     bool run_one();
-    [[noreturn]] void throw_stalled();
+    [[noreturn]] void stalled();
 
     std::mutex mutex_;
     std::condition_variable ready_cv_;

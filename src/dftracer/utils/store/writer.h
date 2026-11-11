@@ -328,6 +328,7 @@ class Writer {
     ExtentWriter extents_;
     dstd::String name_;
     dstd::String path_;
+    std::uint64_t serial_ = 0;
     std::uint32_t extent_size_ = 0;
     std::uint32_t next_namespace_id_ = 1;
     std::uint32_t next_scope_id_ = 1;

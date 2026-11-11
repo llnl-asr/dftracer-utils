@@ -6,9 +6,10 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/trace/index/indexer.h>
 #include <dftracer/utils/trace/views/typed_rows.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -27,17 +28,17 @@ namespace {
 constexpr int RECORDS = 3000;
 
 struct Access {
-    index::Field<dstd::String, "op"> op;
-    index::Field<std::int64_t, "lat"> lat;
-    index::Field<dstd::Optional<std::int64_t>, "io.off"> off;
-    index::Field<dstd::Optional<index::Json>, "tags"> tags;
-    index::Field<dstd::Optional<dstd::String>, "hosts.1"> host;
+    trace::index::Field<dstd::String, "op"> op;
+    trace::index::Field<std::int64_t, "lat"> lat;
+    trace::index::Field<dstd::Optional<std::int64_t>, "io.off"> off;
+    trace::index::Field<dstd::Optional<trace::index::Json>, "tags"> tags;
+    trace::index::Field<dstd::Optional<dstd::String>, "hosts.1"> host;
 };
 
 struct Event {
-    index::Field<dstd::String, "name"> name;
-    index::Field<double, "ts"> ts;
-    index::Field<dstd::Optional<std::int64_t>, "args.size"> size;
+    trace::index::Field<dstd::String, "name"> name;
+    trace::index::Field<double, "ts"> ts;
+    trace::index::Field<dstd::Optional<std::int64_t>, "args.size"> size;
 };
 
 // Record i: op read on even i, lat i, io.off 10*i on multiples of 3, tags on
@@ -59,18 +60,20 @@ dstd::String write_access(TestEnvironment& env, const dstd::String& extra) {
     const dstd::String gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
-    (void)dstd::fs::remove(plain);
-    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
-        .build();
+    dstd::fs::remove(plain).discard();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                                {dstd::String(dstd::StringView(gz))}))
+            .build());
     return gz;
 }
 
 struct Wide {
-    index::Field<std::int64_t, "k"> k;
-    index::Field<dstd::Optional<double>, "inf"> inf;
-    index::Field<dstd::Optional<std::uint64_t>, "big"> big;
-    index::Field<dstd::Optional<dstd::String>, "s"> s;
-    index::Field<dstd::Optional<index::Json>, "j"> j;
+    trace::index::Field<std::int64_t, "k"> k;
+    trace::index::Field<dstd::Optional<double>, "inf"> inf;
+    trace::index::Field<dstd::Optional<std::uint64_t>, "big"> big;
+    trace::index::Field<dstd::Optional<dstd::String>, "s"> s;
+    trace::index::Field<dstd::Optional<trace::index::Json>, "j"> j;
 };
 
 View view_of(const dstd::String& gz) {
@@ -104,7 +107,7 @@ TEST_SUITE("TypedRows") {
                 CHECK(dstd::String(**r.host) == "h" + dstd::to_string(i));
         }
 
-        const auto df = view_of(gz).collect().get();
+        const auto df = dftu_utils_test::ok(view_of(gz).collect().get());
         REQUIRE(df.num_rows() == RECORDS);
         dstd::Vector<dstd::Pair<dstd::String, std::int64_t>> want, have;
         for (std::int64_t i = 0; i < RECORDS; ++i)
@@ -153,7 +156,7 @@ TEST_SUITE("TypedRows") {
         }
         const dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         const auto events = run(rows<Event>(view_of(gz)));
         REQUIRE(events.size() == 20);
         for (const Event& e : events) {
@@ -161,7 +164,8 @@ TEST_SUITE("TypedRows") {
             CHECK(e.size->has_value());
         }
         const auto any = view_of(gz).phase(Phase::Any);
-        CHECK(run(rows<Event>(any)).size() == any.collect().get().num_rows());
+        CHECK(run(rows<Event>(any)).size() ==
+              dftu_utils_test::ok(any.collect().get()).num_rows());
         const auto meta = run(rows<Event>(view_of(gz).phase(Phase::Metadata)));
         REQUIRE(meta.size() == 1);
         CHECK(*meta[0].name == "process_name");
@@ -185,10 +189,11 @@ TEST_SUITE("TypedRows") {
         const dstd::String gz = plain + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                    1 << 20));
-        (void)dstd::fs::remove(plain);
-        dftracer::utils::index::Indexer::open(
-            {dstd::String(dstd::StringView(gz))})
-            .build();
+        dstd::fs::remove(plain).discard();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                                    {dstd::String(dstd::StringView(gz))}))
+                .build());
         auto got = run(rows<Wide>(view_of(gz)));
         REQUIRE(got.size() == 7);
         std::sort(got.begin(), got.end(),

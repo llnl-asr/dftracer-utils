@@ -342,11 +342,11 @@ def generate_collaboration(
 # Bottom-to-top: runtime is the foundation at the base; each arrow points from
 # a library to the one built on top of it (A --> B reads "B is built on A").
 ARCHITECTURE_MMD = """graph BT
-    utilities["dftracer_utils_utilities<br/><i>comparison, statistics, genesis,<br/>plugins, server, dlio, replay</i>"]
+    utilities["dftracer_utils_domains<br/><i>comparison, statistics, genesis,<br/>plugins, server, dlio, replay</i>"]
     trace["dftracer_utils_trace<br/><i>index, views, trace reader, Arrow</i>"]
     dataframe["dftracer_utils_dataframe<br/><i>Series/DataFrame, Highway SIMD kernels,<br/>Arrow bridge, columnar query execution</i>"]
     query["dftracer_utils_duql<br/><i>predicate IR, string codec, evaluator</i>"]
-    io["dftracer_utils_io<br/><i>gzip, file I/O, hashing</i>"]
+    io["dftracer_utils_fileio<br/><i>gzip, file I/O, hashing</i>"]
     json["dftracer_utils_json<br/><i>simdjson-backed parsing</i>"]
     store["dftracer_utils_store<br/><i>key-value store engine</i>"]
     runtime["dftracer_utils_runtime<br/><i>coroutines, tasks, task graph, io backend,<br/>pipelines, primitives</i>"]

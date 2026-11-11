@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/coro/completion_latch.h>
 #include <dftracer/utils/coro/executor.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/span.h>
@@ -70,15 +71,11 @@ void run_training(DictTraining& job) {
         sizes = std::move(job.sizes);
     }
     dstd::Vector<std::uint8_t> bytes;
-    try {
-        auto trained = train_page_dict(
-            dstd::ByteView(reinterpret_cast<const std::byte*>(sample.data()),
-                           sample.size()),
-            dstd::Span<const std::size_t>(sizes.data(), sizes.size()));
-        if (trained) bytes = std::move(*trained);
-    } catch (const std::exception&) {
-        bytes.clear();
-    }
+    auto trained = train_page_dict(
+        dstd::ByteView(reinterpret_cast<const std::byte*>(sample.data()),
+                       sample.size()),
+        dstd::Span<const std::size_t>(sizes.data(), sizes.size()));
+    if (trained) bytes = std::move(*trained);
     sample = dstd::Vector<std::uint8_t>();
     {
         std::lock_guard<std::mutex> lock(job.mutex);
@@ -411,10 +408,8 @@ void ExtentWriter::latch_error(int error_number) {
 }
 
 dstd::Error ExtentWriter::latched_error() const {
-    return dstd::Error(
-        dstd::Condition::Io,
-        "store extent write failed with errno " +
-            dstd::to_string(latched_errno_.load(std::memory_order_acquire)));
+    return dstd::Error::from_format<"store extent write failed with errno {}">(
+        dstd::Condition::Io, latched_errno_.load(std::memory_order_acquire));
 }
 
 void ExtentWriter::begin_write() {

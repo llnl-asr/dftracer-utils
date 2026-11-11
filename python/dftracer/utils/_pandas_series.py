@@ -49,7 +49,7 @@ _OMITTED = _Omitted()
 def _plain(v: "ReplaceScalar") -> "PlainScalar":
     """A NumPy scalar as the Python number the engine accepts."""
     if type(v).__module__ == "numpy" and getattr(v, "ndim", 1) == 0:
-        return cast("PlainScalar", v.item())  # ty: ignore[unresolved-attribute]
+        return cast("PlainScalar", getattr(v, "item")())
     return cast("PlainScalar", v)
 
 

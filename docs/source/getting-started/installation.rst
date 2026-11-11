@@ -52,15 +52,15 @@ The build produces eight layered component libraries, each as shared and static:
 - ``dftracer_utils_runtime``, the async runtime (coroutines, tasks, I/O backend,
   pipelines, common primitives).
 - ``dftracer_utils_store``, the key-value store engine (data files, writer, snapshot).
-- ``dftracer_utils_io``, file I/O (gzip readers and writers, parallel writers,
-  hashing, directory scanning, text filters).
+- ``dftracer_utils_fileio``, file formats (gzip readers and writers, line
+  streams, parallel writers, hashing).
 - ``dftracer_utils_json``, JSON parsing (simdjson-backed).
 - ``dftracer_utils_duql``, the duql filter language (predicate IR, string codec, evaluator).
 - ``dftracer_utils_dataframe``, the columnar SIMD engine (``Series`` /
   ``DataFrame``, Highway kernels, the Arrow bridge, query execution / masking).
 - ``dftracer_utils_trace``, the trace layer (index, views, trace reader, Arrow).
-- ``dftracer_utils_utilities``, the domain layer (comparison, statistics,
-  genesis, plugins, server, DLIO, replay).
+- ``dftracer_utils_domains``, the work done with traces (comparison,
+  statistics, provenance, genesis, DLIO, replay, the server, the plugin host).
 
 You do not link these individually, ``find_package(dftracer_utils)`` and the
 ``dftracer::utils`` target pull the whole set transitively (see below).
@@ -271,7 +271,7 @@ under ``<prefix>/lib/pkgconfig``:
 
 .. code-block:: console
 
-   $ pkg-config --cflags --libs dftracer_utils_utilities
+   $ pkg-config --cflags --libs dftracer_utils_domains
 
 Each file requires the libraries of ours that it needs. For a static link, add
 ``--static`` to get the archives of the bundled third-party libraries too.

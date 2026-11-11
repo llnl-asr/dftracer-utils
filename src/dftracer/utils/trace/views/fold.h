@@ -107,12 +107,12 @@ class Fold {
     /// One per worker slot, folded lock-free, merged after the fan-out joins.
     virtual dstd::UniquePtr<Fold> slice() const = 0;
 
-    virtual void step(const FoldBatch& batch) = 0;
+    virtual dstd::Result<void> step(const FoldBatch& batch) = 0;
     virtual void seal_unit(const ScanUnit& unit) = 0;
     virtual void drop_unit(const ScanUnit& unit) = 0;
     /// A unit the scan passes over unread (covered or pruned mid-scan).
     virtual void skip_unit(const ScanUnit&) {}
-    virtual void merge(Fold& slice) = 0;
+    virtual dstd::Result<void> merge(Fold& slice) = 0;
 
     /// `covered` bounds what a fold may claim. Returns false to persist
     /// nothing.
@@ -167,8 +167,9 @@ class DynamicPrune {
 /// narrow() call mid-scan can still take effect on units not yet claimed.
 /// `gate` (optional) holds one permit per unit a worker may claim; its owner
 /// returns a permit as each unit's output is consumed, which bounds how far
-/// claims run ahead of the oldest open unit.
-coro::CoroTask<ExportStats> fuse(
+/// claims run ahead of the oldest open unit. The first error of gather_units,
+/// a unit read or a fold step ends the scan and is the result.
+coro::CoroTask<dstd::Result<ExportStats>> fuse(
     const ViewPlan& plan, const ViewDefinition& vdef,
     dstd::Span<Fold* const> folds, dftracer::utils::dstd::StringIntern& intern,
     const CoverageSet* covered = nullptr, std::uint64_t limit = 0,

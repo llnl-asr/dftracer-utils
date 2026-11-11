@@ -10,6 +10,8 @@
 // With `op` (cumsum, cummax, cumcount, shift(1), diff, ffill) only that op
 // runs.
 
+#include <bench_ok.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/native_transform.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
@@ -34,12 +36,12 @@ using dataframe::Series;
 
 namespace {
 
-constexpr std::int64_t MORSEL_ROWS = 65536;
+constexpr std::int64_t BATCH_SIZE = 65536;
 
 DataFrame collect(LazyFrame plan) {
-    return dftracer::utils::default_runtime()
-        .submit(plan.collect(MORSEL_ROWS))
-        .get();
+    return dftu::bench::ok(dftracer::utils::default_runtime()
+                               .submit(plan.collect(BATCH_SIZE))
+                               .get());
 }
 
 double median_ms(dftracer::utils::dstd::Vector<double> ms) {
@@ -98,11 +100,11 @@ int main(int argc, char** argv) {
         dftracer::utils::dstd::Vector<double> native, composed;
         for (int r = 0; r < reps; ++r) {
             auto t0 = std::chrono::steady_clock::now();
-            collect(frame.lazy().group_by(keys).transform(
-                c.op, c.n, RankMethod::Average, true));
+            collect(dftu::bench::ok(frame.lazy().group_by(keys).transform(
+                c.op, c.n, RankMethod::Average, true)));
             auto t1 = std::chrono::steady_clock::now();
-            collect(dataframe::composed_group_transform(
-                frame.lazy(), keys, c.op, c.n, RankMethod::Average, true));
+            collect(dftu::bench::ok(dataframe::composed_group_transform(
+                frame.lazy(), keys, c.op, c.n, RankMethod::Average, true)));
             auto t2 = std::chrono::steady_clock::now();
             native.push_back(
                 std::chrono::duration<double, std::milli>(t1 - t0).count());

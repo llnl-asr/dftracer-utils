@@ -13,6 +13,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/uio.h>
+#include <task_result.h>
 #include <unistd.h>
 
 #include <atomic>
@@ -355,7 +356,7 @@ TEST_CASE("AsyncIO - async read with executor") {
         co_return;
     };
 
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     CHECK(success.load());
     CHECK(read_data == data);
 
@@ -389,7 +390,7 @@ TEST_CASE("AsyncIO - async write with executor") {
         co_return;
     };
 
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     CHECK(success.load());
 
     // Read back and verify
@@ -429,7 +430,7 @@ TEST_CASE("AsyncIO - async pread with executor") {
         co_return;
     };
 
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     CHECK(success.load());
     CHECK(read_data == "EFGHI");
 
@@ -464,7 +465,7 @@ TEST_CASE("AsyncIO - async pwrite with executor") {
         co_return;
     };
 
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     CHECK(success.load());
 
     // Read back and verify
@@ -497,7 +498,7 @@ TEST_CASE("AsyncIO - async write to pipe with executor") {
         co_return;
     };
 
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     CHECK(success.load());
 
     // Read back from pipe
@@ -538,7 +539,7 @@ TEST_CASE("AsyncIO - async open + pread + close lifecycle") {
         co_return;
     };
 
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     CHECK(success.load());
     CHECK(read_data == data);
 
@@ -595,7 +596,7 @@ TEST_CASE("AsyncIO - multiple concurrent async reads") {
         co_return;
     };
 
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     CHECK(completed.load() == N);
     for (int i = 0; i < N; ++i) {
         CHECK(results[i] == expected[i]);
@@ -624,7 +625,7 @@ TEST_CASE("AsyncIO - IoBackend::name() reports backend type") {
         co_return;
     };
 
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     CHECK(!backend_name.empty());
     MESSAGE("Active I/O backend: ", backend_name);
     CHECK((backend_name == "threadpool" || backend_name == "io_uring" ||
@@ -644,7 +645,7 @@ TEST_CASE("AsyncIO - async read error handling with executor (invalid fd)") {
         co_return;
     };
 
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     CHECK(result.load() < 0);
 }
 
@@ -676,7 +677,7 @@ TEST_CASE("AsyncIO - large pread with executor") {
         co_return;
     };
 
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     CHECK(success.load());
 
     ::unlink(path.c_str());
@@ -722,7 +723,7 @@ static void run_lifecycle_on_backend(runtime::io::IoBackendType type,
         co_return;
     };
 
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     MESSAGE("Backend requested: ", type_name, ", actual: ", backend_name);
     CHECK(success.load());
     CHECK(read_data == data);
@@ -750,7 +751,7 @@ static void run_pipe_write_on_backend(runtime::io::IoBackendType type,
         co_return;
     };
 
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     CHECK(success.load());
 
     // Read back from pipe
@@ -1109,7 +1110,7 @@ TEST_CASE("AsyncIO - async readv/writev with executor") {
         co_return;
     };
 
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     CHECK(success.load());
 
     ::unlink(path);
@@ -1140,7 +1141,7 @@ TEST_CASE("AsyncIO - async lseek + read with executor") {
         co_return;
     };
 
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     CHECK(success.load());
 
     ::unlink(path.c_str());
@@ -1171,7 +1172,7 @@ TEST_CASE("AsyncIO - async sendfile with executor") {
         co_return;
     };
 
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
 
     // Close write end so read won't block if sendfile failed
     // (macOS sendfile requires a socket destination, not a pipe).
@@ -1205,7 +1206,7 @@ TEST_CASE("AsyncIO - open_file opens a file for async pread") {
         co_return;
     };
 
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     CHECK(read_data == data);
 
     ::unlink(path.c_str());
@@ -1224,6 +1225,6 @@ TEST_CASE("AsyncIO - open_file reports NotFound for a missing file") {
         co_return;
     };
 
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     CHECK(is_not_found);
 }

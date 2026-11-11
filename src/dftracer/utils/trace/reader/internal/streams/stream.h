@@ -1,0 +1,35 @@
+// SPDX-License-Identifier: MIT
+#ifndef DFTRACER_UTILS_TRACE_READER_INTERNAL_STREAMS_STREAM_H
+#define DFTRACER_UTILS_TRACE_READER_INTERNAL_STREAMS_STREAM_H
+
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/trace/index/gzip/checkpoint_indexer.h>
+#include <dftracer/utils/trace/reader/internal/stream.h>  // Public ReaderStream interface
+
+namespace dftracer::utils::trace::reader::internal {
+
+/**
+ * @brief Base class for internal stream implementations.
+ *
+ * Extends the public ReaderStream interface and adds internal initialization
+ * methods.
+ */
+class StreamBase : public ReaderStream {
+   public:
+    virtual ~StreamBase() = default;
+
+   protected:
+    /**
+     * @brief Initialize stream with file path and byte range.
+     *
+     * Internal method used by stream factories to set up the stream.
+     */
+    virtual void initialize(
+        const dstd::String &gz_path, std::size_t start_bytes,
+        std::size_t end_bytes,
+        dftracer::utils::trace::index::gzip::CheckpointIndexer &indexer) = 0;
+};
+
+}  // namespace dftracer::utils::trace::reader::internal
+
+#endif  // DFTRACER_UTILS_TRACE_READER_INTERNAL_STREAMS_STREAM_H

@@ -6,10 +6,13 @@
 //
 //   window_bench [rows] [reps]
 
+#include <bench_ok.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/frame_ops.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -63,8 +66,7 @@ DataFrame make_frame(std::int64_t n) {
         ts[i] = i / PARTITIONS;
         by[i] = by_dist(rng);
         v[i] = dist(rng);
-        s[i] =
-            "str" + dftracer::utils::dstd::to_string(rng() % DISTINCT_STRINGS);
+        s[i] = dstd::fmt<"str{}">(rng() % DISTINCT_STRINGS);
     }
     DataFrame d;
     d.names = {"key", "ts", "v", "by", "s"};
@@ -119,8 +121,8 @@ int main(int argc, char** argv) {
                 dftracer::utils::dstd::Vector<double> ms;
                 for (int r = 0; r < reps; ++r) {
                     const auto t0 = std::chrono::steady_clock::now();
-                    DataFrame out =
-                        dataframe::window(frame, part, order, specs);
+                    DataFrame out = dftu::bench::ok(
+                        dataframe::window(frame, part, order, specs));
                     const auto t1 = std::chrono::steady_clock::now();
                     ms.push_back(
                         std::chrono::duration<double, std::milli>(t1 - t0)

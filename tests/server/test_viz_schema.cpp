@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/detail/coro.h>
+#include <dftracer/utils/domains/server/http_request.h>
+#include <dftracer/utils/domains/server/http_response.h>
+#include <dftracer/utils/domains/server/router.h>
+#include <dftracer/utils/domains/server/trace_api.h>
+#include <dftracer/utils/domains/server/trace_index.h>
+#include <dftracer/utils/domains/server/viz_api.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -8,18 +14,13 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/record_schema.h>
+#include <dftracer/utils/fileio/compress/gzip_rechunker.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/server/http_request.h>
-#include <dftracer/utils/server/http_response.h>
-#include <dftracer/utils/server/router.h>
-#include <dftracer/utils/server/trace_api.h>
-#include <dftracer/utils/server/trace_index.h>
-#include <dftracer/utils/server/viz_api.h>
-#include <dftracer/utils/utilities/fileio/compress/gzip_rechunker.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
+#include <dftracer/utils/trace/index/record_schema.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <cmath>
@@ -28,7 +29,7 @@
 #include <memory>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::server;
+using namespace dftracer::utils::domains::server;
 
 namespace {
 
@@ -66,11 +67,12 @@ fields:
 
 void register_schemas() {
     for (const char* spec : {WEBLOG_SCHEMA, OTEL_SCHEMA, TWIN_SCHEMA})
-        index::register_schema(spec, "test_viz_schema");
+        dftu_utils_test::ok_ref(
+            trace::index::register_schema(spec, "test_viz_schema"));
 }
 
 void write_gz(const dstd::Path& path, const dstd::String& content) {
-    utilities::fileio::compress::GzipMemberCompressor comp;
+    fileio::compress::GzipMemberCompressor comp;
     auto member = comp.compress_member(content.data(), content.size());
     REQUIRE(member.has_value());
     dftu_utils_test::FileOut ofs(path);
@@ -94,14 +96,15 @@ dstd::UniquePtr<Served> serve(const dstd::String& name,
     s->index = dstd::make_unique<TraceIndex>(dstd::String(s->dir.str()),
                                              dstd::String(s->dir.file("idx")));
     Runtime rt(4);
-    auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-        co_await s->index->initialize();
-    });
-    rt.submit(std::move(task), "setup").wait();
+    auto task = coro::with_scope(
+        [&](coro::Scope&) -> coro::CoroTask<dstd::Result<void>> {
+            co_return co_await s->index->initialize();
+        });
+    dftu_utils_test::ok(rt.submit(std::move(task), "setup").wait());
     rt.shutdown();
     REQUIRE(s->index->file_count() == 1);
-    server::register_trace_api(s->router, *s->index);
-    server::register_viz_api(s->router, *s->index);
+    domains::server::register_trace_api(s->router, *s->index);
+    domains::server::register_viz_api(s->router, *s->index);
     return s;
 }
 
@@ -117,7 +120,7 @@ dstd::String get(Served& s, const dstd::String& target) {
         body = resp.body;
         co_return;
     });
-    rt.submit(std::move(task), "get").wait();
+    dftu_utils_test::ok(rt.submit(std::move(task), "get").wait());
     rt.shutdown();
     return body;
 }
@@ -408,6 +411,42 @@ TEST_SUITE("viz_schema") {
               doctest::Approx(OTEL_REQUESTS * 2000.0));
         CHECK(under_handle["render"] ==
               doctest::Approx(OTEL_REQUESTS * 5000.0));
+    }
+
+    TEST_CASE("the columns endpoint refuses files of two record schemas") {
+        register_schemas();
+        auto s = dstd::make_unique<Served>("viz_schema_mixed");
+        write_gz(s->dir.path() / "a.pfw.gz", twin_dftracer());
+        write_gz(s->dir.path() / "b.pfw.gz", twin_generic());
+        s->index = dstd::make_unique<TraceIndex>(
+            dstd::String(s->dir.str()), dstd::String(s->dir.file("idx")));
+        Runtime rt(4);
+        auto task = coro::with_scope(
+            [&](coro::Scope&) -> coro::CoroTask<dstd::Result<void>> {
+                co_return co_await s->index->initialize();
+            });
+        dftu_utils_test::ok(rt.submit(std::move(task), "setup").wait());
+        rt.shutdown();
+        REQUIRE(s->index->file_count() == 2);
+        domains::server::register_viz_api(s->router, *s->index);
+
+        HttpRequest req;
+        req.method = "GET";
+        req.path = "/api/viz/columns";
+        Runtime rt2(4);
+        int status = 0;
+        dstd::String body;
+        auto get_task =
+            coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                HttpResponse resp = co_await s->router.handle(req);
+                status = resp.status_code;
+                body = resp.body;
+                co_return;
+            });
+        dftu_utils_test::ok(rt2.submit(std::move(get_task), "get").wait());
+        rt2.shutdown();
+        CHECK(status == 400);
+        CHECK(body.find("one record schema") != dstd::String::npos);
     }
 
     TEST_CASE("a trace served as dftracer and as generic records agree") {

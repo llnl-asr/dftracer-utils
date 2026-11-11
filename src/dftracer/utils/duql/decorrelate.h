@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_DUQL_DECORRELATE_H
 #define DFTRACER_UTILS_DUQL_DECORRELATE_H
 
+#include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -55,13 +56,13 @@ struct Refusal {
 };
 
 /// The sub-query `p` decorrelated, nullopt when it reads no enclosing row.
-/// `scalar` is a sub-query in an expression, else one under `in`. Throws
+/// `scalar` is a sub-query in an expression, else one under `in`. Fails with a
 /// Refusal for a `^.` outside a key or bound term of a `where`, bounds on two
 /// expressions, a stage that depends on the other keys' rows after that
 /// `where`, a last stage that does not name its columns, or a range sub-query
 /// whose last stage has no range form.
-dstd::Optional<Decorrelated> decorrelate(const syntax::Pipeline& p,
-                                         bool scalar);
+dstd::Expected<dstd::Optional<Decorrelated>, Refusal> decorrelate(
+    const syntax::Pipeline& p, bool scalar);
 
 }  // namespace dftracer::utils::duql
 

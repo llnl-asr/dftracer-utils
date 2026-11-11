@@ -19,18 +19,18 @@ void record(const char* what) { g_ran.emplace_back(what); }
 
 TEST_CASE("shutdown runs the stages in order and each stage in reverse") {
     dstd::add_shutdown_hook(dstd::ShutdownStage::CloseStores,
-                            [] { record("close 1"); });
+                            []() noexcept { record("close 1"); });
     dstd::add_shutdown_hook(dstd::ShutdownStage::StopRuntime,
-                            [] { record("stop 1"); });
+                            []() noexcept { record("stop 1"); });
     dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches,
-                            [] { record("free 1"); });
+                            []() noexcept { record("free 1"); });
     dstd::add_shutdown_hook(dstd::ShutdownStage::CloseStores,
-                            [] { record("close 2"); });
+                            []() noexcept { record("close 2"); });
     dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches,
-                            [] { record("free 2"); });
+                            []() noexcept { record("free 2"); });
     dstd::add_shutdown_hook(dstd::ShutdownStage::StopRuntime,
-                            [] { record("stop 2"); });
-    dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, [] {
+                            []() noexcept { record("stop 2"); });
+    dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, []() noexcept {
         record("nested");
         dstd::shutdown();
         record("nested done");

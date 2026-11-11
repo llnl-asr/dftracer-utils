@@ -9,9 +9,76 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Rename the library `libdftracer_utils_io` to `libdftracer_utils_fileio` and `libdftracer_utils_utilities` to `libdftracer_utils_domains`, with their pkg-config files.
+  A program that links the `dftracer_utils` target needs no change.
+- Move the public index headers from `dftracer/utils/index/` to `dftracer/utils/trace/index/` and their namespace from `dftracer::utils::index` to `dftracer::utils::trace::index`.
+- Move the C++ namespaces of the domain code under `dftracer::utils::domains`, such as `domains::analysis::comparator`, `domains::workload::genesis` and `domains::server`.
+- Link Vectorscan only into the duql library, so the trace library no longer holds a second copy and is about 10 MB smaller on Linux x86-64.
+  On Linux the duql library no longer exports the `hs_*` symbols of Vectorscan.
+- Rename the `morsel_rows` parameter of `LazyFrame.collect` and `LazyFrame.stream` to `batch_size` in C++ and Python.
+- Report the first input error of the duql builder from `Pipe::text()` and `Source::text()`, which now give a `dstd::Expected<dstd::String, DuqlError>`, in place of raising `std::invalid_argument`.
+  A `Col`, `Pipe` or `Source` keeps the first error of the calls that built it, such as a number that is not finite or a `bucket` with a bad mode.
+  `error()` reads it.
+  `View::duql(pipe)` returns the error for a `Pipe` that holds an error.
+- Remove `duql::parse_or_throw`.
+  Use `Query::from_string`, which gives a `dstd::Expected`, or `try_parse`.
+- Return a `dstd::Result` from `duql::load_macros` and `duql::path_macros` in place of raising.
+  The Python `duql.load_path` still raises the same exception.
+- Build the json and duql libraries without exceptions.
+- Build the io library without exceptions.
+- Build the trace library without exceptions.
+  Only the file that reads YAML keeps exceptions, to catch the ones of yaml-cpp.
+  Python keeps its exception types.
+- Build the utilities library and the command line tools without exceptions.
+  Only the two files that call yaml-cpp keep exceptions, to catch the ones of yaml-cpp.
+- Make the viz server answer 400 for a bad query, such as an invalid argument or a duql parse error, and 500 for I/O and internal errors, where every failure answered 500 before.
+- Make a command line tool that fails print `Error: <message>` and exit with 1 in cases where it aborted before, such as an index folder that cannot be written.
+- Make `dftracer_stats` in detailed mode stop at the first error and exit with 1.
+- Print NaN and infinite values as `nan`, `inf` and `-inf` on every platform.
+- Return a `dstd::Result` from `View::export_would_bootstrap`, `collect_would_bootstrap`, `materialize_dir`, `register_materialized`, `mv_source` and `reconstruct_if_cached`, and from `rows<T>`.
+- Return the first builder error of a `View` from every terminal, in place of raising.
+  A view over files of more than one record schema returns the mixed record schema error, in place of falling back to the dftracer schema.
+  The server `columns` endpoint answers 400 when the column info fails.
+- Return a `dstd::Result` from the `Indexer` and the index build, in place of raising.
+- Return a `dstd::Result` from `Source::scan` and `Source::open_batch`.
+  A source that cannot open a scan returns the error and the collect ends with it.
+  A `Cursor` must not throw from `try_next`, `out_names` or `resident_bytes`.
+- Build the dataframe library without exceptions.
+  The C ABI functions of the library return the same null or error values as before.
+- Write the `DFTRACER_UTILS_LOG_*` macros and `DFTRACER_UTILS_TRACE_SCOPE` with `dstd::fmt` formats (`{}`, `{:x}`, `{:.2f}`) in place of printf formats, checked at compile time in every build.
+  A message over 1536 bytes ends in `...`.
+  The log line layout is unchanged, and a `bool` in a message now prints as `true` or `false`.
+- Return a `dstd::Result` from `LazyFrame::collect`, `stream`, `open_cursor` and `reduce_specs`, from `collect_all` and `LazyResult::collect`, and from `DataFrame::join`, `compare_agg` and `to_ipc`, in place of raising.
+  A `LazyFrame` builder keeps its first error: `status()` reads it, and every terminal returns it.
+  `Cursor::next` gives a `MorselResult`.
+  `Cursor::try_next` is now `bool try_next(std::int64_t max_rows, MorselResult& out)` and does not throw.
+  A source that raises from `next` or `collect_batch` ends the collect with an error.
+  A source that raises from `narrow` or `reclaim` is logged, the call counts as nothing done and the collect goes on.
+  A source that breaks the batch or planning hook contract ends the process.
+  Python keeps its exception types.
+  `take` now raises `DFTUtilsValueError`, a subclass of `DFTUtilsError`, for a bad index.
+- Require a `noexcept` function for `dstd::add_shutdown_hook`, so a hook that can raise does not compile.
+- End a cancelled task at its wait, in place of resuming it with an exception: the frame is destroyed, and the stop moves up to the first scope or combinator.
+  `coro::with_timeout`, `coro::with_deadline`, `JoinSet::next_within` and `coro::with_item_timeout` give a `dstd::Result` with `dstd::Condition::Timeout` in place of raising, and the `timeout` adaptor of a stage gives a `dstd::Result` of its output.
+  `coro::throw_cancelled`, `coro::is_cancelled` and `coro/cancelled.h` are gone.
+  A misuse of a coro API, such as a zero size or limit, a join of the scope that spawned the task, or a spawn into a closed scope, ends the process in place of raising.
+- Return a `dstd::Result` from `CoroTask::get()`, `coro::sync_wait`, `Runtime::block_on`, `TaskHandle::get()` and `TypedTaskHandle::get()`, and from `Runtime::parallel_for` and `parallel_reduce`.
+  A task that a stop ended gives `dstd::Condition::Cancelled`, and a runtime that was shut down refuses a task with the same condition, in place of raising.
+  A task that returns a `dstd::Expected<V, dstd::Error>` gives that type itself. An exception that a task raises is still rethrown from the calling code.
+  `GroupBy::transform` and the eager group-by methods, and the sync wrappers of `TraceReader`, give a `dstd::Result` too.
+  The runtime and store libraries are built without exceptions.
+  A `Runtime` built with a bad memory setting in the environment ends the process with the error in place of raising.
+- Remove the `bool` conversion of a `dstd::Expected<bool, E>`, so `if (result)` no longer compiles where it reads as the value and means the state.
+  Test the state with `has_value()` and the value with `*result`.
+- Make `dftu_op_desc::fn` a function pointer of the new type `dftu_op_generic_fn` in place of `const void*`, so a plugin author casts an op function with `(dftu_op_generic_fn)&my_op`.
 - Make `dstd::Expected` our own class and remove the vendored `tl::expected`.
   `value()` and `error()` on the wrong side now end the process with the message and a stack trace, where `value()` threw before.
   A build with `DFTRACER_UTILS_DEBUG` also ends the process when an error result is destroyed unchecked.
+- End the process with a message when memory runs out or an allocation would pass `DFTRACER_UTILS_MEM_HARD_LIMIT`, where it threw `std::bad_alloc` before.
+  Python gets an abort in place of `MemoryError`.
+- End the process when `dstd::any_cast` gets the wrong type or an empty `dstd::Function` is called, where they threw before.
+- End the process with a message that names `DFTRACER_UTILS_IO_BACKEND` when it holds a bad value, or when the I/O thread pool cannot start a thread, where creating a `Runtime` threw before.
+- Raise a Python error from `Runtime.set_timeout` and `Runtime.set_default_task_timeout` on a runtime without a watchdog, where the C++ call threw before.
 - Make an index of system counter traces up to 57% smaller, because each counter value is stored as a change from the last value of the same counter.
   Rebuild indexes made by an earlier version.
 - Store index extents on 8-byte boundaries in place of 4 KiB, so an index of a small trace set is up to 23% smaller.
@@ -345,6 +412,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- Add a second build of the string-match kernels and of the trace prefilter's per-line code with branch padding against the Intel JCC erratum, picked at run time on an affected CPU and set with `DFTRACER_UTILS_JCC_KERNELS` (`plain`, `jcc` or `auto`).
+- Add `dstd::fmt`, which formats text with the format fixed at compile time (`dstd::fmt<"open {}: {}">(path, err)` or `dstd::fmt("open {}: {}"_f, path, err)`), in one allocation, and `dstd::fmt_to`, which writes into a caller buffer with no allocation.
+  It takes `{}`, hex, zero-padded width and fixed float precision, and a wrong argument count or a bad spec does not compile.
+- Add `dstd::fmt_join<"\t">(a, b, c)`, which formats its arguments with one separator between them, and `dstd::fmt_join_to`, which writes the same text into a caller buffer.
+- Add `common::make_error<"...">(code, args...)`, which writes the formatted message straight into the error.
+- Add `coro::fail_with`, which ends a task with a stored exception without a throw, for code built without exceptions.
 - Add `coro::or_fail` and `CoroTask::or_fail()`, which give the value of a `dstd::Expected` or of a task that returns one, or end the calling task with its error, with no exception.
 - Add `match`, `discard` and `or_fail` to `dstd::Expected`, and pass an error on with `return r.error();`.
 - Add `trace::views::LiveView` and its Python adaptor `LiveTraceViewer`, which follow gzip traces that are still being written.
@@ -453,6 +526,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Removed
 
+- Remove `common::DFTUtilsException`, `common::throw_error`, `common::unwrap` and `duql::DuqlParseError`.
+  Library calls return `dstd::Result`, so check the result where you called `unwrap` before.
+- Remove `common::string_format`, `common::vstring_format` and the `DFTRACER_UTILS_PRINTF_FORMAT` macro. Use `dstd::fmt`.
 - Remove `TaskExecutor::enqueue`. Use `post`.
 - Remove the `--watchdog-idle-timeout` flag, which never had an effect.
 - Remove `runtime/compose.h` with `utilities::op`, `AsyncOpFor` and the `&&` and `||` operators. Use the stages and adaptors of `coro/stage.h`, and `coro::when_all` and `coro::when_any` to run two things at once or to race them.
@@ -509,6 +585,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix `dftu_task_when_all` and `dftu_task_when_any` ending the process when an input task raises an exception.
+  The combined task now reports the exception.
+- Fix `Store::commit` accepting a batch made before a `close()` when the next writer got the address of the closed one.
+  Such a batch is now refused.
+- Fix `dftracer_replay` reporting "No trace files" when it cannot read the trace directory.
+  It now reports the read error.
+- Fix a compressed Python export of an aggregated view reporting success when closing the gzip file failed.
 - Fix a hang of a runtime with few threads when a task waits for other tasks while a blocked worker waits to run again, such as a duql join on one thread.
 - Fix a line that spans two chunks being lost when a query prunes chunks.
 - Make a reader stop at the verified end of the index, so it no longer reads bytes the index has not checked.
@@ -554,13 +637,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   The on-demand readers descend at most 128 containers (`MAX_READ_DEPTH`), so a very deep line never overflows the stack and is never dropped: a container below that depth stays under its path as its JSON text.
   A value nested between 128 and 1024 levels, which gave one value per leaf, now gives that text below level 128.
   Density keeps the first value of a repeated key in an event, as the DOM reader did.
-- Fix `read_arrow` when one key holds several value types: the column now widens and keeps every value, where it read past a buffer or wrote a null.
-  Mixed numbers become a double column and any other mix becomes a text column, so a value can change form: an integer above 2^53 becomes inexact, and `1.50` becomes `1.5` in text.
 - Fix the Python Arrow stream reading a column of another type under the first type: such a column now goes to `_extra` as JSON.
-- Read an integer of 20 or more digits above the 64-bit range as its exact digits on the on-demand read paths, as a text cell in `read_arrow`.
+- Read an integer of 20 or more digits above the 64-bit range as its exact digits on the on-demand read paths.
 - Read a line with bad UTF-8 or a raw control byte in a string, with `?` in place of each bad byte in the parsed fields; the raw line stays as it was.
 - Add `TraceReader::dropped_line_count()` and one warning per read for lines that could not be read in full, such as a cropped line.
-  A cropped line stays in `read_json` as text, and its readable fields stay in `read_arrow`.
+  A cropped line stays in `read_json` as text.
 - Fix a crash when code read a field of a line whose document a read error had abandoned.
 - Fix byte range reads that open more than 512 bytes into a line, which returned the tail of that line and lost the event.
   Adjacent byte ranges now give each line once and whole, at any cut and any line size.

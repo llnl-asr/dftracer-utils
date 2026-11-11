@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/big_endian.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
@@ -10,7 +10,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
 #include <cstring>
 #include <limits>
 
@@ -77,8 +76,8 @@ dstd::String key_text(dstd::StringView key) {
         } else if (tag == DOUBLE_TAG) {
             const double d = dstd::bits_double(get_u64(key));
             char buf[32];
-            std::snprintf(buf, sizeof buf, "%.17g", d);
-            out += buf;
+            out.append(buf,
+                       dstd::to_chars_general(buf, buf + sizeof(buf), d, 17));
             key.remove_prefix(8);
         } else if (tag == STRING_TAG) {
             const auto n = static_cast<std::size_t>(get_u64(key));
@@ -91,7 +90,7 @@ dstd::String key_text(dstd::StringView key) {
             key.remove_prefix(1);
         }
     }
-    return parts > 1 ? "(" + out + ")" : out;
+    return parts > 1 ? dstd::fmt<"({})">(out) : out;
 }
 
 const dstd::Vector<std::int64_t>* LookupTable::find(
@@ -100,36 +99,79 @@ const dstd::Vector<std::int64_t>* LookupTable::find(
     return it == rows.end() ? nullptr : &it->second;
 }
 
-void conflict(const LookupTable& table, dstd::StringView column,
-              dstd::StringView key) {
-    throw common::DFTUtilsException(
-        common::ErrorCode::InvalidArgument,
-        ("View::duql '" + table.name + "' has rows with different values of '" +
-         dstd::String(column) + "' for key " + key_text(key) +
-         "; pick one with a narrower let, or read every row with "
-         "'lookup ... into'")
-            .c_str());
+void LookupFailure::set(DuqlError error) {
+    if (failed_.load(std::memory_order_acquire)) return;
+    const std::lock_guard<std::mutex> lock(mutex_);
+    if (error_) return;
+    error_ = std::move(error);
+    failed_.store(true, std::memory_order_release);
 }
 
-void scalar_conflict(dstd::StringView name, dstd::StringView key,
-                     std::size_t rows) {
-    throw common::DFTUtilsException(
-        common::ErrorCode::InvalidArgument,
-        ("View::duql the sub-query '" + dstd::String(name) + "' gives " +
-         dstd::int_text(rows) + " rows for key " + key_text(key) +
-         "; a sub-query in an expression gives one row")
-            .c_str());
+dstd::Optional<DuqlError> LookupFailure::get() const {
+    if (!failed_.load(std::memory_order_acquire)) return dstd::nullopt;
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return error_;
+}
+
+DuqlError lookup_error(dstd::String message) {
+    DuqlError out;
+    out.message = std::move(message);
+    return out;
+}
+
+DuqlError conflict_error(const LookupTable& table, dstd::StringView column,
+                         dstd::StringView key) {
+    return lookup_error(
+        dstd::fmt<"View::duql '{}' has rows with different values of "
+                  "'{}' for key {}; pick one with a narrower let, or "
+                  "read every row with 'lookup ... into'">(table.name, column,
+                                                           key_text(key)));
+}
+
+DuqlError scalar_conflict_error(dstd::StringView name, dstd::StringView key,
+                                std::size_t rows) {
+    return lookup_error(
+        dstd::fmt<"View::duql the sub-query '{}' gives {} rows for "
+                  "key {}; a sub-query in an expression gives one row">(
+            name, rows, key_text(key)));
+}
+
+dstd::Optional<DuqlError> lookup_failure(const detail::QueryNode& node) {
+    return std::visit(
+        [](const auto& n) -> dstd::Optional<DuqlError> {
+            using T = std::decay_t<decltype(n)>;
+            if constexpr (std::is_same_v<T, detail::AndNode> ||
+                          std::is_same_v<T, detail::OrNode>) {
+                if (auto left = lookup_failure(*n.left)) return left;
+                return lookup_failure(*n.right);
+            } else if constexpr (std::is_same_v<T, detail::NotNode>) {
+                return lookup_failure(*n.operand);
+            } else if constexpr (std::is_same_v<T, detail::ExprLeaf>) {
+                dstd::Optional<DuqlError> out;
+                for_each_term(*n.term, [&out](const Term& t) {
+                    if (out) return;
+                    if (const auto* l = std::get_if<TLookup>(&t.node);
+                        l && l->slot)
+                        out = l->slot->failure.get();
+                });
+                return out;
+            } else {
+                return dstd::nullopt;
+            }
+        },
+        node.data);
 }
 
 namespace {
 
-int kind_of(const Ordered& v) {
+int kind_of(const duql::Ordered& v) {
     return v.index() < 3 ? 0 : static_cast<int>(v.index()) - 2;
 }
 
-RangeIndex::Node combine(const RangeIndex& ix, RangeRead read,
-                         const RangeIndex::Node& a, const RangeIndex::Node& b) {
-    RangeIndex::Node out;
+duql::RangeIndex::Node combine(const duql::RangeIndex& ix, RangeRead read,
+                               const duql::RangeIndex::Node& a,
+                               const duql::RangeIndex::Node& b) {
+    duql::RangeIndex::Node out;
     out.isum = a.isum + b.isum;
     out.fsum = a.fsum + b.fsum;
     out.count = a.count + b.count;
@@ -137,8 +179,8 @@ RangeIndex::Node combine(const RangeIndex& ix, RangeRead read,
         out.best = a.best < 0 ? b.best : a.best;
     } else {
         const int c =
-            compare_ordered(*ix.args[static_cast<std::size_t>(a.best)],
-                            *ix.args[static_cast<std::size_t>(b.best)]);
+            duql::compare_ordered(*ix.args[static_cast<std::size_t>(a.best)],
+                                  *ix.args[static_cast<std::size_t>(b.best)]);
         out.best = (read == RangeRead::Min ? c <= 0 : c >= 0) ? a.best : b.best;
     }
     return out;
@@ -146,25 +188,27 @@ RangeIndex::Node combine(const RangeIndex& ix, RangeRead read,
 
 // The first position of [first, last) whose value is not before `v` (or,
 // with `after`, is after it) in the order of compare_ordered.
-std::int64_t position(const RangeIndex& ix, std::int64_t first,
-                      std::int64_t last, const Ordered& v, bool after) {
+std::int64_t position(const duql::RangeIndex& ix, std::int64_t first,
+                      std::int64_t last, const duql::Ordered& v, bool after) {
     const auto begin = ix.values.begin();
-    auto it = after ? std::upper_bound(begin + first, begin + last, v,
-                                       [](const Ordered& x, const Ordered& y) {
-                                           return compare_ordered(x, y) < 0;
-                                       })
-                    : std::lower_bound(begin + first, begin + last, v,
-                                       [](const Ordered& x, const Ordered& y) {
-                                           return compare_ordered(x, y) < 0;
-                                       });
+    auto it = after ? std::upper_bound(
+                          begin + first, begin + last, v,
+                          [](const duql::Ordered& x, const duql::Ordered& y) {
+                              return duql::compare_ordered(x, y) < 0;
+                          })
+                    : std::lower_bound(
+                          begin + first, begin + last, v,
+                          [](const duql::Ordered& x, const duql::Ordered& y) {
+                              return duql::compare_ordered(x, y) < 0;
+                          });
     return it - begin;
 }
 
 // The positions of [first, last) of the kind of `v`.
-dstd::Pair<std::int64_t, std::int64_t> kind_range(const RangeIndex& ix,
+dstd::Pair<std::int64_t, std::int64_t> kind_range(const duql::RangeIndex& ix,
                                                   std::int64_t first,
                                                   std::int64_t last,
-                                                  const Ordered& v) {
+                                                  const duql::Ordered& v) {
     const auto begin = ix.values.begin();
     const int k = kind_of(v);
     const auto r = std::equal_range(
@@ -177,14 +221,13 @@ dstd::Pair<std::int64_t, std::int64_t> kind_range(const RangeIndex& ix,
     return {r.first - begin, r.second - begin};
 }
 
-[[noreturn]] void range_fail(const dstd::String& why) {
-    throw common::DFTUtilsException(common::ErrorCode::InvalidArgument,
-                                    ("View::duql " + why).c_str());
+void range_fail(const TLookup& l, const dstd::String& why) {
+    l.slot->failure.set(lookup_error(dstd::fmt<"View::duql {}">(why)));
 }
 
 }  // namespace
 
-int compare_ordered(const Ordered& a, const Ordered& b) {
+int compare_ordered(const duql::Ordered& a, const duql::Ordered& b) {
     const int ka = kind_of(a);
     const int kb = kind_of(b);
     if (ka != kb) return ka < kb ? -1 : 1;
@@ -207,12 +250,12 @@ int compare_ordered(const Ordered& a, const Ordered& b) {
 }
 
 void build_range_tree(RangeIndex& ix, RangeRead read,
-                      const dstd::Vector<RangeIndex::Node>& leaves) {
+                      const dstd::Vector<duql::RangeIndex::Node>& leaves) {
     ix.tree.assign(2 * leaves.size(), {});
     for (const auto& [key, span] : ix.keys) {
         const auto [b, e] = span;
         const std::int64_t m = e - b;
-        RangeIndex::Node* t = ix.tree.data() + 2 * b;
+        duql::RangeIndex::Node* t = ix.tree.data() + 2 * b;
         for (std::int64_t i = 0; i < m; ++i)
             t[m + i] = leaves[static_cast<std::size_t>(b + i)];
         for (std::int64_t i = m - 1; i > 0; --i)
@@ -220,18 +263,18 @@ void build_range_tree(RangeIndex& ix, RangeRead read,
     }
 }
 
-RangeAnswer range_answer(const TLookup& l, const LookupTable& table,
-                         dstd::StringView key,
-                         const dstd::Optional<Ordered>& low,
-                         const dstd::Optional<Ordered>& high) {
-    RangeAnswer out;
+duql::RangeAnswer range_answer(const TLookup& l, const LookupTable& table,
+                               dstd::StringView key,
+                               const dstd::Optional<duql::Ordered>& low,
+                               const dstd::Optional<duql::Ordered>& high) {
+    duql::RangeAnswer out;
     const RangeRead read = l.range;
     if (read == RangeRead::Count || read == RangeRead::CountValues ||
         read == RangeRead::CountIf)
         out.number = Number{std::int64_t{0}};
     if ((l.low && !low) || (l.high && !high)) return out;
     if (low && high && kind_of(*low) != kind_of(*high)) return out;
-    const RangeIndex& ix = *table.range;
+    const duql::RangeIndex& ix = *table.range;
     const auto it = ix.keys.find(key);
     if (it == ix.keys.end()) return out;
     const auto [first, last] = it->second;
@@ -243,10 +286,11 @@ RangeAnswer range_answer(const TLookup& l, const LookupTable& table,
     if (read == RangeRead::Rows) {
         if (l.kind == LookupKind::Scalar && out.rows > 1)
             range_fail(
-                "the sub-query '" + table.name + "' gives " +
-                dstd::int_text(out.rows) + " rows in the range of " +
-                (key.empty() ? dstd::String("a row") : "key " + key_text(key)) +
-                "; a sub-query in an expression gives one row");
+                l, dstd::fmt<"the sub-query '{}' gives {} rows in the range of "
+                             "{}; a sub-query in an expression gives one row">(
+                       table.name, out.rows,
+                       (key.empty() ? dstd::String("a row")
+                                    : dstd::fmt<"key {}">(key_text(key)))));
         out.row = ix.rows[static_cast<std::size_t>(lo)];
         return out;
     }
@@ -255,8 +299,8 @@ RangeAnswer range_answer(const TLookup& l, const LookupTable& table,
         return out;
     }
     const std::int64_t m = last - first;
-    const RangeIndex::Node* t = ix.tree.data() + 2 * first;
-    RangeIndex::Node acc;
+    const duql::RangeIndex::Node* t = ix.tree.data() + 2 * first;
+    duql::RangeIndex::Node acc;
     for (std::int64_t a = lo - first + m, b = hi - first + m; a < b;
          a >>= 1, b >>= 1) {
         if (a & 1) acc = combine(ix, read, acc, t[a++]);
@@ -273,8 +317,9 @@ RangeAnswer range_answer(const TLookup& l, const LookupTable& table,
                 out.number = Number{acc.fsum};
             } else if (acc.isum < std::numeric_limits<std::int64_t>::min() ||
                        acc.isum > std::numeric_limits<std::int64_t>::max()) {
-                range_fail("'sum' of the sub-query '" + table.name +
-                           "' overflows int64");
+                range_fail(
+                    l, dstd::fmt<"'sum' of the sub-query '{}' overflows int64">(
+                           table.name));
             } else {
                 out.number = Number{static_cast<std::int64_t>(acc.isum)};
             }

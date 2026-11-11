@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/utilities/hash/hash.h>
+#include <dftracer/utils/fileio/hash/fnv1a_hasher_utility.h>
+#include <dftracer/utils/fileio/hash/hasher_utility.h>
+#include <dftracer/utils/fileio/hash/types.h>
 #include <doctest/doctest.h>
 
 using namespace dftracer::utils;
 
-using namespace dftracer::utils::utilities::hash;
+using namespace dftracer::utils::fileio::hash;
 
 TEST_CASE("HasherUtility - Basic hashing") {
     HasherUtility hasher;

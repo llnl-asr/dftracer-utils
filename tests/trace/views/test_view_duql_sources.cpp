@@ -7,9 +7,10 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/macros.h>
-#include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/record_schema.h>
+#include <dftracer/utils/trace/index/indexer.h>
+#include <dftracer/utils/trace/index/record_schema.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -32,8 +33,11 @@ dstd::String write_records(TestEnvironment& env, const dstd::String& name,
     }
     const dstd::String gz = plain + ".gz";
     dftu_utils_test::compress_file_to_gzip(plain, gz);
-    (void)dstd::fs::remove(plain);
-    index::Indexer::open({dstd::String(dstd::StringView(gz))}).build();
+    dstd::fs::remove(plain).discard();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(
+            trace::index::Indexer::open({dstd::String(dstd::StringView(gz))}))
+            .build());
     return gz;
 }
 
@@ -92,13 +96,22 @@ dstd::Vector<dstd::String> dftracer_lines() {
             event(30, R"("fhash":"h1","hhash":"n1")", 3)};
 }
 
-dstd::String error_of(const dstd::Function<void()>& fn) {
-    try {
-        fn();
-    } catch (const std::exception& e) {
-        return e.what();
+// The message of the exception `fn` throws, or of the error the View, plan or
+// result it returns kept.
+template <typename Fn>
+dstd::String error_of(Fn&& fn) {
+    if constexpr (std::is_void_v<std::invoke_result_t<Fn&>>) {
+        try {
+            fn();
+        } catch (const std::exception& e) {
+            return e.what();
+        }
+        return {};
+    } else {
+        const auto status = test_view_common::status_of(fn());
+        if (status.has_value()) return {};
+        return dstd::String(status.error().message());
     }
-    return {};
 }
 
 }  // namespace
@@ -145,7 +158,8 @@ TEST_SUITE("View duql sources") {
     TEST_CASE("an indexed row set reads no chunk") {
         TestEnvironment env(10);
         const View v = view_of(write_records(env, "t", dftracer_lines()));
-        const dstd::String plan = v.explain_duql("from files");
+        const dstd::String plan =
+            dftu_utils_test::ok(v.explain_duql("from files"));
         CHECK(plan.find("from files (rows stored in the index)") !=
               dstd::String::npos);
         CHECK(plan.find("scan") == dstd::String::npos);
@@ -158,7 +172,8 @@ TEST_SUITE("View duql sources") {
         const dataframe::DataFrame f = frame(
             v.duql(R"(where fhash -> files.path == "/data/a" | select ts)"));
         CHECK(column(f, "ts") == dstd::Vector<dstd::String>{"10", "30"});
-        CHECK(v.explain_duql(R"(where fhash -> files.path == "/data/a")")
+        CHECK(dftu_utils_test::ok(
+                  v.explain_duql(R"(where fhash -> files.path == "/data/a")"))
                   .find("fhash in (keys of files) (pushed)") !=
               dstd::String::npos);
         const dataframe::DataFrame d =
@@ -193,7 +208,8 @@ TEST_SUITE("View duql sources") {
             const dstd::String on = dstd::String("where ") + q + " | select ts";
             const dstd::String off =
                 dstd::String("where (") + q + ") or ts < 0 | select ts";
-            CHECK(v.explain_duql(off).find("keys of") == dstd::String::npos);
+            CHECK(dftu_utils_test::ok(v.explain_duql(off)).find("keys of") ==
+                  dstd::String::npos);
             CHECK(column(frame(v.duql(on)), "ts") ==
                   column(frame(v.duql(off)), "ts"));
         }
@@ -210,8 +226,8 @@ TEST_SUITE("View duql sources") {
             "def slow(t) = dur > t; where slow(1) | select ts";
         CHECK(column(frame(v.duql(q)), "ts") ==
               dstd::Vector<dstd::String>{"20", "30"});
-        CHECK(v.explain_duql(q).find("scan filter: dur > 1 (pushed)") !=
-              dstd::String::npos);
+        CHECK(dftu_utils_test::ok(v.explain_duql(q))
+                  .find("scan filter: dur > 1 (pushed)") != dstd::String::npos);
     }
 
     TEST_CASE("macros from a file") {
@@ -221,13 +237,21 @@ TEST_SUITE("View duql sources") {
             dftu_utils_test::FileOut o(path);
             o << "def ms(x) = x / 1000;\ndef long_io(t) = ms(dur) > t;\n";
         }
-        dftracer::utils::duql::load_macros(path);
+        REQUIRE(dftracer::utils::duql::load_macros(path).has_value());
         const View v = view_of(write_records(env, "t", dftracer_lines()));
         CHECK(column(frame(v.duql("where long_io(0.0015) | select ts")),
                      "ts") == dstd::Vector<dstd::String>{"20", "30"});
         CHECK(column(frame(v.duql("def ms(x) = x; where ms(dur) > 2"
                                   " | select ts")),
                      "ts") == dstd::Vector<dstd::String>{"30"});
+    }
+
+    TEST_CASE("a macro file that is missing gives an error") {
+        TestEnvironment env(10);
+        const auto loaded =
+            dftracer::utils::duql::load_macros(env.dir() + "/missing.duql");
+        REQUIRE_FALSE(loaded.has_value());
+        CHECK(loaded.error().is_code(dftracer::utils::common::ErrorCode::Io));
     }
 
     TEST_CASE("pipeline macros run as stages") {
@@ -250,26 +274,28 @@ TEST_SUITE("View duql sources") {
         const dstd::String leading = rate + "io_rate(10us) | sort b";
         CHECK(column(frame(v.duql(leading)), "b") == column(want, "b"));
         const dstd::String pushed = "scan filter: cat == \"POSIX\" (pushed)";
-        REQUIRE(v.explain_duql(hand).find(pushed) != dstd::String::npos);
-        CHECK(v.explain_duql(leading).find(pushed) != dstd::String::npos);
+        REQUIRE(dftu_utils_test::ok(v.explain_duql(hand)).find(pushed) !=
+                dstd::String::npos);
+        CHECK(dftu_utils_test::ok(v.explain_duql(leading)).find(pushed) !=
+              dstd::String::npos);
 
         CHECK(column(frame(v.duql("def slow(t) = dur > t; slow(1) | select "
                                   "ts")),
                      "ts") ==
               column(frame(v.duql("where dur > 1 | select ts")), "ts"));
         CHECK(error_of([&] {
-                  (void)v.duql(rate + "where io_rate(1ms)");
+                  return v.duql(rate + "where io_rate(1ms)");
               }).find("is a pipeline; call it as a stage") !=
               dstd::String::npos);
         CHECK(error_of([&] {
-                  (void)v.duql(
+                  return v.duql(
                       "def slow(t) = dur > t; where ts > 0 | "
                       "slow(1)");
               }).find("write 'where slow(...)'") != dstd::String::npos);
     }
 
     TEST_CASE("pipeline macros from a source and a file") {
-        index::register_schema(R"(
+        dftu_utils_test::ok_ref(trace::index::register_schema(R"(
 id: weblog2
 fields:
   status: {type: int}
@@ -277,7 +303,7 @@ fields:
 source: |
   def worst(n) = sort -status | where status > n
 )",
-                               "test");
+                                                              "test"));
         TestEnvironment env(10);
         const View w =
             view_of(write_records(env, "w2",
@@ -295,7 +321,7 @@ source: |
             o << "def posix_rate(d) = where cat == \"POSIX\" | bucket d | agg "
                  "{ b = sum(dur) };\n";
         }
-        dftracer::utils::duql::load_macros(path);
+        REQUIRE(dftracer::utils::duql::load_macros(path).has_value());
         const View v = view_of(write_records(env, "t", dftracer_lines()));
         const dataframe::DataFrame want = frame(v.duql(
             "where cat == \"POSIX\" | bucket 10us | agg { b = sum(dur) } | "
@@ -309,7 +335,7 @@ source: |
     }
 
     TEST_CASE("a user schema's source") {
-        index::register_schema(R"(
+        dftu_utils_test::ok_ref(trace::index::register_schema(R"(
 id: weblog
 fields:
   status: {type: int}
@@ -318,7 +344,7 @@ source: |
   slow = where request_time > 1;
   def failed = status >= 500
 )",
-                               "test");
+                                                              "test"));
         TestEnvironment env(10);
         const View v =
             view_of(write_records(env, "w",
@@ -333,23 +359,25 @@ source: |
 
     TEST_CASE("sources that do not compile reject registration") {
         CHECK(error_of([] {
-                  index::register_schema(
+                  return trace::index::register_schema(
                       "id: bad1\nsource: \"slow = where x >\"", "test");
               }).find("bad1") != dstd::String::npos);
         CHECK(error_of([] {
-                  index::register_schema(
+                  return trace::index::register_schema(
                       "id: bad2\nsource: \"data = where x > 1 | take 1\"",
                       "test");
               }).find("'data' must be one 'where'") != dstd::String::npos);
         CHECK(error_of([] {
-                  index::register_schema("id: bad3\nsource: \"all = where x\"",
-                                         "test");
+                  return trace::index::register_schema(
+                      "id: bad3\nsource: \"all = where x\"", "test");
               }).find("'all' is every record") != dstd::String::npos);
     }
 
     TEST_CASE("only a source with args_fallback reads bare names under args") {
-        CHECK(index::get_schema("dftracer").args_fallback);
-        CHECK_FALSE(index::get_schema("generic").args_fallback);
+        CHECK(dftu_utils_test::ok_ref(trace::index::get_schema("dftracer"))
+                  .args_fallback);
+        CHECK_FALSE(dftu_utils_test::ok_ref(trace::index::get_schema("generic"))
+                        .args_fallback);
         TestEnvironment env(10);
         const View d = view_of(write_records(env, "t", dftracer_lines()));
         CHECK(column(frame(d.duql(R"(where fhash == "h2" | select ts)")),
@@ -376,10 +404,10 @@ source: |
         TestEnvironment env(10);
         const View v = view_of(write_records(env, "t", dftracer_lines()));
         CHECK(error_of([&] {
-                  (void)v.duql("let files = where x > 1; from files");
+                  return v.duql("let files = where x > 1; from files");
               }).find("names a row set of the source") != dstd::String::npos);
         CHECK(error_of([&] {
-                  (void)v.duql("from nothing");
+                  return v.duql("from nothing");
               }).find("not a let or a row set of the source") !=
               dstd::String::npos);
     }

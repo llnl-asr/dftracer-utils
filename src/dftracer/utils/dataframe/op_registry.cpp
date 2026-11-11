@@ -33,19 +33,21 @@ namespace {
 
 using dftracer::utils::dataframe::internal::op_fn;
 
-// A function-to-void* cast is not constexpr, so this array is dynamically
-// initialized before main; fine, since lookups only run at scan time.
+// A function-pointer reinterpret_cast is not constexpr, so this array is
+// dynamically initialized before main; fine, since lookups only run at scan
+// time.
 const dftu_op_desc BUILTINS[] = {
 #define DFTU_SERIES_OP(name, fn, ret, o0, o1, o2) \
-    {#name, DFTU_OP_SIG(ret, o0, o1, o2), reinterpret_cast<const void*>(&fn)},
+    {#name, DFTU_OP_SIG(ret, o0, o1, o2),         \
+     reinterpret_cast<dftu_op_generic_fn>(&fn)},
 #include <dftracer/utils/dataframe/exported_series_ops.def>
 #define DFTU_FRAME_OP(name, fn, ret, o0, o1, o2, o3, o4, o5, o6)         \
     {"dftu.frame." #name, DFTU_OP_SIG8(ret, o0, o1, o2, o3, o4, o5, o6), \
-     reinterpret_cast<const void*>(&fn)},
+     reinterpret_cast<dftu_op_generic_fn>(&fn)},
 #include <dftracer/utils/dataframe/exported_frame_ops.def>
 #define DFTU_LAZY_OP(name, fn, ret, o0, o1, o2, o3, o4, o5, o6)         \
     {"dftu.lazy." #name, DFTU_OP_SIG8(ret, o0, o1, o2, o3, o4, o5, o6), \
-     reinterpret_cast<const void*>(&fn)},
+     reinterpret_cast<dftu_op_generic_fn>(&fn)},
 #include <dftracer/utils/dataframe/exported_lazy_ops.def>
 };
 constexpr uint32_t BUILTIN_COUNT =
@@ -116,8 +118,8 @@ using CS = const dftu_series*;
 // op->fn to any type other than the one the .def row's own static_assert
 // (op_fn<S>, from op_dispatch.h) already proved it is.
 template <dftu_op_sig S>
-typename op_fn<S>::type as_op(const void* fn) {
-    return reinterpret_cast<typename op_fn<S>::type>(const_cast<void*>(fn));
+typename op_fn<S>::type as_op(dftu_op_generic_fn fn) {
+    return reinterpret_cast<typename op_fn<S>::type>(fn);
 }
 
 const char* tok_name(dftu_op_tok t) {

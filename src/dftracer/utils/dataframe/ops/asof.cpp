@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/frame_ops.h>
+#include <dftracer/utils/dataframe/internal/errors.h>
 #include <dftracer/utils/dataframe/kernels/order.h>
 #include <dftracer/utils/dataframe/ops/ops_common.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -7,7 +8,7 @@
 #include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
-#include <stdexcept>
+#include <utility>
 
 namespace dftracer::utils::dataframe {
 
@@ -21,26 +22,41 @@ struct RightPartition {
 
 }  // namespace
 
-DataFrame asof(const DataFrame& left, const DataFrame& right,
-               const dstd::String& on, const dstd::Vector<dstd::String>& by,
-               AsofDirection direction, dstd::Optional<double> tolerance) {
-    const std::size_t lt_at = ops::column_named(left, on, "asof");
-    const std::size_t rt_at = ops::column_named(right, on, "asof");
+dstd::Result<DataFrame> asof(const DataFrame& left, const DataFrame& right,
+                             const dstd::String& on,
+                             const dstd::Vector<dstd::String>& by,
+                             AsofDirection direction,
+                             dstd::Optional<double> tolerance) {
+    const dstd::Result<std::size_t> lt = ops::column_named(left, on, "asof");
+    if (!lt) return lt.error();
+    const dstd::Result<std::size_t> rt = ops::column_named(right, on, "asof");
+    if (!rt) return rt.error();
+    const std::size_t lt_at = *lt;
+    const std::size_t rt_at = *rt;
     if (left.columns[lt_at].type() != right.columns[rt_at].type())
-        throw std::invalid_argument("asof: ts column types differ");
+        return invalid_argument<"asof: ts column types differ">();
     dstd::Vector<std::size_t> skip{rt_at};
     for (const dstd::String& n : by) {
-        const std::size_t l = ops::column_named(left, n, "asof");
-        const std::size_t r = ops::column_named(right, n, "asof");
-        if (left.columns[l].type() != right.columns[r].type())
-            throw std::invalid_argument("asof: equi column types differ");
-        skip.push_back(r);
+        const dstd::Result<std::size_t> lc = ops::column_named(left, n, "asof");
+        if (!lc) return lc.error();
+        const dstd::Result<std::size_t> rc =
+            ops::column_named(right, n, "asof");
+        if (!rc) return rc.error();
+        if (left.columns[*lc].type() != right.columns[*rc].type())
+            return invalid_argument<"asof: equi column types differ">();
+        skip.push_back(*rc);
     }
     if (!ColumnView::supports(left.columns[lt_at].type()))
-        throw std::invalid_argument("asof: ts column must be numeric");
+        return invalid_argument<"asof: ts column must be numeric">();
 
-    dstd::Vector<ColumnView> lequi = ops::views_of(left, by, "asof");
-    dstd::Vector<ColumnView> requi = ops::views_of(right, by, "asof");
+    dstd::Result<dstd::Vector<ColumnView>> lviews =
+        ops::views_of(left, by, "asof");
+    if (!lviews) return lviews.error();
+    dstd::Result<dstd::Vector<ColumnView>> rviews =
+        ops::views_of(right, by, "asof");
+    if (!rviews) return rviews.error();
+    dstd::Vector<ColumnView> lequi = std::move(*lviews);
+    dstd::Vector<ColumnView> requi = std::move(*rviews);
     dstd::Vector<ColumnView> lkeys = lequi;
     dstd::Vector<ColumnView> rkeys = requi;
     lkeys.emplace_back(left.columns[lt_at]);
@@ -48,7 +64,7 @@ DataFrame asof(const DataFrame& left, const DataFrame& right,
     const ColumnView& lts = lkeys.back();
     const ColumnView& rts = rkeys.back();
     if (lts.is_bytes())
-        throw std::invalid_argument("asof: ts column must be numeric");
+        return invalid_argument<"asof: ts column must be numeric">();
 
     const std::int64_t L = left.num_rows();
     const std::int64_t R = right.num_rows();

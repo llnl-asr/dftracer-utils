@@ -16,18 +16,18 @@
 #include <cstdint>
 #include <utility>
 
-namespace dftracer::utils::index::extensions {}
+namespace dftracer::utils::trace::index::extensions {}
 
-namespace dftracer::utils::index {
+namespace dftracer::utils::trace::index {
 struct RecordSchema;
 class Snapshot;
-}  // namespace dftracer::utils::index
+}  // namespace dftracer::utils::trace::index
 
-namespace dftracer::utils::index::plan {
+namespace dftracer::utils::trace::index::plan {
 /// Index-backed name maps for resolved-name group keys. Defined in
 /// view_resolver.h.
 class GroupResolver;
-}  // namespace dftracer::utils::index::plan
+}  // namespace dftracer::utils::trace::index::plan
 
 namespace dftracer::utils::trace::views::detail {
 
@@ -49,7 +49,8 @@ struct ComputedColumn {
 /// gives the one to use with the lookups' key sets. It is thread-safe and
 /// runs the sides once; a call after a failed one runs them again.
 struct BuildStep {
-    dstd::Function<dstd::Optional<duql::Query>(dstd::Optional<duql::Query>)>
+    dstd::Function<dstd::Result<dstd::Optional<duql::Query>>(
+        dstd::Optional<duql::Query>)>
         run;
 };
 
@@ -176,7 +177,8 @@ struct ViewPlan {
     /// Index-backed name maps, built lazily by ensure_resolver when the plan
     /// has a FilePath/HostName group key; used by the post-aggregation re-key
     /// pass.
-    mutable dstd::SharedPtr<const dftracer::utils::index::plan::GroupResolver>
+    mutable dstd::SharedPtr<
+        const dftracer::utils::trace::index::plan::GroupResolver>
         resolver;
 
     /// The first step of executing a plan that reads duql lookups, shared by
@@ -187,19 +189,26 @@ struct ViewPlan {
     dstd::SharedPtr<const BuildStep> build_step;
 
     /// The files' record_schema, memoized by plan_record_schema.
-    mutable dstd::SharedPtr<const dftracer::utils::index::RecordSchema>
+    mutable dstd::SharedPtr<const dftracer::utils::trace::index::RecordSchema>
         record_schema;
+    /// Why the files have no one record_schema, when plan_record_schema fell
+    /// back to dftracer's.
+    mutable dstd::SharedPtr<const dstd::Error> record_schema_error;
+    /// The error a builder met (a refused argument, an unreadable index).
+    /// Every copy of the plan keeps it, and a terminal returns it first.
+    dstd::SharedPtr<const dstd::Error> error;
 
     /// Index snapshots by index path, taken where the pins of the files were
     /// read. Every read of those indexes goes through them, so a refresh that
     /// commits later cannot show a view rows past its pin.
     dstd::Vector<dstd::Pair<
-        dstd::String, dstd::SharedPtr<const dftracer::utils::index::Snapshot>>>
+        dstd::String,
+        dstd::SharedPtr<const dftracer::utils::trace::index::Snapshot>>>
         index_snapshots;
 };
 
 /// The snapshot `plan` holds for `index_path`, else a new one.
-dstd::Result<dftracer::utils::index::Snapshot> snapshot_of(
+dstd::Result<dftracer::utils::trace::index::Snapshot> snapshot_of(
     const ViewPlan& plan, dstd::StringView index_path);
 
 /// True when a file of `plan` has a pin (@ref ViewFile::pinned_c_end).
@@ -207,7 +216,7 @@ bool has_pin(const ViewPlan& plan);
 /// True when the index of a pinned file holds more than its pin, so an answer
 /// from the index covers rows the view must leave out. Such a plan reads
 /// chunks.
-bool is_past_pin(const ViewPlan& plan);
+dstd::Result<bool> is_past_pin(const ViewPlan& plan);
 
 }  // namespace dftracer::utils::trace::views::detail
 

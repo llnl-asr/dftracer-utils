@@ -33,7 +33,7 @@ class Allocator {
 
     [[nodiscard]] T* allocate(std::size_t n) {
         if (n > std::numeric_limits<std::size_t>::max() / sizeof(T)) {
-            throw std::bad_array_new_length();
+            detail::size_overflow();
         }
         return static_cast<T*>(detail::allocate(n * sizeof(T), alignof(T)));
     }
@@ -75,7 +75,7 @@ class PoolAllocator {
 
     [[nodiscard]] T* allocate(std::size_t n) {
         if (n > std::numeric_limits<std::size_t>::max() / sizeof(T)) {
-            throw std::bad_array_new_length();
+            detail::size_overflow();
         }
         return static_cast<T*>(
             detail::allocate(n * sizeof(T), alignof(T), *pool_));

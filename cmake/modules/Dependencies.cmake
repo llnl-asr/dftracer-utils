@@ -212,6 +212,7 @@ function(need_simdjson)
       target_compile_features(simdjson_static PUBLIC cxx_std_17)
       # Suppress warnings from simdjson (third-party code)
       target_compile_options(simdjson_static PRIVATE -w)
+      target_compile_definitions(simdjson_static PRIVATE SIMDJSON_EXCEPTIONS=0)
       set_target_properties(
         simdjson_static
         PROPERTIES OUTPUT_NAME simdjson
@@ -231,6 +232,7 @@ function(need_simdjson)
       target_compile_features(simdjson_shared PUBLIC cxx_std_17)
       # Suppress warnings from simdjson (third-party code)
       target_compile_options(simdjson_shared PRIVATE -w)
+      target_compile_definitions(simdjson_shared PRIVATE SIMDJSON_EXCEPTIONS=0)
       set_target_properties(
         simdjson_shared
         PROPERTIES OUTPUT_NAME simdjson
@@ -351,23 +353,11 @@ function(need_zlib)
     "WITH_NATIVE_INSTRUCTIONS OFF"
     "INSTALL_UTILS OFF"
     "SKIP_INSTALL_ALL ON")
-  if(NOT TARGET zlib-ng-static)
-    message(FATAL_ERROR "need_zlib: zlib-ng made no zlib-ng-static target")
-  endif()
-  get_target_property(_zng zlib-ng-static ALIASED_TARGET)
-  if(NOT _zng)
-    set(_zng zlib-ng-static)
-  endif()
+  # BUILD_SHARED_LIBS is OFF, so zlib-ng makes the one static target zlib-ng.
+  set(_zng zlib-ng)
   get_target_property(_zng_type ${_zng} TYPE)
   if(NOT _zng_type STREQUAL "STATIC_LIBRARY")
-    message(FATAL_ERROR "need_zlib: zlib-ng-static is a ${_zng_type}")
-  endif()
-  if(TARGET zlib-ng AND NOT _zng STREQUAL "zlib-ng")
-    get_target_property(_zng_shared zlib-ng ALIASED_TARGET)
-    if(NOT _zng_shared)
-      set(_zng_shared zlib-ng)
-    endif()
-    set_target_properties(${_zng_shared} PROPERTIES EXCLUDE_FROM_ALL ON)
+    message(FATAL_ERROR "need_zlib: zlib-ng is a ${_zng_type}")
   endif()
   set_target_properties(
     ${_zng}
@@ -897,9 +887,19 @@ function(need_vectorscan)
     list(APPEND hs_args
          "-DCMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES}")
   endif()
+  # Each function starts on a 64-byte line, so an edit to our code linked
+  # before Vectorscan does not shift its scan loops on the front end.
   foreach(lang C CXX)
+    set(hs_flags "")
     if(CMAKE_${lang}_COMPILER_ID STREQUAL "GNU")
-      list(APPEND hs_args "-DCMAKE_${lang}_FLAGS=-Wno-psabi")
+      list(APPEND hs_flags -Wno-psabi)
+    endif()
+    if(CMAKE_${lang}_COMPILER_ID MATCHES "GNU|Clang")
+      list(APPEND hs_flags -falign-functions=64)
+    endif()
+    if(hs_flags)
+      list(JOIN hs_flags " " hs_flags)
+      list(APPEND hs_args "-DCMAKE_${lang}_FLAGS=${hs_flags}")
     endif()
   endforeach()
   set(hs_fixed_args
@@ -1041,17 +1041,20 @@ function(need_vectorscan)
                -DRAGEL=${RAGEL}
                ${boost_args}
                ${hs_args}
-    BUILD_BYPRODUCTS "${hs_lib}"
     USES_TERMINAL_BUILD ON)
   # Written only after the install step succeeded, so an interrupted build
   # never leaves a prefix that looks complete.
   file(WRITE "${CMAKE_BINARY_DIR}/_deps/vectorscan.fingerprint"
        "${hs_fingerprint}")
+  # The library is written by the install step, so it is a byproduct of this
+  # later step: Ninja then checks it after install and relinks its users in
+  # the same build.
   ExternalProject_Add_Step(
     dftracer_utils_vectorscan_ep fingerprint
     COMMAND ${CMAKE_COMMAND} -E copy
             "${CMAKE_BINARY_DIR}/_deps/vectorscan.fingerprint" "${hs_stamp}"
-    DEPENDEES install)
+    DEPENDEES install
+    BYPRODUCTS "${hs_lib}")
 
   add_dependencies(dftracer_utils_vectorscan::hs dftracer_utils_vectorscan_ep)
   dftracer_utils_ok("Vectorscan ${hs_version} external static build (${hs_lib})")

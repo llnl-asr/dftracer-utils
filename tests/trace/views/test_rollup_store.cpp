@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dstd/fs.h>
@@ -7,8 +8,9 @@
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/cache/rollup_store.h>
+#include <dftracer/utils/trace/index/cache/rollup_store.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <cstdint>
@@ -16,7 +18,7 @@
 using namespace dftracer::utils;
 
 using namespace dftracer::utils::trace::views::detail;
-using namespace dftracer::utils::index::cache;
+using namespace dftracer::utils::trace::index::cache;
 
 namespace {
 
@@ -28,10 +30,10 @@ dataframe::AggStatePtr make_state(const dstd::Vector<double>& values) {
     dataframe::Series val = dataframe::Series::flat_f64(
         vd.data(), static_cast<std::int64_t>(vd.size()));
     dstd::Vector<const dataframe::Series*> vals{&val};
-    return dataframe::group_agg_state(
+    return dftu_utils_test::ok(dataframe::group_agg_state(
         {&key}, vals,
         {dataframe::AggSpec{dataframe::AggOp::Count, -1, "n"},
-         dataframe::AggSpec{dataframe::AggOp::Sum, 0, "total"}});
+         dataframe::AggSpec{dataframe::AggOp::Sum, 0, "total"}}));
 }
 
 // A multi-group AggState: row i belongs to group gkeys[i] with value values[i].
@@ -43,10 +45,10 @@ dataframe::AggStatePtr make_state_kv(const dstd::Vector<dstd::String>& gkeys,
     dataframe::Series val = dataframe::Series::flat_f64(
         vd.data(), static_cast<std::int64_t>(vd.size()));
     dstd::Vector<const dataframe::Series*> vals{&val};
-    return dataframe::group_agg_state(
+    return dftu_utils_test::ok(dataframe::group_agg_state(
         {&key}, vals,
         {dataframe::AggSpec{dataframe::AggOp::Count, -1, "n"},
-         dataframe::AggSpec{dataframe::AggOp::Sum, 0, "total"}});
+         dataframe::AggSpec{dataframe::AggOp::Sum, 0, "total"}}));
 }
 
 }  // namespace
@@ -59,7 +61,7 @@ TEST_SUITE("RollupStore") {
         const dstd::String dir = dstd::String(
             dftu_utils_test::make_unique_test_path("dftu_rollup_store_test")
                 .str());
-        (void)dstd::fs::remove_all(dir);
+        dstd::fs::remove_all(dir).discard();
 
         auto db = open_rollup_db(dir, CacheStore::Mode::ReadWrite);
         REQUIRE(db);
@@ -68,11 +70,12 @@ TEST_SUITE("RollupStore") {
         auto a = make_state({10, 20, 30});         // grp: n=3 total=60
         auto b = make_state({5, 15, 25, 35, 45});  // grp: n=5 total=125
         dataframe::agg_merge(*a, *b);              // grp: n=8 total=185
-        persist_rollup(*db, sig, /*rest_sig=*/0, /*time_bucket_us=*/0,
-                       /*group_by=*/{}, *a);
+        dftu_utils_test::ok(persist_rollup(*db, sig, /*rest_sig=*/0,
+                                           /*time_bucket_us=*/0,
+                                           /*group_by=*/{}, *a));
 
-        CHECK(rollup_exists(*db, sig));
-        auto got = read_rollup(*db, sig);
+        CHECK(dftu_utils_test::ok(rollup_exists(*db, sig)));
+        auto got = dftu_utils_test::ok(read_rollup(*db, sig));
         REQUIRE(got);
         dataframe::DataFrame r = dataframe::agg_finalize(*got, "grp");
         REQUIRE(r.num_rows() == 1);
@@ -80,10 +83,10 @@ TEST_SUITE("RollupStore") {
         CHECK(r.column("total").data<double>()[0] == doctest::Approx(185));
 
         // A different signature is isolated and absent.
-        CHECK_FALSE(rollup_exists(*db, 0x99999999));
-        CHECK(read_rollup(*db, 0x99999999) == nullptr);
+        CHECK_FALSE(dftu_utils_test::ok(rollup_exists(*db, 0x99999999)));
+        CHECK(dftu_utils_test::ok(read_rollup(*db, 0x99999999)) == nullptr);
 
-        (void)dstd::fs::remove_all(dir);
+        dstd::fs::remove_all(dir).discard();
     }
 
     // Two ranks' partials over three distinct groups round-trip: every group's
@@ -93,7 +96,7 @@ TEST_SUITE("RollupStore") {
             dstd::String(dftu_utils_test::make_unique_test_path(
                              "dftu_rollup_store_multi_test")
                              .str());
-        (void)dstd::fs::remove_all(dir);
+        dstd::fs::remove_all(dir).discard();
 
         auto db = open_rollup_db(dir, CacheStore::Mode::ReadWrite);
         REQUIRE(db);
@@ -103,11 +106,12 @@ TEST_SUITE("RollupStore") {
         auto b = make_state_kv({"g2", "g3"}, {50, 7});
         dataframe::agg_merge(*a,
                              *b);  // g1: n=2 t=30; g2: n=2 t=150; g3: n=1 t=7
-        persist_rollup(*db, sig, /*rest_sig=*/0, /*time_bucket_us=*/0,
-                       /*group_by=*/{}, *a);
+        dftu_utils_test::ok(persist_rollup(*db, sig, /*rest_sig=*/0,
+                                           /*time_bucket_us=*/0,
+                                           /*group_by=*/{}, *a));
 
-        CHECK(rollup_exists(*db, sig));
-        auto got = read_rollup(*db, sig);
+        CHECK(dftu_utils_test::ok(rollup_exists(*db, sig)));
+        auto got = dftu_utils_test::ok(read_rollup(*db, sig));
         REQUIRE(got);
         dataframe::DataFrame r = dataframe::agg_finalize(*got, "grp");
         REQUIRE(r.num_rows() == 3);
@@ -128,6 +132,6 @@ TEST_SUITE("RollupStore") {
         CHECK(by_group["g3"].first == 1);
         CHECK(by_group["g3"].second == doctest::Approx(7));
 
-        (void)dstd::fs::remove_all(dir);
+        dstd::fs::remove_all(dir).discard();
     }
 }

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/deque.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/hasher.h>
 #include <dftracer/utils/dstd/map.h>
@@ -345,9 +346,10 @@ TEST_CASE("every container charges the scope pool and frees to zero") {
         dstd::String text(1000, 'z');
         dstd::HashMap<dstd::String, int> hm;
         for (int i = 0; i < 100; ++i) {
-            hm.emplace(dstd::String(40, static_cast<char>('a' + i % 26)) +
-                           dstd::to_string(i),
-                       i);
+            hm.emplace(
+                dstd::fmt<"{}{}">(
+                    dstd::String(40, static_cast<char>('a' + i % 26)), i),
+                i);
         }
         dstd::HashSet<int> hs{1, 2, 3};
         dstd::Map<int, int> m{{1, 1}, {2, 2}};

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <checkpoint_indexer_helpers.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/future.h>
 #include <dftracer/utils/dstd/map.h>
@@ -10,11 +11,12 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/tuple.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/gzip/checkpoint_indexer.h>
-#include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
-#include <dftracer/utils/utilities/reader/internal/reader.h>
-#include <dftracer/utils/utilities/reader/internal/reader_factory.h>
+#include <dftracer/utils/trace/index/gzip/checkpoint_indexer.h>
+#include <dftracer/utils/trace/index/gzip/checkpoint_indexer_factory.h>
+#include <dftracer/utils/trace/reader/internal/reader.h>
+#include <dftracer/utils/trace/reader/internal/reader_factory.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <algorithm>
@@ -30,8 +32,8 @@
 #include <tuple>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::index::gzip;
-using namespace dftracer::utils::utilities::reader::internal;
+using namespace dftracer::utils::trace::index::gzip;
+using namespace dftracer::utils::trace::reader::internal;
 using namespace dftu_utils_test;
 
 std::size_t count_json_lines(const dstd::String& content);
@@ -59,7 +61,7 @@ class LargeTestEnvironment {
     ~LargeTestEnvironment() {
         try {
             if (dstd::fs::exists(temp_dir_).value()) {
-                (void)dstd::fs::remove_all(temp_dir_);
+                dstd::fs::remove_all(temp_dir_).discard();
             }
         } catch (...) {
             // Ignore cleanup errors
@@ -108,7 +110,7 @@ class LargeTestEnvironment {
         // re-inflating from the start of a single giant member.
         bool success =
             compress_file_to_gzip_multimember(txt_file, gz_file, 512 * 1024);
-        (void)dstd::fs::remove(txt_file);
+        dstd::fs::remove(txt_file).discard();
         return success ? gz_file : "";
     }
 
@@ -216,12 +218,12 @@ struct Prepared {
         REQUIRE(!gz_file.empty());
         idx_file = env.get_index_path(gz_file);
         auto indexer =
-            with_lines ? CheckpointIndexerFactory::create(
+            with_lines ? dftu_utils_test::create_indexer(
                              gz_file, idx_file, mb_to_b(checkpoint_mb), true)
-                       : CheckpointIndexerFactory::create(
+                       : dftu_utils_test::create_indexer(
                              gz_file, idx_file, mb_to_b(checkpoint_mb));
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
         if (with_lines) total_lines = indexer->line_count();
     }
 };
@@ -243,7 +245,8 @@ TEST_CASE("Robustness - Large file continuous stride reading") {
     const dstd::String gz_file = fx.gz_file;
     const dstd::String idx_file = fx.idx_file;
 
-    auto reader = ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
+    auto reader = dftu_utils_test::ok(
+        ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0)));
     REQUIRE(reader != nullptr);
     std::size_t max_bytes = reader->max_bytes();
     REQUIRE(max_bytes > 0);
@@ -272,8 +275,8 @@ TEST_CASE("Robustness - Large file continuous stride reading") {
             // Read this chunk
             std::size_t offset = current_start;
             while (offset < current_end &&
-                   (bytes_written = reader->read_line_bytes(
-                        offset, current_end, buffer.data(), buffer.size())) >
+                   (bytes_written = dftu_utils_test::ok(reader->read_line_bytes(
+                        offset, current_end, buffer.data(), buffer.size()))) >
                        0) {
                 content.append(buffer.data(), bytes_written);
                 offset += bytes_written;
@@ -336,8 +339,8 @@ TEST_CASE("Robustness - Large file continuous stride reading") {
 
         std::size_t offset = 0;
         while (offset < large_read_size &&
-               (bytes_written = reader->read_line_bytes(
-                    offset, large_read_size, buffer.data(), buffer.size())) >
+               (bytes_written = dftu_utils_test::ok(reader->read_line_bytes(
+                    offset, large_read_size, buffer.data(), buffer.size()))) >
                    0) {
             single_read_content.append(buffer.data(), bytes_written);
             offset += bytes_written;
@@ -350,8 +353,8 @@ TEST_CASE("Robustness - Large file continuous stride reading") {
             get_last_json_line(single_read_content);
 
         // Now read same range as three 1.25MB stride chunks with fresh reader
-        auto stride_reader =
-            ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
+        auto stride_reader = dftu_utils_test::ok(
+            ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0)));
         REQUIRE(stride_reader != nullptr);
         std::size_t stride_total_lines = 0;
         const std::size_t chunk_size = 1280 * 1024;
@@ -366,8 +369,10 @@ TEST_CASE("Robustness - Large file continuous stride reading") {
 
             std::size_t chunk_offset = start;
             while (chunk_offset < end &&
-                   (bytes_written = stride_reader->read_line_bytes(
-                        chunk_offset, end, buffer.data(), buffer.size())) > 0) {
+                   (bytes_written =
+                        dftu_utils_test::ok(stride_reader->read_line_bytes(
+                            chunk_offset, end, buffer.data(), buffer.size()))) >
+                       0) {
                 chunk_content.append(buffer.data(), bytes_written);
                 chunk_offset += bytes_written;
             }
@@ -400,7 +405,8 @@ TEST_CASE("Robustness - Different buffer sizes consistency") {
     const dstd::String gz_file = fx.gz_file;
     const dstd::String idx_file = fx.idx_file;
 
-    auto reader = ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
+    auto reader = dftu_utils_test::ok(
+        ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0)));
     REQUIRE(reader != nullptr);
 
     SUBCASE("Multiple buffer sizes produce identical results") {
@@ -423,8 +429,8 @@ TEST_CASE("Robustness - Different buffer sizes consistency") {
         for (std::size_t buf_size : buffer_sizes) {
             // Create a fresh reader instance for each buffer size to avoid
             // state issues
-            auto test_reader =
-                ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
+            auto test_reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0)));
             REQUIRE(test_reader != nullptr);
 
             dstd::Vector<char> buffer(buf_size);
@@ -433,8 +439,10 @@ TEST_CASE("Robustness - Different buffer sizes consistency") {
 
             std::size_t offset = start_pos;
             while (offset < end_pos &&
-                   (bytes_written = test_reader->read_line_bytes(
-                        offset, end_pos, buffer.data(), buffer.size())) > 0) {
+                   (bytes_written =
+                        dftu_utils_test::ok(test_reader->read_line_bytes(
+                            offset, end_pos, buffer.data(), buffer.size()))) >
+                       0) {
                 content.append(buffer.data(), bytes_written);
                 offset += bytes_written;
             }
@@ -470,7 +478,8 @@ TEST_CASE("Robustness - Boundary edge cases") {
     const dstd::String idx_file = fx.idx_file;
     LargeTestEnvironment& env = fx.env;
 
-    auto reader = ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
+    auto reader = dftu_utils_test::ok(
+        ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0)));
     REQUIRE(reader != nullptr);
     std::size_t max_bytes = reader->max_bytes();
 
@@ -496,9 +505,10 @@ TEST_CASE("Robustness - Boundary edge cases") {
                 // Read 100 bytes starting at position
                 std::size_t offset = pos;
                 while (offset < pos + 100 &&
-                       (bytes_written = reader->read_line_bytes(
-                            offset, pos + 100, buffer.data(), buffer.size())) >
-                           0) {
+                       (bytes_written =
+                            dftu_utils_test::ok(reader->read_line_bytes(
+                                offset, pos + 100, buffer.data(),
+                                buffer.size()))) > 0) {
                     content.append(buffer.data(), bytes_written);
                     offset += bytes_written;
                 }
@@ -539,10 +549,11 @@ TEST_CASE("Robustness - Boundary edge cases") {
                 // Read 100 bytes starting at position
                 std::size_t end_pos = pos + env.bytes_per_line();
                 std::size_t offset = pos;
-                while (offset < end_pos &&
-                       (bytes_written = reader->read_line_bytes(
-                            offset, end_pos, buffer.data(), buffer.size())) >
-                           0) {
+                while (
+                    offset < end_pos &&
+                    (bytes_written = dftu_utils_test::ok(
+                         reader->read_line_bytes(offset, end_pos, buffer.data(),
+                                                 buffer.size()))) > 0) {
                     content.append(buffer.data(), bytes_written);
                     offset += bytes_written;
                 }
@@ -579,8 +590,8 @@ TEST_CASE("Robustness - Boundary edge cases") {
 
             std::size_t offset = start;
             while (offset < end &&
-                   (bytes_written = reader->read_line_bytes(
-                        offset, end, buffer.data(), buffer.size())) > 0) {
+                   (bytes_written = dftu_utils_test::ok(reader->read_line_bytes(
+                        offset, end, buffer.data(), buffer.size()))) > 0) {
                 content.append(buffer.data(), bytes_written);
                 offset += bytes_written;
             }
@@ -624,7 +635,8 @@ TEST_CASE("Robustness - Complete file sequential read") {
     const dstd::String idx_file = fx.idx_file;
     LargeTestEnvironment& env = fx.env;
 
-    auto reader = ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
+    auto reader = dftu_utils_test::ok(
+        ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0)));
     REQUIRE(reader != nullptr);
     std::size_t max_bytes = reader->max_bytes();
 
@@ -645,8 +657,8 @@ TEST_CASE("Robustness - Complete file sequential read") {
 
             std::size_t offset = current_pos;
             while (offset < end_pos &&
-                   (bytes_written = reader->read_line_bytes(
-                        offset, end_pos, buffer.data(), buffer.size())) > 0) {
+                   (bytes_written = dftu_utils_test::ok(reader->read_line_bytes(
+                        offset, end_pos, buffer.data(), buffer.size()))) > 0) {
                 content.append(buffer.data(), bytes_written);
                 offset += bytes_written;
             }
@@ -706,8 +718,8 @@ TEST_CASE("Robustness - Complete file sequential read") {
 
         std::size_t offset = 0;
         while (offset < max_bytes &&
-               (bytes_written = reader->read_line_bytes(
-                    offset, max_bytes, buffer.data(), buffer.size())) > 0) {
+               (bytes_written = dftu_utils_test::ok(reader->read_line_bytes(
+                    offset, max_bytes, buffer.data(), buffer.size()))) > 0) {
             complete_content.append(buffer.data(), bytes_written);
             offset += bytes_written;
         }
@@ -718,8 +730,8 @@ TEST_CASE("Robustness - Complete file sequential read") {
         dstd::String complete_last_line = get_last_json_line(complete_content);
 
         // Read same file in 2MB chunks with fresh reader
-        auto chunked_reader =
-            ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
+        auto chunked_reader = dftu_utils_test::ok(
+            ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0)));
         REQUIRE(chunked_reader != nullptr);
         const std::size_t chunk_size = 2 * 1024 * 1024;
         std::size_t chunked_total_lines = 0;
@@ -734,9 +746,10 @@ TEST_CASE("Robustness - Complete file sequential read") {
 
             std::size_t chunk_offset = current_pos;
             while (chunk_offset < end_pos &&
-                   (bytes_written = chunked_reader->read_line_bytes(
-                        chunk_offset, end_pos, buffer.data(), buffer.size())) >
-                       0) {
+                   (bytes_written =
+                        dftu_utils_test::ok(chunked_reader->read_line_bytes(
+                            chunk_offset, end_pos, buffer.data(),
+                            buffer.size()))) > 0) {
                 chunk_content.append(buffer.data(), bytes_written);
                 chunk_offset += bytes_written;
             }
@@ -770,7 +783,8 @@ TEST_CASE("Robustness - JSON validation and consistency") {
     const dstd::String gz_file = fx.gz_file;
     const dstd::String idx_file = fx.idx_file;
 
-    auto reader = ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
+    auto reader = dftu_utils_test::ok(
+        ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0)));
     REQUIRE(reader != nullptr);
     std::size_t max_bytes = reader->max_bytes();
 
@@ -786,8 +800,8 @@ TEST_CASE("Robustness - JSON validation and consistency") {
 
         for (std::size_t buf_size : buffer_sizes) {
             for (auto range : test_ranges) {
-                auto test_reader =
-                    ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
+                auto test_reader = dftu_utils_test::ok(
+                    ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0)));
                 REQUIRE(test_reader != nullptr);
                 dstd::Vector<char> buffer(buf_size);
                 std::size_t bytes_written = 0;
@@ -795,9 +809,10 @@ TEST_CASE("Robustness - JSON validation and consistency") {
 
                 std::size_t offset = range.first;
                 while (offset < range.second &&
-                       (bytes_written = test_reader->read_line_bytes(
-                            offset, range.second, buffer.data(),
-                            buffer.size())) > 0) {
+                       (bytes_written =
+                            dftu_utils_test::ok(test_reader->read_line_bytes(
+                                offset, range.second, buffer.data(),
+                                buffer.size()))) > 0) {
                     content.append(buffer.data(), bytes_written);
                     offset += bytes_written;
                 }
@@ -826,8 +841,8 @@ TEST_CASE("Robustness - JSON validation and consistency") {
         dstd::Vector<std::size_t> line_counts;
 
         for (std::size_t buf_size : buffer_sizes) {
-            auto test_reader =
-                ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
+            auto test_reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0)));
             REQUIRE(test_reader != nullptr);
             dstd::Vector<char> buffer(buf_size);
             std::size_t bytes_written = 0;
@@ -835,8 +850,10 @@ TEST_CASE("Robustness - JSON validation and consistency") {
 
             std::size_t offset = start_pos;
             while (offset < end_pos &&
-                   (bytes_written = test_reader->read_line_bytes(
-                        offset, end_pos, buffer.data(), buffer.size())) > 0) {
+                   (bytes_written =
+                        dftu_utils_test::ok(test_reader->read_line_bytes(
+                            offset, end_pos, buffer.data(), buffer.size()))) >
+                       0) {
                 content.append(buffer.data(), bytes_written);
                 offset += bytes_written;
             }
@@ -867,8 +884,8 @@ TEST_CASE("Robustness - JSON validation and consistency") {
         const std::size_t buffer_size = 4 * 1024 * 1024;
 
         // Sequential read
-        auto seq_reader =
-            ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
+        auto seq_reader = dftu_utils_test::ok(
+            ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0)));
         REQUIRE(seq_reader != nullptr);
         dstd::Vector<char> buffer(buffer_size);
         std::size_t bytes_written = 0;
@@ -876,8 +893,8 @@ TEST_CASE("Robustness - JSON validation and consistency") {
 
         std::size_t offset = 0;
         while (offset < test_size &&
-               (bytes_written = seq_reader->read_line_bytes(
-                    offset, test_size, buffer.data(), buffer.size())) > 0) {
+               (bytes_written = dftu_utils_test::ok(seq_reader->read_line_bytes(
+                    offset, test_size, buffer.data(), buffer.size()))) > 0) {
             sequential_content.append(buffer.data(), bytes_written);
             offset += bytes_written;
         }
@@ -892,8 +909,8 @@ TEST_CASE("Robustness - JSON validation and consistency") {
                                                  4 * 1024 * 1024};
 
         for (std::size_t chunk_size : chunk_sizes) {
-            auto chunked_reader =
-                ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
+            auto chunked_reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0)));
             REQUIRE(chunked_reader != nullptr);
             std::size_t chunked_total_lines = 0;
             std::size_t current_pos = 0;
@@ -908,9 +925,10 @@ TEST_CASE("Robustness - JSON validation and consistency") {
 
                 std::size_t chunk_offset = current_pos;
                 while (chunk_offset < end_pos &&
-                       (bytes_written = chunked_reader->read_line_bytes(
-                            chunk_offset, end_pos, buffer.data(),
-                            buffer.size())) > 0) {
+                       (bytes_written =
+                            dftu_utils_test::ok(chunked_reader->read_line_bytes(
+                                chunk_offset, end_pos, buffer.data(),
+                                buffer.size()))) > 0) {
                     chunk_content.append(buffer.data(), bytes_written);
                     chunk_offset += bytes_written;
                 }
@@ -969,7 +987,8 @@ TEST_CASE("Robustness - Complete file reading equivalence") {
     const dstd::String gz_file = fx.gz_file;
     const dstd::String idx_file = fx.idx_file;
 
-    auto reader = ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
+    auto reader = dftu_utils_test::ok(
+        ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0)));
     REQUIRE(reader != nullptr);
     std::size_t max_bytes = reader->max_bytes();
     const std::size_t buffer_size = 4 * 1024 * 1024;
@@ -982,8 +1001,8 @@ TEST_CASE("Robustness - Complete file reading equivalence") {
 
         std::size_t offset = 0;
         while (offset < max_bytes &&
-               (bytes_written = reader->read_line_bytes(
-                    offset, max_bytes, buffer.data(), buffer.size())) > 0) {
+               (bytes_written = dftu_utils_test::ok(reader->read_line_bytes(
+                    offset, max_bytes, buffer.data(), buffer.size()))) > 0) {
             complete_content.append(buffer.data(), bytes_written);
             offset += bytes_written;
         }
@@ -994,8 +1013,8 @@ TEST_CASE("Robustness - Complete file reading equivalence") {
         dstd::String complete_last_line = get_last_json_line(complete_content);
 
         // Read same file using stride (chunked) approach covering entire file
-        auto stride_reader =
-            ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
+        auto stride_reader = dftu_utils_test::ok(
+            ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0)));
         REQUIRE(stride_reader != nullptr);
         dstd::Vector<std::size_t> chunk_sizes = {
             512 * 1024, 1024 * 1024, 2 * 1024 * 1024, 4 * 1024 * 1024};
@@ -1015,9 +1034,10 @@ TEST_CASE("Robustness - Complete file reading equivalence") {
 
                 std::size_t chunk_offset = current_pos;
                 while (chunk_offset < end_pos &&
-                       (bytes_written = stride_reader->read_line_bytes(
-                            chunk_offset, end_pos, buffer.data(),
-                            buffer.size())) > 0) {
+                       (bytes_written =
+                            dftu_utils_test::ok(stride_reader->read_line_bytes(
+                                chunk_offset, end_pos, buffer.data(),
+                                buffer.size()))) > 0) {
                     chunk_content.append(buffer.data(), bytes_written);
                     chunk_offset += bytes_written;
                 }
@@ -1071,8 +1091,8 @@ TEST_CASE("Robustness - Complete file reading equivalence") {
         dstd::Vector<std::size_t> total_line_counts;
 
         for (std::size_t stride_size : stride_sizes) {
-            auto test_reader =
-                ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
+            auto test_reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0)));
             REQUIRE(test_reader != nullptr);
             std::size_t total_lines = 0;
             std::size_t current_pos = 0;
@@ -1088,9 +1108,10 @@ TEST_CASE("Robustness - Complete file reading equivalence") {
 
                 std::size_t offset = current_pos;
                 while (offset < end_pos &&
-                       (bytes_written = test_reader->read_line_bytes(
-                            offset, end_pos, buffer.data(), buffer.size())) >
-                           0) {
+                       (bytes_written =
+                            dftu_utils_test::ok(test_reader->read_line_bytes(
+                                offset, end_pos, buffer.data(),
+                                buffer.size()))) > 0) {
                     content.append(buffer.data(), bytes_written);
                     offset += bytes_written;
                 }
@@ -1136,8 +1157,8 @@ TEST_CASE("Robustness - Memory and performance stress") {
                                                   65536};
 
         for (std::size_t buf_size : buffer_sizes) {
-            auto reader =
-                ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0)));
             REQUIRE(reader != nullptr);
             std::size_t max_bytes = reader->max_bytes();
 
@@ -1162,8 +1183,9 @@ TEST_CASE("Robustness - Memory and performance stress") {
 
                 std::size_t offset = start;
                 while (offset < end &&
-                       (bytes_written = reader->read_line_bytes(
-                            offset, end, buffer.data(), buffer.size())) > 0) {
+                       (bytes_written = dftu_utils_test::ok(
+                            reader->read_line_bytes(offset, end, buffer.data(),
+                                                    buffer.size()))) > 0) {
                     content.append(buffer.data(), bytes_written);
                     offset += bytes_written;
                     total_bytes_written += bytes_written;
@@ -1184,8 +1206,8 @@ TEST_CASE("Robustness - Memory and performance stress") {
         dstd::Vector<dstd::SharedPtr<Reader>> readers;
 
         for (std::size_t i = 0; i < 5; ++i) {
-            readers.push_back(
-                ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0)));
+            readers.push_back(dftu_utils_test::ok(
+                ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0))));
             CHECK(readers.back()->is_valid());
         }
 
@@ -1199,8 +1221,8 @@ TEST_CASE("Robustness - Memory and performance stress") {
 
             std::size_t offset = 0;
             while (offset < 1024 * 1024 &&
-                   (bytes_written = reader->read(
-                        offset, 1024 * 1024, buffer.data(), buffer.size())) >
+                   (bytes_written = dftu_utils_test::ok(reader->read(
+                        offset, 1024 * 1024, buffer.data(), buffer.size()))) >
                        0) {
                 content.append(buffer.data(), bytes_written);
                 offset += bytes_written;
@@ -1219,8 +1241,8 @@ TEST_CASE("Robustness - Memory and performance stress") {
 
         for (std::size_t i = 0; i < thread_count; ++i) {
             threads.emplace_back([&gz_file, &idx_file, &total_lines]() {
-                auto thread_reader =
-                    ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
+                auto thread_reader = dftu_utils_test::ok(
+                    ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0)));
                 REQUIRE(thread_reader != nullptr);
                 std::size_t max_bytes = thread_reader->max_bytes();
 
@@ -1232,9 +1254,10 @@ TEST_CASE("Robustness - Memory and performance stress") {
 
                 std::size_t offset = 0;
                 while (offset < max_bytes &&
-                       (bytes_written = thread_reader->read_line_bytes(
-                            offset, max_bytes, buffer.data(), buffer.size())) >
-                           0) {
+                       (bytes_written =
+                            dftu_utils_test::ok(thread_reader->read_line_bytes(
+                                offset, max_bytes, buffer.data(),
+                                buffer.size()))) > 0) {
                     content.append(buffer.data(), bytes_written);
                     offset += bytes_written;
                 }
@@ -1264,8 +1287,8 @@ TEST_CASE("Robustness - Memory and performance stress") {
         for (std::size_t i = 0; i < future_count; ++i) {
             futures.push_back(std::async(std::launch::async, [&gz_file,
                                                               &idx_file]() {
-                auto async_reader =
-                    ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
+                auto async_reader = dftu_utils_test::ok(
+                    ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0)));
                 REQUIRE(async_reader != nullptr);
                 std::size_t max_bytes = async_reader->max_bytes();
 
@@ -1277,9 +1300,10 @@ TEST_CASE("Robustness - Memory and performance stress") {
 
                 std::size_t offset = 0;
                 while (offset < max_bytes &&
-                       (bytes_written = async_reader->read_line_bytes(
-                            offset, max_bytes, buffer.data(), buffer.size())) >
-                           0) {
+                       (bytes_written =
+                            dftu_utils_test::ok(async_reader->read_line_bytes(
+                                offset, max_bytes, buffer.data(),
+                                buffer.size()))) > 0) {
                     content.append(buffer.data(), bytes_written);
                     offset += bytes_written;
                 }
@@ -1330,7 +1354,8 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
         return;
     }
 
-    auto reader = ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
+    auto reader = dftu_utils_test::ok(
+        ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0)));
     REQUIRE(reader != nullptr);
 
     SUBCASE("Random line range reading consistency") {
@@ -1339,8 +1364,8 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
 
         // Get total lines from indexer
         {
-            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                            mb_to_b(2.0));
+            auto indexer = dftu_utils_test::create_indexer(gz_file, idx_file,
+                                                           mb_to_b(2.0));
             REQUIRE(indexer != nullptr);
             total_lines = indexer->line_count();
         }
@@ -1361,7 +1386,8 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
             std::size_t end_line = start_line + range_size - 1;
 
             try {
-                dstd::String result = reader->read_lines(start_line, end_line);
+                dstd::String result = dftu_utils_test::ok(
+                    reader->read_lines(start_line, end_line));
 
                 // Count actual lines returned
                 std::size_t line_count = 0;
@@ -1411,8 +1437,8 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
 
         // Get total lines from indexer
         {
-            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                            mb_to_b(2.0));
+            auto indexer = dftu_utils_test::create_indexer(gz_file, idx_file,
+                                                           mb_to_b(2.0));
             REQUIRE(indexer != nullptr);
             total_lines = indexer->line_count();
         }
@@ -1434,8 +1460,8 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
         for (auto range : large_ranges) {
             if (range.first <= range.second && range.second <= total_lines) {
                 try {
-                    dstd::String result =
-                        reader->read_lines(range.first, range.second);
+                    dstd::String result = dftu_utils_test::ok(
+                        reader->read_lines(range.first, range.second));
 
                     // Count lines
                     std::size_t line_count = 0;
@@ -1479,8 +1505,8 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
 
         // Get total lines from indexer
         {
-            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                            mb_to_b(2.0));
+            auto indexer = dftu_utils_test::create_indexer(gz_file, idx_file,
+                                                           mb_to_b(2.0));
             REQUIRE(indexer != nullptr);
             total_lines = indexer->line_count();
         }
@@ -1503,8 +1529,8 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
         for (std::size_t line_num : test_lines) {
             if (line_num <= total_lines && line_num > 0) {
                 try {
-                    dstd::String result =
-                        reader->read_lines(line_num, line_num);
+                    dstd::String result = dftu_utils_test::ok(
+                        reader->read_lines(line_num, line_num));
 
                     // Should have exactly one line
                     std::size_t line_count = 0;
@@ -1536,8 +1562,8 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
 
         // Get total lines from indexer
         {
-            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                            mb_to_b(2.0));
+            auto indexer = dftu_utils_test::create_indexer(gz_file, idx_file,
+                                                           mb_to_b(2.0));
             REQUIRE(indexer != nullptr);
             total_lines = indexer->line_count();
         }
@@ -1550,13 +1576,13 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
         // Test boundary conditions
         try {
             // First line
-            dstd::String first = reader->read_lines(1, 1);
+            dstd::String first = dftu_utils_test::ok(reader->read_lines(1, 1));
             CHECK(first.find("\"name\":\"name_1\"") != dstd::String::npos);
 
             // Last line
             if (total_lines > 0) {
-                dstd::String last =
-                    reader->read_lines(total_lines, total_lines);
+                dstd::String last = dftu_utils_test::ok(
+                    reader->read_lines(total_lines, total_lines));
                 dstd::String expected =
                     "\"name\":\"name_" + dstd::to_string(total_lines) + "\"";
                 CHECK(last.find(expected) != dstd::String::npos);
@@ -1564,7 +1590,8 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
 
             // First few lines
             if (total_lines >= 5) {
-                dstd::String first_few = reader->read_lines(1, 5);
+                dstd::String first_few =
+                    dftu_utils_test::ok(reader->read_lines(1, 5));
                 std::size_t line_count = 0;
                 for (char c : first_few) {
                     if (c == '\n') line_count++;
@@ -1575,7 +1602,8 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
             // Last few lines
             if (total_lines >= 5) {
                 std::size_t start = total_lines - 4;
-                dstd::String last_few = reader->read_lines(start, total_lines);
+                dstd::String last_few =
+                    dftu_utils_test::ok(reader->read_lines(start, total_lines));
                 std::size_t line_count = 0;
                 for (char c : last_few) {
                     if (c == '\n') line_count++;
@@ -1593,8 +1621,8 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
 
         // Get total lines from indexer
         {
-            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                            mb_to_b(2.0));
+            auto indexer = dftu_utils_test::create_indexer(gz_file, idx_file,
+                                                           mb_to_b(2.0));
             REQUIRE(indexer != nullptr);
             total_lines = indexer->line_count();
         }
@@ -1602,16 +1630,26 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
         // Test error conditions
 
         // Invalid line numbers (0-based should fail)
-        CHECK_THROWS(reader->read_lines(0, 5));
-        CHECK_THROWS(reader->read_lines(1, 0));
+        dftu_utils_test::expect_error(
+            reader->read_lines(0, 5),
+            dftracer::utils::common::ErrorCode::Reader);
+        dftu_utils_test::expect_error(
+            reader->read_lines(1, 0),
+            dftracer::utils::common::ErrorCode::Reader);
 
         // start > end
-        CHECK_THROWS(reader->read_lines(10, 5));
+        dftu_utils_test::expect_error(
+            reader->read_lines(10, 5),
+            dftracer::utils::common::ErrorCode::Reader);
 
         if (total_lines > 0) {
             // Beyond file bounds
-            CHECK_THROWS(reader->read_lines(total_lines + 1, total_lines + 10));
-            CHECK_THROWS(reader->read_lines(1, total_lines + 1));
+            dftu_utils_test::expect_error(
+                reader->read_lines(total_lines + 1, total_lines + 10),
+                dftracer::utils::common::ErrorCode::Reader);
+            dftu_utils_test::expect_error(
+                reader->read_lines(1, total_lines + 1),
+                dftracer::utils::common::ErrorCode::Reader);
         }
 
         // Very large range (should handle gracefully)
@@ -1619,7 +1657,7 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
             try {
                 // This might succeed or fail depending on memory, but shouldn't
                 // crash
-                reader->read_lines(1, total_lines);
+                dftu_utils_test::ok(reader->read_lines(1, total_lines));
             } catch (const std::exception& e) {
                 // Acceptable to fail with large ranges
                 INFO("Large range failed (acceptable): " << e.what());
@@ -1638,8 +1676,8 @@ TEST_CASE("Robustness - Line reading consistency across multiple readers") {
         // Create multiple readers
         dstd::Vector<dstd::SharedPtr<Reader>> readers;
         for (std::size_t i = 0; i < 5; ++i) {
-            readers.push_back(
-                ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0)));
+            readers.push_back(dftu_utils_test::ok(
+                ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0))));
             CHECK(readers.back()->is_valid());
         }
 
@@ -1659,8 +1697,8 @@ TEST_CASE("Robustness - Line reading consistency across multiple readers") {
                 // Read same range with all readers
                 for (auto& reader : readers) {
                     try {
-                        dstd::String result =
-                            reader->read_lines(range.first, range.second);
+                        dstd::String result = dftu_utils_test::ok(
+                            reader->read_lines(range.first, range.second));
                         results.push_back(result);
                     } catch (const std::exception& e) {
                         INFO("Reader failed for range [" << range.first << ", "
@@ -1691,8 +1729,8 @@ TEST_CASE("Robustness - Line reading consistency across multiple readers") {
         for (std::size_t i = 0; i < thread_count; ++i) {
             threads.emplace_back([&gz_file, &idx_file, &total_lines,
                                   &successful_reads, &failed_reads, i]() {
-                auto thread_reader =
-                    ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
+                auto thread_reader = dftu_utils_test::ok(
+                    ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0)));
                 REQUIRE(thread_reader != nullptr);
 
                 // Each thread reads different ranges - smaller ranges for JSON
@@ -1705,7 +1743,8 @@ TEST_CASE("Robustness - Line reading consistency across multiple readers") {
                 if (thread_start <= thread_end && thread_start > 0) {
                     try {
                         dstd::String result =
-                            thread_reader->read_lines(thread_start, thread_end);
+                            dftu_utils_test::ok(thread_reader->read_lines(
+                                thread_start, thread_end));
 
                         // Validate result
                         std::size_t line_count = 0;
@@ -1752,7 +1791,8 @@ TEST_CASE("Robustness - Line reading consistency across multiple readers") {
 
     SUBCASE("Sequential vs random access pattern comparison") {
         // Create reader for sequential testing
-        auto reader = ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
+        auto reader = dftu_utils_test::ok(
+            ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0)));
         REQUIRE(reader != nullptr);
         REQUIRE(reader->is_valid());
 
@@ -1764,7 +1804,8 @@ TEST_CASE("Robustness - Line reading consistency across multiple readers") {
             std::size_t end = std::min(start + chunk_size - 1, total_lines);
 
             try {
-                dstd::String result = reader->read_lines(start, end);
+                dstd::String result =
+                    dftu_utils_test::ok(reader->read_lines(start, end));
                 sequential_results.push_back(result);
             } catch (const std::exception& e) {
                 sequential_results.push_back("");  // Mark failed
@@ -1788,15 +1829,16 @@ TEST_CASE("Robustness - Line reading consistency across multiple readers") {
         std::mt19937 gen(rd());
         std::shuffle(indices.begin(), indices.end(), gen);
 
-        auto random_reader =
-            ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0));
+        auto random_reader = dftu_utils_test::ok(
+            ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0)));
         REQUIRE(random_reader != nullptr);
         for (std::size_t idx : indices) {
             std::size_t start = (idx * chunk_size) + 1;
             std::size_t end = std::min(start + chunk_size - 1, total_lines);
 
             try {
-                dstd::String result = random_reader->read_lines(start, end);
+                dstd::String result =
+                    dftu_utils_test::ok(random_reader->read_lines(start, end));
                 random_results.push_back(result);
             } catch (const std::exception& e) {
                 random_results.push_back("");  // Mark failed

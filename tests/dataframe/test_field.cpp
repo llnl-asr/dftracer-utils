@@ -8,6 +8,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <doctest/doctest.h>
+#include <memory/fresh_process.h>
 
 #include <cstdint>
 
@@ -39,24 +40,31 @@ int bit_at(const Series& mask, int i) {
 TEST_SUITE("unified field F") {
     TEST_CASE("comparison serializes to a pushable query") {
         auto q = (field::F("dur") > 1000).to_duql();
-        CHECK(q.to_string() == "dur > 1000");
+        REQUIRE(q.has_value());
+        CHECK(q->to_string() == "dur > 1000");
 
         auto q2 =
             ((field::F("cat") == "io") && (field::F("dur") >= 100)).to_duql();
-        CHECK(q2.references("cat"));
-        CHECK(q2.references("dur"));
+        REQUIRE(q2.has_value());
+        CHECK(q2->references("cat"));
+        CHECK(q2->references("dur"));
     }
 
     TEST_CASE("string-match and membership push down") {
-        CHECK((field::F("name").like("read%")).to_duql().references("name"));
-        CHECK((field::F("cat").in(dstd::Vector<dstd::String>{"io", "net"}))
-                  .to_duql()
-                  .references("cat"));
+        auto like = (field::F("name").like("read%")).to_duql();
+        REQUIRE(like.has_value());
+        CHECK(like->references("name"));
+        auto in = (field::F("cat").in(dstd::Vector<dstd::String>{"io", "net"}))
+                      .to_duql();
+        REQUIRE(in.has_value());
+        CHECK(in->references("cat"));
     }
 
     TEST_CASE("comparison also evaluates in memory to a mask") {
         DataFrame df = make_frame();
-        Series mask = (field::F("dur") > 100).apply(df);
+        auto applied = (field::F("dur") > 100).apply(df);
+        REQUIRE(applied.has_value());
+        Series mask = std::move(*applied);
         REQUIRE(mask.type() == dftracer::utils::dataframe::TypeId::Bool);
         REQUIRE(mask.length() == 4);
         CHECK(bit_at(mask, 0) == 0);  // 50
@@ -67,7 +75,9 @@ TEST_SUITE("unified field F") {
 
     TEST_CASE("arithmetic value expression evaluates on a frame") {
         DataFrame df = make_frame();
-        Series out = (field::F("a") + field::F("b")).apply(df);
+        auto applied = (field::F("a") + field::F("b")).apply(df);
+        REQUIRE(applied.has_value());
+        Series out = std::move(*applied);
         REQUIRE(out.length() == 4);
         const std::int64_t* v = out.data<std::int64_t>();
         CHECK(v[0] == 11);
@@ -78,7 +88,9 @@ TEST_SUITE("unified field F") {
 
     TEST_CASE("numeric primitive evaluates on a frame") {
         DataFrame df = make_frame();
-        Series out = field::F("b").ilog2().apply(df);
+        auto applied = field::F("b").ilog2().apply(df);
+        REQUIRE(applied.has_value());
+        Series out = std::move(*applied);
         const std::int64_t* v = out.data<std::int64_t>();
         // ilog2(10)=3, ilog2(20)=4, ilog2(30)=4, ilog2(40)=5.
         CHECK(v[0] == 3);
@@ -87,28 +99,74 @@ TEST_SUITE("unified field F") {
         CHECK(v[3] == 5);
     }
 
-    TEST_CASE("non-pushable predicate raises on to_duql but applies") {
+    TEST_CASE("non-pushable predicate fails on to_duql but applies") {
         DataFrame df = make_frame();
         field::FieldExpr non_pushable = (field::F("a") + field::F("b")) > 3;
-        CHECK_THROWS_AS(non_pushable.to_duql(),
-                        dftracer::utils::common::DFTUtilsException);
+        auto q = non_pushable.to_duql();
+        REQUIRE_FALSE(q.has_value());
+        CHECK(common::errorcode_of(q.error()) ==
+              common::ErrorCode::InvalidArgument);
 
-        Series mask = non_pushable.apply(df);  // (a+b) > 3 -> all true
+        auto applied = non_pushable.apply(df);  // (a+b) > 3 -> all true
+        REQUIRE(applied.has_value());
+        Series mask = std::move(*applied);
         REQUIRE(mask.length() == 4);
         for (int i = 0; i < 4; ++i) CHECK(bit_at(mask, i) == 1);
     }
 
-    TEST_CASE("filter-only predicate raises on apply") {
+    TEST_CASE("filter-only predicate fails on apply") {
         DataFrame df = make_frame();
-        CHECK_THROWS_AS(field::F("cat").like("i%").apply(df),
-                        dftracer::utils::common::DFTUtilsException);
-        CHECK_THROWS_AS((field::F("cat") == "io").apply(df),
-                        dftracer::utils::common::DFTUtilsException);
+        auto like = field::F("cat").like("i%").apply(df);
+        REQUIRE_FALSE(like.has_value());
+        CHECK(common::errorcode_of(like.error()) ==
+              common::ErrorCode::InvalidArgument);
+        auto eq = (field::F("cat") == "io").apply(df);
+        REQUIRE_FALSE(eq.has_value());
+        CHECK(common::errorcode_of(eq.error()) ==
+              common::ErrorCode::InvalidArgument);
     }
 
-    TEST_CASE("missing column raises on apply") {
+    TEST_CASE("missing column fails on apply") {
         DataFrame df = make_frame();
-        CHECK_THROWS_AS(field::F("missing").apply(df),
-                        dftracer::utils::common::DFTUtilsException);
+        auto missing = field::F("missing").apply(df);
+        REQUIRE_FALSE(missing.has_value());
+        CHECK(common::errorcode_of(missing.error()) ==
+              common::ErrorCode::InvalidArgument);
+    }
+
+    TEST_CASE("an empty field expression ends the process" * doctest::skip()) {
+        fresh_process::announce_abort();
+        field::FieldExpr empty;
+        (void)empty.to_duql();
+    }
+
+    TEST_CASE("an empty field expression is fatal") {
+        auto result =
+            fresh_process::run("an empty field expression ends the process");
+        CHECK(result.aborted_with("empty field expression"));
+    }
+
+    TEST_CASE("a match on a non-field expression ends the process" *
+              doctest::skip()) {
+        fresh_process::announce_abort();
+        (void)(field::F("a") + field::F("b")).like("x%");
+    }
+
+    TEST_CASE("a match on a non-field expression is fatal") {
+        auto result = fresh_process::run(
+            "a match on a non-field expression ends the process");
+        CHECK(result.aborted_with("needs a bare field on the left"));
+    }
+
+    TEST_CASE("an aggregate of a non-field expression ends the process" *
+              doctest::skip()) {
+        fresh_process::announce_abort();
+        (void)(field::F("a") + field::F("b")).sum();
+    }
+
+    TEST_CASE("an aggregate of a non-field expression is fatal") {
+        auto result = fresh_process::run(
+            "an aggregate of a non-field expression ends the process");
+        CHECK(result.aborted_with("aggregate needs a bare field"));
     }
 }

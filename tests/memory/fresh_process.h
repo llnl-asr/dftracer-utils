@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_TESTS_MEMORY_FRESH_PROCESS_H
 
 #include <no_core_dump.h>
+#include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -42,6 +43,13 @@ struct Result {
         int copy = status;
         return announced && WIFEXITED(copy) && WEXITSTATUS(copy) == 0;
     }
+
+    /// The process ran the case, ended by SIGABRT and wrote @p text.
+    bool aborted_with(const char* text) const {
+        int copy = status;
+        return announced && WIFSIGNALED(copy) && WTERMSIG(copy) == SIGABRT &&
+               output.find(text) != std::string::npos;
+    }
 };
 
 /// Called first by a test case that run() starts. doctest exits with 0 when no
@@ -52,6 +60,13 @@ inline void announce() {
     char byte = 'x';
     ssize_t written = ::write(std::atoi(fd), &byte, 1);
     (void)written;
+}
+
+/// Like announce(), for a case that ends in abort(): restores the default
+/// SIGABRT action, or doctest reports the abort as a crash.
+inline void announce_abort() {
+    announce();
+    ::signal(SIGABRT, SIG_DFL);
 }
 
 /// Runs one test case of this binary that is skipped by default in a new

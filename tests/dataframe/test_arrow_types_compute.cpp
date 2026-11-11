@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cmath>
 #include <cstdint>
@@ -233,7 +235,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
     TEST_CASE("Float16 reduction (sum) promotes to Float32 and computes") {
         Series a = make_float16({1.0f, 2.0f, 3.0f});
         REQUIRE(a.valid());
-        Scalar total = a.sum();
+        Scalar total = dftu_utils_test::ok(a.sum());
         CHECK(total.f64() == doctest::Approx(6.0));
     }
 
@@ -519,8 +521,8 @@ TEST_SUITE("dataframe_arrow_types_compute") {
     TEST_CASE("Timestamp min/max compute on the exact value") {
         Series s = make_timestamp({300, -1, 100});
         REQUIRE(s.valid());
-        Scalar mn = s.min();
-        Scalar mx = s.max();
+        Scalar mn = dftu_utils_test::ok(s.min());
+        Scalar mx = dftu_utils_test::ok(s.max());
         CHECK(mn.i64() == -1);
         CHECK(mx.i64() == 300);
     }
@@ -587,7 +589,8 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         df.names = {"ts", "v"};
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
-        DataFrame grouped = df.group_by("ts", {GroupAgg{Agg::Count, "v", "n"}});
+        DataFrame grouped = dftu_utils_test::ok(
+            df.group_by("ts", {GroupAgg{Agg::Count, "v", "n"}}));
         REQUIRE(grouped.num_rows() == 2);
         Series gkeys = grouped.column("ts");
         Series gn = grouped.column("n");
@@ -743,7 +746,7 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         "refused") {
         Series d = make_duration(NANOARROW_TIME_UNIT_MICRO, {10, 20, 30});
         REQUIRE(d.valid());
-        Scalar total = d.sum();
+        Scalar total = dftu_utils_test::ok(d.sum());
         CHECK(total.i64() == 60);
 
         dftu_scalar prod = dftu_series_product(d.handle());
@@ -816,7 +819,8 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         df.names = {"k", "v"};
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
-        DataFrame grouped = df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}});
+        DataFrame grouped = dftu_utils_test::ok(
+            df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}}));
         REQUIRE(grouped.num_rows() == 3);
         Series gk = grouped.column("k");
         REQUIRE(gk.type() == TypeId::FixedSizeBinary);
@@ -848,11 +852,13 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         Series v2 = Series::flat_i64(ones3.data(), 3);
 
         AggStatePtr st1 = dataframe::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        dataframe::agg_accumulate(*st1, dstd::Vector<const Series*>{&k1},
-                                  dstd::Vector<const Series*>{&v1});
+        dftu_utils_test::ok(
+            dataframe::agg_accumulate(*st1, dstd::Vector<const Series*>{&k1},
+                                      dstd::Vector<const Series*>{&v1}));
         AggStatePtr st2 = dataframe::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        dataframe::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
-                                  dstd::Vector<const Series*>{&v2});
+        dftu_utils_test::ok(
+            dataframe::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
+                                      dstd::Vector<const Series*>{&v2}));
         dataframe::agg_merge(*st1, *st2);
         REQUIRE(dataframe::agg_group_count(*st1) == 3);
 
@@ -885,10 +891,12 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         Series values = Series::flat_i64(ones.data(), 6);
 
         AggStatePtr st = dataframe::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        dataframe::agg_accumulate(*st, dstd::Vector<const Series*>{&keys},
-                                  dstd::Vector<const Series*>{&values});
+        dftu_utils_test::ok(
+            dataframe::agg_accumulate(*st, dstd::Vector<const Series*>{&keys},
+                                      dstd::Vector<const Series*>{&values}));
         const dstd::String blob = dataframe::agg_serialize(*st);
-        AggStatePtr back = dataframe::agg_deserialize(blob);
+        AggStatePtr back =
+            dftu_utils_test::ok(dataframe::agg_deserialize(blob));
 
         REQUIRE(dataframe::agg_group_count(*back) == 3);
         DataFrame out = dataframe::agg_finalize(*back, "k");
@@ -920,7 +928,8 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         df.names = {"k", "v"};
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
-        DataFrame grouped = df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}});
+        DataFrame grouped = dftu_utils_test::ok(
+            df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}}));
         REQUIRE(grouped.num_rows() == 3);
         Series gk = grouped.column("k");
         REQUIRE(gk.type() == TypeId::Decimal128);
@@ -955,18 +964,21 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         Series v2 = Series::flat_i64(ones3.data(), 3);
 
         AggStatePtr st1 = dataframe::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        dataframe::agg_accumulate(*st1, dstd::Vector<const Series*>{&k1},
-                                  dstd::Vector<const Series*>{&v1});
+        dftu_utils_test::ok(
+            dataframe::agg_accumulate(*st1, dstd::Vector<const Series*>{&k1},
+                                      dstd::Vector<const Series*>{&v1}));
         AggStatePtr st2 = dataframe::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        dataframe::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
-                                  dstd::Vector<const Series*>{&v2});
+        dftu_utils_test::ok(
+            dataframe::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
+                                      dstd::Vector<const Series*>{&v2}));
         dataframe::agg_merge(*st1, *st2);
         REQUIRE(dataframe::agg_group_count(*st1) == 3);
 
         // Round-trip the merged partial through the spill blob before
         // finalizing, exercising the same path agg/serialize.cpp writes.
         const dstd::String blob = dataframe::agg_serialize(*st1);
-        AggStatePtr back = dataframe::agg_deserialize(blob);
+        AggStatePtr back =
+            dftu_utils_test::ok(dataframe::agg_deserialize(blob));
         REQUIRE(dataframe::agg_group_count(*back) == 3);
 
         DataFrame out = dataframe::agg_finalize(*back, "k");
@@ -1001,7 +1013,8 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         df.names = {"k", "v"};
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
-        DataFrame grouped = df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}});
+        DataFrame grouped = dftu_utils_test::ok(
+            df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}}));
         REQUIRE(grouped.num_rows() == 3);
         Series gk = grouped.column("k");
         REQUIRE(gk.type() == TypeId::Decimal256);
@@ -1036,16 +1049,19 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         Series v2 = Series::flat_i64(ones3.data(), 3);
 
         AggStatePtr st1 = dataframe::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        dataframe::agg_accumulate(*st1, dstd::Vector<const Series*>{&k1},
-                                  dstd::Vector<const Series*>{&v1});
+        dftu_utils_test::ok(
+            dataframe::agg_accumulate(*st1, dstd::Vector<const Series*>{&k1},
+                                      dstd::Vector<const Series*>{&v1}));
         AggStatePtr st2 = dataframe::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        dataframe::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
-                                  dstd::Vector<const Series*>{&v2});
+        dftu_utils_test::ok(
+            dataframe::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
+                                      dstd::Vector<const Series*>{&v2}));
         dataframe::agg_merge(*st1, *st2);
         REQUIRE(dataframe::agg_group_count(*st1) == 3);
 
         const dstd::String blob = dataframe::agg_serialize(*st1);
-        AggStatePtr back = dataframe::agg_deserialize(blob);
+        AggStatePtr back =
+            dftu_utils_test::ok(dataframe::agg_deserialize(blob));
         REQUIRE(dataframe::agg_group_count(*back) == 3);
 
         DataFrame out = dataframe::agg_finalize(*back, "k");
@@ -1080,7 +1096,8 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         df.names = {"k", "v"};
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
-        DataFrame grouped = df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}});
+        DataFrame grouped = dftu_utils_test::ok(
+            df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}}));
         REQUIRE(grouped.num_rows() == 3);
         Series gk = grouped.column("k");
         REQUIRE(gk.type() == TypeId::Binary);
@@ -1109,16 +1126,19 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         Series v2 = Series::flat_i64(ones3.data(), 3);
 
         AggStatePtr st1 = dataframe::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        dataframe::agg_accumulate(*st1, dstd::Vector<const Series*>{&k1},
-                                  dstd::Vector<const Series*>{&v1});
+        dftu_utils_test::ok(
+            dataframe::agg_accumulate(*st1, dstd::Vector<const Series*>{&k1},
+                                      dstd::Vector<const Series*>{&v1}));
         AggStatePtr st2 = dataframe::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        dataframe::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
-                                  dstd::Vector<const Series*>{&v2});
+        dftu_utils_test::ok(
+            dataframe::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
+                                      dstd::Vector<const Series*>{&v2}));
         dataframe::agg_merge(*st1, *st2);
         REQUIRE(dataframe::agg_group_count(*st1) == 3);
 
         const dstd::String blob = dataframe::agg_serialize(*st1);
-        AggStatePtr back = dataframe::agg_deserialize(blob);
+        AggStatePtr back =
+            dftu_utils_test::ok(dataframe::agg_deserialize(blob));
         REQUIRE(dataframe::agg_group_count(*back) == 3);
 
         DataFrame out = dataframe::agg_finalize(*back, "k");
@@ -1150,7 +1170,8 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         df.names = {"k", "v"};
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
-        DataFrame grouped = df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}});
+        DataFrame grouped = dftu_utils_test::ok(
+            df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}}));
         REQUIRE(grouped.num_rows() == 3);
         Series gk = grouped.column("k");
         REQUIRE(gk.type() == TypeId::LargeBinary);
@@ -1179,16 +1200,19 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         Series v2 = Series::flat_i64(ones3.data(), 3);
 
         AggStatePtr st1 = dataframe::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        dataframe::agg_accumulate(*st1, dstd::Vector<const Series*>{&k1},
-                                  dstd::Vector<const Series*>{&v1});
+        dftu_utils_test::ok(
+            dataframe::agg_accumulate(*st1, dstd::Vector<const Series*>{&k1},
+                                      dstd::Vector<const Series*>{&v1}));
         AggStatePtr st2 = dataframe::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        dataframe::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
-                                  dstd::Vector<const Series*>{&v2});
+        dftu_utils_test::ok(
+            dataframe::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
+                                      dstd::Vector<const Series*>{&v2}));
         dataframe::agg_merge(*st1, *st2);
         REQUIRE(dataframe::agg_group_count(*st1) == 3);
 
         const dstd::String blob = dataframe::agg_serialize(*st1);
-        AggStatePtr back = dataframe::agg_deserialize(blob);
+        AggStatePtr back =
+            dftu_utils_test::ok(dataframe::agg_deserialize(blob));
         REQUIRE(dataframe::agg_group_count(*back) == 3);
 
         DataFrame out = dataframe::agg_finalize(*back, "k");
@@ -1224,7 +1248,8 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         df.names = {"k", "v"};
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
-        DataFrame grouped = df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}});
+        DataFrame grouped = dftu_utils_test::ok(
+            df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}}));
         REQUIRE(grouped.num_rows() == 4);
         Series gk = grouped.column("k");
         REQUIRE(gk.type() == TypeId::Float16);
@@ -1269,17 +1294,20 @@ TEST_SUITE("dataframe_arrow_types_compute") {
         Series v2 = Series::flat_i64(ones3.data(), 3);
 
         AggStatePtr st1 = dataframe::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        dataframe::agg_accumulate(*st1, dstd::Vector<const Series*>{&k1},
-                                  dstd::Vector<const Series*>{&v1});
+        dftu_utils_test::ok(
+            dataframe::agg_accumulate(*st1, dstd::Vector<const Series*>{&k1},
+                                      dstd::Vector<const Series*>{&v1}));
         AggStatePtr st2 = dataframe::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        dataframe::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
-                                  dstd::Vector<const Series*>{&v2});
+        dftu_utils_test::ok(
+            dataframe::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
+                                      dstd::Vector<const Series*>{&v2}));
         dataframe::agg_merge(*st1, *st2);
         // {1.0}x2, {-0.0}x2, {+0.0}x1, {NaN}x1
         REQUIRE(dataframe::agg_group_count(*st1) == 4);
 
         const dstd::String blob = dataframe::agg_serialize(*st1);
-        AggStatePtr back = dataframe::agg_deserialize(blob);
+        AggStatePtr back =
+            dftu_utils_test::ok(dataframe::agg_deserialize(blob));
         REQUIRE(dataframe::agg_group_count(*back) == 4);
 
         DataFrame out = dataframe::agg_finalize(*back, "k");

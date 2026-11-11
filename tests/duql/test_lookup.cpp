@@ -2,20 +2,24 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dataframe/query/vectorize.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/fields.h>
+#include <dftracer/utils/duql/lookup.h>
 #include <dftracer/utils/duql/pipeline.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/duql/subsumption.h>
-#include <dftracer/utils/duql/vectorize.h>
 #include <dftracer/utils/json/json_value.h>
 #include <doctest/doctest.h>
 #include <duql/eval_json.h>
+#include <memory/fresh_process.h>
 #include <simdjson.h>
+#include <task_result.h>
 
 #include <memory>
 
@@ -36,15 +40,24 @@ dstd::SharedPtr<const dataframe::DataFrame> runs() {
     return f;
 }
 
+// The lookups of `p`, collected inside the walk: duql is built without
+// exceptions, so nothing that can throw runs in the callback.
+dstd::Vector<const TLookup*> lookups(const Pipeline& p) {
+    dstd::Vector<const TLookup*> out;
+    for_each_pipeline_term(p, [&](const Term& t) {
+        if (const auto* l = std::get_if<TLookup>(&t.node)) out.push_back(l);
+    });
+    return out;
+}
+
 // `text`'s scan filter with every lookup bound to runs().
 Query bound(const dstd::String& text) {
     auto p = compile_program(text, {}, nullptr);
     REQUIRE_MESSAGE(p.has_value(), (p ? dstd::String() : p.error().format()));
     REQUIRE(p->main.filter);
-    for_each_pipeline_term(p->main, [](const Term& t) {
-        if (const auto* l = std::get_if<TLookup>(&t.node))
-            l->slot->table = make_lookup_table(*l, runs());
-    });
+    for (const TLookup* l : lookups(p->main))
+        l->slot->table = dftu_utils_test::ok(
+            dftracer::utils::dataframe::query::make_lookup_table(*l, runs()));
     return duql::detail::QueryAccess::from_node(clone(*p->main.filter));
 }
 
@@ -66,7 +79,8 @@ bool on_map(const Query& q, std::int64_t run) {
 
 TEST_CASE("lookups evaluate on JSON and flattened records") {
     const dstd::String lets = "let runs = where run > 0; ";
-    const Query arrow = bound(lets + "where run -> runs.app == \"laghos\"");
+    const Query arrow =
+        bound(dstd::fmt<"{}where run -> runs.app == \"laghos\"">(lets));
     CHECK(on_json(arrow, R"({"run":1})"));
     CHECK_FALSE(on_json(arrow, R"({"run":2})"));
     CHECK_FALSE(on_json(arrow, R"({"run":3})"));
@@ -76,7 +90,7 @@ TEST_CASE("lookups evaluate on JSON and flattened records") {
 
     // Run 2 has two rows with equal values: one value, no conflict.
     const Query same =
-        bound(lets + "where (run -> runs.app) ?? \"x\" == \"amg\"");
+        bound(dstd::fmt<"{}where (run -> runs.app) ?? \"x\" == \"amg\"">(lets));
     CHECK(on_json(same, R"({"run":2})"));
 }
 
@@ -91,29 +105,25 @@ TEST_CASE("an arrow's conflicting values fail in a value position") {
         "let runs = where run > 0; where (run -> runs.app) ?? \"\" == \"amg\"",
         {}, nullptr);
     REQUIRE(p);
-    for_each_pipeline_term(p->main, [&](const Term& t) {
-        if (const auto* l = std::get_if<TLookup>(&t.node))
-            l->slot->table = make_lookup_table(*l, f);
-    });
+    for (const TLookup* l : lookups(p->main))
+        l->slot->table = dftu_utils_test::ok(
+            dftracer::utils::dataframe::query::make_lookup_table(*l, f));
     const Query q =
         duql::detail::QueryAccess::from_node(clone(*p->main.filter));
-    try {
-        (void)on_json(q, R"({"run":1})");
-        FAIL("no conflict error");
-    } catch (const dftracer::utils::common::DFTUtilsException& e) {
-        const dstd::String what = e.what();
-        CHECK(what.find("'runs'") != dstd::String::npos);
-        CHECK(what.find("key 1") != dstd::String::npos);
-    }
+    CHECK_FALSE(lookup_failure(duql::detail::QueryAccess::root(q)));
+    (void)on_json(q, R"({"run":1})");
+    const auto failure = lookup_failure(duql::detail::QueryAccess::root(q));
+    REQUIRE(failure);
+    CHECK(failure->message.find("'runs'") != dstd::String::npos);
+    CHECK(failure->message.find("key 1") != dstd::String::npos);
     // In a comparison, any matching row may make it hold.
     auto any = compile_program(
         "let runs = where run > 0; where run -> runs.app == \"amg\"", {},
         nullptr);
     REQUIRE(any);
-    for_each_pipeline_term(any->main, [&](const Term& t) {
-        if (const auto* l = std::get_if<TLookup>(&t.node))
-            l->slot->table = make_lookup_table(*l, f);
-    });
+    for (const TLookup* l : lookups(any->main))
+        l->slot->table = dftu_utils_test::ok(
+            dftracer::utils::dataframe::query::make_lookup_table(*l, f));
     CHECK(
         on_json(duql::detail::QueryAccess::from_node(clone(*any->main.filter)),
                 R"({"run":1})"));
@@ -130,15 +140,21 @@ TEST_CASE("a lookup leaf is a residual to subsumption") {
                                duql::detail::QueryAccess::root(plain)));
 }
 
-TEST_CASE("an unbound lookup fails loudly") {
+TEST_CASE("an unbound lookup ends the process" * doctest::skip()) {
+    fresh_process::announce_abort();
     auto p = compile_program(
         "let runs = where run > 0; where run -> runs.app == \"amg\"", {},
         nullptr);
     REQUIRE(p);
     const Query q =
         duql::detail::QueryAccess::from_node(clone(*p->main.filter));
-    CHECK_THROWS_AS((void)on_json(q, R"({"run":1})"),
-                    dftracer::utils::common::DFTUtilsException);
+    (void)on_json(q, R"({"run":1})");
+}
+
+TEST_CASE("an unbound lookup fails loudly") {
+    const auto result =
+        fresh_process::run("an unbound lookup ends the process");
+    CHECK(result.aborted_with("was read before its rows were bound"));
 }
 
 TEST_CASE("a joined sub-query term leaves the scan filter") {
@@ -158,16 +174,17 @@ TEST_CASE("a joined sub-query term leaves the scan filter") {
     CHECK(p->main.stages.size() == 2);
     dstd::Vector<const TLookup*> joins;
     dstd::Vector<const TLookup*> sets;
-    for_each_pipeline_term(p->main, [&](const Term& t) {
-        if (const auto* l = std::get_if<TLookup>(&t.node)) {
-            if (joined(*l)) joins.push_back(l);
-            if (l->key_set) sets.push_back(l);
-        }
-    });
+    for (const TLookup* l : lookups(p->main)) {
+        if (joined(*l)) joins.push_back(l);
+        if (l->key_set) sets.push_back(l);
+    }
     CHECK(joins.size() == 2);
     CHECK(sets.size() == 1);
-    CHECK_THROWS_AS(make_lookup_table(*joins.front(), runs()),
-                    dftracer::utils::common::DFTUtilsException);
+    const auto refused = dftracer::utils::dataframe::query::make_lookup_table(
+        *joins.front(), runs());
+    REQUIRE(!refused.has_value());
+    CHECK(dftracer::utils::common::errorcode_of(refused.error()) ==
+          dftracer::utils::common::ErrorCode::InvalidArgument);
 }
 
 TEST_CASE("a range sub-query reads the rows between the enclosing bounds") {
@@ -191,13 +208,12 @@ TEST_CASE("a range sub-query reads the rows between the enclosing bounds") {
         dstd::SharedPtr<Program> program =
             dstd::make_shared<Program>(std::move(*p));
         const TLookup* found = nullptr;
-        for_each_pipeline_term(program->main, [&](const Term& t) {
-            if (const auto* l = std::get_if<TLookup>(&t.node)) {
-                REQUIRE(l->range != RangeRead::None);
-                l->slot->table = make_lookup_table(*l, side);
-                found = l;
-            }
-        });
+        for (const TLookup* l : lookups(program->main)) {
+            REQUIRE(l->range != RangeRead::None);
+            l->slot->table = dftu_utils_test::ok(
+                dftracer::utils::dataframe::query::make_lookup_table(*l, side));
+            found = l;
+        }
         REQUIRE(found);
         return dstd::make_pair(program, found);
     };
@@ -225,10 +241,10 @@ TEST_CASE("a range sub-query reads the rows between the enclosing bounds") {
     const dstd::Vector<const dataframe::Series*> keys = {&k, &a, &b};
     auto band = [&](const dstd::String& agg) {
         const auto [bp, bl] = lookup_of(
-            "derive v = (from data | where pid == ^.pid and ts between ^.lo "
-            "and ^.hi | agg { v = " +
-            agg + " })");
-        return lookup_column(*bl, keys, 6);
+            dstd::fmt<"derive v = (from data | where pid == ^.pid and ts "
+                      "between ^.lo and ^.hi | agg { v = {} })">(agg));
+        return dftu_utils_test::ok(
+            dftracer::utils::dataframe::query::lookup_column(*bl, keys, 6));
     };
     auto ints = [](const dataframe::Series& s) {
         dstd::Vector<dstd::String> out;
@@ -258,14 +274,14 @@ TEST_CASE("a range sub-query reads the rows between the enclosing bounds") {
     const dataframe::Series k2 = dataframe::Series::flat_i64(opid, 2);
     const dataframe::Series a2 = dataframe::Series::flat_i64(one_lo, 2);
     const dataframe::Series b2 = dataframe::Series::flat_i64(one_hi, 1);
-    CHECK(ints(lookup_column(*sl, {&k2, &a2, &b2}, 1)) == V{"5"});
-    dstd::String error;
-    try {
-        const dataframe::Series b3 = dataframe::Series::flat_i64(one_hi + 1, 1);
-        const dataframe::Series a3 = dataframe::Series::flat_i64(one_lo + 1, 1);
-        (void)lookup_column(*sl, {&k2, &a3, &b3}, 1);
-    } catch (const dftracer::utils::common::DFTUtilsException& e) {
-        error = e.what();
-    }
+    CHECK(ints(dftu_utils_test::ok(
+              dftracer::utils::dataframe::query::lookup_column(
+                  *sl, {&k2, &a2, &b2}, 1))) == V{"5"});
+    const dataframe::Series b3 = dataframe::Series::flat_i64(one_hi + 1, 1);
+    const dataframe::Series a3 = dataframe::Series::flat_i64(one_lo + 1, 1);
+    const auto conflict = dftracer::utils::dataframe::query::lookup_column(
+        *sl, {&k2, &a3, &b3}, 1);
+    REQUIRE(!conflict.has_value());
+    const dstd::String error(conflict.error().message());
     CHECK(error.find("rows in the range") != dstd::String::npos);
 }

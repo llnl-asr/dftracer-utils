@@ -23,6 +23,7 @@
 // group_by or flamegraph; a query with an arrow is not pruned, which only
 // reads one file's own columns.
 
+#include <bench_ok.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
@@ -35,15 +36,15 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
-#include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/plan/chunk_pruner.h>
-#include <dftracer/utils/index/plan/prune.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
-#include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
+#include <dftracer/utils/fileio/file_helpers.h>
+#include <dftracer/utils/fileio/lines/sources/async_streaming_gz_line_generator.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/indexer.h>
+#include <dftracer/utils/trace/index/plan/chunk_pruner.h>
+#include <dftracer/utils/trace/index/plan/prune.h>
+#include <dftracer/utils/trace/index/tables.h>
 #include <dftracer/utils/trace/views/view.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
-#include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
 #include <simdjson.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
@@ -93,12 +94,18 @@ struct Options {
 
 template <class T>
 T run(coro::CoroTask<T> t) {
-    return default_runtime().submit(std::move(t)).get();
+    return dftu::bench::ok(default_runtime().submit(std::move(t)).get());
+}
+
+template <class T>
+T run(coro::CoroTask<dstd::Result<T>> t) {
+    return dftu::bench::ok(default_runtime().submit(std::move(t)).get());
 }
 
 template <class Fn>
 void run_scoped(Fn fn) {
-    default_runtime().submit(coro::with_scope(std::move(fn))).wait();
+    dftu::bench::ok(
+        default_runtime().submit(coro::with_scope(std::move(fn))).wait());
 }
 
 double seconds(dstd::FunctionRef<void()> f) {
@@ -194,11 +201,12 @@ coro::CoroTask<QuerySet> sample_queries(dstd::String file) {
     dstd::Map<dstd::String, int> names, cats, args;
     dstd::Vector<std::int64_t> stamps;
     simdjson::dom::parser parser;
-    auto gen = utilities::fileio::lines::sources::async_streaming_gz_lines(
-        std::move(file));
+    auto gen =
+        fileio::lines::sources::async_streaming_gz_lines(std::move(file));
     int seen = 0;
-    while (auto line = co_await gen.next()) {
-        dstd::StringView l = line->content;
+    while (auto next = co_await gen.next()) {
+        if (!*next) dftu::bench::fail(next->error());
+        dstd::StringView l = (*next)->content;
         while (!l.empty() && (l.back() == ',' || l.back() == ' '))
             l.remove_suffix(1);
         if (l.empty() || l.front() != '{') continue;
@@ -272,11 +280,12 @@ coro::CoroTask<dstd::Map<dstd::String, dstd::String>> sample_genesis(
     dstd::Map<dstd::String, dstd::Vector<double>> metrics;
     int shape = 0;  // 1 long, 2 wide
     simdjson::dom::parser parser;
-    auto gen = utilities::fileio::lines::sources::async_streaming_gz_lines(
-        std::move(file));
+    auto gen =
+        fileio::lines::sources::async_streaming_gz_lines(std::move(file));
     int seen = 0;
-    while (auto line = co_await gen.next()) {
-        dstd::StringView l = line->content;
+    while (auto next = co_await gen.next()) {
+        if (!*next) dftu::bench::fail(next->error());
+        dstd::StringView l = (*next)->content;
         simdjson::dom::object o;
         if (l.empty() || l.front() != '{' ||
             parser.parse(l.data(), l.size()).get(o) != simdjson::SUCCESS)
@@ -387,21 +396,21 @@ Result measure(const Options& opt, const dstd::String& input,
         r.compressed_bytes += dstd::fs::file_size(f).value();
 
     for (int i = 0; i < opt.build_runs; ++i) {
-        (void)dstd::fs::remove_all(index_dir);
+        dstd::fs::remove_all(index_dir).discard();
         require_ok(dstd::fs::create_directories(index_dir),
                    "create_directories");
         r.build_s.push_back(seconds([&] {
-            dftracer::utils::index::IndexerOptions options;
+            dftracer::utils::trace::index::IndexerOptions options;
             options.index_dir = index_dir;
             options.bloom->required = false;
             options.memory_budget = opt.memory_budget;
             if (opt.aggregation_interval_us > 0)
                 options.aggregation.time_interval_us =
                     opt.aggregation_interval_us;
-            auto indexer =
-                dftracer::utils::index::Indexer::open(files, options);
+            auto indexer = dftu::bench::ok(
+                dftracer::utils::trace::index::Indexer::open(files, options));
             run_scoped([&](coro::Scope& scope) -> coro::CoroTask<void> {
-                co_await indexer.rebuild(scope);
+                dftu::bench::ok(co_await indexer.rebuild(scope));
             });
         }));
     }
@@ -432,18 +441,18 @@ Result measure(const Options& opt, const dstd::String& input,
         opt.warmups, opt.runs);
 
     {
-        const auto snapshot = common::unwrap(
-            dftracer::utils::index::plan::open_snapshot(index_path));
+        const auto snapshot = dftu::bench::ok(
+            dftracer::utils::trace::index::plan::open_snapshot(index_path));
         dstd::HashSet<dstd::String> paths;
         for (const auto& f : files) {
-            const auto file = snapshot.file(
-                dftracer::utils::index::store::internal::get_logical_path(f));
+            const auto file = snapshot.file(fileio::get_logical_path(f));
             if (!file) continue;
-            if (auto meta = common::unwrap(
-                    dftracer::utils::index::file_metadata(snapshot, *file)))
+            if (auto meta = dftu::bench::ok(
+                    dftracer::utils::trace::index::file_metadata(snapshot,
+                                                                 *file)))
                 r.lines += meta->line_count;
-            for (const auto& [p, stat] : common::unwrap(
-                     dftracer::utils::index::catalog(snapshot, *file)))
+            for (const auto& [p, stat] : dftu::bench::ok(
+                     dftracer::utils::trace::index::catalog(snapshot, *file)))
                 paths.insert(dstd::String(p));
         }
         r.distinct_paths = paths.size();
@@ -461,14 +470,16 @@ Result measure(const Options& opt, const dstd::String& input,
 
     for (const auto& [key, text] : r.queries) {
         if (text.find("->") == dstd::String::npos) {
-            const auto parsed = duql::parse_or_throw(text);
-            dftracer::utils::index::plan::ChunkPrunerBatchInput in;
+            const auto parsed = duql::Query::from_string(text);
+            if (!parsed) dftu::bench::fail(parsed.error());
+            dftracer::utils::trace::index::plan::ChunkPrunerBatchInput in;
             in.index_path = index_path;
-            for (const auto& f : files) in.items.push_back({f, parsed});
-            dftracer::utils::index::plan::ChunkPruner pruner;
+            for (const auto& f : files) in.items.push_back({f, *parsed});
+            dftracer::utils::trace::index::plan::ChunkPruner pruner;
             Samples per_file;
-            for (double s : timed([&] { pruner.process_batch(in); },
-                                  opt.warmups, opt.runs))
+            for (double s :
+                 timed([&] { dftu::bench::ok(pruner.process_batch(in)); },
+                       opt.warmups, opt.runs))
                 per_file.push_back(s * 1e6 / static_cast<double>(files.size()));
             r.prune_us_per_file[key] = std::move(per_file);
         }
@@ -507,18 +518,22 @@ Result measure(const Options& opt, const dstd::String& input,
                 frame.filter(frame.column("metric").str_starts_with("cpu"));
             },
             opt.warmups, opt.runs);
-        r.query_s["frame_sort"] =
-            timed([&] { frame.sort_by("metric"); }, opt.warmups, opt.runs);
+        r.query_s["frame_sort"] = timed([&] { (void)frame.sort_by("metric"); },
+                                        opt.warmups, opt.runs);
         r.query_s["frame_group"] = timed(
             [&] {
-                frame.group_by(dstd::Vector<dstd::String>{"metric"}).size();
+                (void)frame.group_by(dstd::Vector<dstd::String>{"metric"})
+                    .size();
             },
             opt.warmups, opt.runs);
-        const dataframe::DataFrame runs =
-            frame.group_by(dstd::Vector<dstd::String>{"run"}).size();
-        r.query_s["frame_join"] =
-            timed([&] { frame.join(runs, dstd::Vector<dstd::String>{"run"}); },
-                  opt.warmups, opt.runs);
+        const dataframe::DataFrame runs = dftu::bench::ok(
+            frame.group_by(dstd::Vector<dstd::String>{"run"}).size());
+        r.query_s["frame_join"] = timed(
+            [&] {
+                dftu::bench::ok(
+                    frame.join(runs, dstd::Vector<dstd::String>{"run"}));
+            },
+            opt.warmups, opt.runs);
         r.peak_rss = peak_rss_bytes();
         return r;
     }
@@ -701,7 +716,7 @@ dstd::String write_smoke_trace(const dstd::String& dir) {
         lines +=
             R"(,"args":{"fname":"/data/f)" + dstd::to_string(i % 8) + "\"}}\n";
     }
-    dftracer::utils::utilities::fileio::compress::GzipMemberCompressor comp(6);
+    dftracer::utils::fileio::compress::GzipMemberCompressor comp(6);
     auto member = comp.compress_member(
         reinterpret_cast<const std::uint8_t*>(lines.data()), lines.size());
     if (!member) {

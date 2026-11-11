@@ -4,17 +4,18 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/build/batch_builder.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <unistd.h>
 
 #include <memory>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::index::build;
+using namespace dftracer::utils::trace::index::build;
 using namespace dftracer::utils::trace::internal;
 using namespace dftu_utils_test;
 
@@ -55,7 +56,7 @@ static BuildResult run_builder(const dstd::String& gz,
             }
         });
 
-    rt.submit(std::move(task), "index-build").wait();
+    dftu_utils_test::ok(rt.submit(std::move(task), "index-build").wait());
     rt.shutdown();
     return out;
 }

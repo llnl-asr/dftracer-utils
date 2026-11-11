@@ -10,11 +10,12 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/trace/views/view_source.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -65,7 +66,8 @@ TEST_SUITE("trace scan - lazy collect") {
         dataframe::LazyFrame lz =
             views::detail::scan::collect(
                 views::detail::scan::filter(
-                    base, duql::parse_or_throw(R"(cat == "POSIX")")))
+                    base, dftu_utils_test::ok(
+                              duql::Query::from_string(R"(cat == "POSIX")"))))
                 .select({"cat", "name"});
         dataframe::DataFrame subset = test_view_common::run(lz.collect());
 
@@ -199,7 +201,8 @@ TEST_SUITE("View - scan plan equality") {
                     views::detail::scan::phase(
                         views::detail::scan::filter(
                             base_plan(),
-                            duql::parse_or_throw(R"(cat == "POSIX")")),
+                            dftu_utils_test::ok(
+                                duql::Query::from_string(R"(cat == "POSIX")"))),
                         Phase::Events),
                     1000, 3000),
                 {GroupKey::name()}),
@@ -240,7 +243,8 @@ TEST_SUITE("View - scan plan equality") {
     TEST_CASE("a row query with a select") {
         views::detail::scan::ScanPlan v = views::detail::scan::select(
             views::detail::scan::filter(
-                base_plan(), duql::parse_or_throw(R"(cat == "STDIO")")),
+                base_plan(), dftu_utils_test::ok(duql::Query::from_string(
+                                 R"(cat == "STDIO")"))),
             {"cat", "name"});
         View t =
             base_viewer().duql(R"(cat == "STDIO")").select({"cat", "name"});
@@ -342,14 +346,12 @@ TEST_SUITE("View - source absorption") {
 TEST_SUITE("View - builder order") {
     TEST_CASE("a trace builder after a non-filter op is refused") {
         View t = base_viewer().sort_by("ts");
-        CHECK_THROWS_WITH_AS(t.phase(Phase::Events),
-                             doctest::Contains("sort_by"),
-                             dftracer::utils::common::DFTUtilsException);
+        test_view_common::expect_refused(t.phase(Phase::Events), "sort_by");
     }
 
     TEST_CASE("a trace builder may follow an Expr filter") {
         View t = base_viewer().filter(dataframe::col(0) > std::int64_t{0});
-        CHECK_NOTHROW(t.phase(Phase::Events));
+        CHECK(t.phase(Phase::Events).status().has_value());
     }
 
     TEST_CASE("the chain keeps the View type") {
@@ -477,11 +479,9 @@ TEST_SUITE("View - collect_all and sessions") {
             t.group_by({GroupKey::cat()}).agg({{AggOp::Count, "", "n"}}));
         Deferred<dataframe::DataFrame> rows =
             s.collect(t.duql(R"(cat == "STDIO")"));
-        CHECK_THROWS(by_cat.get());
         test_view_common::run(s.execute());
         CHECK(by_cat.get().num_rows() == 2);
         CHECK(rows.get().num_rows() == 20);
-        CHECK_THROWS(s.collect(t.lazy()));
     }
 }
 
@@ -556,7 +556,7 @@ struct FnameTrace {
         ofs.close();
         gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         idx = dstd::String(determine_index_path(gz, ""));
         StringSink sink;
         test_view_common::run(
@@ -782,7 +782,7 @@ struct NestedTrace {
         ofs.close();
         gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         StringSink sink;
         test_view_common::run(
             View::from_file(dstd::String(gz)).sink_json(sink));
@@ -902,12 +902,14 @@ TEST_SUITE("View - trace terminals") {
         };
         same(t.duql(R"(cat == "POSIX")"),
              views::detail::scan::filter(
-                 nested_plan(), duql::parse_or_throw(R"(cat == "POSIX")")));
+                 nested_plan(), dftu_utils_test::ok(duql::Query::from_string(
+                                    R"(cat == "POSIX")"))));
         same(t.filter(dataframe::expr_cmp(dataframe::CmpOp::Eq,
                                           dataframe::col(cat),
                                           dataframe::str("APP"))),
              views::detail::scan::filter(
-                 nested_plan(), duql::parse_or_throw(R"(cat == "APP")")));
+                 nested_plan(), dftu_utils_test::ok(duql::Query::from_string(
+                                    R"(cat == "APP")"))));
         same(t.phase(Phase::Events),
              views::detail::scan::phase(nested_plan(), Phase::Events));
         same(t.time_range(0, 2500),
@@ -917,33 +919,23 @@ TEST_SUITE("View - trace terminals") {
 
     TEST_CASE("rejected prefixes name the first op the terminal cannot take") {
         View t = nested_viewer();
-        CHECK_THROWS_WITH_AS(t.sort_by("ts").flamegraph(),
-                             doctest::Contains("sort_by"),
-                             dftracer::utils::common::DFTUtilsException);
-        CHECK_THROWS_WITH_AS(t.head(3).call_tree(), doctest::Contains("slice"),
-                             dftracer::utils::common::DFTUtilsException);
-        CHECK_THROWS_WITH_AS(
-            t.with_column("d", dataframe::col(column_at(t, "dur")))
-                .flamegraph(),
-            doctest::Contains("with_column"),
-            dftracer::utils::common::DFTUtilsException);
-        CHECK_THROWS_WITH_AS(t.group_by({GroupKey::name()})
-                                 .agg({{AggOp::Count, "", "n"}})
-                                 .flamegraph(),
-                             doctest::Contains("aggregates"),
-                             dftracer::utils::common::DFTUtilsException);
-        CHECK_THROWS_WITH_AS(t.group_by(dstd::Vector<dstd::String>{"name"},
-                                        {{dataframe::Agg::Count, "", "n"}})
-                                 .containment(),
-                             doctest::Contains("aggregates"),
-                             dftracer::utils::common::DFTUtilsException);
-        CHECK_THROWS_WITH_AS(t.aggregate_partial(),
-                             doctest::Contains("group_by or agg"),
-                             dftracer::utils::common::DFTUtilsException);
+        using test_view_common::expect_refused;
+        expect_refused(t.sort_by("ts").flamegraph(), "sort_by");
+        expect_refused(t.head(3).call_tree(), "slice");
+        expect_refused(t.with_column("d", dataframe::col(column_at(t, "dur")))
+                           .flamegraph(),
+                       "with_column");
+        expect_refused(t.group_by({GroupKey::name()})
+                           .agg({{AggOp::Count, "", "n"}})
+                           .flamegraph(),
+                       "aggregates");
+        expect_refused(t.group_by(dstd::Vector<dstd::String>{"name"},
+                                  {{dataframe::Agg::Count, "", "n"}})
+                           .containment(),
+                       "aggregates");
+        expect_refused(t.aggregate_partial(), "group_by or agg");
         StringSink sink;
-        CHECK_THROWS_WITH_AS(t.sort_by("ts").sink_json(sink, LAZY),
-                             doctest::Contains("sort_by"),
-                             dftracer::utils::common::DFTUtilsException);
+        expect_refused(t.sort_by("ts").sink_json(sink, LAZY), "sort_by");
     }
 
     TEST_CASE("containment returns both frames from one collect") {
@@ -971,7 +963,8 @@ TEST_SUITE("View - trace terminals") {
         const dstd::String ap =
             test_view_common::run(agg.aggregate_partial().collect());
         const dstd::Vector<dstd::StringView> aps{ap};
-        CHECK(rows_of(agg.merge_partials(aps), {"name", "n"}) ==
+        CHECK(rows_of(dftu_utils_test::ok(agg.merge_partials(aps)),
+                      {"name", "n"}) ==
               rows_of(test_view_common::run(agg.collect()), {"name", "n"}));
     }
 
@@ -983,7 +976,8 @@ TEST_SUITE("View - trace terminals") {
         const ExportStats want =
             test_view_common::run(views::detail::scan::export_json(
                 views::detail::scan::filter(
-                    nested_plan(), duql::parse_or_throw(R"(cat == "POSIX")")),
+                    nested_plan(), dftu_utils_test::ok(duql::Query::from_string(
+                                       R"(cat == "POSIX")"))),
                 old));
         CHECK(eager.lines() == old.lines());
         CHECK(eager.lines().size() == 16);
@@ -1018,7 +1012,8 @@ TEST_SUITE("View - trace terminals") {
         CHECK(rows_of(b.frames[2], FLAME_COLS) ==
               rows_of(scan_flamegraph(views::detail::scan::filter(
                           nested_plan(),
-                          duql::parse_or_throw(R"(cat == "POSIX")"))),
+                          dftu_utils_test::ok(
+                              duql::Query::from_string(R"(cat == "POSIX")")))),
                       FLAME_COLS));
         const dstd::String fp = trace::views::detail::partial_of(b.frames[3]);
         const dstd::Vector<dstd::StringView> fps{fp};
@@ -1026,8 +1021,8 @@ TEST_SUITE("View - trace terminals") {
               rows_of(b.frames[0], FLAME_COLS));
         const dstd::String ap = trace::views::detail::partial_of(b.frames[4]);
         const dstd::Vector<dstd::StringView> aps{ap};
-        CHECK(rows_of(agg.merge_partials(aps), {"name", "n"}) ==
-              rows_of(b.frames[6], {"name", "n"}));
+        CHECK(rows_of(dftu_utils_test::ok(agg.merge_partials(aps)),
+                      {"name", "n"}) == rows_of(b.frames[6], {"name", "n"}));
         CHECK(trace::views::detail::stats_of(b.frames[5]).events_matched == 16);
         CHECK(sink.lines().size() == 16);
     }
@@ -1059,7 +1054,7 @@ TEST_SUITE("View - trace terminals") {
         }
         const dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         const TypedResult t =
             test_view_common::run(views::detail::scan::collect_typed(
                 views::detail::scan::from_file(dstd::String(gz)), 0, 4096));
@@ -1081,7 +1076,6 @@ TEST_SUITE("View - trace terminals") {
             s.sink_json(t.duql(R"(cat == "POSIX")"), sink);
         Deferred<dataframe::DataFrame> fg = s.collect(t.flamegraph());
         Deferred<TypedResult> typed = s.collect(t.typed());
-        CHECK_THROWS(both.get());
         test_view_common::run(s.execute());
         CHECK(both.get().call_tree.num_rows() == 32);
         CHECK(rows_of(fg.get(), FLAME_COLS) ==
@@ -1151,7 +1145,8 @@ TEST_SUITE("View - trace terminals") {
         auto seen = dstd::make_shared<std::atomic<std::int64_t>>(0);
         auto counting = [seen](ViewSession& s) -> Deferred<std::int64_t> {
             return s.fold<std::int64_t>(
-                dftracer::utils::duql::parse_or_throw("dur >= 0"),
+                dftu_utils_test::ok(
+                    dftracer::utils::duql::Query::from_string("dur >= 0")),
                 [seen](std::int64_t& n, json::Value&, dstd::StringView) {
                     ++n;
                     ++*seen;
@@ -1208,18 +1203,21 @@ TEST_SUITE("View - trace terminals") {
                        .rollup_root(dstd::String(env.dir() + "/rollups"))
                        .group_by({GroupKey::name()})
                        .agg({{AggOp::Count, "", "n"}});
-        CHECK_FALSE(agg.reconstruct_if_cached());
+        CHECK_FALSE(dftu_utils_test::ok(agg.reconstruct_if_cached()));
         const dstd::String p =
             test_view_common::run(agg.aggregate_partial().collect());
         test_view_common::run(agg.materialize_partials({p}));
         dstd::Optional<dataframe::DataFrame> cached =
-            agg.reconstruct_if_cached();
+            dftu_utils_test::ok(agg.reconstruct_if_cached());
         REQUIRE(cached);
         CHECK(rows_of(*cached, {"name", "n"}) ==
               rows_of(test_view_common::run(agg.collect()), {"name", "n"}));
-        CHECK_THROWS_WITH_AS(nested_viewer().reconstruct_if_cached(),
-                             doctest::Contains("group_by or agg"),
-                             dftracer::utils::common::DFTUtilsException);
+        const auto refused = nested_viewer().reconstruct_if_cached();
+        REQUIRE_FALSE(refused.has_value());
+        CHECK(dstd::String(refused.error().message()).find("group_by or agg") !=
+              dstd::String::npos);
+        CHECK(dftracer::utils::common::errorcode_of(refused.error()) ==
+              dftracer::utils::common::ErrorCode::InvalidArgument);
     }
 
     TEST_CASE("compare applies the baseline aggregation to the variant") {
@@ -1238,9 +1236,8 @@ TEST_SUITE("View - trace terminals") {
         CHECK(rows_of(posix, {"name", "l_n", "r_n"}) ==
               dstd::Vector<dstd::String>{"decode|8|0|", "read|8|8|",
                                          "step|8|0|", "write|8|8|"});
-        CHECK_THROWS_WITH_AS(nested_viewer().compare(nested_viewer()),
-                             doctest::Contains("group_by or agg"),
-                             dftracer::utils::common::DFTUtilsException);
+        test_view_common::expect_refused(
+            nested_viewer().compare(nested_viewer()), "group_by or agg");
     }
 
     TEST_CASE("sink_counters writes the aggregation as counter events") {
@@ -1302,10 +1299,9 @@ TEST_SUITE("View - trace terminals") {
             dataframe::CmpOp::Gt, dataframe::col(dur) + dataframe::col(ts),
             dftracer::utils::dataframe::i64(1005)));
         CHECK(test_view_common::run(f.collect()).num_rows() > 0);
-        CHECK_THROWS_WITH_AS(f.group_by({GroupKey::name()}),
-                             doctest::Contains("filter"),
-                             dftracer::utils::common::DFTUtilsException);
-        CHECK_NOTHROW(f.phase(Phase::Events));
+        test_view_common::expect_refused(f.group_by({GroupKey::name()}),
+                                         "filter");
+        CHECK(f.phase(Phase::Events).status().has_value());
     }
 }
 
@@ -1342,23 +1338,26 @@ TEST_SUITE("View - low-level scans") {
         StringSink skipped;
         test_view_common::run(t.slice(30, 10).sink_json(skipped));
         CHECK(skipped.lines().size() == 2);
-        CHECK_THROWS_WITH_AS(
-            test_view_common::run(t.slice(2, 5).for_each_batch(
-                [](std::size_t, const dstd::Vector<dstd::StringView>&) {}, 1)),
-            doctest::Contains("head"),
-            dftracer::utils::common::DFTUtilsException);
-        CHECK_THROWS_WITH_AS(t.head(5).flamegraph(), doctest::Contains("slice"),
-                             dftracer::utils::common::DFTUtilsException);
+        test_view_common::expect_refused(
+            dftracer::utils::default_runtime()
+                .submit(t.slice(2, 5).for_each_batch(
+                    [](std::size_t, const dstd::Vector<dstd::StringView>&) {},
+                    1))
+                .get(),
+            "head");
+        test_view_common::expect_refused(t.head(5).flamegraph(), "slice");
         auto part = t.head(5).flamegraph_partial();
         CHECK_FALSE(test_view_common::run(part.collect()).empty());
-        CHECK_THROWS_WITH_AS(t.slice(1, 5).flamegraph_partial(),
-                             doctest::Contains("skips rows"),
-                             dftracer::utils::common::DFTUtilsException);
+        test_view_common::expect_refused(t.slice(1, 5).flamegraph_partial(),
+                                         "skips rows");
     }
 
     TEST_CASE("config reads the trace description without a filter") {
-        CHECK(nested_viewer().duql(R"(cat == "POSIX")").config().size() ==
-              views::detail::scan::config(nested_plan()).size());
+        CHECK(dftu_utils_test::ok(
+                  nested_viewer().duql(R"(cat == "POSIX")").config())
+                  .size() ==
+              dftu_utils_test::ok(views::detail::scan::config(nested_plan()))
+                  .size());
     }
 }
 
@@ -1404,7 +1403,7 @@ dstd::String write_args_trace(TestEnvironment& env) {
     }
     const dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    (void)dstd::fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     return gz;
 }
 
@@ -1492,7 +1491,8 @@ TEST_SUITE("View - computed columns over a trace scan") {
             for (std::size_t workers : {1, 2, 8}) {
                 CAPTURE(workers);
                 dftracer::utils::Runtime rt(workers);
-                dataframe::DataFrame out = rt.submit(grouped.collect()).get();
+                dataframe::DataFrame out =
+                    dftu_utils_test::ok(rt.submit(grouped.collect()).get());
                 CHECK(cells(out, "f") == want_f);
                 CHECK(cells(out, "l") == want_l);
             }
@@ -1566,7 +1566,7 @@ TEST_SUITE("View - aggregate types over an untyped arg") {
         }
         const dstd::String absent = absent_pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(absent_pfw, absent);
-        (void)dstd::fs::remove(absent_pfw);
+        dstd::fs::remove(absent_pfw).discard();
 
         for (const dstd::String& gz : {write_args_trace(env), absent}) {
             CAPTURE(gz);
@@ -1635,7 +1635,7 @@ struct BadPartTrace {
         ofs.close();
         gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
     }
 };
 
@@ -1693,7 +1693,7 @@ View batch_viewer(const dstd::String& dir,
                         ",\"dur\":" + dstd::to_string(1 + (n * 37) % 500) +
                         ",\"args\":{\"size\":" + dstd::to_string(n) + "}}\n";
             }
-            utilities::fileio::compress::GzipMemberCompressor c;
+            fileio::compress::GzipMemberCompressor c;
             dstd::Vector<std::uint8_t> buf(c.bound(text.size()));
             auto len =
                 c.compress(text.data(), text.size(), buf.data(), buf.size());

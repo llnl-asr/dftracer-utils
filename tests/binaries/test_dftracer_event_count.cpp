@@ -328,7 +328,7 @@ TEST_SUITE("DFTracerEventCount") {
         const dstd::String gz = dir.file("members.pfw.gz");
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                    4096));
-        (void)dstd::fs::remove(plain);
+        dstd::fs::remove(plain).discard();
         const dstd::String idx_dir = dir.file("idx");
 
         auto cold = run_event_count_capture(

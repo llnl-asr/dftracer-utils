@@ -8,8 +8,8 @@ Index
    :doc:`../guides/core/indexing` and :doc:`../concepts/indexing-and-pushdown`
    for the indexing model, and :doc:`../c_api/indexer` for the flat C ABI.
 
-The index module in ``dftracer::utils::index``. ``Indexer``
-(``dftracer/utils/index/indexer.h``) is the entry point for building and
+The index module in ``dftracer::utils::trace::index``. ``Indexer``
+(``dftracer/utils/trace/index/indexer.h``) is the entry point for building and
 inspecting an index.
 The sections after it also document the aggregation configuration types that ``indexer.h`` exposes.
 

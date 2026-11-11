@@ -176,7 +176,9 @@ class Batch {
     void add(dstd::ByteView key, dstd::ByteView value);
     void record_error(dstd::Condition condition);
 
-    const engine::Writer* writer_ = nullptr;
+    /// A serial and not the writer's address, since a writer opened after a
+    /// close can reuse that address.
+    std::uint64_t writer_serial_ = 0;
     std::uint32_t namespace_id_ = 0;
     ScopeKey scope_;
     std::uint64_t params_hash_ = 0;

@@ -9,20 +9,21 @@
 
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/domains/plugins/fold_adapter.h>
+#include <dftracer/utils/domains/plugins/plugins_internal.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
-#include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/plugin.h>
-#include <dftracer/utils/plugins/plugins_internal.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
 // arrow_abi.
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <utilities/plugins/test_plugin_common.h>
 
@@ -200,16 +201,16 @@ dstd::String make_trace(dftu_utils_test::TestEnvironment& env) {
             common::str_cat(R"({"ph":"X","name":"read","cat":"POSIX","pid":)",
                             (i % 2 + 1), R"(,"tid":1,"ts":)", (1000 + i * 100),
                             R"(,"dur":)", (10 + i), R"(,"args":{}})", "\n");
-    (void)dstd::fs::write_file(dstd::PathView(pfw), ofs);
+    dstd::fs::write_file(dstd::PathView(pfw), ofs).discard();
     dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    (void)dstd::fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     return gz;
 }
 
 void run_host(dstd::Vector<dftu_plugin*> plugins,
               dstd::Vector<ViewFile> files) {
-    auto set = plugins::build_injected_plugins(std::move(plugins));
+    auto set = domains::plugins::build_injected_plugins(std::move(plugins));
     REQUIRE(set.has_value());
     View view = View::from_files(std::move(files));
     Runtime rt(4);
@@ -218,7 +219,7 @@ void run_host(dstd::Vector<dftu_plugin*> plugins,
         REQUIRE(run.has_value());
         co_return;
     });
-    rt.submit(std::move(task), "plugin-transform").wait();
+    dftu_utils_test::ok(rt.submit(std::move(task), "plugin-transform").wait());
     rt.shutdown();
 }
 

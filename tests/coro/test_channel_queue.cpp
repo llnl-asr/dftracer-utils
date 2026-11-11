@@ -10,6 +10,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
+#include <task_result.h>
 
 #include <atomic>
 #include <cstdint>
@@ -268,7 +269,7 @@ TEST_CASE("Channel keeps the order of each producer past parked senders") {
         Runtime runtime(4);
         dstd::Vector<std::uint32_t> next(PRODUCERS, 0);
         std::uint64_t seen = 0;
-        runtime.block_on([&]() -> CoroTask<void> {
+        dftu_utils_test::ok(runtime.block_on([&]() -> CoroTask<void> {
             Channel<Tagged> channel(capacity);
             Scope scope;
             for (std::uint32_t p = 0; p < PRODUCERS; ++p) {
@@ -277,7 +278,7 @@ TEST_CASE("Channel keeps the order of each producer past parked senders") {
             }
             scope.spawn(receive_in_order(channel, next, seen));
             co_await scope.join();
-        }());
+        }()));
         CHECK(seen == PRODUCERS * PER_PRODUCER);
     }
 }
@@ -287,7 +288,7 @@ TEST_CASE("Channel close wakes more parked coroutines than one batch holds") {
     Runtime runtime(2);
 
     std::atomic<int> ended{0};
-    runtime.block_on([&]() -> CoroTask<void> {
+    dftu_utils_test::ok(runtime.block_on([&]() -> CoroTask<void> {
         Channel<int> channel(4);
         Scope scope;
         for (int i = 0; i < WAITERS; ++i) {
@@ -296,12 +297,12 @@ TEST_CASE("Channel close wakes more parked coroutines than one batch holds") {
         co_await yield();
         channel.close();
         co_await scope.join();
-    }());
+    }()));
     CHECK(ended.load() == WAITERS);
 
     std::atomic<int> refused{0};
     std::atomic<int> parked{0};
-    runtime.block_on([&]() -> CoroTask<void> {
+    dftu_utils_test::ok(runtime.block_on([&]() -> CoroTask<void> {
         Channel<int> channel(1);
         CHECK(channel.try_send(1));
         Scope scope;
@@ -314,7 +315,7 @@ TEST_CASE("Channel close wakes more parked coroutines than one batch holds") {
         int left = 0;
         CHECK(channel.try_receive(left));
         CHECK(left == 1);
-    }());
+    }()));
     CHECK(refused.load() == WAITERS);
 }
 
@@ -326,7 +327,7 @@ TEST_CASE("Channel delivers every send that returned true when closed midway") {
         std::atomic<std::uint64_t> sent_count{0};
         std::atomic<std::uint64_t> received_sum{0};
         std::atomic<std::uint64_t> received_count{0};
-        runtime.block_on([&]() -> CoroTask<void> {
+        dftu_utils_test::ok(runtime.block_on([&]() -> CoroTask<void> {
             Channel<std::uint64_t> channel(capacity);
             Scope scope;
             for (std::uint64_t p = 0; p < 4; ++p) {
@@ -338,7 +339,7 @@ TEST_CASE("Channel delivers every send that returned true when closed midway") {
             }
             scope.spawn(close_after(channel, sent_count, 2000));
             co_await scope.join();
-        }());
+        }()));
         CHECK(received_count.load() == sent_count.load());
         CHECK(received_sum.load() == sent_sum.load());
     }
@@ -357,14 +358,14 @@ TEST_CASE("Channel blocking_receive sees every item, then the end") {
             ++seen;
         }
     });
-    runtime.block_on([&]() -> CoroTask<void> {
+    dftu_utils_test::ok(runtime.block_on([&]() -> CoroTask<void> {
         Scope scope;
         for (std::uint32_t p = 0; p < 2; ++p) {
             scope.spawn(
                 send_tagged(*channel, channel->producer(), p, PER_PRODUCER));
         }
         co_await scope.join();
-    }());
+    }()));
     reader.join();
     CHECK(seen == 2 * PER_PRODUCER);
 }
@@ -469,7 +470,7 @@ TEST_CASE("UnboundedChannel never refuses and ends after the last producer") {
     CHECK(channel->capacity() == SIZE_MAX);
     std::uint64_t sum = 0;
     std::uint64_t count = 0;
-    runtime.block_on([&]() -> CoroTask<void> {
+    dftu_utils_test::ok(runtime.block_on([&]() -> CoroTask<void> {
         auto producer = channel->producer();
         {
             auto guard = producer.guard();
@@ -485,7 +486,7 @@ TEST_CASE("UnboundedChannel never refuses and ends after the last producer") {
             sum += *item;
             ++count;
         }
-    }());
+    }()));
     CHECK(count == 10000);
     CHECK(sum == 10000 * 10001 / 2);
     CHECK(channel->is_closed_and_done());

@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
@@ -14,6 +15,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <sys/stat.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <unistd.h>
 
@@ -29,7 +31,8 @@ using dstd::fs::FileKind;
 template <typename Fn>
 void run_in_scope(Fn fn) {
     Runtime rt;
-    rt.block_on(coro::named("fs test", coro::with_scope(std::move(fn))));
+    dftu_utils_test::ok(
+        rt.block_on(coro::named("fs test", coro::with_scope(std::move(fn)))));
 }
 
 void write_file_at(const dstd::Path& path, dstd::StringView text) {
@@ -356,12 +359,14 @@ TEST_CASE("find_all - on a plain thread with no IO backend") {
     dftu_utils_test::ScopedTestDir dir("dftu_test_runtime_fs");
     const dstd::Path root = make_tree(dir);
     dstd::Vector<FoundFile> files;
-    coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
-        FindOptions options_found = trace_options();
-        auto found = co_await find_all(scope, root, std::move(options_found));
-        REQUIRE(found.has_value());
-        files = std::move(*found);
-    }).get();
+    dftu_utils_test::ok(
+        coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
+            FindOptions options_found = trace_options();
+            auto found =
+                co_await find_all(scope, root, std::move(options_found));
+            REQUIRE(found.has_value());
+            files = std::move(*found);
+        }).get());
     CHECK(files.size() == 3);
 }
 
@@ -401,7 +406,7 @@ TEST_CASE("find_all - many files in one folder") {
     dftu_utils_test::ScopedTestDir dir("dftu_test_runtime_fs");
     const dstd::Path root = dir.path() / "flat";
     for (int i = 0; i < 100; ++i) {
-        write_file_at(root / ("file" + dstd::to_string(i) + ".txt"), "x");
+        write_file_at(root / (dstd::fmt<"file{}.txt">(i)), "x");
     }
     CHECK(find_names(root, {}).size() == 100);
 }
@@ -468,7 +473,7 @@ TEST_CASE("find_all - a long list of patterns") {
     }
     FindOptions options;
     for (int i = 1; i <= 100; ++i) {
-        options.patterns.push_back("*.ext" + dstd::to_string(i));
+        options.patterns.push_back(dstd::fmt<"*.ext{}">(i));
     }
     dstd::Vector<FoundFile> files;
     run_in_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {

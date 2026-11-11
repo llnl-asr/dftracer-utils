@@ -2,12 +2,13 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
-#include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
-#include <dftracer/utils/utilities/fileio/json_line_format.h>
+#include <dftracer/utils/fileio/gzip_line_writer.h>
+#include <dftracer/utils/fileio/json_line_format.h>
 #include <doctest/doctest.h>
 #include <testing_runtime.h>
 #include <testing_utilities.h>
@@ -17,12 +18,11 @@
 #include <limits>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities::fileio;
+using namespace dftracer::utils::fileio;
 
 namespace {
 
-template <line_format::FixedString Fmt, class E = line_format::PlainEscape,
-          class... A>
+template <dstd::FixedString Fmt, class E = line_format::PlainEscape, class... A>
 dstd::String fmt_ct(const A&... a) {
     const auto v = line_format::view<Fmt>();
     dstd::String out(line_format::max_line_bytes<E>(v, a...), '\0');
@@ -180,18 +180,17 @@ TEST_CASE("line_format - writer output equals hand-built lines") {
     REQUIRE(lf.has_value());
     dstd::String want;
     for (int i = 0; i < 500; ++i)
-        want += "{\"id\":" + dstd::to_string(i) + ",\"n\":\"n\\\"" +
-                dstd::to_string(i) + "\",\"v\":" + (i % 2 ? "true" : "false") +
-                "}\n";
+        want += dstd::fmt<"{\"id\":{},\"n\":\"n\\\"{}\",\"v\":{}}\n">(
+            i, i, (i % 2 ? "true" : "false"));
 
-    bool bad_count = false, null_arg = false;
+    bool bad_count = false, null_arg = false, null_mut_arg = false;
     dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         GzipWriterOptions o;
         o.member_size = 1024;
         auto w = co_await GzipLineWriter::open(p1, std::move(o));
         REQUIRE(w.has_value());
         for (int i = 0; i < 500; ++i) {
-            const dstd::String n = "n\"" + dstd::to_string(i);
+            const dstd::String n = dstd::fmt<"n\"{}">(i);
             if (i % 2) {
                 REQUIRE(co_await w->append_json<R"({"id":{},"n":"{}","v":{}})">(
                     i, n, true));
@@ -203,6 +202,10 @@ TEST_CASE("line_format - writer output equals hand-built lines") {
         bad_count = !r.has_value() &&
                     r.error().is_code(common::ErrorCode::InvalidArgument);
         auto r2 = co_await w->append_json<"{}">((const char*)nullptr);
+        char* null_mut = nullptr;
+        auto r3 = co_await w->append_fmt<"{}">(null_mut);
+        null_mut_arg = !r3.has_value() &&
+                       r3.error().is_code(common::ErrorCode::InvalidArgument);
         null_arg = !r2.has_value() &&
                    r2.error().is_code(common::ErrorCode::InvalidArgument);
         REQUIRE(co_await w->close());
@@ -215,7 +218,7 @@ TEST_CASE("line_format - writer output equals hand-built lines") {
         auto pr = wu->producer();
         REQUIRE(pr.has_value());
         for (int i = 0; i < 500; ++i) {
-            const dstd::String n = "n\"" + dstd::to_string(i);
+            const dstd::String n = dstd::fmt<"n\"{}">(i);
             REQUIRE(co_await pr->append_json(*lf, i, n, i % 2 != 0));
         }
         REQUIRE(co_await pr->flush());
@@ -223,6 +226,7 @@ TEST_CASE("line_format - writer output equals hand-built lines") {
     });
     CHECK(bad_count);
     CHECK(null_arg);
+    CHECK(null_mut_arg);
     CHECK(gunzip_all(p1) == want);
     auto lines = [](const dstd::String& t) {
         dstd::MultiSet<dstd::String> out;

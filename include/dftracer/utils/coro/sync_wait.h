@@ -7,6 +7,7 @@
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/run_on.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/future.h>
 #include <dftracer/utils/dstd/optional.h>
 
@@ -21,9 +22,12 @@ namespace detail {
 template <class T>
 struct SyncWaitSlot {
     dstd::Optional<T> value;
+    bool stopped{false};
 };
 template <>
-struct SyncWaitSlot<void> {};
+struct SyncWaitSlot<void> {
+    bool stopped{false};
+};
 
 // The frame owns the promise. The waiter may free its stack as soon as the
 // future is ready, while set_value may still be running.
@@ -31,16 +35,10 @@ template <class T>
 detail::Coro sync_wait_child(CoroTask<T> task, SyncWaitSlot<T>& slot,
                              std::exception_ptr& error,
                              dstd::Promise<void> done) {
-    try {
-        if constexpr (std::is_void_v<T>) {
-            co_await std::move(task);
-        } else {
-            T value = co_await std::move(task);
-            slot.value.emplace(std::move(value));
-        }
-    } catch (...) {
-        error = std::current_exception();
-    }
+    auto settled = co_await settle(std::move(task));
+    error = std::move(settled.exception);
+    slot.stopped = settled.stopped;
+    if constexpr (!std::is_void_v<T>) slot.value = std::move(settled.value);
     done.set_value();
 }
 
@@ -49,13 +47,15 @@ detail::Coro sync_wait_child(CoroTask<T> task, SyncWaitSlot<T>& slot,
 /**
  * @brief Runs `task` on `ex` and blocks the calling thread until it ends.
  *
- * The task's error is raised here. A thread of an executor keeps running that
- * executor's work while it waits. On the only thread of an executor that
- * cannot lend it (@ref Executor::drive_until returns false) this raises
- * before the task runs.
+ * Gives the value, or an error with dstd::Condition::Cancelled when the task
+ * stopped (see @ref TaskResult). An exception the task raised is rethrown here.
+ * A thread of an executor keeps running that executor's work while it waits. On
+ * the only thread of an executor that cannot lend it (@ref
+ * Executor::drive_until returns false) this ends the process before the task
+ * runs.
  */
 template <class T>
-T sync_wait(Executor& ex, CoroTask<T> task) {
+TaskResult<T> sync_wait(Executor& ex, CoroTask<T> task) {
     Executor* here = Executor::current();
     if (here == &ex) return task.get();
     // A thread of another executor keeps serving it while it waits.
@@ -71,7 +71,12 @@ T sync_wait(Executor& ex, CoroTask<T> task) {
     ex.post(child.release());
     finished.wait();
     if (error) common::rethrow_and_clear(error);
-    if constexpr (!std::is_void_v<T>) return std::move(*slot.value);
+    if (slot.stopped) return detail::stopped_result<T>();
+    if constexpr (std::is_void_v<T>) {
+        return {};
+    } else {
+        return TaskResult<T>(std::move(*slot.value));
+    }
 }
 
 }  // namespace dftracer::utils::coro

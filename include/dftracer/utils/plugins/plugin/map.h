@@ -15,13 +15,30 @@
 #include <dftracer/utils/plugins/result_registry.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
+#include <exception>
 #include <initializer_list>
 #include <iterator>
 #include <type_traits>
 #include <utility>
 
 namespace dftracer::utils::plugins {
+
+namespace detail {
+/// Runs a plugin callable the host calls through a C function pointer. The
+/// host cannot catch, so an exception stops here and is reported on stderr.
+template <class Fn>
+void run_guarded(Fn& fn) noexcept {
+    try {
+        fn();
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "plugin callback threw: %s\n", e.what());
+    } catch (...) {
+        std::fputs("plugin callback threw\n", stderr);
+    }
+}
+}  // namespace detail
 
 class Writer;
 class Agg;
@@ -82,7 +99,8 @@ class Host {
     /// so it must outlive it (a coroutine local naturally does).
     template <class Fn>
     AsyncOp spawn(Fn& fn) const {
-        return spawn([](void* p) { (*static_cast<Fn*>(p))(); }, &fn);
+        return spawn([](void* p) { detail::run_guarded(*static_cast<Fn*>(p)); },
+                     &fn);
     }
     /// Sequence: run `fn(arg)` after `t` completes; returns an @ref AsyncOp to
     /// co_await. `arg` is plugin-owned and must outlive the await.
@@ -93,7 +111,8 @@ class Host {
     /// Sequence a callable after `t`; `fn` is borrowed for the await.
     template <class Fn>
     AsyncOp then(dftu_task* t, Fn& fn) const {
-        return then(t, [](void* p) { (*static_cast<Fn*>(p))(); }, &fn);
+        return then(
+            t, [](void* p) { detail::run_guarded(*static_cast<Fn*>(p)); }, &fn);
     }
 
     /// Run a synchronous blocking call while releasing the worker's run-permit,
@@ -105,7 +124,9 @@ class Host {
         const dftu_svc_coro* c = ext(DFTU_SVC_CORO, coro_ext_);
         if (c && c->run_blocking)
             c->run_blocking(
-                h_->h, [](void* p) { (*static_cast<Fn*>(p))(); }, &fn);
+                h_->h,
+                [](void* p) { detail::run_guarded(*static_cast<Fn*>(p)); },
+                &fn);
         else
             fn();
     }
@@ -948,17 +969,25 @@ inline const detail::ColBuf* Batch::find_dyn(
 
 template <class Fn>
 inline int Host::trace_read(const char* path, Fn&& fn) const {
+    struct State {
+        std::decay_t<Fn>* f;
+        bool failed;
+    } state{const_cast<std::decay_t<Fn>*>(std::addressof(fn)), false};
     auto thunk = [](const void* item, void* ud) {
         const auto* df = static_cast<const dftu_dataframe*>(item);
-        auto& f = *static_cast<std::decay_t<Fn>*>(ud);
-        if constexpr (std::is_invocable_v<std::decay_t<Fn>&, const Batch&>)
-            f(Batch{df});
-        else
-            f(df);
+        auto& st = *static_cast<State*>(ud);
+        if (st.failed) return;
+        try {
+            if constexpr (std::is_invocable_v<std::decay_t<Fn>&, const Batch&>)
+                (*st.f)(Batch{df});
+            else
+                (*st.f)(df);
+        } catch (...) {
+            st.failed = true;
+        }
     };
-    return trace_read(
-        path, thunk,
-        const_cast<void*>(static_cast<const void*>(std::addressof(fn))));
+    const int rc = trace_read(path, thunk, &state);
+    return state.failed ? -1 : rc;
 }
 
 /// Non-owning view over a compiled dftu_duql (see Host::compile). Host-owned

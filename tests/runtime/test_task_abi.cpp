@@ -5,6 +5,7 @@
 #include <doctest/doctest.h>
 
 #include <atomic>
+#include <stdexcept>
 
 using namespace dftracer::utils;
 
@@ -12,6 +13,11 @@ namespace {
 
 coro::CoroTask<void> set_flag(std::atomic<int>* n) {
     n->fetch_add(1);
+    co_return;
+}
+
+coro::CoroTask<void> throw_boom() {
+    throw std::runtime_error("boom");
     co_return;
 }
 
@@ -50,6 +56,21 @@ TEST_SUITE("core task ABI") {
         dftu_task* any = dftu_task_when_any(ts, 2);
         CHECK(dftu_task_run(dftu_default_runtime(), any) == 0);
         CHECK(ran.load() >= 1);
+    }
+
+    TEST_CASE("dftu_task_when_all reports a thrown input") {
+        std::atomic<int> ran{0};
+        dftu_task* ts[2] = {task_to_abi(set_flag(&ran)),
+                            task_to_abi(throw_boom())};
+        dftu_task* all = dftu_task_when_all(ts, 2);
+        CHECK(dftu_task_run(dftu_default_runtime(), all) == -1);
+    }
+
+    TEST_CASE("dftu_task_when_any reports a thrown input") {
+        dftu_task* ts[2] = {task_to_abi(throw_boom()),
+                            task_to_abi(throw_boom())};
+        dftu_task* any = dftu_task_when_any(ts, 2);
+        CHECK(dftu_task_run(dftu_default_runtime(), any) == -1);
     }
 
     TEST_CASE("empty when_all/when_any return null") {

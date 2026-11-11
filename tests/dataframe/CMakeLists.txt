@@ -28,15 +28,16 @@ set(DATAFRAME_TEST_SOURCES test_mask.cpp test_series.cpp test_methods.cpp
                            test_where_null.cpp test_constant_column.cpp
                            test_variance_stable.cpp
                            test_covariance_stable.cpp
-                           test_join_null_keys.cpp
+                           test_join_null_keys.cpp test_join_contract.cpp
                            test_concat_large_string.cpp
                            test_groupby_scale.cpp
-                           test_string_simd.cpp test_expr_string_methods.cpp
+                           test_string_simd.cpp test_string_match.cpp test_expr_string_methods.cpp
                            test_concat_text.cpp test_struct_concat_by_name.cpp
                            test_rest_column.cpp
                            test_string_view.cpp
                            test_groupby_string_encodings.cpp
                            test_kernels_keep_layouts.cpp
+                           test_parallel_region.cpp
                            test_collect_concat.cpp
                            test_slice_views.cpp
                            test_chunked_columns.cpp
@@ -117,5 +118,6 @@ endforeach()
 add_executable(dataframe_test_scalar_macros_c test_scalar_macros_c.c)
 target_include_directories(dataframe_test_scalar_macros_c PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(dataframe_test_scalar_macros_c PRIVATE dftracer_utils)
+target_set_warnings(dataframe_test_scalar_macros_c)
 set_target_properties(dataframe_test_scalar_macros_c PROPERTIES OUTPUT_NAME test_scalar_macros_c)
 add_test(NAME dataframe/test_scalar_macros_c COMMAND dataframe_test_scalar_macros_c)

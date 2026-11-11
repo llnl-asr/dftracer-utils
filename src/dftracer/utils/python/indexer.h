@@ -4,13 +4,13 @@
 
 #include <Python.h>
 #include <dftracer/utils/dstd/memory.h>
-#include <dftracer/utils/index/gzip/checkpoint_indexer.h>
+#include <dftracer/utils/trace/index/gzip/checkpoint_indexer.h>
 
 #include <cstdint>
 
 typedef struct {
     PyObject_HEAD dftracer::utils::dstd::SharedPtr<
-        dftracer::utils::index::gzip::CheckpointIndexer> *handle;
+        dftracer::utils::trace::index::gzip::CheckpointIndexer> *handle;
     PyObject *gz_path;
     PyObject *index_path;
     std::uint64_t checkpoint_size;

@@ -1,0 +1,349 @@
+// SPDX-License-Identifier: MIT
+#ifndef DFTRACER_UTILS_TRACE_READER_INTERNAL_STREAMS_LINE_STREAM_H
+#define DFTRACER_UTILS_TRACE_READER_INTERNAL_STREAMS_LINE_STREAM_H
+
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/trace/reader/internal/stream.h>
+
+#include <cstring>
+
+namespace dftracer::utils::trace::reader::internal {
+
+class LineStream : public ReaderStream {
+   private:
+    dstd::UniquePtr<internal::ReaderStream> underlying_stream_;
+    dstd::Span<const char> current_span_;
+    dstd::String line_accumulator_;
+    dstd::String current_line_;
+    bool is_finished_;
+    bool has_pending_line_;
+    std::size_t current_line_number_;
+    std::size_t start_line_;
+    std::size_t end_line_;
+    std::size_t initial_line_;
+    std::size_t output_position_;
+    std::size_t span_pos_;
+
+    enum class ParseResult { HasLine, NeedMoreData, Finished };
+
+    struct DirectOutputResult {
+        std::size_t bytes_written;
+        bool need_more_data;
+        bool finished;
+    };
+
+   public:
+    explicit LineStream(dstd::UniquePtr<ReaderStream> underlying_stream,
+                        std::size_t start_line = 0, std::size_t end_line = 0,
+                        std::size_t initial_line = 1)
+        : underlying_stream_(std::move(underlying_stream)),
+          current_span_(),
+          is_finished_(false),
+          has_pending_line_(false),
+          current_line_number_(initial_line),
+          start_line_(start_line),
+          end_line_(end_line),
+          initial_line_(initial_line),
+          output_position_(0),
+          span_pos_(0) {
+        line_accumulator_.reserve(1024);
+        current_line_.reserve(1024);
+    }
+
+    ~LineStream() override { reset(); }
+
+    coro::CoroTask<dstd::Result<dstd::Span<const char>>> read_async() override {
+        if (!underlying_stream_ || is_finished_) {
+            co_return {};
+        }
+
+        while (true) {
+            auto result = try_parse_next_line();
+
+            if (result == ParseResult::HasLine) {
+                co_return dstd::Span<const char>(current_line_.data(),
+                                                 current_line_.size());
+            }
+            if (result == ParseResult::Finished) {
+                co_return {};
+            }
+
+            if (underlying_stream_->done()) {
+                if (handle_eof_line()) {
+                    co_return dstd::Span<const char>(current_line_.data(),
+                                                     current_line_.size());
+                }
+                is_finished_ = true;
+                co_return {};
+            }
+
+            auto chunk = co_await underlying_stream_->read_async();
+            if (!chunk.has_value()) {
+                co_return chunk.error();
+            }
+            current_span_ = *chunk;
+            span_pos_ = 0;
+            if (current_span_.empty()) {
+                is_finished_ = true;
+                co_return dstd::Span<const char>{};
+            }
+        }
+    }
+
+    coro::CoroTask<dstd::Result<std::size_t>> read_async(
+        char* buffer, std::size_t buffer_size) override {
+        if (!underlying_stream_) {
+            co_return std::size_t{0};
+        }
+
+        if (has_pending_line_) {
+            co_return output_pending_line(buffer, buffer_size);
+        }
+
+        if (is_finished_) {
+            co_return std::size_t{0};
+        }
+
+        while (true) {
+            auto direct = try_direct_output(buffer, buffer_size);
+            if (direct.bytes_written > 0) {
+                co_return direct.bytes_written;
+            }
+            if (direct.finished) {
+                co_return std::size_t{0};
+            }
+
+            if (!direct.need_more_data) {
+                auto result = try_parse_next_line();
+                if (result == ParseResult::HasLine) {
+                    co_return output_pending_line(buffer, buffer_size);
+                }
+                if (result == ParseResult::Finished) {
+                    co_return std::size_t{0};
+                }
+            }
+
+            if (underlying_stream_->done()) {
+                if (handle_eof_line()) {
+                    co_return output_pending_line(buffer, buffer_size);
+                }
+                is_finished_ = true;
+                co_return std::size_t{0};
+            }
+
+            auto chunk = co_await underlying_stream_->read_async();
+            if (!chunk.has_value()) {
+                co_return chunk.error();
+            }
+            current_span_ = *chunk;
+            span_pos_ = 0;
+            if (current_span_.empty()) {
+                is_finished_ = true;
+                co_return std::size_t{0};
+            }
+        }
+    }
+
+    bool done() const override { return is_finished_ && !has_pending_line_; }
+
+    void reset() override {
+        if (underlying_stream_) {
+            underlying_stream_->reset();
+        }
+        line_accumulator_.clear();
+        current_line_.clear();
+        current_span_ = dstd::Span<const char>();
+        is_finished_ = false;
+        has_pending_line_ = false;
+        current_line_number_ = initial_line_;
+        output_position_ = 0;
+        span_pos_ = 0;
+    }
+
+   private:
+    bool is_beyond_range() const {
+        return end_line_ > 0 && current_line_number_ > end_line_;
+    }
+
+    bool should_output_current_line() const {
+        if (start_line_ == 0 && end_line_ == 0) {
+            return true;
+        }
+        bool after_start =
+            (start_line_ == 0 || current_line_number_ >= start_line_);
+        bool before_end = (end_line_ == 0 || current_line_number_ <= end_line_);
+        return after_start && before_end;
+    }
+
+    bool has_data_in_span() const { return span_pos_ < current_span_.size(); }
+
+    const char* find_next_newline() const {
+        return static_cast<const char*>(
+            std::memchr(current_span_.data() + span_pos_, '\n',
+                        current_span_.size() - span_pos_));
+    }
+
+    void accumulate_remaining_span() {
+        line_accumulator_.append(current_span_.data() + span_pos_,
+                                 current_span_.size() - span_pos_);
+        span_pos_ = current_span_.size();
+    }
+
+    ParseResult try_parse_next_line() {
+        if (is_beyond_range()) {
+            is_finished_ = true;
+            return ParseResult::Finished;
+        }
+
+        while (has_data_in_span()) {
+            const char* newline_ptr = find_next_newline();
+
+            if (!newline_ptr) {
+                accumulate_remaining_span();
+                return ParseResult::NeedMoreData;
+            }
+
+            std::size_t newline_pos = newline_ptr - current_span_.data();
+            if (process_complete_line(newline_pos)) {
+                return ParseResult::HasLine;
+            }
+        }
+
+        return ParseResult::NeedMoreData;
+    }
+
+    DirectOutputResult try_direct_output(char* buffer,
+                                         std::size_t buffer_size) {
+        if (!line_accumulator_.empty()) {
+            return {0, false, false};
+        }
+
+        while (true) {
+            if (is_beyond_range()) {
+                is_finished_ = true;
+                return {0, false, true};
+            }
+
+            if (!has_data_in_span()) {
+                return {0, true, false};
+            }
+
+            const char* newline_ptr = find_next_newline();
+            if (!newline_ptr) {
+                return {0, false, false};
+            }
+
+            std::size_t newline_pos = newline_ptr - current_span_.data();
+            std::size_t line_size = newline_pos - span_pos_ + 1;
+
+            if (line_size > buffer_size) {
+                return {0, false, false};
+            }
+
+            bool should_output = should_output_current_line();
+
+            if (is_beyond_range()) {
+                is_finished_ = true;
+                return {0, false, true};
+            }
+
+            current_line_number_++;
+
+            if (should_output) {
+                std::memcpy(buffer, current_span_.data() + span_pos_,
+                            line_size);
+                span_pos_ = newline_pos + 1;
+                return {line_size, false, false};
+            }
+
+            span_pos_ = newline_pos + 1;
+        }
+    }
+
+    bool handle_eof_line() {
+        if (line_accumulator_.empty()) {
+            return false;
+        }
+        current_line_ = std::move(line_accumulator_);
+        line_accumulator_.clear();
+        if (should_output_current_line() && !is_beyond_range()) {
+            has_pending_line_ = true;
+            output_position_ = 0;
+            current_line_number_++;
+            return true;
+        }
+        return false;
+    }
+
+    void finalize_line_with_accumulator(std::size_t line_size) {
+        line_accumulator_.append(current_span_.data() + span_pos_, line_size);
+        line_accumulator_.push_back('\n');
+        current_line_ = std::move(line_accumulator_);
+        line_accumulator_.clear();
+    }
+
+    void finalize_line_direct(std::size_t line_size) {
+        current_line_.assign(current_span_.data() + span_pos_, line_size);
+        current_line_.push_back('\n');
+    }
+
+    bool process_complete_line(std::size_t newline_pos) {
+        std::size_t line_size = newline_pos - span_pos_;
+
+        if (!line_accumulator_.empty()) {
+            finalize_line_with_accumulator(line_size);
+        } else {
+            finalize_line_direct(line_size);
+        }
+
+        span_pos_ = newline_pos + 1;
+
+        bool should_output = should_output_current_line();
+
+        if (is_beyond_range()) {
+            is_finished_ = true;
+            return false;
+        }
+
+        current_line_number_++;
+
+        if (should_output) {
+            has_pending_line_ = true;
+            output_position_ = 0;
+            return true;
+        }
+
+        current_line_.clear();
+        return false;
+    }
+
+    std::size_t output_pending_line(char* buffer, std::size_t buffer_size) {
+        if (output_position_ >= current_line_.size()) {
+            has_pending_line_ = false;
+            current_line_.clear();
+            output_position_ = 0;
+            return 0;
+        }
+
+        std::size_t remaining = current_line_.size() - output_position_;
+        std::size_t copy_size = std::min(remaining, buffer_size);
+
+        std::memcpy(buffer, current_line_.data() + output_position_, copy_size);
+        output_position_ += copy_size;
+
+        if (output_position_ >= current_line_.size()) {
+            has_pending_line_ = false;
+            current_line_.clear();
+            output_position_ = 0;
+        }
+
+        return copy_size;
+    }
+};
+
+}  // namespace dftracer::utils::trace::reader::internal
+
+#endif  // DFTRACER_UTILS_TRACE_READER_INTERNAL_STREAMS_LINE_STREAM_H

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_DSTD_HASH_COMBINE_H
-#define DFTRACER_UTILS_DSTD_HASH_COMBINE_H
+#ifndef DFTRACER_UTILS_DSTD_HASH_HASH_COMBINE_H
+#define DFTRACER_UTILS_DSTD_HASH_HASH_COMBINE_H
 
 #include <dftracer/utils/dstd/hash/constants.h>
 
@@ -21,4 +21,4 @@ inline void hash_combine(std::size_t& seed, std::size_t value) {
 
 }  // namespace dftracer::utils::dstd
 
-#endif  // DFTRACER_UTILS_DSTD_HASH_COMBINE_H
+#endif  // DFTRACER_UTILS_DSTD_HASH_HASH_COMBINE_H

@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -177,7 +178,7 @@ dstd::String write_trace(const dstd::String& dir, int file, std::uint64_t seed,
     }
     const dstd::String gz = pfw + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
-    (void)dstd::fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     return gz;
 }
 
@@ -224,7 +225,7 @@ void write_dlio_traces(const dstd::String& dir) {
             ofs << "]\n";
         }
         REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, pfw + ".gz"));
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
     }
 }
 
@@ -878,7 +879,8 @@ TEST_SUITE("AggParity") {
         for (const auto& q : queries) {
             SUBCASE(q.file) {
                 View base = View::from_files(view_files(fx.baseline_files));
-                const dataframe::DataFrame t = q.build(base).collect().get();
+                const dataframe::DataFrame t =
+                    dftu_utils_test::ok(q.build(base).collect().get());
                 const dstd::String produced = table_text(t, q.keys);
                 const dstd::String ref = reference(q.file, produced);
                 if (!ref.empty()) compare_table(q.file, ref, produced, q.keys);

@@ -8,7 +8,6 @@
 #include <simdjson.h>
 
 #include <cstddef>
-#include <cstdio>
 
 namespace dftracer::utils::json {
 
@@ -37,41 +36,36 @@ inline dstd::String ondemand_value_to_string(simdjson::ondemand::value& val) {
     auto type_result = val.type();
     if (type_result.error()) return {};
 
-    switch (type_result.value()) {
+    switch (type_result.value_unsafe()) {
         case simdjson::ondemand::json_type::string: {
             auto s = val.get_string();
-            return s.error() ? dstd::String{} : dstd::String(s.value());
+            return s.error() ? dstd::String{} : dstd::String(s.value_unsafe());
         }
         case simdjson::ondemand::json_type::number: {
             char buf[32];
             auto u = val.get_uint64();
             if (!u.error()) {
-                char* end =
-                    dstd::to_chars_u64(buf, buf + sizeof(buf), u.value());
+                char* end = dstd::to_chars_u64(buf, buf + sizeof(buf),
+                                               u.value_unsafe());
                 if (end) return dstd::String(buf, end);
             }
             auto i = val.get_int64();
             if (!i.error()) {
-                char* end =
-                    dstd::to_chars_i64(buf, buf + sizeof(buf), i.value());
+                char* end = dstd::to_chars_i64(buf, buf + sizeof(buf),
+                                               i.value_unsafe());
                 if (end) return dstd::String(buf, end);
             }
             auto d = val.get_double();
             if (!d.error()) {
-                // %f is what dstd::to_string(double) prints; 512 bytes holds
-                // every magnitude.
-                char text[512];
-                const int n =
-                    std::snprintf(text, sizeof(text), "%f", d.value());
-                if (n > 0 && static_cast<std::size_t>(n) < sizeof(text))
-                    return dstd::String(text, static_cast<std::size_t>(n));
+                return dstd::fixed_text(d.value_unsafe());
             }
             return {};
         }
         case simdjson::ondemand::json_type::boolean: {
             auto b = val.get_bool();
-            return b.error() ? dstd::String{}
-                             : dstd::String(b.value() ? "true" : "false");
+            return b.error()
+                       ? dstd::String{}
+                       : dstd::String(b.value_unsafe() ? "true" : "false");
         }
         default:
             return {};

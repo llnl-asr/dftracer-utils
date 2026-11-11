@@ -1,19 +1,20 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/domains/server/trace_index.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
-#include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/server/trace_index.h>
+#include <dftracer/utils/trace/index/indexer.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <atomic>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::server;
+using namespace dftracer::utils::domains::server;
 
 /// Helper: create a DFTracer gzip file with .pfw.gz extension
 /// (TraceIndex scans for .pfw and .pfw.gz patterns).
@@ -49,7 +50,8 @@ TEST_CASE("TraceIndex - discovers .pfw.gz files") {
 
     auto body = [&]() -> coro::CoroTask<void> {
         TraceIndex index(dstd::String(env.dir()), dstd::String(env.dir()));
-        co_await index.initialize();
+        auto initialized = co_await index.initialize();
+        CHECK(initialized.has_value());
 
         file_count = index.file_count();
         if (file_count >= 2) {
@@ -58,7 +60,7 @@ TEST_CASE("TraceIndex - discovers .pfw.gz files") {
         co_return;
     };
 
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     CHECK(success.load());
     CHECK(file_count >= 2);
 }
@@ -77,7 +79,8 @@ TEST_CASE("TraceIndex - find_file by path") {
 
     auto body = [&]() -> coro::CoroTask<void> {
         TraceIndex index(dstd::String(env.dir()), dstd::String(env.dir()));
-        co_await index.initialize();
+        auto initialized = co_await index.initialize();
+        CHECK(initialized.has_value());
 
         auto* info = index.find_file(dstd::String(file));
         if (info != nullptr) {
@@ -87,7 +90,7 @@ TEST_CASE("TraceIndex - find_file by path") {
         co_return;
     };
 
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     CHECK(found.load());
     CHECK(found_path == file);
 }
@@ -105,7 +108,8 @@ TEST_CASE("TraceIndex - find_file returns nullptr for missing file") {
 
     auto body = [&]() -> coro::CoroTask<void> {
         TraceIndex index(dstd::String(env.dir()), dstd::String(env.dir()));
-        co_await index.initialize();
+        auto initialized = co_await index.initialize();
+        CHECK(initialized.has_value());
 
         auto* info = index.find_file("/nonexistent/path.pfw.gz");
         if (info == nullptr) {
@@ -114,7 +118,7 @@ TEST_CASE("TraceIndex - find_file returns nullptr for missing file") {
         co_return;
     };
 
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     CHECK(is_null.load());
 }
 
@@ -131,7 +135,8 @@ TEST_CASE("TraceIndex - file_at by index") {
 
     auto body = [&]() -> coro::CoroTask<void> {
         TraceIndex index(dstd::String(env.dir()), dstd::String(env.dir()));
-        co_await index.initialize();
+        auto initialized = co_await index.initialize();
+        CHECK(initialized.has_value());
 
         REQUIRE(index.file_count() >= 1);
         auto* info = index.file_at(0);
@@ -145,7 +150,7 @@ TEST_CASE("TraceIndex - file_at by index") {
         co_return;
     };
 
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     CHECK(success.load());
 }
 
@@ -159,16 +164,17 @@ TEST_CASE("TraceIndex - empty directory") {
 
     auto body = [&]() -> coro::CoroTask<void> {
         TraceIndex index(dstd::String(dir.str()), dstd::String(dir.str()));
-        co_await index.initialize();
+        auto initialized = co_await index.initialize();
+        CHECK(initialized.has_value());
 
         count.store(index.file_count());
         co_return;
     };
 
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     CHECK(count.load() == 0);
 
-    (void)dstd::fs::remove_all(dir);
+    dstd::fs::remove_all(dir).discard();
 }
 
 TEST_CASE("TraceIndex - directory and index_dir accessors") {
@@ -190,23 +196,25 @@ TEST_CASE("TraceIndex - genesis output resolves run keys through runs") {
                 dstd::to_string(i) + R"(","depth":1,"count":2})" + "\n";
     const dstd::String gz = env.dir() + "/genesis.pfw.gz";
     dftu_utils_test::write_gz_trace(gz, text);
-    dftracer::utils::index::IndexerOptions o;
+    dftracer::utils::trace::index::IndexerOptions o;
     o.index_dir = env.dir();
-    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))},
-                                          o)
-        .build();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                                {dstd::String(dstd::StringView(gz))}, o))
+            .build());
 
     Runtime rt(2);
     dstd::String schema, app, nodes;
     auto body = [&]() -> coro::CoroTask<void> {
         TraceIndex index(dstd::String(env.dir()), dstd::String(env.dir()));
-        co_await index.initialize();
+        auto initialized = co_await index.initialize();
+        CHECK(initialized.has_value());
         schema = index.record_schema().id;
         app = index.resolve("runs", "run", "app", "ab");
         nodes = index.resolve("runs", "run", "nodes", "ab");
         co_return;
     };
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     CHECK(schema == "genesis");
     CHECK(app == "laghos");
     CHECK(nodes == "4");

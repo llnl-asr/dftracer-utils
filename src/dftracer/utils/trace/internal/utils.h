@@ -9,7 +9,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <cstdio>
 #include <type_traits>
 
 namespace dftracer::utils::trace::internal {
@@ -21,9 +20,9 @@ template <class T>
 void append_value(dstd::String& out, const T& v) {
     if constexpr (std::is_floating_point_v<T>) {
         char buf[40];
-        const int n =
-            std::snprintf(buf, sizeof(buf), "%.17g", static_cast<double>(v));
-        if (n > 0) out.append(buf, static_cast<std::size_t>(n));
+        char* const end = dstd::to_chars_general(buf, buf + sizeof(buf),
+                                                 static_cast<double>(v), 17);
+        if (end) out.append(buf, end);
     } else if constexpr (std::is_same_v<T, char>) {
         out.push_back(v);
     } else if constexpr (std::is_integral_v<T>) {

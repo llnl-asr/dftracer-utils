@@ -36,7 +36,7 @@ class TypedCollectFold : public Fold {
         return dstd::make_unique<TypedCollectFold>(*intern_);
     }
 
-    void step(const FoldBatch& batch) override {
+    dstd::Result<void> step(const FoldBatch& batch) override {
         for (const auto& ev : batch.events) {
             switch (ev.phase) {
                 case RecordPhase::Complete:
@@ -53,16 +53,18 @@ class TypedCollectFold : public Fold {
                     break;
             }
         }
+        return {};
     }
 
     void seal_unit(const ScanUnit&) override {}
     void drop_unit(const ScanUnit&) override {}
 
-    void merge(Fold& other) override {
+    dstd::Result<void> merge(Fold& other) override {
         auto& o = static_cast<TypedCollectFold&>(other);
         regular_.append(std::move(o.regular_));
         aggregated_.append(std::move(o.aggregated_));
         counters_.append(std::move(o.counters_));
+        return {};
     }
 
     coro::CoroTask<bool> finalize(const CoverageSet&) override {

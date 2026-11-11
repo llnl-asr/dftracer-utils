@@ -4,6 +4,7 @@
  * sequences with co_await. */
 #include <dftracer/utils/plugins/abi.h>
 #include <stdint.h>
+#include <utilities/plugins/abi_c_consumers.h>
 
 static const dftu_svc_writer* wr_of(const dftu_plugin_host* h) {
     return (const dftu_svc_writer*)h->get_service(h->h, DFTU_SVC_WRITER);

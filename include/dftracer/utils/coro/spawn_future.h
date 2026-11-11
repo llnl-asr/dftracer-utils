@@ -3,7 +3,6 @@
 #define DFTRACER_UTILS_CORO_SPAWN_FUTURE_H
 
 #include <dftracer/utils/common/exception_helpers.h>
-#include <dftracer/utils/coro/cancelled.h>
 #include <dftracer/utils/coro/detail/parked.h>
 #include <dftracer/utils/coro/detail/resumption_helper.h>
 #include <dftracer/utils/coro/executor.h>
@@ -52,6 +51,11 @@ struct SharedState {
     [[no_unique_address]] std::conditional_t<std::is_void_v<T>, dstd::Monostate,
                                              dstd::Optional<T>> result;
     std::exception_ptr exception;
+    /// The spawned task stopped and gave no result. Written before DONE.
+    bool stopped{false};
+    /// The task that waits, so a stop of the spawn can stop it. Written before
+    /// the waiter publishes itself.
+    detail::ParkOwner waiter_owner;
     Executor* executor{nullptr};
     dstd::SharedPtr<std::atomic<bool>> cancel_token;
     /// Cancels a task spawned by a @ref Scope, which reads it at its waits.
@@ -84,6 +88,12 @@ struct SharedState {
         notify_done();
     }
 
+    /// Called by the spawned coroutine when it stopped.
+    void complete_stopped() {
+        stopped = true;
+        notify_done();
+    }
+
     /// Check if result is ready without blocking.
     bool is_done() const {
         return flag.load(std::memory_order_acquire) == DONE;
@@ -97,7 +107,11 @@ struct SharedState {
             // prev is a waiting coroutine handle address.
             auto waiter = std::coroutine_handle<>::from_address(
                 reinterpret_cast<void*>(prev));
-            detail::post_resumption(executor, waiter);
+            if (stopped) {
+                detail::stop_or_continue(executor, waiter_owner, waiter);
+            } else {
+                detail::post_resumption(executor, waiter);
+            }
         }
     }
 };
@@ -140,13 +154,16 @@ class SpawnFuture {
     // Awaitable interface
     // ====================================================================
 
-    bool await_ready() const noexcept { return state_->is_done(); }
+    bool await_ready() const noexcept {
+        return state_->is_done() && !state_->stopped;
+    }
 
-    /// co_await throws a cancelled error (see coro::is_cancelled) when the
-    /// executor shuts down while the spawn is still running. The spawn is not
-    /// stopped by that, and its scope still joins it.
+    /// The awaiting task stops when the spawn stops, and when the executor
+    /// shuts down while the spawn is still running. The spawn is not stopped
+    /// by shutdown, and its scope still joins it.
     bool await_suspend(std::coroutine_handle<> awaiting) noexcept {
         handle_ = awaiting;
+        state_->waiter_owner = detail::current_park_owner();
         executor_ = detail::resume_executor_for(state_->executor);
         // Registered before the flag publishes the waiter: once it does, the
         // spawn may resume the frame on another thread at any moment.
@@ -163,6 +180,9 @@ class SpawnFuture {
         }
         if (park_) executor_->unpark(park_);
         park_ = nullptr;
+        if (state_->stopped) {
+            return detail::stop_task(executor_, nullptr, state_->waiter_owner);
+        }
         return false;
     }
 
@@ -176,7 +196,7 @@ class SpawnFuture {
                 expected, SharedState<T>::CANCELLED, std::memory_order_acq_rel,
                 std::memory_order_acquire)) {
             cancelled_ = true;
-            detail::post_resumption(executor_, handle_);
+            detail::stop_or_resume(executor_, park_, handle_);
         }
     }
 
@@ -185,7 +205,8 @@ class SpawnFuture {
             executor_->unpark(park_);
             park_ = nullptr;
         }
-        if (cancelled_) throw_cancelled("future wait cancelled");
+        if (cancelled_) detail::cancelled_unstoppable("future wait");
+        if (state_->stopped) detail::cancelled_unstoppable("a stopped future");
         if (state_->exception) {
             common::rethrow_and_clear(state_->exception);
         }

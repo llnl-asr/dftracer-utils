@@ -18,7 +18,7 @@ static int64_t double_rows(const dftu_series* v) {
 }
 
 static const dftu_op_desc g_op = {OP_NAME, DFTU_OP_SIG(I64, SERIES, NONE, NONE),
-                                  (const void*)&double_rows};
+                                  (dftu_op_generic_fn)&double_rows};
 
 static int64_t g_total;
 

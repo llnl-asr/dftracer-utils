@@ -14,6 +14,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cmath>
 #include <cstdint>
@@ -207,8 +208,8 @@ TEST_SUITE("distinct on ids") {
                 CHECK(col.unique().length() == ref.unique().length());
                 CHECK(col.nunique() == ref.nunique());
                 CHECK(col.nunique() == col.unique().length());
-                const DataFrame vc = col.value_counts();
-                const DataFrame rc = ref.value_counts();
+                const DataFrame vc = dftu_utils_test::ok(col.value_counts());
+                const DataFrame rc = dftu_utils_test::ok(ref.value_counts());
                 CHECK(frame_cells(vc) == frame_cells(rc));
                 CHECK(vc.num_rows() == rc.num_rows());
                 const Series nd = needles(base);
@@ -222,7 +223,8 @@ TEST_SUITE("distinct on ids") {
     TEST_CASE(
         "string value counts count the nulls out and keep first-seen ties") {
         const Series s = flat_strings();
-        const DataFrame vc = s.dictionary_encode().value_counts();
+        const DataFrame vc =
+            dftu_utils_test::ok(s.dictionary_encode().value_counts());
         std::int64_t total = 0;
         const Series cnt = vc.columns[1].materialize();
         for (std::int64_t i = 0; i < cnt.length(); ++i) {
@@ -255,8 +257,8 @@ TEST_SUITE("distinct on ids") {
                   dstd::Vector<dstd::String>{"f", "s"}}) {
                 CAPTURE(variant);
                 CAPTURE(subset.size());
-                const DataFrame got = df.unique(subset);
-                const DataFrame want = ref.unique(subset);
+                const DataFrame got = dftu_utils_test::ok(df.unique(subset));
+                const DataFrame want = dftu_utils_test::ok(ref.unique(subset));
                 CHECK(got.num_rows() == want.num_rows());
                 CHECK(frame_cells(got) == frame_cells(want));
             }
@@ -267,11 +269,11 @@ TEST_SUITE("distinct on ids") {
         const Series e = flat_i64().take(Idx{});
         CHECK(e.unique().length() == 0);
         CHECK(e.nunique() == 0);
-        CHECK(e.value_counts().num_rows() == 0);
+        CHECK(dftu_utils_test::ok(e.value_counts()).num_rows() == 0);
         DataFrame df;
         df.names = {"a"};
         df.columns.push_back(e.share());
-        CHECK(df.unique().num_rows() == 0);
+        CHECK(dftu_utils_test::ok(df.unique()).num_rows() == 0);
     }
 
     TEST_CASE("float unique keeps every NaN row and the sorted order") {

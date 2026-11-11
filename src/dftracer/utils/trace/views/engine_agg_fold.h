@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_ENGINE_AGG_FOLD_H
 #define DFTRACER_UTILS_TRACE_VIEWS_ENGINE_AGG_FOLD_H
 
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -21,6 +22,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <utility>
 
 namespace dftracer::utils::trace::views::detail {
 
@@ -33,10 +35,10 @@ class EngineAggFold : public Fold {
    public:
     EngineAggFold(const ViewPlan& plan,
                   const dftracer::utils::dstd::StringIntern& intern,
-                  bool apply_query = false)
+                  AggInputSpec spec, bool apply_query = false)
         : plan_(&plan),
           intern_(&intern),
-          spec_(make_agg_input_spec(plan)),
+          spec_(std::move(spec)),
           lowered_(dftracer::utils::dataframe::lower_group_aggs(spec_.gaggs)),
           phase_target_(agg_phase_target(plan)),
           keep_metadata_(metadata_rows(plan)),
@@ -70,10 +72,11 @@ class EngineAggFold : public Fold {
     }
 
     dstd::UniquePtr<Fold> slice() const override {
-        return dstd::make_unique<EngineAggFold>(*plan_, *intern_, apply_query_);
+        return dstd::make_unique<EngineAggFold>(*plan_, *intern_, spec_,
+                                                apply_query_);
     }
 
-    void step(const FoldBatch& batch) override {
+    dstd::Result<void> step(const FoldBatch& batch) override {
         dstd::Vector<FoldEvent> keep =
             select_events(batch, [&](const FoldEvent& ev) {
                 if (ev.phase == RecordPhase::Metadata && !keep_metadata_ &&
@@ -85,20 +88,21 @@ class EngineAggFold : public Fold {
                 return !apply_query_ ||
                        pod_matches(*plan_->query, ev, *intern_, qmap_);
             });
-        if (keep.empty()) return;
-        dftracer::utils::dataframe::DataFrame f =
-            build_agg_input_frame(keep, *intern_, spec_, resolver_);
-        dftracer::utils::dataframe::agg_accumulate_chunk(
-            *state_, f, spec_.group_key_names, lowered_.value_names,
+        if (keep.empty()) return {};
+        auto f = build_agg_input_frame(keep, *intern_, spec_, resolver_);
+        if (!f) return f.error();
+        return dftracer::utils::dataframe::agg_accumulate_chunk(
+            *state_, *f, spec_.group_key_names, lowered_.value_names,
             spec_.emit_dyn ? spec_.dyn_prefix : dstd::String());
     }
 
     void seal_unit(const ScanUnit&) override {}
     void drop_unit(const ScanUnit&) override {}
 
-    void merge(Fold& other) override {
+    dstd::Result<void> merge(Fold& other) override {
         auto& o = static_cast<EngineAggFold&>(other);
         dftracer::utils::dataframe::agg_merge(*state_, *o.state_);
+        return {};
     }
 
     coro::CoroTask<bool> finalize(const CoverageSet&) override {
@@ -127,7 +131,8 @@ class EngineAggFold : public Fold {
     RecordPhase phase_target_;
     bool keep_metadata_;
     bool apply_query_ = false;
-    const dftracer::utils::index::plan::GroupResolver* resolver_ = nullptr;
+    const dftracer::utils::trace::index::plan::GroupResolver* resolver_ =
+        nullptr;
     dftracer::utils::dataframe::AggStatePtr state_;
     duql::ValueMap qmap_;
 };

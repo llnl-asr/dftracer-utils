@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
@@ -828,7 +829,7 @@ TEST_CASE("parse_number - same results as strtod on every first character") {
         CAPTURE(c);
         CHECK(parse_number_with_strtod_only(in).has_value() ==
               parse_number(in).has_value());
-        const dstd::String two = in + "5";
+        const dstd::String two = dstd::fmt<"{}5">(in);
         CHECK(parse_number_with_strtod_only(two).has_value() ==
               parse_number(two).has_value());
     }

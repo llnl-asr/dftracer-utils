@@ -6,6 +6,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/scheduler/watchdog.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <atomic>
 #include <chrono>
@@ -119,7 +120,7 @@ TEST_SUITE("ExecutorResponsiveness") {
         std::this_thread::sleep_for(1400ms);
         CHECK(rt.is_responsive());
         stop.store(true);
-        handle.wait();
+        dftu_utils_test::ok(handle.wait());
         rt.shutdown();
     }
 
@@ -138,7 +139,7 @@ TEST_SUITE("ExecutorResponsiveness") {
         std::this_thread::sleep_for(1400ms);
         CHECK_FALSE(rt.is_responsive());
         stop.store(true);
-        handle.wait();
+        dftu_utils_test::ok(handle.wait());
         rt.shutdown();
     }
 }

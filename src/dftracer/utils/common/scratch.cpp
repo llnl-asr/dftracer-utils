@@ -33,13 +33,13 @@ dstd::String lower(dstd::String s) {
 
 bool writable_dir(dstd::PathView dir) {
     // A failed create_directories shows up as a missing directory below.
-    (void)dstd::fs::create_directories(dir);
+    dstd::fs::create_directories(dir).discard();
     const auto is_dir = dstd::fs::is_directory(dir);
-    if (!is_dir || !*is_dir) return false;
+    if (!is_dir.has_value() || !*is_dir) return false;
     const dstd::Path probe =
-        dir / str_cat(".dftracer_probe_", static_cast<long>(::getpid()));
-    if (!dstd::fs::create_directory(probe.view())) return false;
-    (void)dstd::fs::remove(probe.view());
+        dir / dstd::fmt<".dftracer_probe_{}">(static_cast<long>(::getpid()));
+    if (!dstd::fs::create_directory(probe.view()).has_value()) return false;
+    dstd::fs::remove(probe.view()).discard();
     return true;
 }
 
@@ -150,9 +150,9 @@ dstd::Path compute_local_spill_root() {
     joined /= "dftracer-utils";
     joined /= "spill";
     const dstd::Path dir = dstd::normalize(joined.view());
-    if (!dstd::fs::create_directories(dir.view())) return {};
+    if (!dstd::fs::create_directories(dir.view()).has_value()) return {};
     const auto is_dir = dstd::fs::is_directory(dir.view());
-    if (!is_dir || !*is_dir) return {};
+    if (!is_dir.has_value() || !*is_dir) return {};
     return dir;
 }
 
@@ -164,7 +164,7 @@ struct Roots {
 Roots& roots() {
     Roots& held = dstd::Singleton<Roots>::get();
     [[maybe_unused]] static const bool hooked = [] {
-        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, [] {
+        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, []() noexcept {
             Roots& dropped = dstd::Singleton<Roots>::get();
             // Swapped out so the old buffers are destroyed, since assigning
             // an empty value keeps the heap buffer in libstdc++.
@@ -215,11 +215,11 @@ ScratchSession::ScratchSession(std::uint64_t estimated_bytes) {
     dstd::Path joined = root;
     joined /= current_user();
     joined /= "dftracer-utils";
-    joined /= str_cat(static_cast<long>(::getpid()), "_", id);
+    joined /= dstd::fmt<"{}_{}">(static_cast<long>(::getpid()), id);
     const dstd::Path dir = dstd::normalize(joined.view());
-    if (!dstd::fs::create_directories(dir.view())) return;
+    if (!dstd::fs::create_directories(dir.view()).has_value()) return;
     const auto is_dir = dstd::fs::is_directory(dir.view());
-    if (is_dir && *is_dir) dir_ = dir;
+    if (is_dir.has_value() && *is_dir) dir_ = dir;
 }
 
 ScratchSession::ScratchSession(ScratchSession&& other) noexcept
@@ -229,7 +229,7 @@ ScratchSession::ScratchSession(ScratchSession&& other) noexcept
 
 ScratchSession::~ScratchSession() {
     if (dir_.empty() || keep_) return;
-    (void)dstd::fs::remove_all(dir_.view());
+    dstd::fs::remove_all(dir_.view()).discard();
 }
 
 dstd::Optional<ScratchSession> staged_build_scratch(
@@ -248,22 +248,22 @@ dstd::Optional<ScratchSession> staged_build_scratch(
     return scratch;
 }
 
-void publish_path(dstd::PathView src, dstd::PathView dst) {
+dstd::Result<void> publish_path(dstd::PathView src, dstd::PathView dst) {
     const dstd::PathView parent = dst.parent();
-    if (!parent.empty()) (void)dstd::fs::create_directories(parent);
-    (void)dstd::fs::remove_all(dst);
+    if (!parent.empty()) dstd::fs::create_directories(parent).discard();
+    dstd::fs::remove_all(dst).discard();
 
-    if (dstd::fs::rename(src, dst)) return;
+    if (dstd::fs::rename(src, dst)) return {};
 
     // Cross-device rename fails; fall back to copy + remove.
     const auto copied =
         dstd::fs::copy_tree(src, dst, dstd::fs::CopyMode::Overwrite);
     if (!copied) {
-        throw DFTUtilsException(
-            ErrorCode::Io, str_cat("failed to publish ", src.str(), " to ",
-                                   dst.str(), ": ", copied.error().message()));
+        return make_error<"failed to publish {} to {}: {}">(
+            ErrorCode::Io, src.str(), dst.str(), copied.error().message());
     }
-    (void)dstd::fs::remove_all(src);
+    dstd::fs::remove_all(src).discard();
+    return {};
 }
 
 }  // namespace dftracer::utils::common

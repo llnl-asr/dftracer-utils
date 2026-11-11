@@ -2,7 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
-#include <dftracer/utils/index/cache/cache_store.h>
+#include <dftracer/utils/trace/index/cache/cache_store.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
 #include <sys/wait.h>
@@ -11,7 +11,7 @@
 #include <cstdlib>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::index;
+using namespace dftracer::utils::trace::index;
 
 namespace {
 
@@ -47,7 +47,7 @@ TEST_CASE("index: writes an index and a cache then returns" * doctest::skip()) {
     auto held = cache::CacheStore::open(root + "/cache",
                                         cache::CacheStore::Mode::ReadWrite);
     REQUIRE(held != nullptr);
-    held->put(7, {{"k", "v"}}, 1);
+    REQUIRE(held->put(7, {{"k", "v"}}, 1).has_value());
 }
 
 TEST_CASE("index: a process that wrote an index and a cache exits clean") {

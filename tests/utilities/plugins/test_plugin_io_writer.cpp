@@ -7,24 +7,25 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/domains/plugins/fold_adapter.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/plugins/abi.h>
-#include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/runtime/runtime.h>
 // compose.h pulls plugin.h/arrow_abi.h; keep it after fold_adapter.h so
 // nanoarrow's full definitions win over arrow_abi.h's fallback structs.
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/domains/plugins/compose.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/plugins/compose.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/uio.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <unistd.h>
 
@@ -46,8 +47,8 @@ struct HostFixture {
     dstd::StringIntern intern;
     dftu_plugin* plugin =
         dftracer::utils::plugins::make_plugin<TrivialSlice>(nullptr);
-    dstd::UniquePtr<plugins::PluginFold> fold =
-        dstd::make_unique<plugins::PluginFold>(plugin, intern);
+    dstd::UniquePtr<domains::plugins::PluginFold> fold =
+        dstd::make_unique<domains::plugins::PluginFold>(plugin, intern);
     dftu_plugin_host& host() { return fold->host(); }
     ~HostFixture() {
         fold.reset();
@@ -71,14 +72,15 @@ dstd::String read_all(const dstd::String& path) {
 template <class MakeTask>
 void drive_task(dftu_plugin_host& host, int workers, MakeTask make) {
     Runtime rt(workers);
-    rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                  dftu_task* driver =
-                      dftracer::utils::plugins::detail::drive_coro<int>(&host,
-                                                                        make());
-                  co_await *reinterpret_cast<coro::CoroTask<void>*>(driver);
-              }),
-              "caller")
-        .wait();
+    dftu_utils_test::ok(
+        rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                      dftu_task* driver =
+                          dftracer::utils::plugins::detail::drive_coro<int>(
+                              &host, make());
+                      co_await *reinterpret_cast<coro::CoroTask<void>*>(driver);
+                  }),
+                  "caller")
+            .wait());
     rt.shutdown();
 }
 
@@ -186,26 +188,26 @@ dftracer::utils::plugins::Task compose_ops(dftracer::utils::plugins::Host h,
                                            std::int64_t* all0,
                                            std::int64_t* all1,
                                            std::int64_t* raced) {
-    auto a = plugins::make_op<std::int64_t, std::int64_t>(
+    auto a = domains::plugins::make_op<std::int64_t, std::int64_t>(
         h, [](std::int64_t x) { return x * 2; });
-    auto b = plugins::make_op<std::int64_t, std::int64_t>(
+    auto b = domains::plugins::make_op<std::int64_t, std::int64_t>(
         h, [](std::int64_t x) { return x + 1; });
 
     std::int64_t in = 5;
     int rc = 0;
     std::int64_t p = 0;
-    co_await dftracer::utils::plugins::run(a | b, in, p, rc);  // (5*2)+1 == 11
+    co_await domains::plugins::run(a | b, in, p, rc);  // (5*2)+1 == 11
     *piped = p;
 
     std::array<std::int64_t, 2> both{};
-    co_await dftracer::utils::plugins::run(
-        dftracer::utils::plugins::when_all(a, b), in, both, rc);
+    co_await domains::plugins::run(domains::plugins::when_all(a, b), in, both,
+                                   rc);
     *all0 = both[0];  // 10
     *all1 = both[1];  // 6
 
     std::int64_t one = 0;
-    co_await dftracer::utils::plugins::run(
-        dftracer::utils::plugins::when_any(a, b), in, one, rc);
+    co_await domains::plugins::run(domains::plugins::when_any(a, b), in, one,
+                                   rc);
     *raced = one;  // 10 or 6
 }
 
@@ -255,7 +257,7 @@ TEST_CASE("plugin cxx: sendfile transfers a file into a socket") {
     dstd::String src = env.dir() + "/src.bin";
     const dstd::String body = "zero-copy transfer payload\n";
     {
-        (void)dstd::fs::write_file(dstd::PathView(src), body);
+        dstd::fs::write_file(dstd::PathView(src), body).discard();
     }
 
     int sv[2] = {-1, -1};
@@ -332,8 +334,8 @@ TEST_CASE("plugin cxx: merge_shards concatenates shard files into a target") {
         fa += "AAAA";
         dstd::String fb;
         fb += "BBBB";
-        (void)dstd::fs::write_file(dstd::PathView(a), fa);
-        (void)dstd::fs::write_file(dstd::PathView(b), fb);
+        dstd::fs::write_file(dstd::PathView(a), fa).discard();
+        dstd::fs::write_file(dstd::PathView(b), fb).discard();
     }
 
     HostFixture fx;

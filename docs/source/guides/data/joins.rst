@@ -46,13 +46,14 @@ Join two DataFrames
          using dftracer::utils::dataframe::DataFrame;
          using dftracer::utils::dataframe::JoinHow;
 
-         DataFrame joined = left.join(right, {"fid"});                     // inner
-         DataFrame lj = left.join(right, {"pid", "tid"}, JoinHow::Left);
-         DataFrame keyed = left.join(right, {"k"}, {"rk"}, JoinHow::Outer, "_r");
+         // Each join gives dstd::Result<DataFrame>.
+         auto joined = left.join(right, {"fid"});                          // inner
+         auto lj = left.join(right, {"pid", "tid"}, JoinHow::Left);
+         auto keyed = left.join(right, {"k"}, {"rk"}, JoinHow::Outer, "_r");
 
       ``JoinHow`` is ``Inner``, ``Left``, ``Right``, ``Outer``, ``Semi``, ``Anti``,
-      ``Cross``, ``Lookup`` or ``Nest``. An absent key throws ``std::out_of_range``; an empty or
-      uneven key list, or a key type mismatch, throws ``std::invalid_argument``.
+      ``Cross``, ``Lookup`` or ``Nest``. An absent key is a ``NotFound`` error; an empty or
+      uneven key list, or a key type mismatch, is an ``InvalidArgument`` error.
 
    .. tab-item:: Python
 
@@ -155,7 +156,7 @@ is read, never the result.
       .. code-block:: cpp
 
          LazyFrame plan = left.lazy().join(right.lazy(), {"fid"}, JoinHow::Left);
-         DataFrame out = co_await plan.collect();
+         dstd::Result<DataFrame> out = co_await plan.collect();
 
    .. tab-item:: Python
 

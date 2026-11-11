@@ -1,0 +1,232 @@
+// SPDX-License-Identifier: MIT
+#ifndef DFTRACER_UTILS_FILEIO_COMPRESS_GZIP_RECHUNKER_H
+#define DFTRACER_UTILS_FILEIO_COMPRESS_GZIP_RECHUNKER_H
+
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/file.h>
+#include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/fileio/compress/gzip_stream_inflater.h>
+#include <dftracer/utils/fileio/gzip_line_writer.h>
+#include <dftracer/utils/runtime/io/io.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+
+namespace dftracer::utils::fileio::compress {
+
+/// A member larger than this is worth rewriting as smaller members, since a
+/// multi-member file reads faster and in parallel.
+inline constexpr std::size_t RECHUNK_MEMBER_CAP = std::size_t{1} << 31;
+
+/// What decoding the start of a file shows. `compressed` and `uncompressed`
+/// count the bytes read and produced up to the point where the decode stopped.
+struct FirstMember {
+    bool exceeds_cap = false;
+    std::uint64_t compressed = 0;
+    std::uint64_t uncompressed = 0;
+};
+
+/// Decodes the first gzip member, discarding the output, and stops once the
+/// output passes `cap`, so memory stays bounded. With `sample_bytes` it goes on
+/// through the next members until it has read that many compressed bytes.
+/// `exceeds_cap` covers the first member only.
+inline coro::CoroTask<FirstMember> gzip_first_member(
+    int fd, std::uint64_t file_size, std::size_t cap,
+    std::uint64_t sample_bytes = 0) {
+    FirstMember member;
+    if (file_size == 0) co_return member;
+
+    GzipStreamInflater gz;
+    if (!gz.init(15 + 16)) co_return member;
+
+    constexpr std::size_t BUFFER_BYTES = std::size_t{1} << 20;
+    const std::size_t in_bytes = static_cast<std::size_t>(
+        std::min<std::uint64_t>(BUFFER_BYTES, file_size));
+    auto in = dstd::make_unique_for_overwrite<unsigned char[]>(in_bytes);
+    auto out = dstd::make_unique_for_overwrite<unsigned char[]>(BUFFER_BYTES);
+    std::uint64_t off = 0;
+    std::uint64_t produced = 0;
+    std::uint64_t member_produced = 0;
+    std::uint64_t finished = 0;  // compressed bytes of the members that ended
+    bool in_first = true;
+    bool counted = false;
+
+    while (true) {
+        if (gz.avail_in() == 0) {
+            if (off >= file_size) break;
+            const std::size_t want = static_cast<std::size_t>(
+                std::min<std::uint64_t>(in_bytes, file_size - off));
+            const ssize_t n =
+                co_await runtime::io::pread(fd, in.get(), want, off);
+            if (n <= 0) break;
+            off += static_cast<std::uint64_t>(n);
+            gz.set_input(in.get(), static_cast<std::size_t>(n));
+        }
+
+        gz.set_output(out.get(), BUFFER_BYTES);
+        const InflateStatus rc = gz.inflate();
+        const std::uint64_t got = BUFFER_BYTES - gz.avail_out();
+        produced += got;
+        member_produced += got;
+
+        if (in_first && member_produced > cap) {  // rechunk
+            member.exceeds_cap = true;
+            break;
+        }
+        if (rc == InflateStatus::StreamEnd) {
+            finished += gz.total_in();
+            in_first = false;
+            const bool more = gz.avail_in() > 0 || off < file_size;
+            if (finished >= sample_bytes || !more || !gz.reset()) {
+                counted = true;
+                break;
+            }
+            member_produced = 0;
+            continue;
+        }
+        // Corrupt or truncated data is left for the normal path to report.
+        if (rc != InflateStatus::Ok) break;
+    }
+
+    member.compressed = counted ? finished : finished + gz.total_in();
+    member.uncompressed = produced;
+    co_return member;
+}
+
+/// Decodes `in_path` (single huge member or otherwise; plain text is read as
+/// is) with zlib in bounded memory and writes an equivalent multi-member gzip
+/// to `out_path`: identical uncompressed bytes, re-framed by @ref
+/// GzipLineWriter into members of about `member_size` uncompressed bytes that
+/// end at newlines.
+///
+/// Fails with @ref common::ErrorCode::Io when the input cannot be opened or
+/// statted, @ref common::ErrorCode::Compression when it cannot be decoded, and
+/// with the writer's error when the output cannot be written.
+inline coro::CoroTask<dstd::Result<void>> gzip_rechunk_to_members(
+    dstd::String in_path, dstd::String out_path, std::size_t member_size,
+    int level) {
+    if (member_size == 0)
+        member_size = common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
+    if (level < 0) level = 6;
+
+    auto opened = co_await runtime::io::open_file(in_path, {});
+    if (!opened) {
+        co_return common::make_error<"Cannot open file: {}">(
+            common::ErrorCode::Io, in_path)
+            .error();
+    }
+    const dstd::File in_file = std::move(*opened);
+    const int in_fd = in_file.native_handle();
+
+    struct stat st;
+    const ssize_t stat_result = co_await runtime::io::fstat(in_fd, &st);
+    if (stat_result != 0) {
+        co_return common::make_error<"Cannot stat file: {}">(
+            common::ErrorCode::Io, in_path)
+            .error();
+    }
+    const auto file_size = static_cast<std::uint64_t>(st.st_size);
+    unsigned char magic[2] = {0, 0};
+    const bool plain = co_await runtime::io::pread(in_fd, magic, 2, 0) != 2 ||
+                       magic[0] != 0x1f || magic[1] != 0x8b;
+
+    GzipStreamInflater gz;
+    if (!plain && !gz.init(15 + 16)) {
+        co_return common::make_error<"cannot open a gzip stream for {}">(
+            common::ErrorCode::Compression, in_path)
+            .error();
+    }
+
+    GzipWriterOptions opts;
+    opts.member_size = member_size;
+    opts.level = level;
+    auto opened_writer =
+        co_await GzipLineWriter::open(out_path, std::move(opts));
+    if (!opened_writer) co_return opened_writer.error();
+    auto writer = std::move(*opened_writer);
+
+    dstd::Vector<unsigned char> in(1u << 20);
+    dstd::Vector<unsigned char> out(1u << 20);
+    dstd::String carry;
+    std::uint64_t off = 0;
+
+    // Appends the whole lines of `text` and keeps the rest in `carry`.
+    auto feed =
+        [&](dstd::StringView text) -> coro::CoroTask<dstd::Result<void>> {
+        const auto nl = text.rfind('\n');
+        if (nl == dstd::StringView::npos) {
+            carry.append(text);
+            co_return dstd::Result<void>();
+        }
+        carry.append(text.substr(0, nl + 1));
+        auto appended = co_await writer.append(carry);
+        if (!appended) co_return appended.error();
+        carry.assign(text.substr(nl + 1));
+        co_return dstd::Result<void>();
+    };
+
+    bool ok = true;
+    while (ok) {
+        if (plain) {
+            if (off >= file_size) break;
+            const std::size_t want = static_cast<std::size_t>(
+                std::min<std::uint64_t>(in.size(), file_size - off));
+            const ssize_t n =
+                co_await runtime::io::pread(in_fd, in.data(), want, off);
+            if (n <= 0) break;
+            off += static_cast<std::uint64_t>(n);
+            auto fed = co_await feed(
+                dstd::StringView(reinterpret_cast<const char*>(in.data()),
+                                 static_cast<std::size_t>(n)));
+            if (!fed) co_return fed.error();
+            continue;
+        }
+        if (gz.avail_in() == 0) {
+            if (off >= file_size) break;
+            const std::size_t want = static_cast<std::size_t>(
+                std::min<std::uint64_t>(in.size(), file_size - off));
+            const ssize_t n =
+                co_await runtime::io::pread(in_fd, in.data(), want, off);
+            if (n <= 0) break;
+            off += static_cast<std::uint64_t>(n);
+            gz.set_input(in.data(), static_cast<std::size_t>(n));
+        }
+
+        gz.set_output(out.data(), out.size());
+        const InflateStatus rc = gz.inflate();
+        auto fed = co_await feed(
+            dstd::StringView(reinterpret_cast<const char*>(out.data()),
+                             out.size() - gz.avail_out()));
+        if (!fed) co_return fed.error();
+
+        if (rc == InflateStatus::StreamEnd) {
+            if (gz.total_in() >= file_size && gz.avail_in() == 0) break;
+            if (!gz.reset()) {
+                ok = false;
+                break;
+            }
+        } else if (rc != InflateStatus::Ok) {
+            ok = false;
+        }
+    }
+
+    if (!ok) {
+        co_return common::make_error<"decompression failed for {}">(
+            common::ErrorCode::Compression, in_path)
+            .error();
+    }
+    auto closed = co_await writer.close(carry);
+    if (!closed) co_return closed.error();
+    co_return dstd::Result<void>();
+}
+
+}  // namespace dftracer::utils::fileio::compress
+
+#endif  // DFTRACER_UTILS_FILEIO_COMPRESS_GZIP_RECHUNKER_H

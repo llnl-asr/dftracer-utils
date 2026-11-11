@@ -2,8 +2,9 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/trace/index/indexer.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -17,10 +18,11 @@ TEST_SUITE("View unified F filter") {
     TEST_CASE("F predicate pushes down like the query DSL") {
         const auto& s = shared_trace();
         StringSink sink;
-        auto stats = View::from_file(dstd::String(s.gz), dstd::String(s.idx))
-                         .filter(dataframe::field::F("cat") == "POSIX")
-                         .sink_json(sink)
-                         .get();
+        auto stats = dftu_utils_test::ok(
+            View::from_file(dstd::String(s.gz), dstd::String(s.idx))
+                .filter(dataframe::field::F("cat") == "POSIX")
+                .sink_json(sink)
+                .get());
 
         auto lines = sink.lines();
         CHECK(lines.size() == 30);
@@ -33,10 +35,11 @@ TEST_SUITE("View unified F filter") {
         const auto& s = shared_trace();
         StringSink sink;
         // POSIX dur is 10..39, STDIO dur is 20..39; dur >= 30 keeps a subset.
-        View::from_file(dstd::String(s.gz), dstd::String(s.idx))
-            .filter(dataframe::field::F("dur") >= 30)
-            .sink_json(sink)
-            .get();
+        dftu_utils_test::ok(
+            View::from_file(dstd::String(s.gz), dstd::String(s.idx))
+                .filter(dataframe::field::F("dur") >= 30)
+                .sink_json(sink)
+                .get());
         CHECK(sink.lines().size() > 0);
         CHECK(sink.lines().size() < 50);
     }
@@ -62,10 +65,11 @@ TEST_SUITE("View unified F filter") {
         const dstd::String gz = plain + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                    16 * 1024));
-        (void)dstd::fs::remove(plain);
-        dftracer::utils::index::Indexer::open(
-            {dstd::String(dstd::StringView(gz))})
-            .build();
+        dstd::fs::remove(plain).discard();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                                    {dstd::String(dstd::StringView(gz))}))
+                .build());
         const dstd::String idx = dstd::String(determine_index_path(gz, ""));
         auto count = [&](Phase ph, const char* q) {
             return run(View::from_file(dstd::String(gz), dstd::String(idx))
@@ -89,21 +93,24 @@ TEST_SUITE("View unified F filter") {
         const auto& s = shared_trace();
 
         StringSink pos;
-        View::from_file(dstd::String(s.gz), dstd::String(s.idx))
-            .filter(dataframe::field::F("dur") >= 30)
-            .sink_json(pos)
-            .get();
+        dftu_utils_test::ok(
+            View::from_file(dstd::String(s.gz), dstd::String(s.idx))
+                .filter(dataframe::field::F("dur") >= 30)
+                .sink_json(pos)
+                .get());
 
         StringSink neg;
-        View::from_file(dstd::String(s.gz), dstd::String(s.idx))
-            .filter(!(dataframe::field::F("dur") >= 30))
-            .sink_json(neg)
-            .get();
+        dftu_utils_test::ok(
+            View::from_file(dstd::String(s.gz), dstd::String(s.idx))
+                .filter(!(dataframe::field::F("dur") >= 30))
+                .sink_json(neg)
+                .get());
 
         StringSink all;
-        View::from_file(dstd::String(s.gz), dstd::String(s.idx))
-            .sink_json(all)
-            .get();
+        dftu_utils_test::ok(
+            View::from_file(dstd::String(s.gz), dstd::String(s.idx))
+                .sink_json(all)
+                .get());
 
         CHECK(pos.lines().size() > 0);
         CHECK(neg.lines().size() > 0);
@@ -111,11 +118,13 @@ TEST_SUITE("View unified F filter") {
         CHECK(pos.lines().size() + neg.lines().size() == all.lines().size());
     }
 
-    TEST_CASE("non-pushable F predicate raises at filter") {
+    TEST_CASE("non-pushable F predicate is an error kept at filter") {
         const auto& s = shared_trace();
         View base = View::from_file(dstd::String(s.gz), dstd::String(s.idx));
-        CHECK_THROWS_AS(base.filter((dataframe::field::F("dur") +
-                                     dataframe::field::F("ts")) > 3),
-                        dftracer::utils::common::DFTUtilsException);
+        const View refused = base.filter(
+            (dataframe::field::F("dur") + dataframe::field::F("ts")) > 3);
+        dftu_utils_test::expect_error(
+            refused.status(),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
     }
 }

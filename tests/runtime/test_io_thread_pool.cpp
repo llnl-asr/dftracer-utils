@@ -79,7 +79,7 @@ runtime::io::IoPoolOptions elastic(std::chrono::milliseconds keepalive) {
 
 TEST_CASE("an elastic pool starts with one thread") {
     runtime::io::IoThreadPool pool(CAP, 0, elastic(SHORT_KEEPALIVE));
-    pool.start();
+    REQUIRE(pool.start().has_value());
     CHECK(pool.live_threads() == 1);
     pool.stop();
     CHECK(pool.live_threads() == 0);
@@ -88,7 +88,7 @@ TEST_CASE("an elastic pool starts with one thread") {
 TEST_CASE("an eager pool starts the whole cap") {
     runtime::io::IoThreadPool pool(
         CAP, 0, runtime::io::IoPoolOptions{true, SHORT_KEEPALIVE});
-    pool.start();
+    REQUIRE(pool.start().has_value());
     CHECK(pool.live_threads() == CAP);
     std::this_thread::sleep_for(5 * SHORT_KEEPALIVE);
     CHECK(pool.live_threads() == CAP);
@@ -97,7 +97,7 @@ TEST_CASE("an eager pool starts the whole cap") {
 
 TEST_CASE("blocked requests grow the pool to the cap and no further") {
     runtime::io::IoThreadPool pool(CAP, 0, elastic(SHORT_KEEPALIVE));
-    pool.start();
+    REQUIRE(pool.start().has_value());
     std::atomic<bool> release{false};
     std::atomic<std::size_t> running{0};
     std::atomic<std::size_t> done{0};
@@ -120,7 +120,7 @@ TEST_CASE("blocked requests grow the pool to the cap and no further") {
 
 TEST_CASE("idle threads retire to the floor after the keepalive") {
     runtime::io::IoThreadPool pool(CAP, 0, elastic(SHORT_KEEPALIVE));
-    pool.start();
+    REQUIRE(pool.start().has_value());
     std::atomic<bool> release{false};
     std::atomic<std::size_t> running{0};
     for (std::size_t i = 0; i < CAP; ++i) {
@@ -139,7 +139,7 @@ TEST_CASE("idle threads retire to the floor after the keepalive") {
 
 TEST_CASE("a request submitted while threads retire still runs") {
     runtime::io::IoThreadPool pool(CAP, 0, elastic(1ms));
-    pool.start();
+    REQUIRE(pool.start().has_value());
     std::atomic<std::size_t> done{0};
     std::size_t submitted = 0;
     // Rounds until enough retirements raced a submit, since a loaded machine
@@ -162,7 +162,7 @@ TEST_CASE("a request submitted while threads retire still runs") {
 
 TEST_CASE("a burst after the pool shrank grows it again") {
     runtime::io::IoThreadPool pool(CAP, 0, elastic(1ms));
-    pool.start();
+    REQUIRE(pool.start().has_value());
     for (int round = 0; round < 20; ++round) {
         std::atomic<std::size_t> done{0};
         constexpr std::size_t JOBS = CAP * 2;
@@ -179,7 +179,7 @@ TEST_CASE("a burst after the pool shrank grows it again") {
 
 TEST_CASE("stop runs queued requests and joins every thread") {
     runtime::io::IoThreadPool pool(CAP, 0, elastic(SHORT_KEEPALIVE));
-    pool.start();
+    REQUIRE(pool.start().has_value());
     std::atomic<std::size_t> done{0};
     constexpr std::size_t JOBS = CAP * 4;
     for (std::size_t i = 0; i < JOBS; ++i)
@@ -194,7 +194,7 @@ TEST_CASE("stop runs queued requests and joins every thread") {
 
 TEST_CASE("grow raises the cap without starting threads") {
     runtime::io::IoThreadPool pool(2, 0, elastic(SHORT_KEEPALIVE));
-    pool.start();
+    REQUIRE(pool.start().has_value());
     pool.grow(CAP, false);
     CHECK(pool.live_threads() == 1);
     pool.grow(CAP, true);
@@ -211,7 +211,7 @@ TEST_CASE("an eager executor holds more threads than an elastic one") {
         config.min_workers = min_workers;
         config.io_backend_type = runtime::io::IoBackendType::Threadpool;
         auto executor = make_task_executor(config);
-        executor->start();
+        REQUIRE(executor->start().has_value());
         const std::size_t during = settled_threads();
         CHECK(executor->io_pool_size() == dftu_utils_test::pool_width(8));
         executor->shutdown();

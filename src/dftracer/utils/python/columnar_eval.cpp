@@ -12,6 +12,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/python/columnar_eval.h>
@@ -252,9 +253,16 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
                 }
                 dataframe::Expr needle = pop();
                 dataframe::Expr a = pop();
-                stack.push_back(dataframe::expr_str_pred_col(
+                auto pred = dataframe::expr_str_pred_col(
                     static_cast<dataframe::StrPredOp>(PyLong_AsLong(arg(1))), a,
-                    needle));
+                    needle);
+                if (!pred) {
+                    const dftracer::utils::dstd::String message(
+                        pred.error().message());
+                    PyErr_SetString(PyExc_ValueError, message.c_str());
+                    return false;
+                }
+                stack.push_back(std::move(*pred));
                 break;
             }
             case AstStrReplaceCol: {
@@ -379,8 +387,12 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
 void runtime_backend(void*, std::int64_t n, std::int64_t grain,
                      void (*body)(void*, std::int64_t, std::int64_t),
                      void* bctx) {
-    dftracer::utils::default_runtime().parallel_for(
+    const auto ran = dftracer::utils::default_runtime().parallel_for(
         n, grain, [&](std::int64_t b, std::int64_t e) { body(bctx, b, e); });
+    if (!ran) {
+        dftracer::utils::dstd::fatal(
+            "parallel_for: the runtime stopped during a fork-join");
+    }
 }
 
 }  // namespace
@@ -392,7 +404,7 @@ bool build_expr_from_ast(PyObject* ast, dataframe::Expr* out) {
 }
 
 // vec_eval(ast, [Series, ...]) -> Series
-PyObject* vec_eval(PyObject* /*self*/, PyObject* args) {
+static PyObject* vec_eval(PyObject* /*self*/, PyObject* args) {
     PyObject* ast = nullptr;
     PyObject* cols_obj = nullptr;
     if (!PyArg_ParseTuple(args, "OO", &ast, &cols_obj)) return nullptr;
@@ -417,18 +429,19 @@ PyObject* vec_eval(PyObject* /*self*/, PyObject* args) {
     }
     Py_DECREF(seq);
 
-    try {
-        return wrap_vec_column(dataframe::eval(expr, inputs));
-    } catch (const std::exception& ex) {
-        PyErr_SetString(PyExc_RuntimeError, ex.what());
+    auto out = dataframe::eval(expr, inputs);
+    if (!out) {
+        const dftracer::utils::dstd::String message(out.error().message());
+        PyErr_SetString(PyExc_RuntimeError, message.c_str());
         return nullptr;
     }
+    return wrap_vec_column(std::move(*out));
 }
 
 // vec_eval_many([ast, ...], [Series, ...]) -> [Series, ...]
 // Compiles all roots into one program so CSE spans them (a subexpression shared
 // across outputs is computed once), sharing the same input column list.
-PyObject* vec_eval_many(PyObject* /*self*/, PyObject* args) {
+static PyObject* vec_eval_many(PyObject* /*self*/, PyObject* args) {
     PyObject* asts_obj = nullptr;
     PyObject* cols_obj = nullptr;
     if (!PyArg_ParseTuple(args, "OO", &asts_obj, &cols_obj)) return nullptr;
@@ -464,24 +477,24 @@ PyObject* vec_eval_many(PyObject* /*self*/, PyObject* args) {
     }
     Py_DECREF(seq);
 
-    try {
-        dftracer::utils::dstd::Vector<dataframe::Series> outs =
-            dataframe::eval_many(roots, inputs);
-        PyObject* list = PyList_New(static_cast<Py_ssize_t>(outs.size()));
-        if (!list) return nullptr;
-        for (std::size_t i = 0; i < outs.size(); ++i) {
-            PyObject* s = wrap_vec_column(std::move(outs[i]));
-            if (!s) {
-                Py_DECREF(list);
-                return nullptr;
-            }
-            PyList_SET_ITEM(list, static_cast<Py_ssize_t>(i), s);
-        }
-        return list;
-    } catch (const std::exception& ex) {
-        PyErr_SetString(PyExc_RuntimeError, ex.what());
+    auto res = dataframe::eval_many(roots, inputs);
+    if (!res) {
+        const dftracer::utils::dstd::String message(res.error().message());
+        PyErr_SetString(PyExc_RuntimeError, message.c_str());
         return nullptr;
     }
+    dftracer::utils::dstd::Vector<dataframe::Series>& outs = *res;
+    PyObject* list = PyList_New(static_cast<Py_ssize_t>(outs.size()));
+    if (!list) return nullptr;
+    for (std::size_t i = 0; i < outs.size(); ++i) {
+        PyObject* s = wrap_vec_column(std::move(outs[i]));
+        if (!s) {
+            Py_DECREF(list);
+            return nullptr;
+        }
+        PyList_SET_ITEM(list, static_cast<Py_ssize_t>(i), s);
+    }
+    return list;
 }
 
 int init_columnar_eval(PyObject* m) {

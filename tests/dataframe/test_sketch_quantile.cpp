@@ -4,6 +4,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/dataframe.h>
@@ -11,6 +12,7 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/sketch.h>
 #include <dftracer/utils/dstd/base64.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -18,6 +20,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -75,7 +78,7 @@ dstd::Vector<GroupAgg> quantile_aggs() {
     dstd::Vector<GroupAgg> aggs;
     for (double q : QUANTILES)
         aggs.push_back(
-            GroupAgg{Agg::SketchQuantile, "s", "q" + dstd::to_string(q), q});
+            GroupAgg{Agg::SketchQuantile, "s", dstd::fmt<"q{}">(q), q});
     return aggs;
 }
 
@@ -120,8 +123,9 @@ std::int64_t row_of(const DataFrame& d, std::int64_t key) {
     return -1;
 }
 
-DataFrame run(dftracer::utils::coro::CoroTask<DataFrame> t) {
-    return dftracer::utils::default_runtime().submit(std::move(t)).get();
+DataFrame run(dftracer::utils::coro::CoroTask<dstd::Result<DataFrame>> t) {
+    return dftu_utils_test::ok(
+        dftracer::utils::default_runtime().submit(std::move(t)).get());
 }
 
 LazyFrame scan(const DataFrame& d) {
@@ -176,7 +180,7 @@ struct Fixture {
                                  concat(g2a, g2b)};
         for (std::size_t qi = 0; qi < QUANTILES.size(); ++qi) {
             const Series c =
-                r.column("q" + dstd::to_string(QUANTILES[qi])).materialize();
+                r.column(dstd::fmt<"q{}">(QUANTILES[qi])).materialize();
             REQUIRE(c.type() == TypeId::Float64);
             for (int g = 0; g < 3; ++g) {
                 REQUIRE_FALSE(c.is_null(rows[g]));
@@ -196,17 +200,17 @@ TEST_CASE("sketch_quantile: merged cells equal one sketch over the group") {
         {0, text_of(sketch_of({1, 2, 3, 4, 5}))},
         {0, text_of(sketch_of({6, 7, 8, 9, 0}))},
     });
-    const DataFrame r = d.group_by("k", quantile_aggs());
+    const DataFrame r = dftu_utils_test::ok(d.group_by("k", quantile_aggs()));
     REQUIRE(r.num_rows() == 1);
     for (double q : QUANTILES)
-        CHECK(r.column("q" + dstd::to_string(q)).data<double>()[0] ==
+        CHECK(r.column(dstd::fmt<"q{}">(q)).data<double>()[0] ==
               clamped(g0, q));
 }
 
 TEST_CASE(
     "sketch_quantile: invalid cells are skipped, an empty group is null") {
     Fixture f;
-    f.check(f.frame.group_by("k", quantile_aggs()));
+    f.check(dftu_utils_test::ok(f.frame.group_by("k", quantile_aggs())));
 }
 
 TEST_CASE("sketch_quantile: reads large string sketch text") {
@@ -216,7 +220,7 @@ TEST_CASE("sketch_quantile: reads large string sketch text") {
     large.columns.push_back(f.frame.column("k").share());
     large.columns.push_back(large_copy(f.frame.column("s")));
     REQUIRE(large.column("s").type() == TypeId::LargeString);
-    f.check(large.group_by("k", quantile_aggs()));
+    f.check(dftu_utils_test::ok(large.group_by("k", quantile_aggs())));
 }
 
 TEST_CASE("sketch_quantile: lazy and spilled group_by match eager") {
@@ -249,15 +253,16 @@ TEST_CASE("sketch_quantile: the agg state merges and round-trips") {
     auto b = dataframe::agg_new(specs);
     const dstd::Vector<const Series*> keys{&k};
     const dstd::Vector<const Series*> values{&s};
-    dataframe::agg_accumulate(*a, keys, values, 0, half);
-    dataframe::agg_accumulate(*b, keys, values, half, n);
-    auto b2 = dataframe::agg_deserialize(dataframe::agg_serialize(*b));
+    dftu_utils_test::ok(dataframe::agg_accumulate(*a, keys, values, 0, half));
+    dftu_utils_test::ok(dataframe::agg_accumulate(*b, keys, values, half, n));
+    auto b2 = dftu_utils_test::ok(
+        dataframe::agg_deserialize(dataframe::agg_serialize(*b)));
     REQUIRE(b2);
     dataframe::agg_merge(*a, *b2);
     dataframe::agg_sort_groups(*a);
 
     auto whole = dataframe::agg_new(specs);
-    dataframe::agg_accumulate(*whole, keys, values);
+    dftu_utils_test::ok(dataframe::agg_accumulate(*whole, keys, values));
     dataframe::agg_sort_groups(*whole);
 
     const DataFrame got = dataframe::agg_finalize(*a, "k");
@@ -282,7 +287,9 @@ TEST_CASE("sketch_quantile: a non-String column is refused") {
     d.names = {"k", "s"};
     d.columns.push_back(Series::flat_i64(k.data(), 2));
     d.columns.push_back(Series::flat_i64(v.data(), 2));
-    CHECK_THROWS_AS(d.group_by("k", quantile_aggs()), std::invalid_argument);
+    dftu_utils_test::expect_error(
+        d.group_by("k", quantile_aggs()),
+        dftracer::utils::common::ErrorCode::InvalidArgument);
 }
 
 TEST_CASE("DDSketch::deserialize rejects truncated and hostile bytes") {

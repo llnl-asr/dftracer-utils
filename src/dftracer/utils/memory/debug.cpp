@@ -235,8 +235,9 @@ Slot* lookup(const void* p, bool insert) noexcept {
 }
 
 void* base_allocate(std::size_t size, std::size_t align) {
-    return active_backend() == Backend::PageHeap ? page_allocate(size, align)
-                                                 : system_allocate(size, align);
+    return active_backend() == Backend::PageHeap
+               ? page_try_allocate(size, align)
+               : system_try_allocate(size, align);
 }
 
 void base_deallocate(void* p) noexcept {
@@ -321,9 +322,10 @@ std::uint64_t debug_allocation_count() noexcept {
 void* debug_allocate(std::size_t size, std::size_t align, void* site) {
     g_allocations.fetch_add(1, std::memory_order_relaxed);
     if (size > std::numeric_limits<std::size_t>::max() - DEBUG_REDZONE_BYTES) {
-        throw std::bad_alloc();
+        return nullptr;
     }
     void* p = base_allocate(size + DEBUG_REDZONE_BYTES, align);
+    if (p == nullptr) return nullptr;
     Slot* s = lookup(p, true);
     std::uint32_t expected = STATE_FREED;
     if (!s->state.compare_exchange_strong(expected, STATE_LIVE,
@@ -401,6 +403,7 @@ void* debug_reallocate(void* p, std::size_t old_size, std::size_t new_size,
                             s->pool.load(std::memory_order_relaxed)};
         moved = debug_allocate(new_size, align, site);
     }
+    if (moved == nullptr) return nullptr;
     std::memcpy(moved, p, std::min(old_size, new_size));
     debug_deallocate(p, old_size, true);
     return moved;

@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/coro/async_event.h>
-#include <dftracer/utils/coro/cancelled.h>
 #include <dftracer/utils/coro/detail/wake_batch.h>
 #include <dftracer/utils/coro/executor.h>
 
@@ -37,7 +36,7 @@ void AsyncEvent::WaitAwaitable::await_resume() {
         park_ = nullptr;
     }
     queued_ = false;
-    if (cancelled_) throw_cancelled("event wait cancelled");
+    if (cancelled_) detail::cancelled_unstoppable("event wait");
 }
 
 void AsyncEvent::WaitAwaitable::cancel_thunk(void* self) noexcept {
@@ -48,7 +47,7 @@ void AsyncEvent::WaitAwaitable::cancel_thunk(void* self) noexcept {
         if (!lock || !waiter->event_.remove_locked(waiter)) return;
         waiter->cancelled_ = true;
     }
-    detail::post_resumption(waiter->executor_, waiter->handle_);
+    detail::stop_or_resume(waiter->executor_, waiter->park_, waiter->handle_);
 }
 
 void AsyncEvent::set() {

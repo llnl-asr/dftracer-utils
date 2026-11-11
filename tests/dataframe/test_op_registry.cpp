@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/abi.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 
@@ -260,8 +261,9 @@ TEST_SUITE("op_registry") {
     }
 
     TEST_CASE("a user op registers under a module prefix and runs") {
-        dftu_op_desc copy{"mymod.copy", DFTU_OP_SIG(SERIES, SERIES, NONE, NONE),
-                          reinterpret_cast<const void*>(&dftu_series_share)};
+        dftu_op_desc copy{
+            "mymod.copy", DFTU_OP_SIG(SERIES, SERIES, NONE, NONE),
+            reinterpret_cast<dftu_op_generic_fn>(&dftu_series_share)};
         REQUIRE(dftu_op_register(&copy) == 0);
         std::int64_t v[2] = {7, 9};
         dftu_series* src = i64_col(v, 2);
@@ -276,20 +278,20 @@ TEST_SUITE("op_registry") {
 
     TEST_CASE("registration rejects a clash and run rejects a mismatch") {
         CHECK(dftu_op_register(nullptr) != 0);
-        dftu_op_desc dup{"dftu.series.add",
-                         DFTU_OP_SIG(SERIES, SERIES, SERIES, NONE),
-                         reinterpret_cast<const void*>(&dftu_series_add)};
+        dftu_op_desc dup{
+            "dftu.series.add", DFTU_OP_SIG(SERIES, SERIES, SERIES, NONE),
+            reinterpret_cast<dftu_op_generic_fn>(&dftu_series_add)};
         CHECK(dftu_op_register(&dup) != 0);
 
         // A name is a stable public key, so a second registration of one
         // already taken fails instead of shadowing it.
-        dftu_op_desc first{"mymod.once",
-                           DFTU_OP_SIG(SERIES, SERIES, NONE, NONE),
-                           reinterpret_cast<const void*>(&dftu_series_share)};
+        dftu_op_desc first{
+            "mymod.once", DFTU_OP_SIG(SERIES, SERIES, NONE, NONE),
+            reinterpret_cast<dftu_op_generic_fn>(&dftu_series_share)};
         REQUIRE(dftu_op_register(&first) == 0);
-        dftu_op_desc second{"mymod.once",
-                            DFTU_OP_SIG(SERIES, SERIES, NONE, NONE),
-                            reinterpret_cast<const void*>(&dftu_series_abs)};
+        dftu_op_desc second{
+            "mymod.once", DFTU_OP_SIG(SERIES, SERIES, NONE, NONE),
+            reinterpret_cast<dftu_op_generic_fn>(&dftu_series_abs)};
         CHECK(dftu_op_register(&second) != 0);
         CHECK(dftu_op_find("mymod.once")->fn == first.fn);
         std::int64_t v[1] = {1};
@@ -473,8 +475,9 @@ TEST_SUITE("op_registry") {
         cpp_df.names = {"k", "v"};
         cpp_df.columns.emplace_back(k_col);
         cpp_df.columns.emplace_back(v_col);
-        DataFrame via_cpp = cpp_df.group_by(dstd::Vector<dstd::String>{"k"},
-                                            {GroupAgg{Agg::Sum, "v", "total"}});
+        DataFrame via_cpp = dftu_utils_test::ok(
+            cpp_df.group_by(dstd::Vector<dstd::String>{"k"},
+                            {GroupAgg{Agg::Sum, "v", "total"}}));
         REQUIRE(static_cast<std::int64_t>(via_cpp.num_rows()) ==
                 dftu_dataframe_num_rows(via_registry));
 

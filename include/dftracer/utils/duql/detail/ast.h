@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_DUQL_DETAIL_AST_H
 #define DFTRACER_UTILS_DUQL_DETAIL_AST_H
 
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -46,7 +47,7 @@ inline FieldNode field_node(dstd::StringView text) {
 
 /// The field as a query writes it.
 inline dstd::String field_text(const FieldNode& field) {
-    return field.any ? "any(" + field.path + ")" : field.path;
+    return field.any ? dstd::fmt<"any({})">(field.path) : field.path;
 }
 
 /// An array of literal values (used by in/not-in).

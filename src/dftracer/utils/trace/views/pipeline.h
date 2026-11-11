@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_TRACE_VIEWS_PIPELINE_H
 
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -42,14 +43,14 @@ Pipeline lower_fused_folds(const ViewPlan& plan, const ViewDefinition& vdef,
                            dstd::Span<Fold* const> sinks);
 
 /// Run a lowered pipeline. A Source feeding fold Sinks with no streaming ops is
-/// lowering (a): one direct `fuse` call. Throws std::logic_error on a shape no
-/// lowering handles yet, rather than silently dropping nodes. Taken by value:
-/// a coroutine holding a reference to a caller's temporary plan dangles as soon
-/// as the call is not itself the awaited full-expression.
-coro::CoroTask<ExportStats> execute(Pipeline pipeline,
-                                    dftracer::utils::dstd::StringIntern& intern,
-                                    const CoverageSet* covered = nullptr,
-                                    std::uint64_t limit = 0);
+/// lowering (a): one direct `fuse` call, whose error is the result. A shape no
+/// lowering handles yet ends the process, rather than silently dropping nodes.
+/// Taken by value: a coroutine holding a reference to a caller's temporary
+/// plan dangles as soon as the call is not itself the awaited
+/// full-expression.
+coro::CoroTask<dstd::Result<ExportStats>> execute(
+    Pipeline pipeline, dftracer::utils::dstd::StringIntern& intern,
+    const CoverageSet* covered = nullptr, std::uint64_t limit = 0);
 
 }  // namespace dftracer::utils::trace::views::detail
 

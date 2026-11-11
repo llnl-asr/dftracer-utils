@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dataframe/query/group_fold.h>
+#include <dftracer/utils/dataframe/query/vectorize.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -11,9 +14,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/fields.h>
-#include <dftracer/utils/duql/group_fold.h>
 #include <dftracer/utils/duql/pipeline.h>
-#include <dftracer/utils/duql/vectorize.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_duql_internal.h>
@@ -68,21 +69,24 @@ dstd::Optional<dataframe::TypeId> Applier::agg_type(
     return dstd::nullopt;
 }
 
-dstd::Optional<dataframe::TypeId> Applier::term_type(const duql::TermRef& t,
-                                                     const dstd::String& text) {
-    if (!t) return dstd::nullopt;
+dstd::Result<dstd::Optional<dataframe::TypeId>> Applier::term_type(
+    const duql::TermRef& t, const dstd::String& text) {
+    if (!t) return dstd::Optional<dataframe::TypeId>();
     if (const auto* f = whole_field(t))
         if (const auto c = scan_column(dstd::String(f->base)))
             return c->type.id == dataframe::TypeId::Unknown
-                       ? dstd::nullopt
+                       ? dstd::Optional<dataframe::TypeId>()
                        : dstd::Optional<dataframe::TypeId>(c->type.id);
-    const dataframe::TypeId id =
-        dataframe::infer_type(compile(t, text), types()).id;
-    if (id == dataframe::TypeId::Unknown) return dstd::nullopt;
-    return id;
+    auto compiled = compile(t, text);
+    if (!compiled) return compiled.error();
+    auto inferred = dataframe::infer_type(*compiled, types());
+    if (!inferred) return inferred.error();
+    if (inferred->id == dataframe::TypeId::Unknown)
+        return dstd::Optional<dataframe::TypeId>();
+    return dstd::Optional<dataframe::TypeId>(inferred->id);
 }
 
-dstd::Optional<duql::VectorColumn> Applier::trace_column(
+dstd::Optional<dataframe::query::VectorColumn> Applier::trace_column(
     const duql::TermRef& t) {
     const auto* f = whole_field(t);
     if (!f) return dstd::nullopt;
@@ -91,24 +95,26 @@ dstd::Optional<duql::VectorColumn> Applier::trace_column(
     return c;
 }
 
-dstd::String Applier::trace_refusal(
+dstd::Result<dstd::String> Applier::trace_refusal(
     const duql::PipelineGroup& g,
     const dstd::Optional<duql::PipelineBucket>& pending) {
     if (!scan_)
-        return "'" + blocker_ +
-               "' comes before it; only where, time_range, bucket and "
-               "a field select may";
+        return dstd::fmt<
+            "'{}' comes before it; only where, time_range, bucket and a "
+            "field select may">(blocker_);
     if (pending) {
         if (pending->every)
-            return "a hopping bucket assigns a record to several windows";
+            return dstd::String(
+                "a hopping bucket assigns a record to several windows");
         const double us = pending->width * us_per_time_unit();
         if (std::trunc(us) != us)
-            return "its bucket width is not a whole number of "
-                   "microseconds";
+            return dstd::String(
+                "its bucket width is not a whole number of microseconds");
         const double origin_us = pending->origin * us_per_time_unit();
         if (std::trunc(origin_us) != origin_us || origin_us < 0)
-            return "its bucket origin is not a whole, non-negative number "
-                   "of microseconds";
+            return dstd::String(
+                "its bucket origin is not a whole, non-negative number of "
+                "microseconds");
     }
     // A select at the scan fixes the columns: a field it left out is no
     // column, whatever the files hold.
@@ -124,8 +130,8 @@ dstd::String Applier::trace_refusal(
                     if (!has_column_for(dstd::String(f.base))) missing = f.base;
                 });
         if (!missing.empty())
-            refuse("has no column '" + missing + "'; the columns here are " +
-                   joined(names()));
+            return refuse<"has no column '{}'; the columns here are {}">(
+                missing, joined(names()));
     }
     dstd::Vector<dstd::String> seen;
     for (const auto& k : g.keys) {
@@ -133,26 +139,24 @@ dstd::String Applier::trace_refusal(
         if (!c || (c->type.id != dataframe::TypeId::String &&
                    c->type.id != dataframe::TypeId::Int64 &&
                    c->type.id != dataframe::TypeId::Uint64))
-            return dstd::String("key '" + k.text +
-                                "' is not a string or integer field");
+            return dstd::fmt<"key '{}' is not a string or integer field">(
+                k.text);
         for (const auto& s : seen)
-            if (s == c->name) return "a field is a key twice";
+            if (s == c->name) return dstd::String("a field is a key twice");
         seen.push_back(c->name);
     }
     for (const auto& a : g.aggs) {
         if (!trace_op(a))
-            return dstd::String("'" + a.text +
-                                "' runs only on the scanned columns");
+            return dstd::fmt<"'{}' runs only on the scanned columns">(a.text);
         if (!a.arg) continue;
         const auto c = trace_column(a.arg);
         if (!c || !is_number(c->type.id))
-            return dstd::String("'" + a.text +
-                                "' does not read a numeric field");
+            return dstd::fmt<"'{}' does not read a numeric field">(a.text);
     }
-    return {};
+    return dstd::String();
 }
 
-void Applier::stage(const duql::PipelineGroup& group) {
+Status Applier::stage(const duql::PipelineGroup& group) {
     dstd::Optional<duql::PipelineBucket> bucket = std::move(bucket_);
     bucket_.reset();
     // A sum over no values is null: a hidden mean tells which groups
@@ -166,34 +170,42 @@ void Applier::stage(const duql::PipelineGroup& group) {
             hidden.name = valid;
             hidden.fn = duql::AggFn::Mean;
             hidden.arg = a.arg;
-            hidden.text = "mean(" + duql::term_text(*a.arg) + ")";
+            hidden.text = dstd::fmt<"mean({})">(duql::term_text(*a.arg));
             g.aggs.push_back(std::move(hidden));
             sums.emplace_back(a.name, std::move(valid));
         }
-    const dstd::String why = trace_refusal(g, bucket);
+    auto reason = trace_refusal(g, bucket);
+    if (!reason) return reason.error();
+    const dstd::String why = std::move(*reason);
     if (!why.empty()) {
         for (const auto& a : g.aggs)
             if (duql::is_occupancy(a.fn)) {
                 if (bucket && bucket->every)
-                    refuse("'" + agg_name(a.fn) +
-                           "' does not run with a hopping bucket");
-                refuse("'" + agg_name(a.fn) +
-                       "' needs the trace aggregation, which this group "
-                       "cannot take: " +
-                       why);
+                    return refuse<"'{}' does not run with a hopping bucket">(
+                        agg_name(a.fn));
+                return refuse<
+                    "'{}' needs the trace aggregation, which this group "
+                    "cannot take: {}">(agg_name(a.fn), why);
             }
         leave_scan("group");
     }
     dstd::Vector<dstd::Optional<dataframe::TypeId>> key_types;
-    if (bucket)
-        key_types.push_back(term_type(bucket->key, dstd::String(bucket->text))
-                                .value_or(dataframe::TypeId::Int64));
-    for (const auto& k : g.keys)
-        key_types.push_back(term_type(k.term, dstd::String(k.text)));
+    if (bucket) {
+        auto type = term_type(bucket->key, dstd::String(bucket->text));
+        if (!type) return type.error();
+        key_types.push_back(type->value_or(dataframe::TypeId::Int64));
+    }
+    for (const auto& k : g.keys) {
+        auto type = term_type(k.term, dstd::String(k.text));
+        if (!type) return type.error();
+        key_types.push_back(*type);
+    }
     dstd::Vector<dstd::Optional<dataframe::TypeId>> agg_types;
-    for (const auto& a : g.aggs)
-        agg_types.push_back(
-            agg_type(a, term_type(a.arg, dstd::String(a.text))));
+    for (const auto& a : g.aggs) {
+        auto type = term_type(a.arg, dstd::String(a.text));
+        if (!type) return type.error();
+        agg_types.push_back(agg_type(a, *type));
+    }
 
     dstd::Vector<dstd::String> keys;
     if (bucket) keys.push_back(dstd::String(bucket->name));
@@ -204,21 +216,30 @@ void Applier::stage(const duql::PipelineGroup& group) {
     for (std::size_t i = 0; i < out.size(); ++i)
         for (std::size_t j = 0; j < i; ++j)
             if (out[i] == out[j])
-                refuse("group gives two columns named '" + out[i] + "'");
+                return refuse<"group gives two columns named '{}'">(out[i]);
 
     dstd::String text;
-    for (const auto& k : g.keys) text += (text.empty() ? "" : ", ") + k.text;
+    for (const auto& k : g.keys) {
+        if (!text.empty()) text += ", ";
+        text += k.text;
+    }
     for (const auto& [sum, valid] : sums) out.push_back(valid);
     dstd::String aggs;
-    for (const auto& a : group.aggs)
-        aggs += (aggs.empty() ? "" : ", ") + a.name + " = " + a.text;
-    if (why.empty()) {
-        lines.push_back("group (trace plan): keys " + text + "; aggs " + aggs);
-        trace_group(g, bucket);
-    } else {
-        lines.push_back("group (frame plan): keys " + text + "; aggs " + aggs);
-        frame_group(g, bucket);
+    for (const auto& a : group.aggs) {
+        if (!aggs.empty()) aggs += ", ";
+        aggs += dstd::fmt<"{} = {}">(a.name, a.text);
     }
+    Status grouped;
+    if (why.empty()) {
+        lines.push_back(
+            dstd::fmt<"group (trace plan): keys {}; aggs {}">(text, aggs));
+        grouped = trace_group(g, bucket);
+    } else {
+        lines.push_back(
+            dstd::fmt<"group (frame plan): keys {}; aggs {}">(text, aggs));
+        grouped = frame_group(g, bucket);
+    }
+    if (!grouped) return grouped;
     rename(out);
     cols_.clear();
     for (const auto& f : v_.output_schema().fields)
@@ -261,9 +282,10 @@ void Applier::stage(const duql::PipelineGroup& group) {
                                           col(a.name)),
                     dataframe::expr_lit_null(dataframe::TypeId::Float64),
                     col(a.name)));
-    if (out != visible) keep(visible, false);
+    if (out != visible)
+        if (auto done = keep(visible, false); !done) return done;
     if (!keys.empty()) {
-        lines.push_back("sort_by_multi " + joined(keys));
+        lines.push_back(dstd::fmt<"sort_by_multi {}">(joined(keys)));
         v_ = v_.sort_by_multi(std_strs(keys),
                               dstd::Vector<bool>(keys.size(), false));
     }
@@ -272,10 +294,12 @@ void Applier::stage(const duql::PipelineGroup& group) {
     else if (keys.empty())
         finish_empty(g);
     extras_.clear();
+    return {};
 }
 
-void Applier::trace_group(const duql::PipelineGroup& g,
-                          const dstd::Optional<duql::PipelineBucket>& bucket) {
+Status Applier::trace_group(
+    const duql::PipelineGroup& g,
+    const dstd::Optional<duql::PipelineBucket>& bucket) {
     // A select before it would project the aggregation's output; the
     // keys and arguments are among the selected columns already.
     View v = v_.select(dstd::Vector<dstd::String>{});
@@ -286,11 +310,11 @@ void Applier::trace_group(const duql::PipelineGroup& g,
         const auto origin = static_cast<std::uint64_t>(
             std::llround(bucket->origin * us_per_time_unit()));
         if (origin == 0) {
-            lines.push_back("time_bucket " + dstd::to_string(width) + " us");
+            lines.push_back(dstd::fmt<"time_bucket {} us">(width));
             v = v.time_bucket(width);
         } else {
-            lines.push_back("time_bucket " + dstd::to_string(width) +
-                            " us at " + dstd::to_string(origin) + " us");
+            lines.push_back(
+                dstd::fmt<"time_bucket {} us at {} us">(width, origin));
             v = v.time_bucket(width, origin);
         }
         keep_cols.push_back("time_bucket");
@@ -316,7 +340,7 @@ void Applier::trace_group(const duql::PipelineGroup& g,
     scan_ = false;
     blocker_ = "group";
     columns_from_view();
-    keep(std::move(keep_cols), false);
+    if (auto done = keep(std::move(keep_cols), false); !done) return done;
     // busy() and active() come back in microseconds; the duration role
     // may count in another unit.
     const auto dur_ns = roles_.fields.find(roles_.duration);
@@ -329,13 +353,15 @@ void Applier::trace_group(const duql::PipelineGroup& g,
             g.aggs[i].fn != duql::AggFn::Active)
             continue;
         const dstd::String out = "__duql_agg_" + dstd::to_string(i);
-        with_column(
-            out,
-            dataframe::expr_binary(
-                dataframe::BinaryOp::Div,
-                dataframe::expr_col(static_cast<std::int32_t>(*index(out))),
-                dataframe::expr_lit(us_per_dur)),
-            out + " in duration units");
+        if (auto done = with_column(
+                out,
+                dataframe::expr_binary(
+                    dataframe::BinaryOp::Div,
+                    dataframe::expr_col(static_cast<std::int32_t>(*index(out))),
+                    dataframe::expr_lit(us_per_dur)),
+                dstd::fmt<"{} in duration units">(out));
+            !done)
+            return done;
     }
     // The trace aggregation keys buckets in microseconds; the time role
     // may count in another unit.
@@ -346,22 +372,26 @@ void Applier::trace_group(const duql::PipelineGroup& g,
             dataframe::expr_col(static_cast<std::int32_t>(*i)),
             dataframe::expr_lit(us_per_time_unit()));
         const auto* field = schema_.field_at(roles_.time);
-        if (field && field->type == index::FieldType::Int)
+        if (field && field->type == trace::index::FieldType::Int)
             in_unit = dataframe::expr_cast(dataframe::TypeId::Int64, in_unit);
-        with_column("time_bucket", in_unit, "time_bucket in time units");
+        return with_column("time_bucket", in_unit, "time_bucket in time units");
     }
+    return {};
 }
 
-dstd::Vector<double> Applier::plugin_params(const duql::PipelineAgg& a) {
+dstd::Result<dstd::Vector<double>> Applier::plugin_params(
+    const duql::PipelineAgg& a) {
     const dftu_op_desc* op = dftu_op_find(a.plugin.c_str());
-    if (!op) refuse("plugin function '" + a.plugin + "' is not registered");
+    if (!op) return refuse<"plugin function '{}' is not registered">(a.plugin);
     if (!a.arg)
-        plugin_refusal(dstd::String(a.plugin), op, "the column is missing");
+        return plugin_refusal(dstd::String(a.plugin), op,
+                              "the column is missing");
     std::size_t takes = 0;
     for (std::uint32_t i = 1; i < DFTU_OP_MAX_ARGS; ++i)
         if (DFTU_OP_SIG_ARG(op->sig, i) != DFTU_TOK_NONE) ++takes;
     if (a.params.size() != takes)
-        plugin_refusal(dstd::String(a.plugin), op, "the arguments do not fit");
+        return plugin_refusal(dstd::String(a.plugin), op,
+                              "the arguments do not fit");
     dstd::Vector<double> out;
     for (std::size_t i = 0; i < takes; ++i) {
         const dftu_op_tok tok =
@@ -372,8 +402,8 @@ dstd::Vector<double> Applier::plugin_params(const duql::PipelineAgg& a) {
         const bool count = tok == DFTU_TOK_I32 || tok == DFTU_TOK_REDUCE ||
                            tok == DFTU_TOK_BOOL;
         if (v.kind == DFTU_SCALAR_TAG_STR || !(real || (count && whole)))
-            plugin_refusal(dstd::String(a.plugin), op,
-                           "the arguments do not fit");
+            return plugin_refusal(dstd::String(a.plugin), op,
+                                  "the arguments do not fit");
         out.push_back(v.kind == DFTU_SCALAR_TAG_F64 ? v.value.d
                       : v.kind == DFTU_SCALAR_TAG_U64
                           ? static_cast<double>(v.value.u)
@@ -393,12 +423,14 @@ dataframe::DataType Applier::plugin_type(const dstd::String& name) {
     }
 }
 
-void Applier::hop_rows(const duql::PipelineBucket& b) {
+Status Applier::hop_rows(const duql::PipelineBucket& b) {
     const dstd::String time = "__duql_time";
-    with_column(time,
-                compile(column_item(dstd::String(roles_.time)).term,
-                        dstd::String(roles_.time)),
-                dstd::String(roles_.time));
+    auto compiled = compile(column_item(dstd::String(roles_.time)).term,
+                            dstd::String(roles_.time));
+    if (!compiled) return compiled.error();
+    if (auto done = with_column(time, *compiled, dstd::String(roles_.time));
+        !done)
+        return done;
     const std::size_t at = *index(time);
     const dataframe::TypeId tid = cols_[at].type.id;
     const auto whole = [](double x) { return std::trunc(x) == x; };
@@ -410,12 +442,13 @@ void Applier::hop_rows(const duql::PipelineBucket& b) {
         exact ? dataframe::TypeId::Int64 : dataframe::TypeId::Float64;
     const double width = b.width;
     const double origin = b.origin;
-    dstd::Vector<duql::VectorColumn> next = cols_;
+    dstd::Vector<dataframe::query::VectorColumn> next = cols_;
     next.push_back({"__duql_bucket", dataframe::scalar(out_type)});
     const auto windows =
         static_cast<std::size_t>(std::max(1.0, std::ceil(width / step)));
     map_rows(
-        [at, exact, width, step, origin, windows](dataframe::DataFrame f) {
+        [at, exact, width, step, origin, windows](
+            dataframe::DataFrame f) -> dstd::Result<dataframe::DataFrame> {
             const std::int64_t n = f.num_rows();
             dstd::Vector<std::int64_t> parent;
             parent.reserve(static_cast<std::size_t>(n) * windows);
@@ -474,45 +507,66 @@ void Applier::hop_rows(const duql::PipelineBucket& b) {
             return out;
         },
         std::move(next),
-        "hop buckets " + number_text(width) + " every " + number_text(step) +
-            (origin != 0 ? " at " + number_text(origin) : ""));
+        dstd::fmt<"hop buckets {} every {}{}">(
+            number_text(width), number_text(step),
+            origin != 0 ? dstd::fmt<" at {}">(number_text(origin))
+                        : dstd::String()));
+    return {};
 }
 
-void Applier::frame_group(const duql::PipelineGroup& g,
-                          const dstd::Optional<duql::PipelineBucket>& bucket) {
+Status Applier::frame_group(
+    const duql::PipelineGroup& g,
+    const dstd::Optional<duql::PipelineBucket>& bucket) {
     dstd::Vector<dstd::String> keys;
     if (bucket) {
-        if (bucket->every)
-            hop_rows(*bucket);
-        else
-            with_column("__duql_bucket",
-                        compile(bucket->key, dstd::String(bucket->text)),
-                        dstd::String(bucket->text));
+        if (bucket->every) {
+            if (auto done = hop_rows(*bucket); !done) return done;
+        } else {
+            auto compiled = compile(bucket->key, dstd::String(bucket->text));
+            if (!compiled) return compiled.error();
+            if (auto done = with_column("__duql_bucket", *compiled,
+                                        dstd::String(bucket->text));
+                !done)
+                return done;
+        }
         keys.push_back("__duql_bucket");
     }
-    for (std::size_t k = 0; k < g.keys.size(); ++k)
-        keys.push_back(source(g.keys[k], "__duql_key_" + dstd::to_string(k)));
+    for (std::size_t k = 0; k < g.keys.size(); ++k) {
+        auto column = source(g.keys[k], dstd::fmt<"__duql_key_{}">(k));
+        if (!column) return column.error();
+        keys.push_back(std::move(*column));
+    }
     dstd::Vector<dataframe::GroupAgg> specs;
-    dstd::Vector<duql::FoldAgg> fold(g.aggs.size());
+    dstd::Vector<dataframe::query::FoldAgg> fold(g.aggs.size());
     dstd::Vector<dstd::String> by(g.aggs.size());
     bool folded = false;
     for (std::size_t i = 0; i < g.aggs.size(); ++i) {
         const auto& a = g.aggs[i];
         const dstd::String out = "__duql_agg_" + dstd::to_string(i);
         dstd::String in;
-        if (a.by)
-            by[i] = source({"", a.by, duql::term_text(*a.by)},
-                           "__duql_by_" + dstd::to_string(i));
+        if (a.by) {
+            auto column = source({"", a.by, duql::term_text(*a.by)},
+                                 dstd::fmt<"__duql_by_{}">(i));
+            if (!column) return column.error();
+            by[i] = std::move(*column);
+        }
         if (a.fn == duql::AggFn::CountIf) {
-            in = "__duql_in_" + dstd::to_string(i);
-            with_column(in,
-                        dataframe::expr_select(
-                            compile(a.arg, dstd::String(a.text), true),
-                            dataframe::expr_lit(std::int64_t{1}),
-                            dataframe::expr_lit_null(dataframe::TypeId::Int64)),
-                        dstd::String(a.text));
+            in = dstd::fmt<"__duql_in_{}">(i);
+            auto condition = compile(a.arg, dstd::String(a.text), true);
+            if (!condition) return condition.error();
+            if (auto done = with_column(
+                    in,
+                    dataframe::expr_select(
+                        *condition, dataframe::expr_lit(std::int64_t{1}),
+                        dataframe::expr_lit_null(dataframe::TypeId::Int64)),
+                    dstd::String(a.text));
+                !done)
+                return done;
         } else if (a.arg) {
-            in = source({"", a.arg, a.text}, "__duql_in_" + dstd::to_string(i));
+            auto column =
+                source({"", a.arg, a.text}, dstd::fmt<"__duql_in_{}">(i));
+            if (!column) return column.error();
+            in = std::move(*column);
         }
         dataframe::GroupAgg spec{dataframe::Agg::Count, std_str(in),
                                  std_str(out)};
@@ -523,8 +577,11 @@ void Applier::frame_group(const duql::PipelineGroup& g,
                     // A key-less Count with no input gives null.
                     spec.column = "__duql_one";
                     if (!index(spec.column))
-                        with_column(dstd::String(spec.column),
-                                    dataframe::expr_lit(std::int64_t{1}), "1");
+                        if (auto done = with_column(
+                                dstd::String(spec.column),
+                                dataframe::expr_lit(std::int64_t{1}), "1");
+                            !done)
+                            return done;
                 }
                 break;
             case duql::AggFn::CountIf:
@@ -557,7 +614,8 @@ void Applier::frame_group(const duql::PipelineGroup& g,
             case duql::AggFn::Quantile:
                 spec.op = dataframe::Agg::Pct;
                 spec.param = a.q;
-                if (a.merged) fold[i].op = duql::FoldOp::MergeQuantile;
+                if (a.merged)
+                    fold[i].op = dataframe::query::FoldOp::MergeQuantile;
                 break;
             case duql::AggFn::Histogram:
                 spec.op = dataframe::Agg::Hist;
@@ -566,32 +624,37 @@ void Applier::frame_group(const duql::PipelineGroup& g,
             case duql::AggFn::Concurrency:
             case duql::AggFn::Utilization:
             case duql::AggFn::Active:
-                refuse("'" + agg_name(a.fn) + "' needs the trace aggregation");
+                return refuse<"'{}' needs the trace aggregation">(
+                    agg_name(a.fn));
             case duql::AggFn::CountDistinct:
-                fold[i].op = duql::FoldOp::CountDistinct;
+                fold[i].op = dataframe::query::FoldOp::CountDistinct;
                 break;
             case duql::AggFn::Collect:
-                fold[i].op = duql::FoldOp::Collect;
+                fold[i].op = dataframe::query::FoldOp::Collect;
                 break;
             case duql::AggFn::Argmax:
-                fold[i].op = duql::FoldOp::Argmax;
+                fold[i].op = dataframe::query::FoldOp::Argmax;
                 break;
             case duql::AggFn::Argmin:
-                fold[i].op = duql::FoldOp::Argmin;
+                fold[i].op = dataframe::query::FoldOp::Argmin;
                 break;
             case duql::AggFn::Sketch:
-                fold[i].op = duql::FoldOp::Sketch;
+                fold[i].op = dataframe::query::FoldOp::Sketch;
                 break;
             case duql::AggFn::Merge:
-                fold[i].op = duql::FoldOp::Merge;
+                fold[i].op = dataframe::query::FoldOp::Merge;
                 break;
             case duql::AggFn::Plugin:
-                fold[i].op = duql::FoldOp::Plugin;
+                fold[i].op = dataframe::query::FoldOp::Plugin;
                 fold[i].plugin = a.plugin;
-                fold[i].params = plugin_params(a);
+                {
+                    auto params = plugin_params(a);
+                    if (!params) return params.error();
+                    fold[i].params = std::move(*params);
+                }
                 break;
         }
-        folded = folded || fold[i].op != duql::FoldOp::Engine;
+        folded = folded || fold[i].op != dataframe::query::FoldOp::Engine;
         fold[i].engine = dataframe::to_agg_op(spec.op);
         fold[i].param = spec.param;
         specs.push_back(std::move(spec));
@@ -599,15 +662,16 @@ void Applier::frame_group(const duql::PipelineGroup& g,
     if (!folded) {
         v_ = v_.group_by(std_strs(keys), specs);
         columns_from_view();
-        return;
+        return {};
     }
     fold_group(keys, specs, by, std::move(fold));
+    return {};
 }
 
 void Applier::fold_group(const dstd::Vector<dstd::String>& keys,
                          const dstd::Vector<dataframe::GroupAgg>& specs,
                          const dstd::Vector<dstd::String>& by,
-                         dstd::Vector<duql::FoldAgg> fold) {
+                         dstd::Vector<dataframe::query::FoldAgg> fold) {
     dstd::Vector<dstd::String> read = keys;
     auto at = [&](dstd::StringView name) {
         const auto it = std::find(read.begin(), read.end(), name);
@@ -634,35 +698,35 @@ void Applier::fold_group(const dstd::Vector<dstd::String>& keys,
             f.in < 0 ? dataframe::scalar(dataframe::TypeId::Int64)
                      : type_of(read[static_cast<std::size_t>(f.in)]);
         switch (f.op) {
-            case duql::FoldOp::Engine:
+            case dataframe::query::FoldOp::Engine:
                 f.type = dataframe::agg_output_type(f.engine, t.id);
                 break;
-            case duql::FoldOp::CountDistinct:
+            case dataframe::query::FoldOp::CountDistinct:
                 f.type = dataframe::scalar(dataframe::TypeId::Int64);
                 break;
-            case duql::FoldOp::Collect:
+            case dataframe::query::FoldOp::Collect:
                 f.type = dataframe::list_of(t);
                 break;
-            case duql::FoldOp::Argmax:
-            case duql::FoldOp::Argmin:
+            case dataframe::query::FoldOp::Argmax:
+            case dataframe::query::FoldOp::Argmin:
                 f.type = t;
                 break;
-            case duql::FoldOp::Plugin:
+            case dataframe::query::FoldOp::Plugin:
                 f.type = plugin_type(dstd::String(f.plugin));
                 break;
-            case duql::FoldOp::Sketch:
-            case duql::FoldOp::Merge:
+            case dataframe::query::FoldOp::Sketch:
+            case dataframe::query::FoldOp::Merge:
                 f.type = dataframe::scalar(dataframe::TypeId::String);
                 break;
-            case duql::FoldOp::MergeQuantile:
+            case dataframe::query::FoldOp::MergeQuantile:
                 f.type = dataframe::scalar(dataframe::TypeId::Float64);
                 break;
         }
-        schema.fields.push_back(dataframe::Field{
-            std_str("__duql_agg_" + dstd::to_string(i)), f.type, true});
+        schema.fields.push_back(
+            dataframe::Field{dstd::fmt<"__duql_agg_{}">(i), f.type, true});
     }
-    lines.push_back("group fold over " + joined(read) +
-                    " (one pass, in input order)");
+    lines.push_back(dstd::fmt<"group fold over {} (one pass, in input order)">(
+        joined(read)));
     v_ = v_.with_lazy(fold_source(v_.lazy().select(std_strs(read)),
                                   std::move(schema), std::move(in),
                                   std::move(key_types), std::move(fold)));
@@ -684,7 +748,8 @@ void Applier::finish_empty(const duql::PipelineGroup& g) {
     dstd::Vector<dstd::Pair<dstd::String, dataframe::DataType>> cols;
     for (const auto& c : cols_) cols.emplace_back(c.name, c.type);
     finish(
-        [counts, cols](dataframe::DataFrame f) {
+        [counts,
+         cols](dataframe::DataFrame f) -> dstd::Result<dataframe::DataFrame> {
             if (f.num_rows() > 0) return f;
             dataframe::DataFrame row;
             const std::int64_t zero = 0;
@@ -741,8 +806,9 @@ dstd::String fill_key_in(const dstd::Vector<dataframe::Series>& text,
 }
 
 // False when `f` needs no added row.
-bool fill_missing_rows(const FillSpec& spec, const dataframe::DataFrame& f,
-                       dataframe::DataFrame& out) {
+dstd::Result<bool> fill_missing_rows(const FillSpec& spec,
+                                     const dataframe::DataFrame& f,
+                                     dataframe::DataFrame& out) {
     const auto& n_keys = spec.n_keys;
     const auto& width = spec.width;
     const auto& origin = spec.origin;
@@ -783,10 +849,9 @@ bool fill_missing_rows(const FillSpec& spec, const dataframe::DataFrame& f,
             present[{k, std::llround((at[r] - lo) / width)}] = true;
     }
     if (steps * reps.size() > limit)
-        refuse("'bucket ... fill' would make " + dstd::to_string(steps) +
-               " buckets x " + dstd::to_string(reps.size()) +
-               " groups, over DUQL_FILL_MAX_ROWS (" + dstd::to_string(limit) +
-               ")");
+        return refuse<
+            "'bucket ... fill' would make {} buckets x {} groups, over "
+            "DUQL_FILL_MAX_ROWS ({})">(steps, reps.size(), limit);
     dstd::Vector<std::int64_t> take;
     dstd::Vector<double> starts;
     for (std::uint64_t s = 0; s < steps; ++s)
@@ -798,7 +863,9 @@ bool fill_missing_rows(const FillSpec& spec, const dataframe::DataFrame& f,
     if (take.empty()) return false;
     dstd::Vector<dstd::String> key_names(f.names.begin(),
                                          f.names.begin() + 1 + n_keys);
-    dataframe::DataFrame add = f.select(std_strs(key_names)).take(take);
+    auto key_columns = f.select(std_strs(key_names));
+    if (!key_columns) return key_columns.error();
+    dataframe::DataFrame add = key_columns->take(take);
     const auto m = static_cast<std::int64_t>(take.size());
     add.columns[0] =
         dataframe::Series::flat_f64(starts.data(), m).cast(f.columns[0].type());
@@ -818,12 +885,18 @@ bool fill_missing_rows(const FillSpec& spec, const dataframe::DataFrame& f,
         add.names.emplace_back("__duql_added");
         add.columns.push_back(dataframe::Series::flat_i64(ones.data(), m));
     }
-    out = dataframe::concat({base, &add}, dataframe::ConcatHow::Diagonal);
+    auto joined_rows =
+        dataframe::concat({base, &add}, dataframe::ConcatHow::Diagonal);
+    if (!joined_rows) return joined_rows.error();
+    out = std::move(*joined_rows);
     dstd::Vector<dstd::String> keep = strings_of(f.names);
     if (carry) keep.push_back("__duql_added");
-    out = out.select(std_strs(keep))
-              .sort_by_multi(std_strs(key_names),
-                             dstd::Vector<bool>(key_names.size(), false));
+    auto kept = out.select(std_strs(keep));
+    if (!kept) return kept.error();
+    auto ordered = kept->sort_by_multi(
+        std_strs(key_names), dstd::Vector<bool>(key_names.size(), false));
+    if (!ordered) return ordered.error();
+    out = std::move(*ordered);
     return true;
 }
 
@@ -925,21 +998,26 @@ void Applier::finish_fill(const duql::PipelineGroup& g,
     const double origin = spec.origin;
     const duql::syntax::FillMode mode = spec.mode;
     finish(
-        [spec = std::move(spec)](dataframe::DataFrame f) {
+        [spec = std::move(spec)](
+            dataframe::DataFrame f) -> dstd::Result<dataframe::DataFrame> {
             dataframe::DataFrame out;
-            if (!fill_missing_rows(spec, f, out)) return f;
+            auto added = fill_missing_rows(spec, f, out);
+            if (!added.has_value()) return added.error();
+            if (!*added) return f;
             if (spec.mode == duql::syntax::FillMode::Zero) return out;
             fill_carry(spec, f, out);
             return out.select(f.names);
         },
-        "fill buckets " + number_text(width) +
-            (origin != 0 ? " at " + number_text(origin) : "") +
-            (mode == duql::syntax::FillMode::Forward  ? " forward"
-             : mode == duql::syntax::FillMode::Linear ? " linear"
-                                                      : "") +
-            (b.low ? " from " + number_text(*b.low) + " to " +
-                         number_text(*b.high)
-                   : ""));
+        dstd::fmt<"fill buckets {}{}{}{}">(
+            number_text(width),
+            origin != 0 ? dstd::fmt<" at {}">(number_text(origin))
+                        : dstd::String(),
+            mode == duql::syntax::FillMode::Forward  ? " forward"
+            : mode == duql::syntax::FillMode::Linear ? " linear"
+                                                     : "",
+            b.low ? dstd::fmt<" from {} to {}">(number_text(*b.low),
+                                                number_text(*b.high))
+                  : dstd::String()));
 }
 
 }  // namespace dftracer::utils::trace::views::duql_detail

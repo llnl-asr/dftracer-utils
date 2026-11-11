@@ -5,11 +5,13 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 
+#include <dataframe/expr_ok.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/view_builder.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -17,6 +19,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 #include <cstring>
@@ -152,21 +155,23 @@ dstd::Vector<Case> cases() {
     for (bool nulls : {false, true}) {
         const dstd::String suffix = nulls ? " nulls" : "";
         const Rows rows = rows_for(nulls);
-        out.push_back({"int64" + suffix, int64_of(nulls)});
-        out.push_back({"float64" + suffix, float64_of(nulls)});
-        out.push_back({"bool" + suffix, bool_of(nulls)});
-        out.push_back({"string" + suffix, strings_of(rows, TypeId::String)});
-        out.push_back({"large string" + suffix, large_of(rows)});
-        out.push_back({"binary" + suffix, strings_of(rows, TypeId::Binary)});
+        out.push_back({dstd::fmt<"int64{}">(suffix), int64_of(nulls)});
+        out.push_back({dstd::fmt<"float64{}">(suffix), float64_of(nulls)});
+        out.push_back({dstd::fmt<"bool{}">(suffix), bool_of(nulls)});
         out.push_back(
-            {"json" + suffix, strings_of(rows, TypeId::String).as_json()});
-        out.push_back({"view" + suffix, view_of(rows)});
-        out.push_back({"dictionary" + suffix,
+            {dstd::fmt<"string{}">(suffix), strings_of(rows, TypeId::String)});
+        out.push_back({dstd::fmt<"large string{}">(suffix), large_of(rows)});
+        out.push_back(
+            {dstd::fmt<"binary{}">(suffix), strings_of(rows, TypeId::Binary)});
+        out.push_back({dstd::fmt<"json{}">(suffix),
+                       strings_of(rows, TypeId::String).as_json()});
+        out.push_back({dstd::fmt<"view{}">(suffix), view_of(rows)});
+        out.push_back({dstd::fmt<"dictionary{}">(suffix),
                        strings_of(rows, TypeId::String).dictionary_encode()});
         out.push_back(
-            {"selection string" + suffix,
+            {dstd::fmt<"selection string{}">(suffix),
              selection_over(strings_of(rows, TypeId::String), scatter())});
-        out.push_back({"selection int64" + suffix,
+        out.push_back({dstd::fmt<"selection int64{}">(suffix),
                        selection_over(int64_of(nulls), scatter())});
     }
     return out;
@@ -306,7 +311,8 @@ TEST_SUITE("slice views") {
                     CAPTURE(len);
                     Series got{dftu_series_slice(base.handle(), offset, len)};
                     Series want = base.take(range(offset, len));
-                    CHECK(got.sum().i64() == want.sum().i64());
+                    CHECK(dftu_utils_test::ok(got.sum()).i64() ==
+                          dftu_utils_test::ok(want.sum()).i64());
                 }
         }
     }
@@ -382,19 +388,22 @@ TEST_SUITE("slice views") {
         df.columns.push_back(
             strings_of(rows, TypeId::String).dictionary_encode());
 
-        DataFrame lazy = dftracer::utils::default_runtime()
-                             .submit(df.lazy()
-                                         .filter(col(0) > std::int64_t{10})
-                                         .with_column("j", col(0) + col(0))
-                                         .collect(7))
-                             .get();
+        DataFrame lazy = dftu_utils_test::ok(
+            dftracer::utils::default_runtime()
+                .submit(df.lazy()
+                            .filter(col(0) > std::int64_t{10})
+                            .with_column("j", col(0) + col(0))
+                            .collect(7))
+                .get());
 
         dstd::Vector<const Series*> in;
         for (const Series& c : df.columns) in.push_back(&c);
-        DataFrame kept = df.filter(eval(col(0) > std::int64_t{10}, in));
+        DataFrame kept =
+            df.filter(dftu_utils_test::eval_ok(col(0) > std::int64_t{10}, in));
         dstd::Vector<const Series*> kin;
         for (const Series& c : kept.columns) kin.push_back(&c);
-        DataFrame want = kept.with_column("j", eval(col(0) + col(0), kin));
+        DataFrame want = kept.with_column(
+            "j", dftu_utils_test::eval_ok(col(0) + col(0), kin));
 
         REQUIRE(lazy.num_columns() == want.num_columns());
         CHECK(lazy.names == want.names);
@@ -414,7 +423,7 @@ TEST_SUITE("slice views") {
             if (layout == 1) s = view_of(rows);
             if (layout == 2) s = s.dictionary_encode();
             dstd::Vector<const Series*> in{&s};
-            Series got = eval(
+            Series got = dftu_utils_test::eval_ok(
                 expr_str_pred(StrPredOp::Contains, expr_col(0), "name"), in);
             Series want = s.str_contains("name");
             REQUIRE(got.length() == want.length());

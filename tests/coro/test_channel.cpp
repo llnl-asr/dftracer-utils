@@ -4,6 +4,7 @@
 #include <dftracer/utils/coro/generator.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
@@ -11,6 +12,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <atomic>
 #include <chrono>
@@ -62,11 +64,11 @@ bool blocking_receive(ChannelT& channel, ItemT& item) {
 }
 
 void run_together(Runtime& rt, dstd::Vector<coro::CoroTask<void>> tasks) {
-    rt.block_on(
+    dftu_utils_test::ok(rt.block_on(
         coro::with_scope([&tasks](coro::Scope& scope) -> coro::CoroTask<void> {
             for (auto& task : tasks) scope.spawn(std::move(task));
             co_return;
-        }));
+        })));
 }
 
 }  // namespace
@@ -415,7 +417,7 @@ TEST_CASE("Channel - Tasks run in order") {
     };
 
     Runtime rt(2);
-    rt.block_on(in_order());
+    dftu_utils_test::ok(rt.block_on(in_order()));
 
     CHECK(producer_sum.load() == consumer_sum.load());
 }
@@ -468,7 +470,7 @@ TEST_CASE("Channel - Chained transform tasks") {
     };
 
     Runtime rt(3);
-    rt.block_on(in_order());
+    dftu_utils_test::ok(rt.block_on(in_order()));
 
     CHECK(produced_values.size() == 10);
     CHECK(transformed_values.size() == 10);
@@ -898,7 +900,7 @@ TEST_CASE("Channel - receive_async() with transform chain") {
     };
 
     Runtime rt(3);
-    rt.block_on(in_order());
+    dftu_utils_test::ok(rt.block_on(in_order()));
 
     CHECK(produced_values.size() == 20);
     CHECK(transformed_values.size() == 20);
@@ -1205,7 +1207,7 @@ TEST_CASE("Channel - producer() with scope.spawn() pattern") {
     std::atomic<int> total_consumed{0};
 
     Runtime rt(NUM_PRODUCERS + 1);
-    rt.block_on(
+    dftu_utils_test::ok(rt.block_on(
         coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
             // Spawn producers using producer()
             for (int p = 0; p < NUM_PRODUCERS; ++p) {
@@ -1232,7 +1234,7 @@ TEST_CASE("Channel - producer() with scope.spawn() pattern") {
                 });
 
             co_return;
-        }));
+        })));
 
     CHECK(total_produced.load() == total_consumed.load());
     int expected_sum = 0;
@@ -1251,7 +1253,7 @@ TEST_CASE("Channel - producer() early exit in scope.spawn()") {
     std::atomic<int> total_consumed{0};
 
     Runtime rt(NUM_PRODUCERS + 1);
-    rt.block_on(
+    dftu_utils_test::ok(rt.block_on(
         coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
             // Some producers exit early (simulating skip/error)
             for (int p = 0; p < NUM_PRODUCERS; ++p) {
@@ -1280,7 +1282,7 @@ TEST_CASE("Channel - producer() early exit in scope.spawn()") {
                 });
 
             co_return;
-        }));
+        })));
 
     // Only producers 1 and 3 send 10 items each
     CHECK(total_consumed.load() == 20);
@@ -1296,7 +1298,7 @@ TEST_CASE("Channel - producer() two-stage pipeline with scope.spawn()") {
     std::atomic<int> total_consumed{0};
 
     Runtime rt(NUM_PRODUCERS + NUM_WORKERS + 1);
-    rt.block_on(
+    dftu_utils_test::ok(rt.block_on(
         coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
             // Stage 1: producers -> stage1 channel
             for (int p = 0; p < NUM_PRODUCERS; ++p) {
@@ -1335,7 +1337,7 @@ TEST_CASE("Channel - producer() two-stage pipeline with scope.spawn()") {
                 });
 
             co_return;
-        }));
+        })));
 
     CHECK(total_consumed.load() == NUM_PRODUCERS * ITEMS_PER_PRODUCER);
 }
@@ -1352,7 +1354,7 @@ TEST_CASE("Channel - spawn_transforms() basic") {
     std::atomic<int> total_consumed{0};
 
     Runtime rt(4);
-    rt.block_on(
+    dftu_utils_test::ok(rt.block_on(
         coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
             // Single producer
             auto generate = []() -> coro::Generator<int> {
@@ -1406,7 +1408,7 @@ TEST_CASE("Channel - spawn_transforms() basic") {
             });
 
             co_return;
-        }));
+        })));
 
     // sum of squares 1..100
     int expected = 0;
@@ -1422,7 +1424,7 @@ TEST_CASE("Channel - spawn_transforms() two-stage pipeline") {
     std::atomic<int> total_consumed{0};
 
     Runtime rt(8);
-    rt.block_on(
+    dftu_utils_test::ok(rt.block_on(
         coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
             // Producer: emit integers
             auto generate = []() -> coro::Generator<int> {
@@ -1465,7 +1467,7 @@ TEST_CASE("Channel - spawn_transforms() two-stage pipeline") {
 
             // Transform 2: string -> string (prefix)
             auto prefix = [](dstd::String val) -> coro::CoroTask<dstd::String> {
-                co_return "item_" + val;
+                co_return dstd::fmt<"item_{}">(val);
             };
             for (int w = 0; w < 2; ++w) {
                 scope.spawn([&]() -> coro::CoroTask<void> {
@@ -1496,7 +1498,7 @@ TEST_CASE("Channel - spawn_transforms() two-stage pipeline") {
             });
 
             co_return;
-        }));
+        })));
 
     CHECK(total_consumed.load() == 50);
 }

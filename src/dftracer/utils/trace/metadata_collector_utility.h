@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFTRACER_METADATA_COLLECTOR_UTILITY_H
-#define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFTRACER_METADATA_COLLECTOR_UTILITY_H
+#ifndef DFTRACER_UTILS_TRACE_METADATA_COLLECTOR_UTILITY_H
+#define DFTRACER_UTILS_TRACE_METADATA_COLLECTOR_UTILITY_H
 
 #include <dftracer/utils/common/archive_format.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
-#include <dftracer/utils/utilities/reader/internal/reader_factory.h>
+#include <dftracer/utils/trace/index/gzip/checkpoint_indexer_factory.h>
+#include <dftracer/utils/trace/reader/internal/reader_factory.h>
 
 namespace dftracer::utils::trace {
 
@@ -16,7 +16,7 @@ namespace dftracer::utils::trace {
 struct MetadataCollectorUtilityInput {
     dstd::String file_path;
     dstd::String index_path;  ///< Empty for plain files, otherwise `.dftindex`.
-    std::size_t checkpoint_size = dftracer::utils::index::gzip::
+    std::size_t checkpoint_size = dftracer::utils::trace::index::gzip::
         CheckpointIndexer::DEFAULT_CHECKPOINT_SIZE;
     bool force_rebuild = false;
     bool compute_hash = false;
@@ -25,8 +25,8 @@ struct MetadataCollectorUtilityInput {
 
     MetadataCollectorUtilityInput(
         dstd::String fpath, dstd::String ipath = "",
-        std::size_t ckpt = dftracer::utils::index::gzip::CheckpointIndexer::
-            DEFAULT_CHECKPOINT_SIZE,
+        std::size_t ckpt = dftracer::utils::trace::index::gzip::
+            CheckpointIndexer::DEFAULT_CHECKPOINT_SIZE,
         bool force = false, bool hash = false)
         : file_path(std::move(fpath)),
           index_path(std::move(ipath)),
@@ -132,4 +132,4 @@ class MetadataCollectorUtility {
 
 }  // namespace dftracer::utils::trace
 
-#endif  // DFTRACER_UTILS_UTILITIES_COMPOSITES_DFTRACER_METADATA_COLLECTOR_UTILITY_H
+#endif  // DFTRACER_UTILS_TRACE_METADATA_COLLECTOR_UTILITY_H

@@ -1,22 +1,23 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/file.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/utilities/fileio/compress/gzip_member_reader.h>
-#include <dftracer/utils/utilities/fileio/compress/gzip_rechunker.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
+#include <dftracer/utils/fileio/compress/gzip_member_reader.h>
+#include <dftracer/utils/fileio/compress/gzip_rechunker.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities;
 
 namespace {
 
@@ -25,8 +26,8 @@ dstd::String make_lines(std::size_t n) {
     dstd::String s;
     s.reserve(n * 48);
     for (std::size_t i = 0; i < n; ++i) {
-        s += "{\"id\":" + dstd::to_string(i) +
-             ",\"name\":\"read\",\"cat\":\"POSIX\",\"dur\":42}\n";
+        s += dstd::fmt<
+            "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"dur\":42}\n">(i);
     }
     return s;
 }
@@ -38,7 +39,7 @@ dstd::String write_single_member_gz(const dstd::String& path,
     REQUIRE(member.has_value());
     dstd::String ofs;
     ofs.append(reinterpret_cast<const char*>(member->data()), member->size());
-    (void)dstd::fs::write_file(dstd::PathView(path), ofs);
+    dstd::fs::write_file(dstd::PathView(path), ofs).discard();
     return path;
 }
 
@@ -54,14 +55,16 @@ dstd::Pair<dstd::String, dstd::Vector<char>> decode_members(
 
     dstd::String out;
     dstd::Vector<char> last_bytes;
-    [&]() -> dftracer::utils::coro::CoroTask<void> {
+    dftu_utils_test::ok([&]() -> dftracer::utils::coro::CoroTask<void> {
         auto gen = fileio::compress::decode_gzip_members(fd, size);
         while (auto chunk = co_await gen.next()) {
-            last_bytes.push_back(chunk->empty() ? '\0' : chunk->back());
-            out.append(chunk->data(), chunk->size());
+            REQUIRE(*chunk);
+            const dstd::StringView bytes = **chunk;
+            last_bytes.push_back(bytes.empty() ? '\0' : bytes.back());
+            out.append(bytes.data(), bytes.size());
         }
     }()
-                 .get();
+                                     .get());
     return {out, last_bytes};
 }
 
@@ -76,9 +79,10 @@ bool needs_rechunk(const dstd::String& path, std::size_t cap) {
     const int fd = fd_file->native_handle();
     struct stat st;
     REQUIRE(::fstat(fd, &st) == 0);
-    return fileio::compress::gzip_first_member(
-               fd, static_cast<std::uint64_t>(st.st_size), cap)
-        .get()
+    return dftu_utils_test::ok(
+               fileio::compress::gzip_first_member(
+                   fd, static_cast<std::uint64_t>(st.st_size), cap)
+                   .get())
         .exceeds_cap;
 }
 
@@ -114,7 +118,7 @@ TEST_SUITE("gzip_rechunker") {
                        head->size());
             ofs.append(reinterpret_cast<const char*>(body->data()),
                        body->size());
-            (void)dstd::fs::write_file(dstd::PathView(gz), ofs);
+            dstd::fs::write_file(dstd::PathView(gz), ofs).discard();
         }
 
         auto fd_file = dstd::File::open(gz, {});
@@ -126,19 +130,20 @@ TEST_SUITE("gzip_rechunker") {
         constexpr std::size_t CAP = 10 * 1024 * 1024;
 
         // Without a sample only the "[" member is read.
-        auto first = fileio::compress::gzip_first_member(fd, size, CAP).get();
+        auto first = dftu_utils_test::ok(
+            fileio::compress::gzip_first_member(fd, size, CAP).get());
         CHECK(first.uncompressed == 2);
         CHECK_FALSE(first.exceeds_cap);
 
         // With one, the next member counts too, and the cap still applies to
         // the first member only.
-        auto sampled =
-            fileio::compress::gzip_first_member(fd, size, 16, 1 << 20).get();
+        auto sampled = dftu_utils_test::ok(
+            fileio::compress::gzip_first_member(fd, size, 16, 1 << 20).get());
         CHECK(sampled.uncompressed == 2 + payload.size());
         CHECK(sampled.compressed == size);
         CHECK_FALSE(sampled.exceeds_cap);
 
-        (void)dstd::fs::remove_all(dir);
+        dstd::fs::remove_all(dir).discard();
     }
 
     TEST_CASE("rechunk preserves bytes and produces multiple members") {
@@ -151,10 +156,11 @@ TEST_SUITE("gzip_rechunker") {
 
         // One member in, small member size out.
         CHECK(decode_all(in).second == 1);
-        fileio::compress::gzip_rechunk_to_members(in, out,
-                                                  /*member_size=*/8 * 1024,
-                                                  /*level=*/6)
-            .get();
+        dftu_utils_test::ok(
+            fileio::compress::gzip_rechunk_to_members(in, out,
+                                                      /*member_size=*/8 * 1024,
+                                                      /*level=*/6)
+                .get());
 
         auto [content, last_bytes] = decode_members(out);
         CHECK(content == payload);     // exact byte preservation
@@ -164,7 +170,21 @@ TEST_SUITE("gzip_rechunker") {
             CHECK(last_bytes[i] == '\n');
         }
 
-        (void)dstd::fs::remove_all(dir);
+        dstd::fs::remove_all(dir).discard();
+    }
+
+    TEST_CASE("rechunk of a missing input is an Io error") {
+        auto dir = dftu_utils_test::make_unique_test_path("rechunk_missing");
+        REQUIRE(dstd::fs::create_directories(dir).has_value());
+        const dstd::String in = dstd::String((dir / "absent.pfw.gz").str());
+        const dstd::String out = dstd::String((dir / "out.pfw.gz").str());
+
+        dftu_utils_test::expect_error(
+            fileio::compress::gzip_rechunk_to_members(in, out, 4 * 1024, 6)
+                .get(),
+            common::ErrorCode::Io);
+
+        dstd::fs::remove_all(dir).discard();
     }
 
     TEST_CASE("rechunk handles a payload with no trailing newline") {
@@ -176,9 +196,11 @@ TEST_SUITE("gzip_rechunker") {
         payload += "{\"id\":99999,\"trailing\":true}";  // no final '\n'
         write_single_member_gz(in, payload);
 
-        fileio::compress::gzip_rechunk_to_members(in, out, 4 * 1024, 6).get();
+        dftu_utils_test::ok(
+            fileio::compress::gzip_rechunk_to_members(in, out, 4 * 1024, 6)
+                .get());
         CHECK(decode_all(out).first == payload);
 
-        (void)dstd::fs::remove_all(dir);
+        dstd::fs::remove_all(dir).discard();
     }
 }

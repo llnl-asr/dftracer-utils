@@ -56,6 +56,7 @@
 // up. Instructions are counted over the whole run of a case, set-up included.
 
 #include <bench_counters.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -326,8 +327,8 @@ dftracer::utils::dstd::Vector<Case> make_cases() {
     for (std::size_t size : SMALL_SIZES) {
         for (bool lifo : {false, true}) {
             dftracer::utils::dstd::String name =
-                "small " + dftracer::utils::dstd::to_string(size) + "B " +
-                (lifo ? "lifo" : "batch");
+                dftracer::utils::dstd::fmt<"small {}B {}">(
+                    size, (lifo ? "lifo" : "batch"));
             cases.push_back(
                 {name, both([size, lifo](auto policy, const Scale &scale) {
                      using A = decltype(policy);
@@ -344,8 +345,7 @@ dftracer::utils::dstd::Vector<Case> make_cases() {
     if (cores != 1 && cores != 8) pair_counts.push_back(cores);
     for (std::size_t pairs : pair_counts) {
         dftracer::utils::dstd::String name =
-            "xthread " + dftracer::utils::dstd::to_string(pairs) + "p" +
-            dftracer::utils::dstd::to_string(pairs) + "c";
+            dftracer::utils::dstd::fmt<"xthread {}p{}c">(pairs, pairs);
         if (pairs == cores) name += " (all cores)";
         cases.push_back({name, both([pairs](auto policy, const Scale &scale) {
                              return cross_case<decltype(policy)>(pairs, scale);

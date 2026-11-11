@@ -16,7 +16,8 @@ namespace dftracer::utils::trace::views::detail {
 
 // One aggregate group -> one ph="C" counter event JSON line. `keys` aligns to
 // `group_cols` (nullopt for a null key), `values` to `value_cols`. The group
-// columns `entity_col` and `lane_col` give pid and tid, as index::entity_id.
+// columns `entity_col` and `lane_col` give pid and tid, as
+// trace::index::entity_id.
 dstd::String counter_line(
     const dstd::Vector<dstd::String>& group_cols,
     const dstd::Vector<dstd::Optional<dstd::String>>& keys,
@@ -28,8 +29,9 @@ dstd::String counter_line(
 // counter-partial merge). Byte-matches emit_group_counter: finalizes the state,
 // then writes one event per group with its own args (spec value columns then
 // the present dyn columns, skipping args a group did not see).
-void emit_counters_from_state(const dftracer::utils::dataframe::AggState& state,
-                              const ViewPlan& plan, ExportSink& sink);
+dstd::Result<void> emit_counters_from_state(
+    const dftracer::utils::dataframe::AggState& state, const ViewPlan& plan,
+    ExportSink& sink);
 
 }  // namespace dftracer::utils::trace::views::detail
 

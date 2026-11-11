@@ -6,6 +6,7 @@
 #include <dftracer/utils/plugins/abi.h>
 #include <fcntl.h>
 #include <stdint.h>
+#include <utilities/plugins/abi_c_consumers.h>
 
 static const dftu_io* io_of(const dftu_plugin_host* h) {
     return (const dftu_io*)h->get_service(h->h, DFTU_SVC_IO);

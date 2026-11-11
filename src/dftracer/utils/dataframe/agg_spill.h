@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
@@ -33,8 +34,9 @@ class AggSpiller {
     std::size_t runs() const;
 
     /// Write `state` to a run and replace it with a fresh empty state over the
-    /// same specs when it exceeds the budget. Returns true when it spilled.
-    bool maybe_spill(AggStatePtr& state);
+    /// same specs when it exceeds the budget. Gives true when it spilled, or
+    /// the @ref ErrorCode::Io error of a run that cannot be written.
+    dstd::Result<bool> maybe_spill(AggStatePtr& state);
 
     /// Take over `other`'s runs, leaving it empty. For a driver that merges a
     /// worker slice's accumulator into a master one.
@@ -43,9 +45,11 @@ class AggSpiller {
     /// The whole aggregate: every run merged with the still-live `live`,
     /// finalized with `key_names`. Repeatable - the runs are re-read, not
     /// consumed, and `live` is not modified. With no runs this is exactly
-    /// agg_finalize(live, key_names).
-    DataFrame drain(const AggState& live,
-                    const dstd::Vector<dstd::String>& key_names) const;
+    /// agg_finalize(live, key_names). A run that cannot be read gives an
+    /// @ref ErrorCode::Io or @ref ErrorCode::Parse error.
+    dstd::Result<DataFrame> drain(
+        const AggState& live,
+        const dstd::Vector<dstd::String>& key_names) const;
 
    private:
     struct Impl;

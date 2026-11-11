@@ -8,12 +8,14 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 #include <dftracer/utils/trace/views/view_scanner_utility.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <doctest/doctest.h>
+#include <generator_ok.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <algorithm>
@@ -37,7 +39,7 @@ static dstd::String create_pfw_gz(TestEnvironment& env, int n) {
     ofs.close();
     dstd::String gz = pfw + ".gz";
     compress_file_to_gzip(pfw, gz);
-    (void)dstd::fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     return gz;
 }
 
@@ -64,7 +66,7 @@ static dstd::String create_metadata_pfw_gz(TestEnvironment& env) {
     ofs.close();
     dstd::String gz = pfw + ".gz";
     compress_file_to_gzip(pfw, gz);
-    (void)dstd::fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     return gz;
 }
 
@@ -80,7 +82,7 @@ struct CollectedViewOutput {
 static coro::CoroTask<CollectedViewOutput> collect_view_coro(
     ViewScannerUtility* reader, ViewScannerInput input) {
     CollectedViewOutput output;
-    auto gen = (*reader)(input);
+    auto gen = dftu_utils_test::ok_items((*reader)(input));
     while (auto batch = co_await gen.next()) {
         output.events_matched += batch->events_matched;
         output.events_scanned += batch->events_scanned;
@@ -97,7 +99,8 @@ static coro::CoroTask<CollectedViewOutput> collect_view_coro(
 
 static CollectedViewOutput collect_view_output(ViewScannerUtility& reader,
                                                ViewScannerInput input) {
-    return collect_view_coro(&reader, std::move(input)).get();
+    return dftu_utils_test::ok(
+        collect_view_coro(&reader, std::move(input)).get());
 }
 
 static dstd::String create_refused_gz(TestEnvironment& env) {
@@ -120,7 +123,7 @@ static dstd::String create_refused_gz(TestEnvironment& env) {
     }
     dstd::String gz = pfw + ".gz";
     compress_file_to_gzip(pfw, gz);
-    (void)dstd::fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     return gz;
 }
 
@@ -139,7 +142,7 @@ static dstd::String write_newline_split_trace(TestEnvironment& env,
     const dstd::String gz = env.dir() + "/split_line.pfw.gz";
     dftu_utils_test::FileOut out(gz);
     for (const auto* text : {&first, &second}) {
-        dftracer::utils::utilities::fileio::compress::GzipMemberCompressor comp;
+        dftracer::utils::fileio::compress::GzipMemberCompressor comp;
         auto member = comp.compress_member(text->data(), text->size());
         REQUIRE(member.has_value());
         out.write(reinterpret_cast<const char*>(member->data()),
@@ -204,7 +207,7 @@ TEST_SUITE("ViewScanner") {
         }
         dstd::String gz = pfw + ".gz";
         compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
 
         ViewScannerInput input;
         input.with_file_path(dstd::String(gz))
@@ -307,7 +310,7 @@ TEST_SUITE("ViewScanner") {
         }
         dstd::String gz = pfw + ".gz";
         compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
 
         ViewScannerInput input;
         input.with_file_path(dstd::String(gz))

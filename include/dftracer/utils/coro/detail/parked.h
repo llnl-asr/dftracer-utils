@@ -5,12 +5,17 @@
 #include <dftracer/utils/dstd/memory.h>
 
 #include <atomic>
+#include <coroutine>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
 #include <new>
 #include <thread>
 #include <type_traits>
+
+namespace dftracer::utils::coro {
+class Executor;
+}  // namespace dftracer::utils::coro
 
 namespace dftracer::utils::coro::detail {
 
@@ -23,15 +28,51 @@ using ParkCancelFn = void (*)(void* waiter) noexcept;
 
 /// The task that is suspending now, so a registry can tell later that it was
 /// cancelled. Valid while its node is registered.
+struct ParkOwnerOps {
+    bool (*cancel_requested)(const void*) noexcept;
+    /// Ends the suspended task as cancelled, so the frame never resumes, and
+    /// returns true; returns false for a task that must resume, such as one
+    /// that holds a scope. Null for an owner that cannot be stopped.
+    bool (*stop)(const void*) noexcept;
+    /// True for a task that must resume at a cancelled wait, such as one that
+    /// holds a scope.
+    bool (*refuses_stop)(const void*) noexcept;
+};
+
 struct ParkOwner {
     const void* promise{nullptr};
-    bool (*cancel_requested)(const void*) noexcept {nullptr};
+    const ParkOwnerOps* ops{nullptr};
 };
+
+static_assert(sizeof(ParkOwner) == 2 * sizeof(void*),
+              "ParkOwner is copied on every suspend");
 
 template <typename Promise>
 bool promise_cancel_requested(const void* promise) noexcept {
     return static_cast<const Promise*>(promise)->cancel_requested();
 }
+
+template <typename Promise>
+bool promise_refuses_stop(const void* promise) noexcept {
+    return static_cast<const Promise*>(promise)->refuses_stop();
+}
+
+template <typename Promise>
+bool promise_stop(const void* promise) noexcept {
+    auto* p = const_cast<Promise*>(static_cast<const Promise*>(promise));
+    if (p->refuses_stop()) return false;
+    p->finish_cancelled();
+    return true;
+}
+
+template <typename Promise>
+inline constexpr ParkOwnerOps STOPPABLE_OWNER_OPS{
+    &promise_cancel_requested<Promise>, &promise_stop<Promise>,
+    &promise_refuses_stop<Promise>};
+
+template <typename Promise>
+inline constexpr ParkOwnerOps CANCEL_ONLY_OWNER_OPS{
+    &promise_cancel_requested<Promise>, nullptr, nullptr};
 
 /// The owner of the suspend running on this thread. In a source file, so every
 /// library sees one thread local.
@@ -58,13 +99,52 @@ class ParkOwnerScope {
 
 template <typename Handle>
 ParkOwner park_owner_of(Handle h) noexcept {
-    if constexpr (requires { h.promise().cancel_requested(); }) {
-        using Promise = std::remove_reference_t<decltype(h.promise())>;
-        return {&h.promise(), &promise_cancel_requested<Promise>};
+    using Promise = std::remove_reference_t<decltype(h.promise())>;
+    if constexpr (requires {
+                      h.promise().finish_cancelled();
+                      h.promise().refuses_stop();
+                  }) {
+        return {&h.promise(), &STOPPABLE_OWNER_OPS<Promise>};
+    } else if constexpr (requires { h.promise().cancel_requested(); }) {
+        return {&h.promise(), &CANCEL_ONLY_OWNER_OPS<Promise>};
     } else {
         return {};
     }
 }
+
+struct ParkNode;
+
+/// Called from a cancel callback, with the waiter already out of its
+/// awaitable's queue: posts a job to `executor` that removes `node` and ends
+/// the owner task as cancelled, so the waiter never resumes. Returns false,
+/// and posts nothing, when the owner cannot be stopped; the caller then
+/// resumes the waiter.
+bool stop_parked(Executor* executor, ParkNode* node) noexcept;
+
+/// Ends the task `owner` names as cancelled, through a job on `executor` (in
+/// place when it is null), and removes `node` first when it is not null.
+/// Returns false, and does nothing, when the owner cannot stop. For a finished
+/// wait that completes with a stop, where no cancel callback runs. Touches
+/// nothing of the waiter after it returns true, since its frame can be gone.
+bool stop_task(Executor* executor, ParkNode* node, ParkOwner owner) noexcept;
+
+/// Continues the waiter `handle` of a wait that ended with a stop: ends its
+/// task through @ref stop_task, or resumes it when the task cannot stop, and
+/// the wait then ends the process.
+void stop_or_continue(Executor* executor, ParkOwner owner,
+                      std::coroutine_handle<> handle) noexcept;
+
+/// For a cancel callback, after the waiter left its awaitable's queue: ends
+/// the owner task through @ref stop_parked and clears `park`, which the stop
+/// releases. When the owner cannot stop, keeps `park` and resumes `handle`, and
+/// the wait then sees the cancel. Touches nothing of the waiter after a stop is
+/// posted, since its frame can be gone by then.
+void stop_or_resume(Executor* executor, ParkNode*& park,
+                    std::coroutine_handle<> handle) noexcept;
+
+/// Ends the process: a wait was cancelled in a frame that cannot stop, such
+/// as one that is not a task. `what` names the wait.
+[[noreturn]] void cancelled_unstoppable(const char* what) noexcept;
 
 /// The registry entry of a coroutine suspended on an awaitable that only
 /// another party can finish. Shutdown wakes the waiter with a cancelled status
@@ -109,7 +189,8 @@ class ParkRegistry {
         s.size.store(s.size.load(std::memory_order_relaxed) + 1,
                      std::memory_order_release);
         n->owner = current_park_owner();
-        if (n->owner.promise && n->owner.cancel_requested(n->owner.promise)) {
+        if (n->owner.promise &&
+            n->owner.ops->cancel_requested(n->owner.promise)) {
             note_park_after_cancel();
         }
         return n;
@@ -176,7 +257,7 @@ class ParkRegistry {
             std::lock_guard<std::mutex> lock(s.mutex);
             for (ParkNode* n = s.head; n; n = n->next_) {
                 if (n->owner.promise == nullptr ||
-                    !n->owner.cancel_requested(n->owner.promise)) {
+                    !n->owner.ops->cancel_requested(n->owner.promise)) {
                     continue;
                 }
                 n->cancel(n->waiter);

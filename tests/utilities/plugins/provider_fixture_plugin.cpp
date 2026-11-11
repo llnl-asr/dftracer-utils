@@ -105,7 +105,8 @@ void rows_cursor_destroy(void* self) {
     g_rows_cursor_destroy.fetch_add(1);
 }
 
-const ::dftu_cursor_vt ROWS_CURSOR_VT = {rows_next, rows_cursor_destroy};
+const ::dftu_cursor_vt ROWS_CURSOR_VT = {.next = rows_next,
+                                         .destroy = rows_cursor_destroy};
 
 void* rows_scan(void*, const ::dftu_scan_request*, int32_t*,
                 void** out_cursor_self, const ::dftu_cursor_vt** out_vt) {
@@ -117,8 +118,8 @@ void* rows_scan(void*, const ::dftu_scan_request*, int32_t*,
 
 void rows_source_destroy(void*) { g_rows_source_destroy.fetch_add(1); }
 
-const ::dftu_source_vt ROWS_SOURCE_VT = {rows_schema, rows_scan,
-                                         rows_source_destroy};
+const ::dftu_source_vt ROWS_SOURCE_VT = {
+    .schema = rows_schema, .scan = rows_scan, .destroy = rows_source_destroy};
 
 /* ---- provider_fixture.failing: next() fails on the first call ---- */
 
@@ -137,8 +138,8 @@ dftu_task* failing_next(void*, int64_t, ::dftu_result_frame* out) {
 
 void failing_cursor_destroy(void*) { g_failing_cursor_destroy.fetch_add(1); }
 
-const ::dftu_cursor_vt FAILING_CURSOR_VT = {failing_next,
-                                            failing_cursor_destroy};
+const ::dftu_cursor_vt FAILING_CURSOR_VT = {.next = failing_next,
+                                            .destroy = failing_cursor_destroy};
 
 void* failing_scan(void*, const ::dftu_scan_request*, int32_t*,
                    void** out_cursor_self, const ::dftu_cursor_vt** out_vt) {
@@ -150,8 +151,9 @@ void* failing_scan(void*, const ::dftu_scan_request*, int32_t*,
 
 void failing_source_destroy(void*) {}
 
-const ::dftu_source_vt FAILING_SOURCE_VT = {failing_schema, failing_scan,
-                                            failing_source_destroy};
+const ::dftu_source_vt FAILING_SOURCE_VT = {.schema = failing_schema,
+                                            .scan = failing_scan,
+                                            .destroy = failing_source_destroy};
 
 /* ---- fold side: never exercised (the test never calls Plugins::run) ---- */
 
@@ -263,6 +265,16 @@ void destroy(void*) {}
 dftu_plugin g_plugin;
 
 }  // namespace
+
+extern "C" {
+DFTU_PLUGIN_EXPORT int provider_fixture_gate_ok(void);
+DFTU_PLUGIN_EXPORT int provider_fixture_source_destroy_count(void);
+DFTU_PLUGIN_EXPORT int provider_fixture_cursor_destroy_count(void);
+DFTU_PLUGIN_EXPORT int provider_fixture_failing_next_calls(void);
+DFTU_PLUGIN_EXPORT int provider_fixture_failing_cursor_destroy_count(void);
+DFTU_PLUGIN_EXPORT int provider_fixture_sdk_alive(void);
+DFTU_PLUGIN_EXPORT int provider_fixture_sdk_filters(void);
+}
 
 extern "C" {
 

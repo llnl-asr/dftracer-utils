@@ -10,6 +10,7 @@
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <algorithm>
 #include <cmath>
@@ -261,11 +262,11 @@ TEST_CASE("every group keeps its own accuracy at different offsets") {
     Series x =
         Series::flat_f64(vals.data(), static_cast<std::int64_t>(vals.size()));
     dstd::Vector<const Series*> inputs = {&k, &x};
-    DataFrame r = dataframe::group_agg_expr(
+    DataFrame r = dftu_utils_test::ok(dataframe::group_agg_expr(
         dataframe::expr_col(0),
         {dataframe::agg_std(dataframe::expr_col(1), "s"),
          dataframe::agg_var(dataframe::expr_col(1), "v")},
-        inputs, "g");
+        inputs, "g"));
     REQUIRE(r.num_rows() == static_cast<std::int64_t>(G));
     const std::int64_t* gk = r.column("g").data<std::int64_t>();
     const double* s = r.column("s").data<double>();
@@ -291,9 +292,9 @@ TEST_CASE("a group-by over one group with a large offset") {
     Series k = Series::flat_i64(keys.data(), static_cast<std::int64_t>(N));
     Series x = Series::flat_f64(v.data(), static_cast<std::int64_t>(N));
     dstd::Vector<const Series*> inputs = {&k, &x};
-    DataFrame r = dataframe::group_agg_expr(
+    DataFrame r = dftu_utils_test::ok(dataframe::group_agg_expr(
         dataframe::expr_col(0),
-        {dataframe::agg_std(dataframe::expr_col(1), "s")}, inputs, "g");
+        {dataframe::agg_std(dataframe::expr_col(1), "s")}, inputs, "g"));
     REQUIRE(r.num_rows() == 1);
     CHECK(rel(r.column("s").data<double>()[0], ref.sd) < 1e-9);
 }

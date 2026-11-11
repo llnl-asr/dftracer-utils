@@ -18,22 +18,24 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
-#include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/plan/chunk_pruner.h>
-#include <dftracer/utils/index/plan/rowsets.h>
-#include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
-#include <dftracer/utils/index/store/layout.h>
-#include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/fileio/file_helpers.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/indexer.h>
+#include <dftracer/utils/trace/index/plan/chunk_pruner.h>
+#include <dftracer/utils/trace/index/plan/rowsets.h>
+#include <dftracer/utils/trace/index/record_schema.h>
+#include <dftracer/utils/trace/index/store/layout.h>
+#include <dftracer/utils/trace/index/tables.h>
 #include <dftracer/utils/trace/internal/utils.h>
+#include <dftracer/utils/trace/reader/trace_reader.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 #include <dftracer/utils/trace/views/view_scan.h>
-#include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
+#include <generator_ok.h>
 #include <index_test_helpers.h>
 #include <mmix_lcg.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <cstdint>
@@ -42,7 +44,7 @@
 #include <utility>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::index;
+using namespace dftracer::utils::trace::index;
 
 namespace {
 
@@ -136,12 +138,12 @@ dstd::String write_trace(const dstd::String& dir, int seed, int events) {
     }
     out += "]\n";
     const auto plain = dir + "/trace" + dstd::to_string(seed) + ".pfw";
-    (void)dstd::fs::write_file(dstd::PathView(plain), out);
+    dstd::fs::write_file(dstd::PathView(plain), out).discard();
     const auto gz = plain + ".gz";
     const std::size_t member = seed == 3 ? LARGE_MEMBER_BYTES : MEMBER_BYTES;
     REQUIRE(
         dftu_utils_test::compress_file_to_gzip_multimember(plain, gz, member));
-    (void)dstd::fs::remove(plain);
+    dstd::fs::remove(plain).discard();
     return gz;
 }
 
@@ -222,9 +224,12 @@ struct Corpus {
         index_dir = env.dir() + "/idx";
         for (int seed : {1, 2, 3})
             traces.push_back(write_trace(env.dir(), seed, 6000));
-        index::IndexerOptions opts;
+        trace::index::IndexerOptions opts;
         opts.index_dir = index_dir;
-        index::Indexer::open(dftu_utils_test::dstd_paths(traces), opts).build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(trace::index::Indexer::open(
+                                    dftu_utils_test::dstd_paths(traces), opts))
+                .build());
     }
     dstd::String index_of(const dstd::String& trace) const {
         return dstd::String(
@@ -241,20 +246,22 @@ dstd::Vector<dstd::String> run_oracle(const Corpus& c) {
         const auto file =
             dftu_utils_test::require_indexed_file(snapshot, trace);
         const auto members =
-            dftu_utils_test::index_take(index::members(snapshot, file)).size();
-        const auto uc =
-            dftu_utils_test::index_take(index::file_metadata(snapshot, file))
-                ->max_bytes;
+            dftu_utils_test::index_take(trace::index::members(snapshot, file))
+                .size();
+        const auto uc = dftu_utils_test::index_take(
+                            trace::index::file_metadata(snapshot, file))
+                            ->max_bytes;
 
         for (const auto& text : QUERIES) {
-            const auto q = duql::parse_or_throw(text);
+            const auto q = dftu_utils_test::ok(duql::Query::from_string(text));
             const dstd::String key = base + "|" + text + "|";
 
             plan::ChunkPruner pruner;
-            auto one = pruner(plan::ChunkPrunerInput{
-                                  dstd::String(dstd::StringView(index_path)),
-                                  dstd::String(dstd::StringView(trace)), q})
-                           .get();
+            auto one = dftu_utils_test::ok(
+                pruner(plan::ChunkPrunerInput{
+                           dstd::String(dstd::StringView(index_path)),
+                           dstd::String(dstd::StringView(trace)), q})
+                    .get());
             lines.push_back(
                 key + "-|pruner|" +
                 dstd::to_string(static_cast<int>(one.success)) + "/" +
@@ -281,10 +288,13 @@ dstd::Vector<dstd::String> run_oracle(const Corpus& c) {
                                     dstd::String(index_path), uc, members, 0});
                 vp.query = q;
                 vp.time_range = tr;
-                const auto vdef = trace::views::detail::make_vdef(vp, false);
+                const auto vdef = dftu_utils_test::ok(
+                    trace::views::detail::make_vdef(vp, false));
                 std::uint64_t skipped = 0;
-                auto units =
-                    trace::views::detail::gather_units(vp, vdef, skipped).get();
+                auto units = dftu_utils_test::ok(
+
+                    trace::views::detail::gather_units(vp, vdef, skipped)
+                        .get());
                 dstd::Vector<std::uint64_t> ckpts;
                 for (const auto& u : units) ckpts.push_back(u.checkpoint_idx);
                 lines.push_back(
@@ -306,19 +316,19 @@ dstd::String recording_path() {
 std::size_t count_json(const dstd::String& trace, const dstd::String& index_dir,
                        const dstd::String& text, bool skip_pruning) {
     auto run = [&]() -> coro::CoroTask<std::size_t> {
-        utilities::reader::TraceReader reader(
+        trace::reader::TraceReader reader(
             {.file_path = dstd::String(trace),
              .index_dir = dstd::String(index_dir)});
-        utilities::reader::ReadConfig cfg;
+        trace::reader::ReadConfig cfg;
         cfg.query = text;
         cfg.skip_pruning = skip_pruning;
         cfg.buffer_size = SCAN_BUFFER_BYTES;
-        auto gen = reader.read_json(cfg);
+        auto gen = dftu_utils_test::ok_items(reader.read_json(cfg));
         std::size_t n = 0;
         while (auto line = co_await gen.next()) ++n;
         co_return n;
     };
-    return run().get();
+    return dftu_utils_test::ok(run().get());
 }
 
 coro::CoroTask<std::uint64_t> scan_unit(
@@ -327,7 +337,7 @@ coro::CoroTask<std::uint64_t> scan_unit(
     auto sin = trace::views::detail::make_scanner_input(u, vdef, vdef.query);
     sin.with_batch_size(SCAN_BUFFER_BYTES);
     trace::views::ViewScannerUtility scanner;
-    auto gen = scanner(sin);
+    auto gen = dftu_utils_test::ok_items(scanner(sin));
     std::uint64_t n = 0;
     while (auto b = co_await gen.next()) n += b->events_matched;
     co_return n;
@@ -339,17 +349,18 @@ std::uint64_t count_view(const dstd::String& trace,
     trace::views::detail::ViewPlan vp;
     vp.files.push_back(
         {dstd::String(trace), dstd::String(index_path), 0, 0, 0});
-    vp.query = duql::parse_or_throw(text);
-    const auto vdef = trace::views::detail::make_vdef(vp, false);
+    vp.query = dftu_utils_test::ok(duql::Query::from_string(text));
+    const auto vdef =
+        dftu_utils_test::ok(trace::views::detail::make_vdef(vp, false));
     auto run = [&]() -> coro::CoroTask<std::uint64_t> {
         std::uint64_t skipped = 0;
-        const auto units =
-            co_await trace::views::detail::gather_units(vp, vdef, skipped);
+        const auto units = dftu_utils_test::ok(
+            co_await trace::views::detail::gather_units(vp, vdef, skipped));
         std::uint64_t n = 0;
         for (const auto& u : units) n += co_await scan_unit(u, vdef);
         co_return n;
     };
-    return run().get();
+    return dftu_utils_test::ok(run().get());
 }
 
 // The View scan without pruning: the whole file as one unit.
@@ -357,10 +368,11 @@ std::uint64_t count_view_unpruned(const dstd::String& trace,
                                   const dstd::String& index_path,
                                   const dstd::String& text) {
     trace::views::detail::ViewPlan vp;
-    vp.query = duql::parse_or_throw(text);
-    const auto vdef = trace::views::detail::make_vdef(vp, false);
+    vp.query = dftu_utils_test::ok(duql::Query::from_string(text));
+    const auto vdef =
+        dftu_utils_test::ok(trace::views::detail::make_vdef(vp, false));
     const auto snapshot = dftu_utils_test::index_snapshot(index_path);
-    const auto spans = dftu_utils_test::index_take(index::spans(
+    const auto spans = dftu_utils_test::index_take(trace::index::spans(
         snapshot, dftu_utils_test::require_indexed_file(snapshot, trace)));
     REQUIRE_FALSE(spans.empty());
     dstd::SharedPtr<const duql::Query> q;
@@ -374,7 +386,7 @@ std::uint64_t count_view_unpruned(const dstd::String& trace,
         0,
         q,
         nullptr};
-    return scan_unit(u, vdef).get();
+    return dftu_utils_test::ok(scan_unit(u, vdef).get());
 }
 
 }  // namespace
@@ -388,7 +400,7 @@ TEST_CASE("prune decisions match the recording") {
         for (const auto& l : lines) f += common::str_cat(l, "\n");
         MESSAGE("recorded " << lines.size() << " lines to "
                             << dstd::String(out));
-        (void)dstd::fs::write_file(dstd::PathView(out), f);
+        dstd::fs::write_file(dstd::PathView(out), f).discard();
         return;
     }
 
@@ -433,25 +445,29 @@ dstd::Vector<std::uint64_t> view_chunks(const dstd::String& trace,
     trace::views::detail::ViewPlan vp;
     vp.files.push_back(
         {dstd::String(trace), dstd::String(index_path),
-         dftu_utils_test::index_take(index::file_metadata(snapshot, file))
+         dftu_utils_test::index_take(
+             trace::index::file_metadata(snapshot, file))
              ->max_bytes,
-         dftu_utils_test::index_take(index::members(snapshot, file)).size(),
+         dftu_utils_test::index_take(trace::index::members(snapshot, file))
+             .size(),
          0});
-    vp.query = duql::parse_or_throw(text);
-    const auto vdef = trace::views::detail::make_vdef(vp, false);
+    vp.query = dftu_utils_test::ok(duql::Query::from_string(text));
+    const auto vdef =
+        dftu_utils_test::ok(trace::views::detail::make_vdef(vp, false));
     std::uint64_t skipped = 0;
     dstd::Vector<std::uint64_t> out;
-    for (const auto& u :
-         trace::views::detail::gather_units(vp, vdef, skipped).get())
-        out.push_back(u.checkpoint_idx);
+    const auto units = dftu_utils_test::ok(
+        trace::views::detail::gather_units(vp, vdef, skipped).get());
+    for (const auto& u : units) out.push_back(u.checkpoint_idx);
     return out;
 }
 
-using Manifest = dstd::Map<dstd::String, index::ExtensionEntry>;
+using Manifest = dstd::Map<dstd::String, trace::index::ExtensionEntry>;
 
-Manifest manifest_of(const index::Indexer& ix, const dstd::String& trace) {
+Manifest manifest_of(const trace::index::Indexer& ix,
+                     const dstd::String& trace) {
     Manifest out;
-    for (const auto& f : ix.manifest())
+    for (const auto& f : dftu_utils_test::ok(ix.manifest()))
         if (dstd::StringView(f.path) == dstd::StringView(trace))
             for (const auto& e : f.extensions) out[e.name] = e;
     return out;
@@ -470,8 +486,8 @@ dstd::Vector<std::uint64_t> rows(const Corpus& c) {
     return out;
 }
 
-index::IndexerOptions corpus_options(const Corpus& c) {
-    index::IndexerOptions o;
+trace::index::IndexerOptions corpus_options(const Corpus& c) {
+    trace::index::IndexerOptions o;
     o.index_dir = c.index_dir;
     return o;
 }
@@ -480,11 +496,11 @@ index::IndexerOptions corpus_options(const Corpus& c) {
 
 TEST_CASE("explain reads the chunks a View scan reads") {
     Corpus corpus;
-    auto ix = index::Indexer::open(dftu_utils_test::dstd_paths(corpus.traces),
-                                   corpus_options(corpus));
+    auto ix = dftu_utils_test::ok(trace::index::Indexer::open(
+        dftu_utils_test::dstd_paths(corpus.traces), corpus_options(corpus)));
     bool postings_removed = false;
     for (const auto& text : QUERIES) {
-        const auto explained = ix.explain(text);
+        const auto explained = dftu_utils_test::ok(ix.explain(text));
         REQUIRE(explained.size() == corpus.traces.size());
         for (const auto& f : explained) {
             CAPTURE(f.path);
@@ -502,15 +518,16 @@ TEST_CASE("explain reads the chunks a View scan reads") {
         }
     }
     CHECK(postings_removed);
-    CHECK_THROWS_AS(ix.explain("name =="), common::DFTUtilsException);
+    dftu_utils_test::expect_error(ix.explain("name =="),
+                                  common::ErrorCode::InvalidArgument);
 }
 
 TEST_CASE("one extension is rebuilt or dropped without the others") {
     Corpus corpus;
     const auto trace = corpus.traces.front();
     const auto expected_rows = rows(corpus);
-    auto ix = index::Indexer::open(dftu_utils_test::dstd_paths(corpus.traces),
-                                   corpus_options(corpus));
+    auto ix = dftu_utils_test::ok(trace::index::Indexer::open(
+        dftu_utils_test::dstd_paths(corpus.traces), corpus_options(corpus)));
     const auto before = manifest_of(ix, trace);
     for (const char* name : {"core.members", "core.rowset", "zonemap", "bloom",
                              "counts", "postings", "dft.stats"}) {
@@ -519,33 +536,35 @@ TEST_CASE("one extension is rebuilt or dropped without the others") {
         CHECK(before.at(name).current);
     }
 
-    ix.drop_extension("counts");
+    dftu_utils_test::ok(ix.drop_extension("counts"));
     auto dropped = manifest_of(ix, trace);
     CHECK_FALSE(dropped.count("counts"));
     CHECK(dropped.size() == before.size() - 1);
     CHECK(rows(corpus) == expected_rows);
-    CHECK(ix.status().needs_work.size() == corpus.traces.size());
-    CHECK(ix.build().indexed == corpus.traces.size());
+    CHECK(dftu_utils_test::ok(ix.status()).needs_work.size() ==
+          corpus.traces.size());
+    CHECK(dftu_utils_test::ok(ix.build()).indexed == corpus.traces.size());
     CHECK(manifest_of(ix, trace).count("counts"));
     CHECK(rows(corpus) == expected_rows);
 
     auto without = corpus_options(corpus);
     without.extensions = {"zonemap", "bloom", "postings"};
-    auto subset = index::Indexer::open(
-        dftu_utils_test::dstd_paths(corpus.traces), without);
-    subset.drop_extension("counts");
-    CHECK(subset.status().needs_work.empty());
-    CHECK(subset.build().indexed == 0);
-    subset.rebuild_extension("bloom");
+    auto subset = dftu_utils_test::ok(trace::index::Indexer::open(
+        dftu_utils_test::dstd_paths(corpus.traces), without));
+    dftu_utils_test::ok(subset.drop_extension("counts"));
+    CHECK(dftu_utils_test::ok(subset.status()).needs_work.empty());
+    CHECK(dftu_utils_test::ok(subset.build()).indexed == 0);
+    dftu_utils_test::ok(subset.rebuild_extension("bloom"));
     CHECK_FALSE(manifest_of(subset, trace).count("counts"));
     CHECK(rows(corpus) == expected_rows);
 
     auto other_rate = without;
     other_rate.bloom->false_positive_rate = 0.05;
-    auto rate = index::Indexer::open(dftu_utils_test::dstd_paths(corpus.traces),
-                                     other_rate);
-    CHECK(rate.status().needs_work.size() == corpus.traces.size());
-    rate.build();
+    auto rate = dftu_utils_test::ok(trace::index::Indexer::open(
+        dftu_utils_test::dstd_paths(corpus.traces), other_rate));
+    CHECK(dftu_utils_test::ok(rate.status()).needs_work.size() ==
+          corpus.traces.size());
+    dftu_utils_test::ok(rate.build());
     const auto after = manifest_of(rate, trace);
     CHECK(after.at("bloom").params_hash != before.at("bloom").params_hash);
     CHECK(after.at("bloom").current);
@@ -556,20 +575,17 @@ TEST_CASE("one extension is rebuilt or dropped without the others") {
 
     for (const char* bad : {"core.members", "core.rowset", "nope"}) {
         CAPTURE(bad);
-        try {
-            ix.drop_extension(bad);
-            FAIL("expected an error");
-        } catch (const common::DFTUtilsException& e) {
-            CHECK(e.error().is_code(common::ErrorCode::InvalidArgument));
-        }
-        CHECK_THROWS_AS(ix.rebuild_extension(bad), common::DFTUtilsException);
+        dftu_utils_test::expect_error(ix.drop_extension(bad),
+                                      common::ErrorCode::InvalidArgument);
+        dftu_utils_test::expect_error(ix.rebuild_extension(bad),
+                                      common::ErrorCode::InvalidArgument);
     }
     auto bad_options = corpus_options(corpus);
     bad_options.extensions = {"dft.stats"};
-    CHECK_THROWS_AS(
-        index::Indexer::open(dftu_utils_test::dstd_paths(corpus.traces),
-                             bad_options),
-        common::DFTUtilsException);
+    dftu_utils_test::expect_error(
+        trace::index::Indexer::open(dftu_utils_test::dstd_paths(corpus.traces),
+                                    bad_options),
+        common::ErrorCode::InvalidArgument);
 }
 
 TEST_CASE("a spilled build indexes the corpus as an unbounded one") {
@@ -577,8 +593,11 @@ TEST_CASE("a spilled build indexes the corpus as an unbounded one") {
     auto spill = corpus_options(corpus);
     spill.index_dir = dstd::String(corpus.env.dir()) + "/idx_spill";
     spill.memory_budget = 64 * 1024;
-    index::Indexer::open(dftu_utils_test::dstd_paths(corpus.traces), spill)
-        .build();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(
+            trace::index::Indexer::open(
+                dftu_utils_test::dstd_paths(corpus.traces), spill))
+            .build());
     // The aggregation tier keys its rows by interned string ids that follow the
     // build's file order, and a memory budget changes that order. Its bytes may
     // differ, its answers may not.
@@ -598,20 +617,21 @@ TEST_CASE("a spilled build indexes the corpus as an unbounded one") {
     CHECK(a == b);
 
     const auto summary = [&](const dstd::String& index_path) {
-        const auto df = trace::views::View::from_files(
-                            {{dstd::String(trace), dstd::String(index_path)}})
-                            .group_by({trace::views::GroupKey::cat(),
-                                       trace::views::GroupKey::name(),
-                                       trace::views::GroupKey::pid(),
-                                       trace::views::GroupKey::tid()})
-                            .agg({{trace::views::AggOp::Count, "", "n"},
-                                  {trace::views::AggOp::Sum, "dur", "dsum"},
-                                  {trace::views::AggOp::Min, "dur", "dmin"},
-                                  {trace::views::AggOp::Max, "dur", "dmax"},
-                                  {trace::views::AggOp::Min, "ts", "tmin"},
-                                  {trace::views::AggOp::Max, "ts", "tmax"}})
-                            .collect()
-                            .get();
+        const auto df = dftu_utils_test::ok(
+            trace::views::View::from_files(
+                {{dstd::String(trace), dstd::String(index_path)}})
+                .group_by({trace::views::GroupKey::cat(),
+                           trace::views::GroupKey::name(),
+                           trace::views::GroupKey::pid(),
+                           trace::views::GroupKey::tid()})
+                .agg({{trace::views::AggOp::Count, "", "n"},
+                      {trace::views::AggOp::Sum, "dur", "dsum"},
+                      {trace::views::AggOp::Min, "dur", "dmin"},
+                      {trace::views::AggOp::Max, "dur", "dmax"},
+                      {trace::views::AggOp::Min, "ts", "tmin"},
+                      {trace::views::AggOp::Max, "ts", "tmax"}})
+                .collect()
+                .get());
         dstd::Map<dstd::String, dstd::Vector<double>> rows;
         for (std::int64_t r = 0; r < df.num_rows(); ++r) {
             dstd::String key;
@@ -664,19 +684,22 @@ TEST_CASE("a name two traces hash differently is an arrow to both hashes") {
                 R"(,"dur":5,"args":{"fhash":")", hash, "\"}}\n");
         const auto plain =
             env.dir() + "/t" + dstd::to_string(traces.size()) + ".pfw";
-        (void)dstd::fs::write_file(dstd::PathView(plain), out);
+        dstd::fs::write_file(dstd::PathView(plain), out).discard();
         const auto gz = plain + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                    1024));
-        (void)dstd::fs::remove(plain);
+        dstd::fs::remove(plain).discard();
         traces.push_back(gz);
     }
-    index::IndexerOptions opts;
+    trace::index::IndexerOptions opts;
     opts.index_dir = index_dir;
-    index::Indexer::open(dftu_utils_test::dstd_paths(traces), opts).build();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(trace::index::Indexer::open(
+                                dftu_utils_test::dstd_paths(traces), opts))
+            .build());
     const auto index_path = dstd::String(
         trace::internal::determine_index_path(traces[0], index_dir));
-    const auto rows = index::plan::stored_rowset(
+    const auto rows = trace::index::plan::stored_rowset(
         {{dstd::String(dstd::StringView(traces[0])),
           dstd::String(dstd::StringView(index_path))},
          {dstd::String(dstd::StringView(traces[1])),
@@ -688,11 +711,11 @@ TEST_CASE("a name two traces hash differently is an arrow to both hashes") {
         CAPTURE(trace);
         const auto v = trace::views::View::from_file(dstd::String(trace),
                                                      dstd::String(index_path));
-        const auto f =
+        const auto f = dftu_utils_test::ok(
             dftracer::utils::default_runtime()
                 .submit(
                     v.duql(R"(where fhash -> files.path == "/x")").collect())
-                .get();
+                .get());
         CHECK(f.num_rows() == 20);
     }
 }

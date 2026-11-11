@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 #include <cstring>
@@ -389,7 +391,8 @@ TEST_SUITE("dataframe_arrow_large_types_compute") {
         df.names = {"k", "v"};
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
-        DataFrame grouped = df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}});
+        DataFrame grouped = dftu_utils_test::ok(
+            df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}}));
         REQUIRE(grouped.num_rows() == 3);
         Series gk = grouped.column("k");
         REQUIRE(gk.type() == TypeId::LargeString);
@@ -419,18 +422,21 @@ TEST_SUITE("dataframe_arrow_large_types_compute") {
         Series v2 = Series::flat_i64(ones3.data(), 3);
 
         AggStatePtr st1 = dataframe::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        dataframe::agg_accumulate(*st1, dstd::Vector<const Series*>{&k1},
-                                  dstd::Vector<const Series*>{&v1});
+        dftu_utils_test::ok(
+            dataframe::agg_accumulate(*st1, dstd::Vector<const Series*>{&k1},
+                                      dstd::Vector<const Series*>{&v1}));
         AggStatePtr st2 = dataframe::agg_new({AggSpec{AggOp::Count, -1, "n"}});
-        dataframe::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
-                                  dstd::Vector<const Series*>{&v2});
+        dftu_utils_test::ok(
+            dataframe::agg_accumulate(*st2, dstd::Vector<const Series*>{&k2},
+                                      dstd::Vector<const Series*>{&v2}));
         dataframe::agg_merge(*st1, *st2);
         REQUIRE(dataframe::agg_group_count(*st1) == 3);
 
         // Round-trip the merged partial through the spill blob before
         // finalizing, exercising the same path agg/serialize.cpp writes.
         const dstd::String blob = dataframe::agg_serialize(*st1);
-        AggStatePtr back = dataframe::agg_deserialize(blob);
+        AggStatePtr back =
+            dftu_utils_test::ok(dataframe::agg_deserialize(blob));
         REQUIRE(dataframe::agg_group_count(*back) == 3);
 
         DataFrame out = dataframe::agg_finalize(*back, "k");

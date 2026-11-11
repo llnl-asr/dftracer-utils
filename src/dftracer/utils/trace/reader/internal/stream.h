@@ -1,0 +1,99 @@
+// SPDX-License-Identifier: MIT
+#ifndef DFTRACER_UTILS_TRACE_READER_INTERNAL_STREAM_H
+#define DFTRACER_UTILS_TRACE_READER_INTERNAL_STREAM_H
+
+#include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/span.h>
+
+#include <cstddef>
+
+namespace dftracer::utils::trace::reader::internal {
+
+/**
+ * @brief Abstract base class for streaming data from readers.
+ *
+ * ReaderStream provides incremental access to data (bytes, lines, etc.)
+ * without loading everything into memory. Implementations handle
+ * the supported input formats (gzip) transparently.
+ *
+ * Usage:
+ * @code
+ * auto stream = reader->stream(StreamType::MULTI_LINES,
+ * RangeType::LINE_RANGE, 1, 100); char buffer[4096]; while (!stream->done()) {
+ * size_t bytes = stream->read(buffer, sizeof(buffer));
+ *     // Process buffer...
+ * }
+ * @endcode
+ */
+class ReaderStream {
+   public:
+    /**
+     * @brief Virtual destructor.
+     */
+    virtual ~ReaderStream() = default;
+
+    /**
+     * @brief Read next chunk as zero-copy view (coroutine).
+     *
+     * Returns view into internal buffer
+     *
+     * LIFETIME: The returned span is invalidated by:
+     *   - Next call to read() or read(buffer, size)
+     *   - Calling reset() or destructor
+     *
+     * @return View to next chunk (empty span if done), or the error of a
+     *         failed read, such as corrupt gzip data
+     */
+    virtual coro::CoroTask<dstd::Result<dstd::Span<const char>>>
+    read_async() = 0;
+
+    /**
+     * @brief Read next chunk as zero-copy view (sync wrapper).
+     */
+    dstd::Result<dstd::Span<const char>> read() { return read_async().get(); }
+
+    /**
+     * @brief Read next chunk of data into buffer (coroutine).
+     *
+     * Reads incrementally from the stream. Each call returns the next
+     * available chunk up to buffer_size bytes.
+     *
+     * @param buffer Output buffer
+     * @param buffer_size Maximum bytes to read
+     * @return Number of bytes actually read (0 if finished), or the error of a
+     *         failed read
+     */
+    virtual coro::CoroTask<dstd::Result<std::size_t>> read_async(
+        char* buffer, std::size_t buffer_size) = 0;
+
+    /**
+     * @brief Read next chunk of data into buffer (sync wrapper).
+     */
+    dstd::Result<std::size_t> read(char* buffer, std::size_t buffer_size) {
+        return read_async(buffer, buffer_size).get();
+    }
+
+    /**
+     * @brief Check if stream is done (no more data available).
+     *
+     * @return true if no more data to read, false otherwise
+     */
+    virtual bool done() const = 0;
+
+    /**
+     * @brief Reset stream to beginning.
+     *
+     * After reset, read() will start from the beginning of the range.
+     */
+    virtual void reset() = 0;
+
+   protected:
+    ReaderStream() = default;
+    ReaderStream(const ReaderStream&) = delete;
+    ReaderStream& operator=(const ReaderStream&) = delete;
+};
+
+}  // namespace dftracer::utils::trace::reader::internal
+
+#endif  // DFTRACER_UTILS_TRACE_READER_INTERNAL_STREAM_H

@@ -4,13 +4,12 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/domains/plugins/config.h>
+#include <dftracer/utils/domains/plugins/plugins.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/index/build/resolve_and_build.h>
-#include <dftracer/utils/plugins/config.h>
-#include <dftracer/utils/plugins/plugins.h>
 #include <dftracer/utils/plugins/result_registry.h>
 #include <dftracer/utils/python/plugin_host.h>
 #include <dftracer/utils/python/py_dict_helpers.h>
@@ -23,6 +22,7 @@
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/build/resolve_and_build.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 // Unconditional: the native-frame result path (OwnedDataFrame) needs the
@@ -55,16 +55,16 @@ using namespace dftracer::utils;
 namespace {
 
 using dftracer::utils::Runtime;
-using dftracer::utils::plugins::ConfigTree;
 using dftracer::utils::plugins::NamedResult;
 using dftracer::utils::plugins::NamedResultRegistry;
 using dftracer::utils::plugins::OwnedArrow;
 using dftracer::utils::plugins::OwnedDataFrame;
 using dftracer::utils::plugins::OwnedLazyFrame;
-using dftracer::utils::plugins::PluginRun;
-using dftracer::utils::plugins::Plugins;
 using dftracer::utils::python::parse_seq;
 using dftracer::utils::python::parse_string_seq;
+using domains::plugins::ConfigTree;
+using domains::plugins::PluginRun;
+using domains::plugins::Plugins;
 
 }  // namespace
 
@@ -114,7 +114,7 @@ coro::CoroTask<void> run_host_scan(
     for (const auto& p : inputs) {
         const auto is_dir = dftracer::utils::dstd::fs::is_directory(
             dftracer::utils::dstd::PathView(p));
-        if (is_dir && *is_dir) {
+        if (is_dir.has_value() && *is_dir) {
             dftracer::utils::runtime::fs::FindOptions options;
             options.patterns = dftracer::utils::runtime::fs::names_of(
                 dftracer::utils::common::constants::indexer::
@@ -126,7 +126,7 @@ coro::CoroTask<void> run_host_scan(
             auto found = co_await dftracer::utils::runtime::fs::find_all(
                 scope, dftracer::utils::dstd::PathView(p), std::move(options));
             if (!found)
-                throw dftracer::utils::common::DFTUtilsException(found.error());
+                throw dftracer::utils::python::PyErrorException(found.error());
             for (auto& e : *found) files.emplace_back(e.path.str());
         } else {
             files.push_back(p);
@@ -134,7 +134,7 @@ coro::CoroTask<void> run_host_scan(
     }
     std::sort(files.begin(), files.end());
     if (files.empty())
-        throw dftracer::utils::common::DFTUtilsException(
+        throw dftracer::utils::python::PyErrorException(
             dftracer::utils::common::ErrorCode::NotFound,
             "no trace files found");
 
@@ -145,8 +145,9 @@ coro::CoroTask<void> run_host_scan(
             to_check.emplace_back(dftracer::utils::dstd::StringView(file));
         dftracer::utils::dstd::String index_dir_arg{
             dftracer::utils::dstd::StringView(index_dir)};
-        co_await dftracer::utils::index::build::ensure_indexes_fresh(
-            "", std::move(to_check), std::move(index_dir_arg));
+        dftracer::utils::python::py_unwrap(
+            co_await dftracer::utils::trace::index::build::ensure_indexes_fresh(
+                "", std::move(to_check), std::move(index_dir_arg)));
     }
 
     dftracer::utils::dstd::Vector<trace::views::ViewFile> view_files;
@@ -160,7 +161,7 @@ coro::CoroTask<void> run_host_scan(
     trace::views::View view =
         trace::views::View::from_files(std::move(view_files));
     auto run = co_await plugins->run(view);
-    if (!run) throw dftracer::utils::common::DFTUtilsException(run.error());
+    if (!run) throw dftracer::utils::python::PyErrorException(run.error());
     *out = std::move(*run);
 }
 
@@ -218,8 +219,7 @@ PyObject* result_to_py(NamedResult& result) {
     ArrowSchemaMove(&owned->schema, schema.get());
     ArrowArrayMove(&owned->array, array.get());
     return dftracer::utils::python::arrow_result_to_table(
-        utilities::arrow::ArrowExportResult(std::move(schema),
-                                            std::move(array)));
+        trace::arrow::ArrowExportResult(std::move(schema), std::move(array)));
 #else
     PyErr_SetString(PyExc_RuntimeError,
                     "plugin emitted an Arrow result but the extension was "
@@ -316,18 +316,20 @@ int ph_init(PluginHostObject* self, PyObject* args, PyObject* kwds) {
         const char* config_json = nullptr;
         bool ok = PyArg_ParseTuple(item, "s|z", &path, &config_json) != 0;
         if (ok) {
-            try {
-                if (config_json)
-                    builder.add(path,
-                                ConfigTree::from_json_string(config_json));
-                else
-                    builder.add(path);
-            } catch (const std::exception& e) {
-                PyErr_SetString(dftracer::utils::python::g_dft_value_error
-                                    ? dftracer::utils::python::g_dft_value_error
-                                    : PyExc_ValueError,
-                                e.what());
-                ok = false;
+            if (config_json) {
+                auto tree = ConfigTree::from_json_string(config_json);
+                if (tree) {
+                    builder.add(path, std::move(*tree));
+                } else {
+                    PyErr_SetString(
+                        dftracer::utils::python::g_dft_value_error
+                            ? dftracer::utils::python::g_dft_value_error
+                            : PyExc_ValueError,
+                        tree.error().c_str());
+                    ok = false;
+                }
+            } else {
+                builder.add(path);
             }
         }
         Py_DECREF(item);
@@ -372,15 +374,16 @@ PyObject* ph_run(PluginHostObject* self, PyObject* args, PyObject* kwds) {
     dftracer::utils::dstd::String index_dir_s = index_dir ? index_dir : "";
     PluginRun run;
     if (!run_blocking([&] {
-            rt->submit(dftracer::utils::coro::with_scope(
-                           [&](dftracer::utils::coro::Scope& scope) {
-                               return run_host_scan(scope, std::move(inputs),
-                                                    std::move(index_dir_s),
-                                                    plugins, auto_index != 0,
-                                                    &run);
-                           }),
-                       "plugin-host-run")
-                .get();
+            dftracer::utils::python::py_unwrap(
+                rt->submit(dftracer::utils::coro::with_scope(
+                               [&](dftracer::utils::coro::Scope& scope) {
+                                   return run_host_scan(
+                                       scope, std::move(inputs),
+                                       std::move(index_dir_s), plugins,
+                                       auto_index != 0, &run);
+                               }),
+                           "plugin-host-run")
+                    .get());
         }))
         return nullptr;
 
@@ -414,43 +417,15 @@ PyMethodDef ph_methods[] = {
 }  // namespace
 
 PyTypeObject PluginHostType = {
-    PyVarObject_HEAD_INIT(nullptr, 0) "dftracer_utils_ext.Plugins",
-    sizeof(PluginHostObject),
-    0,
-    (destructor)ph_dealloc,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    Py_TPFLAGS_DEFAULT,
-    "Load and run compiled DFTracer plugins over trace files.",
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    ph_methods,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    (initproc)ph_init,
-    0,
-    ph_new,
+    .ob_base = PyVarObject_HEAD_INIT(nullptr, 0).tp_name =
+        "dftracer_utils_ext.Plugins",
+    .tp_basicsize = sizeof(PluginHostObject),
+    .tp_dealloc = (destructor)ph_dealloc,
+    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_doc = "Load and run compiled DFTracer plugins over trace files.",
+    .tp_methods = ph_methods,
+    .tp_init = (initproc)ph_init,
+    .tp_new = ph_new,
 };
 
 int dftracer::utils::python::init_plugin_host(PyObject* m) {
@@ -465,8 +440,8 @@ PyObject* dftracer::utils::python::plugin_host_results_dict(PyObject* host) {
     return results_to_dict(state_of((PluginHostObject*)host));
 }
 
-const dftracer::utils::plugins::Plugins*
-dftracer::utils::python::plugin_host_plugins(PyObject* host) {
+const domains::plugins::Plugins* dftracer::utils::python::plugin_host_plugins(
+    PyObject* host) {
     if (!PyObject_TypeCheck(host, &PluginHostType)) {
         PyErr_SetString(PyExc_TypeError, "expected a Plugins instance");
         return nullptr;

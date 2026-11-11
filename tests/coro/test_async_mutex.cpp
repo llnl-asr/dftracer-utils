@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -73,7 +74,8 @@ TEST_SUITE("AsyncMutex") {
             tasks.push_back(releaser(mutex));
             co_await coro::when_all(std::move(tasks));
         };
-        rt.submit(coro::with_scope(body), "MutexChain").wait();
+        dftu_utils_test::ok(
+            rt.submit(coro::with_scope(body), "MutexChain").wait());
         rt.shutdown();
 
         CHECK(acquired == WAITERS);

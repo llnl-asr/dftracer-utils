@@ -8,17 +8,19 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/domains/plugins/plugins_internal.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
-#include <dftracer/utils/plugins/plugins_internal.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
+#include <memory/fresh_process.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <utilities/plugins/test_plugin_common.h>
 
@@ -103,16 +105,16 @@ dstd::String make_homog_trace(dftu_utils_test::TestEnvironment& env,
             common::str_cat(R"({"ph":"X","name":")", name, R"(","cat":")", cat,
                             R"(","pid":1,"tid":1,"ts":)", (1000 + i * 100),
                             R"(,"dur":)", (10 + i), R"(,"args":{}})", "\n");
-    (void)dstd::fs::write_file(dstd::PathView(pfw), ofs);
+    dstd::fs::write_file(dstd::PathView(pfw), ofs).discard();
     dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    (void)dstd::fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     return gz;
 }
 
 ExportStats run_host(dstd::Vector<dftu_plugin*> plugins,
                      dstd::Vector<ViewFile> files) {
-    auto set = plugins::build_injected_plugins(std::move(plugins));
+    auto set = domains::plugins::build_injected_plugins(std::move(plugins));
     REQUIRE(set.has_value());
     View view = View::from_files(std::move(files));
     ExportStats stats;
@@ -122,7 +124,7 @@ ExportStats run_host(dstd::Vector<dftu_plugin*> plugins,
         if (run) stats = run->stats;
         co_return;
     });
-    rt.submit(std::move(task), "plugin-planner").wait();
+    dftu_utils_test::ok(rt.submit(std::move(task), "plugin-planner").wait());
     rt.shutdown();
     return stats;
 }
@@ -131,18 +133,19 @@ ExportStats run_host(dstd::Vector<dftu_plugin*> plugins,
 
 TEST_SUITE("PluginPlannerUnion") {
     TEST_CASE("no plugins yields no prune") {
-        CHECK_FALSE(plugins::detail::plugin_union_prune_query({}).has_value());
+        CHECK_FALSE(
+            domains::plugins::detail::plugin_union_prune_query({}).has_value());
     }
 
     TEST_CASE("a single query is the union verbatim") {
-        auto u = plugins::detail::plugin_union_prune_query(
+        auto u = domains::plugins::detail::plugin_union_prune_query(
             qs({R"(cat == "STDIO")"}));
         REQUIRE(u.has_value());
         CHECK(u->source() == R"(cat == "STDIO")");
     }
 
     TEST_CASE("distinct queries disjoin into a real OR") {
-        auto u = plugins::detail::plugin_union_prune_query(
+        auto u = domains::plugins::detail::plugin_union_prune_query(
             qs({R"(cat == "STDIO")", R"(cat == "POSIX")"}));
         REQUIRE(u.has_value());
         // The parenthesized union must parse to a disjunction that keeps events
@@ -161,22 +164,23 @@ TEST_SUITE("PluginPlannerUnion") {
 
     TEST_CASE("identical queries collapse (no repeated term)") {
         const char* q = R"(cat == "STDIO")";
-        auto u = plugins::detail::plugin_union_prune_query(qs({q, q, q}));
+        auto u =
+            domains::plugins::detail::plugin_union_prune_query(qs({q, q, q}));
         REQUIRE(u.has_value());
         CHECK(u->source() == dstd::String(q));
     }
 
     TEST_CASE("a plugin without a plan_duql disables the prune") {
-        CHECK_FALSE(plugins::detail::plugin_union_prune_query(
+        CHECK_FALSE(domains::plugins::detail::plugin_union_prune_query(
                         qs({R"(cat == "STDIO")", nullptr}))
                         .has_value());
-        CHECK_FALSE(plugins::detail::plugin_union_prune_query(
+        CHECK_FALSE(domains::plugins::detail::plugin_union_prune_query(
                         qs({R"(cat == "STDIO")", ""}))
                         .has_value());
     }
 
     TEST_CASE("an unparseable plan_duql disables the prune") {
-        CHECK_FALSE(plugins::detail::plugin_union_prune_query(
+        CHECK_FALSE(domains::plugins::detail::plugin_union_prune_query(
                         qs({R"(cat == "STDIO")", "cat =="}))
                         .has_value());
     }
@@ -273,24 +277,33 @@ TEST_SUITE("PluginAttachHandle") {
         return total;
     }
 
-    TEST_CASE("reading the handle before execute() throws") {
+    TEST_CASE("reading the handle before execute() ends the process" *
+              doctest::skip()) {
+        fresh_process::announce_abort();
         dftu_utils_test::TestEnvironment env(0);
         REQUIRE(env.is_valid());
         dstd::Vector<ViewFile> files{test_plugin_common::index_trace(
             make_homog_trace(env, "early", "read", "POSIX", 5))};
         CountState st{nullptr};
         dftu_plugin p = make_count_plugin(&st);
-        auto set = plugins::build_injected_plugins({&p});
+        auto set = domains::plugins::build_injected_plugins({&p});
         REQUIRE(set.has_value());
 
         View base = View::from_files(files);
-        dftracer::utils::dataframe::LazyResult<plugins::PluginRun>
-            plugin_result = base.branch<plugins::PluginRun>(
+        dftracer::utils::dataframe::LazyResult<domains::plugins::PluginRun>
+            plugin_result = base.branch<domains::plugins::PluginRun>(
                 [&](trace::views::ViewSession& s) { return set->attach(s); });
         trace::views::TraceSession sess = base.session();
-        trace::views::Deferred<plugins::PluginRun> h =
+        trace::views::Deferred<domains::plugins::PluginRun> h =
             sess.collect(plugin_result);
-        CHECK_THROWS_AS(static_cast<void>(h->results), std::logic_error);
+        static_cast<void>(h->results);
+    }
+
+    TEST_CASE("reading the handle before execute() is fatal") {
+        auto result = fresh_process::run(
+            "reading the handle before execute() ends the process");
+        CHECK(result.aborted_with(
+            "ViewSession result read before execute() resolved it"));
     }
 
     // A sole plugin branch still resolves correctly through attach(); it just
@@ -311,13 +324,14 @@ TEST_SUITE("PluginAttachHandle") {
 
         CountState st{R"(cat == "STDIO")"};
         dftu_plugin p = make_count_plugin(&st);
-        auto set = plugins::build_injected_plugins({&p});
+        auto set = domains::plugins::build_injected_plugins({&p});
         REQUIRE(set.has_value());
 
         View base = View::from_files(files);
         ExportStats scan{};
         auto plugin_branch = [&](trace::views::ViewSession& s) {
-            trace::views::Deferred<plugins::PluginRun> h = set->attach(s);
+            trace::views::Deferred<domains::plugins::PluginRun> h =
+                set->attach(s);
             return dstd::Function<void(const ExportStats&)>(
                 [&, h](const ExportStats& stats) mutable {
                     h.get();
@@ -328,10 +342,11 @@ TEST_SUITE("PluginAttachHandle") {
 
         Runtime rt(4);
         auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-            co_await plan.collect();
+            dftu_utils_test::ok(co_await plan.collect());
             co_return;
         });
-        rt.submit(std::move(task), "plugin-attach-solo").wait();
+        dftu_utils_test::ok(
+            rt.submit(std::move(task), "plugin-attach-solo").wait());
         rt.shutdown();
 
         CHECK(st.total.load() == N);  // the plugin's own filter still applies
@@ -359,13 +374,14 @@ TEST_SUITE("PluginAttachHandle") {
 
         CountState st{R"(cat == "STDIO")"};  // the plugin only wants STDIO
         dftu_plugin p = make_count_plugin(&st);
-        auto set = plugins::build_injected_plugins({&p});
+        auto set = domains::plugins::build_injected_plugins({&p});
         REQUIRE(set.has_value());
 
         View base = View::from_files(files);
         ExportStats scan{};
         auto plugin_branch = [&](trace::views::ViewSession& s) {
-            trace::views::Deferred<plugins::PluginRun> h = set->attach(s);
+            trace::views::Deferred<domains::plugins::PluginRun> h =
+                set->attach(s);
             return dstd::Function<void(const ExportStats&)>(
                 [&, h](const ExportStats& stats) mutable {
                     h.get();
@@ -385,11 +401,13 @@ TEST_SUITE("PluginAttachHandle") {
         dftracer::utils::dataframe::DataFrame all;
         Runtime rt(4);
         auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-            all = std::get<1>(co_await dftracer::utils::dataframe::collect_all(
-                plugin_plan, all_plan));
+            all = std::get<1>(dftu_utils_test::ok(
+                co_await dftracer::utils::dataframe::collect_all(plugin_plan,
+                                                                 all_plan)));
             co_return;
         });
-        rt.submit(std::move(task), "plugin-attach-coscan").wait();
+        dftu_utils_test::ok(
+            rt.submit(std::move(task), "plugin-attach-coscan").wait());
         rt.shutdown();
 
         CHECK(st.total.load() == N);  // plugin's own filter is unaffected

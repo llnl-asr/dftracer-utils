@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_RUNTIME_MPI_UTILS_H
-#define DFTRACER_UTILS_RUNTIME_MPI_UTILS_H
+#ifndef DFTRACER_UTILS_RUNTIME_MPI_MPI_UTILS_H
+#define DFTRACER_UTILS_RUNTIME_MPI_MPI_UTILS_H
 
 /**
  * @file mpi_utils.h
@@ -108,4 +108,4 @@ class MPIUtils {
 
 }  // namespace dftracer::utils::mpi
 
-#endif  // DFTRACER_UTILS_RUNTIME_MPI_UTILS_H
+#endif  // DFTRACER_UTILS_RUNTIME_MPI_MPI_UTILS_H

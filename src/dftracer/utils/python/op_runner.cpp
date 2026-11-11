@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/domains/plugins/fold_adapter.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
-#include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/python/op_runner.h>
+#include <dftracer/utils/python/py_errors.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dlfcn.h>
 
@@ -18,7 +20,7 @@ namespace {
 
 using dftracer::utils::Runtime;
 using dftracer::utils::dstd::StringIntern;
-using dftracer::utils::plugins::PluginFold;
+using domains::plugins::PluginFold;
 
 // The compose host is a real PluginFold with a do-nothing slice: the op graph
 // only needs the host's compose extension and task machinery, never a scan.
@@ -78,11 +80,12 @@ PyObject* jit_run_op(PyObject*, PyObject* args) {
                     compose->run(host.h, op, in_data, out_buf.data(), &rc);
                 if (task) {
                     Py_BEGIN_ALLOW_THREADS;
-                    default_runtime().block_on(
-                        coro::named("jit-op", [&]() -> coro::CoroTask<void> {
-                            co_await *reinterpret_cast<coro::CoroTask<void>*>(
-                                task);
-                        }()));
+                    dftracer::utils::python::py_unwrap(
+                        default_runtime().block_on(coro::named(
+                            "jit-op", [&]() -> coro::CoroTask<void> {
+                                co_await *reinterpret_cast<
+                                    coro::CoroTask<void>*>(task);
+                            }())));
                     Py_END_ALLOW_THREADS;
                 }
                 ran = true;

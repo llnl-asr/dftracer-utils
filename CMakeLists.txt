@@ -235,6 +235,11 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules/PythonHelpers.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules/Sanitizer.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules/PrecompiledHeader.cmake)
 
+# pcre2 and highway put BUILD_SHARED_LIBS in the cache, so without this the
+# dependencies added before them see it unset on the first configure only, and
+# zlib-ng then exports a target name that changes on the next configure.
+set(BUILD_SHARED_LIBS OFF)
+
 link_libatomic()
 
 configure_sanitizers()

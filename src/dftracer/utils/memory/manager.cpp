@@ -80,7 +80,7 @@ std::atomic<std::uint16_t> g_exit_exempt{0};
 std::atomic<bool> g_exit_hook{false};
 std::atomic<bool> g_exit_ran{false};
 constexpr std::size_t EXIT_HOOK_SLOTS = 8;
-std::atomic<void (*)()> g_exit_hooks[EXIT_HOOK_SLOTS];
+std::atomic<void (*)() noexcept> g_exit_hooks[EXIT_HOOK_SLOTS];
 std::atomic<std::size_t> g_exit_hook_count{0};
 
 void write_report(std::string_view text) noexcept {
@@ -482,7 +482,8 @@ void ManagerAccess::exit_check() noexcept {
     std::size_t hooks = std::min(
         g_exit_hook_count.load(std::memory_order_acquire), EXIT_HOOK_SLOTS);
     while (hooks > 0) {
-        void (*hook)() = g_exit_hooks[--hooks].load(std::memory_order_acquire);
+        void (*hook)() noexcept =
+            g_exit_hooks[--hooks].load(std::memory_order_acquire);
         if (hook != nullptr) hook();
     }
     Manager& m = Manager::get();
@@ -576,7 +577,7 @@ void set_exit_report(bool enabled) noexcept {
     if (enabled) register_exit_hook();
 }
 
-void add_exit_hook(void (*hook)()) noexcept {
+void add_exit_hook(void (*hook)() noexcept) noexcept {
     std::size_t slot =
         g_exit_hook_count.fetch_add(1, std::memory_order_acq_rel);
     if (slot >= EXIT_HOOK_SLOTS) {
@@ -1222,13 +1223,10 @@ void PoolInternals::retire(Manager& m, Pool& p) noexcept {
 
 ReserveWait* ReserveWait::create(Pool& pool, std::size_t bytes, Resume resume,
                                  void* context) noexcept {
-    void* raw = nullptr;
-    try {
-        raw = allocate(sizeof(ReserveWait), alignof(ReserveWait),
-                       Manager::get().general());
-    } catch (const std::bad_alloc&) {
-        return nullptr;
-    }
+    void* raw =
+        try_allocate_at(sizeof(ReserveWait), alignof(ReserveWait),
+                        Manager::get().general(), __builtin_return_address(0));
+    if (raw == nullptr) return nullptr;
     return new (raw) ReserveWait(pool, bytes, resume, context);
 }
 

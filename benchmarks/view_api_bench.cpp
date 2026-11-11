@@ -11,6 +11,8 @@
 //
 //   view_api_bench [events] [workdir] [case-substring]
 
+#include <bench_ok.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
@@ -22,11 +24,11 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/views/typed_rows.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 
 #include <algorithm>
 #include <chrono>
@@ -40,6 +42,12 @@ using namespace dftracer::utils;
 using namespace dftracer::utils::trace::views;
 
 namespace {
+
+duql::Query parsed_query(dstd::StringView text) {
+    auto parsed = duql::Query::from_string(text);
+    if (!parsed) dftu::bench::fail(parsed.error());
+    return std::move(*parsed);
+}
 
 /// Prints the error and exits with 1 when a setup call failed.
 template <class T>
@@ -61,7 +69,12 @@ constexpr double MAX_SLOWDOWN = 0.05;
 
 template <class T>
 T run(coro::CoroTask<T> t) {
-    return default_runtime().submit(std::move(t)).get();
+    return dftu::bench::ok(default_runtime().submit(std::move(t)).get());
+}
+
+template <class T>
+T run(coro::CoroTask<dstd::Result<T>> t) {
+    return dftu::bench::ok(default_runtime().submit(std::move(t)).get());
 }
 
 // A multi-member trace: POSIX/STDIO reads and writes across pids with a
@@ -69,7 +82,7 @@ T run(coro::CoroTask<T> t) {
 dstd::String write_trace(const dstd::String& dir, std::int64_t events) {
     const dstd::String gz = dir + "/bench.pfw.gz";
     require_ok(dstd::fs::write_file(gz, {}), "write_file");
-    utilities::fileio::compress::GzipMemberCompressor comp(6);
+    fileio::compress::GzipMemberCompressor comp(6);
     const char* names[] = {"read", "write", "open", "close", "fread", "fwrite"};
     const char* cats[] = {"POSIX", "POSIX", "POSIX", "POSIX", "STDIO", "STDIO"};
     std::mt19937_64 rng(7);
@@ -112,7 +125,7 @@ dstd::String write_trace(const dstd::String& dir, std::int64_t events) {
 dstd::String write_clustered(const dstd::String& dir, std::int64_t events) {
     const dstd::String gz = dir + "/clustered.pfw.gz";
     require_ok(dstd::fs::write_file(gz, {}), "write_file");
-    utilities::fileio::compress::GzipMemberCompressor comp(6);
+    fileio::compress::GzipMemberCompressor comp(6);
     dstd::String chunk;
     auto flush = [&] {
         if (chunk.empty()) return;
@@ -144,7 +157,7 @@ dstd::String write_clustered(const dstd::String& dir, std::int64_t events) {
 dstd::String write_generic(const dstd::String& dir, std::int64_t records) {
     const dstd::String gz = dir + "/bench.ndjson.gz";
     require_ok(dstd::fs::write_file(gz, {}), "write_file");
-    utilities::fileio::compress::GzipMemberCompressor comp(6);
+    fileio::compress::GzipMemberCompressor comp(6);
     const char* ops[] = {"read", "write", "open", "close"};
     std::mt19937_64 rng(7);
     dstd::String chunk;
@@ -176,15 +189,15 @@ dstd::String write_generic(const dstd::String& dir, std::int64_t records) {
 }
 
 struct EventRow {
-    index::Field<dstd::String, "name"> name;
-    index::Field<std::int64_t, "dur"> dur;
-    index::Field<std::int64_t, "args.size"> size;
+    trace::index::Field<dstd::String, "name"> name;
+    trace::index::Field<std::int64_t, "dur"> dur;
+    trace::index::Field<std::int64_t, "args.size"> size;
 };
 
 struct GenericRow {
-    index::Field<dstd::String, "op"> op;
-    index::Field<std::int64_t, "lat"> lat;
-    index::Field<std::int64_t, "io.size"> size;
+    trace::index::Field<dstd::String, "op"> op;
+    trace::index::Field<std::int64_t, "lat"> lat;
+    trace::index::Field<std::int64_t, "io.size"> size;
 };
 
 std::int64_t int_at(const dataframe::DataFrame& f, std::size_t c,
@@ -345,8 +358,7 @@ int main(int argc, char** argv) {
                     trace::views::detail::scan::agg(
                         trace::views::detail::scan::group_by(
                             trace::views::detail::scan::filter(
-                                base,
-                                duql::parse_or_throw(R"(cat == "POSIX")")),
+                                base, parsed_query(R"(cat == "POSIX")")),
                             {GroupKey::pid()}),
                         {{AggOp::Mean, "dur", "m"}}),
                     "m", 5);
@@ -383,7 +395,7 @@ int main(int argc, char** argv) {
             trace::views::detail::scan::ScanPlan p =
                 trace::views::detail::scan::select(
                     trace::views::detail::scan::filter(
-                        base, duql::parse_or_throw(R"(name == "fwrite")")),
+                        base, parsed_query(R"(name == "fwrite")")),
                     {"name", "dur", "args.size"});
             run(trace::views::detail::scan::collect_frame(p));
         },
@@ -397,7 +409,7 @@ int main(int argc, char** argv) {
         [&] {
             trace::views::detail::scan::ScanPlan p =
                 trace::views::detail::scan::filter(
-                    base, duql::parse_or_throw(R"(cat == "POSIX")"));
+                    base, parsed_query(R"(cat == "POSIX")"));
             run(trace::views::detail::scan::flamegraph(p, {"pid", "tid"}, "ts",
                                                        "dur", "name", {}));
         },

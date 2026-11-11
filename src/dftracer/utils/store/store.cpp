@@ -6,6 +6,7 @@
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/coro/executor.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -308,10 +309,10 @@ std::mutex& registry_mutex() {
     return *value;
 }
 
-void close_all_at_shutdown() {
+void close_all_at_shutdown() noexcept {
     if (auto closed = Store::close_all(); !closed) {
-        DFTRACER_UTILS_LOG_ERROR("store: close at exit: %s",
-                                 closed.error().format().c_str());
+        DFTRACER_UTILS_LOG_ERROR("store: close at exit: {}",
+                                 closed.error().format());
     }
 }
 
@@ -323,8 +324,8 @@ void Store::register_shutdown_close() {
     // The exit check registers here, so it runs after the hook that this adds
     // has stopped what holds memory.
     if (auto configured = common::configure_memory_from_env(); !configured) {
-        DFTRACER_UTILS_LOG_ERROR("store: memory settings: %s",
-                                 configured.error().format().c_str());
+        DFTRACER_UTILS_LOG_ERROR("store: memory settings: {}",
+                                 configured.error().format());
     }
     dstd::add_shutdown_hook(dstd::ShutdownStage::CloseStores,
                             &close_all_at_shutdown);
@@ -453,7 +454,7 @@ Store::State::~State() {
     {
         memory::detail::Scope in_pool(*pool);
         drop_published();
-        (void)close_blocking();
+        close_blocking().discard();
     }
     std::lock_guard<std::mutex> lock(registry_mutex());
     auto& states = registry();
@@ -473,11 +474,11 @@ Store::State::get_or_open(dstd::StringView dir) {
         if (live && !live->forked()) return live;
     }
     const auto made = dstd::fs::create_directories(key.view());
-    if (!made) {
-        return dstd::Unexpected<dstd::Error>(dstd::Error(
-            dstd::Condition::Io,
-            common::str_cat("store: cannot create the directory ", key.str(),
-                            ": ", made.error().message())));
+    if (!made.has_value()) {
+        return dstd::Unexpected<dstd::Error>(
+            dstd::Error::from_format<
+                "store: cannot create the directory {}: {}">(
+                dstd::Condition::Io, key.str(), made.error().message()));
     }
     // A state outlives the call that opened it, so it is not charged to that
     // call's pool.
@@ -494,11 +495,11 @@ Store::State::get_or_open(dstd::StringView dir) {
 
 dstd::Expected<void, dstd::Error> Store::State::ensure_dir_locked() {
     const auto made = dstd::fs::create_directories(dir.view());
-    if (!made) {
-        return dstd::Unexpected<dstd::Error>(dstd::Error(
-            dstd::Condition::Io,
-            common::str_cat("store: cannot create the directory ", dir.str(),
-                            ": ", made.error().message())));
+    if (!made.has_value()) {
+        return dstd::Unexpected<dstd::Error>(
+            dstd::Error::from_format<
+                "store: cannot create the directory {}: {}">(
+                dstd::Condition::Io, dir.str(), made.error().message()));
     }
     return {};
 }
@@ -853,11 +854,10 @@ coro::CoroTask<dstd::Expected<PackReport, dstd::Error>> Store::State::pack_task(
         if (!old_enough) continue;
         auto removed =
             dstd::fs::remove((self->dir / dstd::PathView(file.name)).view());
-        if (!removed) {
+        if (!removed.has_value()) {
             co_return Failure(
-                dstd::Error(dstd::Condition::Io,
-                            common::str_cat("store: cannot delete ", file.name,
-                                            ": ", removed.error().message())));
+                dstd::Error::from_format<"store: cannot delete {}: {}">(
+                    dstd::Condition::Io, file.name, removed.error().message()));
         }
         ++report.files_deleted;
         report.bytes_deleted += file.size;
@@ -987,7 +987,8 @@ dstd::Expected<void, dstd::Error> Store::erase(const Namespace& ns,
     auto erased =
         (*opened)->erase(engine::NamespaceId{ns.id}, scope, begin, end);
     state_->bump_version();
-    if (!erased) return dstd::Unexpected<dstd::Error>(erased.error());
+    if (!erased.has_value())
+        return dstd::Unexpected<dstd::Error>(erased.error());
     if (*erased || ns.spec.shared) return {};
     auto view = snapshot();
     if (!view) return dstd::Unexpected<dstd::Error>(view.error());

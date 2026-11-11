@@ -38,13 +38,9 @@ dstd::Unexpected<dstd::Error> invalid_error() {
 // is charged to the general pool.
 ZSTD_customMem general_pool_mem() noexcept {
     return {[](void* pool, std::size_t size) -> void* {
-                try {
-                    return memory::detail::allocate(
-                        size, alignof(std::max_align_t),
-                        *static_cast<memory::Pool*>(pool));
-                } catch (...) {
-                    return nullptr;
-                }
+                return memory::detail::try_allocate_at(
+                    size, alignof(std::max_align_t),
+                    *static_cast<memory::Pool*>(pool), nullptr);
             },
             [](void*, void* p) { memory::detail::c_free(p); },
             &memory::detail::Manager::get().general()};

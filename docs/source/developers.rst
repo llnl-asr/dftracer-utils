@@ -233,10 +233,12 @@ Configure it once at startup with functions; emit with macros:
    dftracer::utils::common::logger::init();  // reads env, defaults to Info
                                              // + auto color
 
-   DFTRACER_UTILS_LOG_ERROR("cannot open %s: errno=%d", path, e);
-   DFTRACER_UTILS_LOG_INFO("processed %zu files", n);
-   DFTRACER_UTILS_LOG_DEBUG("resolved %d checkpoints", k);
+   DFTRACER_UTILS_LOG_ERROR("cannot open {}: errno={}", path, e);
+   DFTRACER_UTILS_LOG_INFO("processed {} files", n);
+   DFTRACER_UTILS_LOG_DEBUG("resolved {} checkpoints", k);
 
+   // the first argument is a string literal in the dstd::fmt syntax; a wrong
+   // hole count or argument type does not compile, in every build
    // change verbosity at runtime
    dftracer::utils::common::logger::set_level(
        dftracer::utils::common::logger::Level::Debug);
@@ -254,12 +256,12 @@ runtime level without a rebuild via ``DFTRACER_UTILS_LOG_LEVEL`` (see
 
 **Scope tracing.** ``DFTRACER_UTILS_TRACE_SCOPE`` logs ``-> label`` on entry and
 ``<- label [ms]`` on exit, only when Trace is enabled. With no argument the label
-is the function name; extra arguments are printf-formatted and appended:
+is the function name; extra arguments are formatted and appended:
 
 .. code-block:: cpp
 
    coro::CoroTask<int> read_chunk(std::size_t off, std::size_t len) {
-       DFTRACER_UTILS_TRACE_SCOPE("off=%zu len=%zu", off, len);
+       DFTRACER_UTILS_TRACE_SCOPE("off={} len={}", off, len);
        ...  // "-> read_chunk: off=... len=..." now, "<- ... [x ms]" on return
    }
 

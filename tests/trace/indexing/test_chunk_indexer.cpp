@@ -3,14 +3,15 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/index/build/chunk_indexer.h>
+#include <dftracer/utils/trace/index/build/chunk_indexer.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <fstream>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::index::build;
+using namespace dftracer::utils::trace::index::build;
 
 // Helper to create a test trace file (plain text), then compress to gzip.
 // Returns the .gz path and the uncompressed size.
@@ -52,7 +53,7 @@ static dstd::Pair<dstd::String, std::size_t> create_test_trace_gz(
     dstd::String gz_path = plain_path + ".gz";
     dftu_utils_test::compress_file_to_gzip(dstd::String(plain_path),
                                            dstd::String(gz_path));
-    (void)dstd::fs::remove(plain_path);
+    dstd::fs::remove(plain_path).discard();
 
     return {gz_path, uncompressed_size};
 }
@@ -80,9 +81,8 @@ TEST_SUITE("ChunkIndexer") {
             .with_batch_size(4 * 1024 * 1024);
 
         ChunkIndexer indexer;
-        auto output = indexer(input).get();
+        auto output = dftu_utils_test::ok(indexer(input).get());
 
-        CHECK(output.success == true);
         CHECK(output.events_processed == 50);
         CHECK(output.checkpoint_idx == 0);
 
@@ -113,7 +113,7 @@ TEST_SUITE("ChunkIndexer") {
         CHECK(output.statistics.name_counts.count("read") == 1);
         CHECK(output.statistics.duration_count == 50);
 
-        (void)dstd::fs::remove_all(test_dir);
+        dstd::fs::remove_all(test_dir).discard();
     }
 
     TEST_CASE("ChunkIndexer - Extra dimensions with nested keys") {
@@ -141,9 +141,8 @@ TEST_SUITE("ChunkIndexer") {
             .with_batch_size(4 * 1024 * 1024);
 
         ChunkIndexer indexer;
-        auto output = indexer(input).get();
+        auto output = dftu_utils_test::ok(indexer(input).get());
 
-        CHECK(output.success == true);
         CHECK(output.events_processed == 20);
 
         // Extra dimensions should have bloom filters
@@ -159,7 +158,7 @@ TEST_SUITE("ChunkIndexer") {
         CHECK(output.bloom_filters.at("io.size").possibly_contains("1024"));
         CHECK(output.bloom_filters.at("io.size").possibly_contains("2048"));
 
-        (void)dstd::fs::remove_all(test_dir);
+        dstd::fs::remove_all(test_dir).discard();
     }
 
     TEST_CASE("ChunkIndexer - Events missing some fields") {
@@ -184,7 +183,7 @@ TEST_SUITE("ChunkIndexer") {
         dstd::String gz_path = plain_path + ".gz";
         dftu_utils_test::compress_file_to_gzip(dstd::String(plain_path),
                                                dstd::String(gz_path));
-        (void)dstd::fs::remove(plain_path);
+        dstd::fs::remove(plain_path).discard();
 
         ChunkIndexerConfig config;
         config.expected_entries_per_chunk = 100;
@@ -199,13 +198,48 @@ TEST_SUITE("ChunkIndexer") {
             .with_batch_size(4 * 1024 * 1024);
 
         ChunkIndexer indexer;
-        auto output = indexer(input).get();
+        auto output = dftu_utils_test::ok(indexer(input).get());
 
-        CHECK(output.success == true);
         CHECK(output.events_processed == 2);
         CHECK(output.bloom_filters.at("fhash").possibly_contains("def456"));
         CHECK(output.statistics.total_events == 2);
 
-        (void)dstd::fs::remove_all(test_dir);
+        dstd::fs::remove_all(test_dir).discard();
+    }
+
+    TEST_CASE("ChunkIndexer - A missing file is an error") {
+        dstd::String test_dir = "test_chunk_indexer_missing";
+        dstd::fs::create_directories(test_dir).discard();
+        ChunkIndexerConfig config;
+        ChunkIndexerInput input;
+        input.with_file_path(test_dir + "/absent.pfw.gz")
+            .with_index_path("")
+            .with_checkpoint_size(1024)
+            .with_checkpoint_idx(0)
+            .with_byte_range(0, 1024)
+            .with_config(config)
+            .with_batch_size(4 * 1024);
+
+        ChunkIndexer indexer;
+        const auto result = indexer(input).get();
+        CHECK_FALSE(result.has_value());
+        dstd::fs::remove_all(test_dir).discard();
+    }
+
+    TEST_CASE("ChunkIndexerConfig - stats_share outside (0, 1] is an error") {
+        ChunkIndexerConfig config;
+        CHECK(config.validate().has_value());
+        for (double bad : {0.0, -0.1, 1.5}) {
+            CAPTURE(bad);
+            config.stats_share = bad;
+            const auto rejected = config.validate();
+            dftu_utils_test::expect_error(rejected,
+                                          common::ErrorCode::InvalidArgument);
+            CHECK(
+                dstd::String(rejected.error().message()).find("stats_share") !=
+                dstd::String::npos);
+        }
+        config.stats_share = 1.0;
+        CHECK(config.validate().has_value());
     }
 }

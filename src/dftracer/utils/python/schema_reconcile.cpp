@@ -2,13 +2,14 @@
 #include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/python/schema_reconcile.h>
 
 #include <cstdint>
-#include <cstdio>
 #include <cstring>
 
 namespace dftracer::utils::python {
@@ -77,10 +78,10 @@ void json_escape(dstd::StringView in, dstd::String &out) {
             default:
                 if (static_cast<unsigned char>(c) < 0x20) {
                     char buf[8];
-                    std::snprintf(
-                        buf, sizeof(buf), "\\u%04x",
-                        static_cast<int>(static_cast<unsigned char>(c)));
-                    out.append(buf);
+                    const auto text = dstd::fmt_to<"\\u{:04x}">(
+                        buf, sizeof(buf),
+                        static_cast<unsigned>(static_cast<unsigned char>(c)));
+                    out.append(buf, text.size);
                 } else {
                     out.push_back(c);
                 }
@@ -106,10 +107,11 @@ void append_json_scalar(const ArrowArrayView *view, ArrowType t, int64_t row,
         case NANOARROW_TYPE_INT32:
         case NANOARROW_TYPE_INT64: {
             char buf[32];
-            std::snprintf(
-                buf, sizeof(buf), "%lld",
-                static_cast<long long>(ArrowArrayViewGetIntUnsafe(view, row)));
-            out.append(buf);
+            const auto text =
+                dstd::fmt_to<"{}">(buf, sizeof(buf),
+                                   static_cast<std::int64_t>(
+                                       ArrowArrayViewGetIntUnsafe(view, row)));
+            out.append(buf, text.size);
             break;
         }
         case NANOARROW_TYPE_UINT8:
@@ -117,18 +119,20 @@ void append_json_scalar(const ArrowArrayView *view, ArrowType t, int64_t row,
         case NANOARROW_TYPE_UINT32:
         case NANOARROW_TYPE_UINT64: {
             char buf[32];
-            std::snprintf(buf, sizeof(buf), "%llu",
-                          static_cast<unsigned long long>(
-                              ArrowArrayViewGetUIntUnsafe(view, row)));
-            out.append(buf);
+            const auto text =
+                dstd::fmt_to<"{}">(buf, sizeof(buf),
+                                   static_cast<std::uint64_t>(
+                                       ArrowArrayViewGetUIntUnsafe(view, row)));
+            out.append(buf, text.size);
             break;
         }
         case NANOARROW_TYPE_FLOAT:
         case NANOARROW_TYPE_DOUBLE: {
             char buf[32];
-            std::snprintf(buf, sizeof(buf), "%g",
-                          ArrowArrayViewGetDoubleUnsafe(view, row));
-            out.append(buf);
+            char *end = dstd::to_chars_general(
+                buf, buf + sizeof(buf),
+                ArrowArrayViewGetDoubleUnsafe(view, row), 6);
+            out.append(buf, static_cast<std::size_t>(end - buf));
             break;
         }
         case NANOARROW_TYPE_STRING:

@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_MEMORY_ARENA_H
 
 #include <dftracer/utils/memory/asan.h>
+#include <dftracer/utils/memory/detail/heap.h>
 #include <dftracer/utils/memory/detail/manager.h>
 
 #include <cstddef>
@@ -28,8 +29,8 @@ inline constexpr std::size_t ARENA_MAX_CHUNK = std::size_t{4} << 20;
  */
 class Arena {
    public:
-    /// Open the child pool @p name below @p parent. Throws std::bad_alloc when
-    /// the pool table is full.
+    /// Open the child pool @p name below @p parent. Ends the process when the
+    /// pool table is full.
     Arena(Pool& parent, std::string_view name);
     /// Open the child pool below current_pool(), read once here.
     explicit Arena(std::string_view name);
@@ -42,18 +43,18 @@ class Arena {
      * @brief @p n bytes aligned to @p align, valid until reset() or release().
      *
      * @p align must be a power of two, else the behavior is undefined. A zero
-     * @p n returns a pointer that must not be read. Throws std::bad_alloc when
-     * a new chunk is not available.
+     * @p n returns a pointer that must not be read. Ends the process when a new
+     * chunk is not available.
      */
     void* allocate(std::size_t n,
                    std::size_t align = alignof(std::max_align_t)) {
-        std::uintptr_t p = (cur_ + align - 1) & ~(align - 1);
-        if (p <= end_ && n <= end_ - p) [[likely]] {
-            cur_ = p + n;
-            detail::asan_unpoison(reinterpret_cast<void*>(p), n);
-            return reinterpret_cast<void*>(p);
-        }
-        return allocate_chunk(n, align);
+        void* p = bump(n, align);
+        if (p != nullptr) [[likely]]
+            return p;
+        p = allocate_chunk(n, align);
+        if (p == nullptr) [[unlikely]]
+            memory::detail::out_of_memory(n);
+        return p;
     }
 
     /// Like allocate() but null when the hard cap or the operating system
@@ -137,8 +138,17 @@ class Arena {
         Destructor* next;
     };
 
-    void* allocate_chunk(std::size_t n, std::size_t align);
-    Chunk* new_chunk(std::size_t size);
+    void* bump(std::size_t n, std::size_t align) noexcept {
+        std::uintptr_t p = (cur_ + align - 1) & ~(align - 1);
+        if (p <= end_ && n <= end_ - p) [[likely]] {
+            cur_ = p + n;
+            detail::asan_unpoison(reinterpret_cast<void*>(p), n);
+            return reinterpret_cast<void*>(p);
+        }
+        return nullptr;
+    }
+    void* allocate_chunk(std::size_t n, std::size_t align) noexcept;
+    Chunk* new_chunk(std::size_t size) noexcept;
     void run_destructors() noexcept;
 
     // An empty arena has the start past the end, so the fast path misses even
@@ -181,7 +191,7 @@ class ArenaAllocator {
 
     [[nodiscard]] T* allocate(std::size_t n) {
         if (n > std::numeric_limits<std::size_t>::max() / sizeof(T)) {
-            throw std::bad_array_new_length();
+            memory::detail::size_overflow();
         }
         return static_cast<T*>(arena_->allocate(n * sizeof(T), alignof(T)));
     }

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -10,6 +11,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/detail/manager.h>
 #include <doctest/doctest.h>
+#include <memory/fresh_process.h>
 
 #include <algorithm>
 #include <atomic>
@@ -29,7 +31,7 @@ TEST_SUITE("StringIntern") {
         {
             dstd::StringIntern intern(pool.get());
             for (int i = 0; i < 100; ++i)
-                intern.get_or_insert("s" + dstd::to_string(i));
+                intern.get_or_insert(dstd::fmt<"s{}">(i));
             MESSAGE("bytes for 100 strings: " << pool->live());
             CHECK(pool->live() < 128 * 1024);
         }
@@ -41,9 +43,9 @@ TEST_SUITE("StringIntern") {
         dstd::Vector<std::uint32_t> ids;
         constexpr int N = 200000;
         for (int i = 0; i < N; ++i)
-            ids.push_back(intern.get_or_insert("value_" + dstd::to_string(i)));
+            ids.push_back(intern.get_or_insert(dstd::fmt<"value_{}">(i)));
         for (int i = 0; i < N; ++i) {
-            CHECK(intern.resolve(ids[i]) == "value_" + dstd::to_string(i));
+            CHECK(intern.resolve(ids[i]) == dstd::fmt<"value_{}">(i));
         }
         CHECK(intern.get_or_insert("value_7") == ids[7]);
     }
@@ -61,14 +63,24 @@ TEST_SUITE("StringIntern") {
         CHECK(intern.get_or_insert("dur") == dur);
     }
 
-    TEST_CASE("StringIntern - ids beyond the table are reported, not empty") {
+    TEST_CASE("StringIntern - a free slot inside the table is empty") {
         dstd::StringIntern intern;
         auto id = intern.get_or_insert("a");
         CHECK(intern.resolve(id) == "a");
-        // A free slot inside the table is a genuine absent string.
         CHECK(intern.resolve(id + 1).empty());
-        CHECK_THROWS_AS(intern.resolve(dstd::StringIntern::FAST_CAPACITY),
-                        std::out_of_range);
+    }
+
+    TEST_CASE("StringIntern - resolve past the table ends the process" *
+              doctest::skip()) {
+        fresh_process::announce_abort();
+        dstd::StringIntern intern;
+        intern.resolve(dstd::StringIntern::FAST_CAPACITY);
+    }
+
+    TEST_CASE("StringIntern - ids beyond the table are reported, not empty") {
+        auto result = fresh_process::run(
+            "StringIntern - resolve past the table ends the process");
+        CHECK(result.aborted_with("string intern: id is out of range"));
     }
 
     TEST_CASE("StringIntern - insert_at_id preserves loaded ids") {
@@ -95,9 +107,9 @@ TEST_SUITE("StringIntern") {
         dstd::StringIntern intern;
         CHECK(intern.insert_at_id(42, "loaded") == Status::Ok);
         for (int i = 0; i < 100; ++i) {
-            auto id = intern.get_or_insert("fresh_" + dstd::to_string(i));
+            auto id = intern.get_or_insert(dstd::fmt<"fresh_{}">(i));
             CHECK(id != 42u);
-            CHECK(intern.resolve(id) == "fresh_" + dstd::to_string(i));
+            CHECK(intern.resolve(id) == dstd::fmt<"fresh_{}">(i));
         }
         CHECK(intern.resolve(42) == "loaded");
     }
@@ -120,7 +132,7 @@ TEST_SUITE("StringIntern") {
         intern.enable_deterministic_ids();
         dstd::Vector<dstd::String> inserted;
         for (int i = 0; i < 1000; ++i) {
-            inserted.push_back("value_" + dstd::to_string(i));
+            inserted.push_back(dstd::fmt<"value_{}">(i));
             intern.get_or_insert(inserted.back());
         }
         intern.get_or_insert("value_0");
@@ -139,15 +151,14 @@ TEST_SUITE("StringIntern") {
         for (int t = 0; t < THREADS; ++t) {
             threads.emplace_back([&, t] {
                 for (int i = 0; i < PER_THREAD; ++i)
-                    ids[t].push_back(intern.get_or_insert(
-                        dstd::to_string(t) + "_" + dstd::to_string(i)));
+                    ids[t].push_back(
+                        intern.get_or_insert(dstd::fmt<"{}_{}">(t, i)));
             });
         }
         for (auto& th : threads) th.join();
         for (int t = 0; t < THREADS; ++t) {
             for (int i = 0; i < PER_THREAD; ++i) {
-                CHECK(intern.resolve(ids[t][i]) ==
-                      dstd::to_string(t) + "_" + dstd::to_string(i));
+                CHECK(intern.resolve(ids[t][i]) == dstd::fmt<"{}_{}">(t, i));
             }
         }
     }
@@ -174,7 +185,7 @@ TEST_SUITE("StringIntern") {
         dstd::Vector<dstd::Thread> threads;
         dstd::Vector<dstd::Vector<std::uint32_t>> ids(THREADS);
         auto name = [](int t, int i) {
-            return "s" + dstd::to_string((t % 2) * 1000000 + i);
+            return dstd::fmt<"s{}">((t % 2) * 1000000 + i);
         };
         for (int t = 0; t < THREADS; ++t) {
             threads.emplace_back([&, t] {
@@ -245,7 +256,7 @@ TEST_SUITE("StringIntern") {
         constexpr int THREADS = 14;
         constexpr int PER_THREAD = 100000;
         constexpr int STRIDE = 5000;
-        auto name = [](int k) { return "overlap_" + dstd::to_string(k); };
+        auto name = [](int k) { return dstd::fmt<"overlap_{}">(k); };
         dstd::Vector<dstd::Thread> threads;
         dstd::Vector<dstd::Vector<std::uint32_t>> ids(THREADS);
         for (int t = 0; t < THREADS; ++t) {
@@ -310,34 +321,38 @@ TEST_SUITE("StringIntern") {
         for (int t = 0; t < 8; ++t) {
             threads.emplace_back([&] {
                 for (int i = 0; i < N; ++i)
-                    intern.get_or_insert("det_" + dstd::to_string(i));
+                    intern.get_or_insert(dstd::fmt<"det_{}">(i));
             });
         }
         for (auto& th : threads) th.join();
         for (int i = 0; i < N; ++i) {
-            const auto key = "det_" + dstd::to_string(i);
+            const auto key = dstd::fmt<"det_{}">(i);
             CHECK(intern.get_or_insert(key) == serial.get_or_insert(key));
         }
         CHECK(intern.entry_count() == static_cast<std::size_t>(N));
     }
 
-    TEST_CASE("StringIntern - a deterministic id collision throws") {
+    TEST_CASE("StringIntern - a deterministic id collision is an error") {
         dstd::StringIntern intern;
         intern.enable_deterministic_ids();
         dstd::Vector<dstd::String> kept;
-        bool threw = false;
-        for (int i = 0; i < 2000000 && !threw; ++i) {
-            const auto key = "collide_" + dstd::to_string(i);
-            try {
-                intern.get_or_insert(key);
+        bool collided = false;
+        for (int i = 0; i < 2000000 && !collided; ++i) {
+            const auto key = dstd::fmt<"collide_{}">(i);
+            auto id = intern.try_get_or_insert(key);
+            if (id) {
                 kept.push_back(key);
-            } catch (const std::logic_error&) {
-                threw = true;
+                continue;
             }
+            collided = true;
+            CHECK(id.error().condition() == dstd::Condition::InvalidArgument);
+            CHECK(dstd::StringView(id.error().c_str())
+                      .find("deterministic id collision") !=
+                  dstd::StringView::npos);
         }
-        REQUIRE(threw);
+        REQUIRE(collided);
         for (const auto& key : kept)
-            CHECK(intern.resolve(intern.get_or_insert(key)) == key);
+            CHECK(intern.resolve(*intern.try_get_or_insert(key)) == key);
         CHECK(intern.entry_count() == kept.size());
     }
 
@@ -359,8 +374,7 @@ TEST_SUITE("StringIntern") {
         dstd::StringIntern intern;
         dstd::Vector<std::uint32_t> ids;
         for (int i = 0; i < 5000; ++i)
-            ids.push_back(
-                intern.get_or_insert("ordered_" + dstd::to_string(i)));
+            ids.push_back(intern.get_or_insert(dstd::fmt<"ordered_{}">(i)));
         intern.get_or_insert("ordered_3");
         REQUIRE(intern.entry_count() == ids.size());
         for (std::size_t n = 0; n < ids.size(); ++n)
@@ -382,8 +396,7 @@ TEST_SUITE("StringIntern") {
         for (int t = 0; t < 4; ++t) {
             writers.emplace_back([&, t] {
                 for (int i = 0; i < 5000; ++i)
-                    intern.get_or_insert(dstd::to_string(t) + "_w_" +
-                                         dstd::to_string(i));
+                    intern.get_or_insert(dstd::fmt<"{}_w_{}">(t, i));
             });
         }
         for (auto& w : writers) w.join();

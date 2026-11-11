@@ -426,13 +426,12 @@ void sample_used(std::size_t bytes) noexcept {
                                     bytes);
 }
 
-void check_cap(std::size_t bytes) {
+bool check_cap(std::size_t bytes) noexcept {
     std::size_t cap = hard_cap();
     std::size_t after = page_reserved() + bytes;
     raise_peak(g_reserved_peak, after);
     sample_used(bytes);
-    if (cap != 0 && after > cap) [[unlikely]]
-        throw std::bad_alloc();
+    return cap == 0 || after <= cap;
 }
 
 std::uint64_t pack_heap(Heap* h, std::uint64_t tag) noexcept {
@@ -471,12 +470,12 @@ void push_free_heap(Heap* h) noexcept {
         std::memory_order_relaxed));
 }
 
-void before_map(std::size_t bytes);
+bool before_map(std::size_t bytes);
 
 Heap* make_heap() {
-    before_map(HEAP_PAGE_SIZE);
+    if (!before_map(HEAP_PAGE_SIZE)) return nullptr;
     void* raw = map_aligned(HEAP_PAGE_SIZE);
-    if (raw == nullptr) throw std::bad_alloc();
+    if (raw == nullptr) return nullptr;
     if ((addr(raw) >> HEAP_ADDR_SHIFT) > HEAP_ADDR_MASK) {
         abort_with("dftracer-utils memory: address space is above 56 bits\n");
     }
@@ -608,22 +607,35 @@ void process_init() {
 
 // A thread that allocates after its key destructor ran lands here again and the
 // destructor runs another round.
-Heap& attach_heap() {
+Heap* attach_heap() {
     ::pthread_once(&g_once, process_init);
     Heap* h = pop_free_heap();
     if (h == nullptr) h = make_heap();
+    if (h == nullptr) return nullptr;
     t_heap = h;
     if (active_backend() == Backend::PageHeap) t_page_attrib = &h->attrib;
     if (::pthread_setspecific(g_key, h) != 0) {
         abort_with("dftracer-utils memory: cannot register thread heap\n");
     }
     drain_inbox(*h);
+    return h;
+}
+
+Heap* local_heap_or_null() {
+    if (t_heap == nullptr) [[unlikely]]
+        return attach_heap();
+    return t_heap;
+}
+
+[[gnu::noinline]] Heap& attach_heap_or_die() {
+    Heap* h = attach_heap();
+    if (h == nullptr) out_of_memory(HEAP_PAGE_SIZE);
     return *h;
 }
 
 Heap& local_heap() {
     if (t_heap == nullptr) [[unlikely]]
-        return attach_heap();
+        return attach_heap_or_die();
     return *t_heap;
 }
 
@@ -1031,7 +1043,7 @@ std::size_t purge_cached(std::size_t want) noexcept {
 
 // Backed bytes are page_reserved(): mapped bytes less purged pages. Purges only
 // when the map would pass the budget.
-void before_map(std::size_t bytes) {
+bool before_map(std::size_t bytes) {
     std::size_t budget = map_budget();
     if (budget != 0) {
         std::size_t backed = page_reserved();
@@ -1040,7 +1052,7 @@ void before_map(std::size_t bytes) {
             g_budget_purged.fetch_add(freed, std::memory_order_relaxed);
         }
     }
-    check_cap(bytes);
+    return check_cap(bytes);
 }
 
 SpanHeader* new_span(Heap& h) {
@@ -1048,9 +1060,9 @@ SpanHeader* new_span(Heap& h) {
     if (s != nullptr) {
         adopt_cached_span(h, s);
     } else {
-        before_map(HEAP_SPAN_SIZE);
+        if (!before_map(HEAP_SPAN_SIZE)) return nullptr;
         void* base = map_aligned(HEAP_SPAN_SIZE);
-        if (base == nullptr) throw std::bad_alloc();
+        if (base == nullptr) return nullptr;
         s = new (base) SpanHeader{};
         s->owner = &h;
         s->kind = SpanKind::Standard;
@@ -1136,6 +1148,7 @@ Run acquire_run(Heap& h, std::size_t n, std::size_t step) {
     if (find_in_spans(h, n, step, run)) return run;
     if (slow_path(h) && find_in_spans(h, n, step, run)) return run;
     SpanHeader* s = new_span(h);
+    if (s == nullptr) return {};
     std::size_t index = 0;
     find_run(s->free_mask, n, step, index);
     take_run(h, s, index, n);
@@ -1144,6 +1157,7 @@ Run acquire_run(Heap& h, std::size_t n, std::size_t step) {
 
 PageDesc* new_small_page(Heap& h, std::size_t cls) {
     Run r = acquire_run(h, 1, 1);
+    if (r.span == nullptr) return nullptr;
     PageDesc* d = &r.span->pages[r.index];
     d->free_list = nullptr;
     d->used = 0;
@@ -1159,7 +1173,7 @@ PageDesc* new_small_page(Heap& h, std::size_t cls) {
     return d;
 }
 
-template <bool Fixed>
+template <bool Fixed, bool Fatal>
 void* allocate_small(Heap& h, std::size_t size, std::size_t align,
                      std::uint16_t pool) {
     std::size_t cls = class_for(size, align);
@@ -1168,6 +1182,10 @@ void* allocate_small(Heap& h, std::size_t size, std::size_t align,
         slow_path(h);
         d = h.avail[cls];
         if (d == nullptr) d = new_small_page(h, cls);
+        if (d == nullptr) {
+            if constexpr (Fatal) out_of_memory(CLASS_SIZES[cls]);
+            return nullptr;
+        }
     }
     const SmallLayout& layout = SMALL_LAYOUTS[cls];
     std::size_t block = layout.delta - ATTRIB_BLOCK;
@@ -1225,6 +1243,7 @@ void free_small_block(Heap& h, SpanHeader* s, std::size_t index,
     std::size_t n =
         (std::max<std::size_t>(size, 1) + HEAP_PAGE_SIZE - 1) / HEAP_PAGE_SIZE;
     Run r = acquire_run(h, n, std::max<std::size_t>(align / HEAP_PAGE_SIZE, 1));
+    if (r.span == nullptr) return nullptr;
     PageDesc* d = &r.span->pages[r.index];
     d->kind = PageKind::MediumHead;
     d->pages = static_cast<std::uint32_t>(n);
@@ -1249,7 +1268,7 @@ void free_medium_run(Heap& h, SpanHeader* s, std::size_t index) noexcept {
     std::size_t offset = std::max(HEAP_PAGE_SIZE, align);
     if (size >
         std::numeric_limits<std::size_t>::max() - offset - 2 * HEAP_SPAN_SIZE) {
-        throw std::bad_alloc();
+        return nullptr;
     }
     SpanKind kind = size <= LARGE_MAX ? SpanKind::Large : SpanKind::Huge;
     std::size_t run = kind == SpanKind::Large ? large_run(size)
@@ -1260,9 +1279,9 @@ void free_medium_run(Heap& h, SpanHeader* s, std::size_t index) noexcept {
         s = adopt_cached_run(h, run);
     }
     if (s == nullptr) {
-        before_map(bytes);
+        if (!before_map(bytes)) return nullptr;
         void* base = map_aligned(bytes);
-        if (base == nullptr) throw std::bad_alloc();
+        if (base == nullptr) return nullptr;
         s = new (base) SpanHeader{};
         s->map_bytes = bytes;
         bump(h.reserved, bytes, true);
@@ -1358,10 +1377,8 @@ void free_standard(Heap& me, SpanHeader* s, void* p,
 
 void release(void* p, std::size_t size, bool sized) noexcept {
     if (p == nullptr) return;
-    Heap* me;
-    try {
-        me = &local_heap();
-    } catch (const std::bad_alloc&) {
+    Heap* me = local_heap_or_null();
+    if (me == nullptr) {
         abort_with("dftracer-utils memory: cannot get a heap to free into\n");
     }
     SpanHeader* s = span_of(p);
@@ -1427,32 +1444,76 @@ void resize_in_place(SpanHeader* s, void* p, std::size_t old_size,
     vg_resize(p, old_size, new_size);
 }
 
+template <bool Fatal>
+void* finish_allocate(void* p, std::size_t size) {
+    if constexpr (Fatal) {
+        if (p == nullptr) [[unlikely]]
+            out_of_memory(size);
+    }
+    return p;
+}
+
+template <bool Fatal>
+void* allocate_in(std::size_t size, std::size_t align) {
+    check_align(align);
+    Heap* hp;
+    if constexpr (Fatal) {
+        hp = &local_heap();
+    } else {
+        hp = local_heap_or_null();
+        if (hp == nullptr) [[unlikely]]
+            return nullptr;
+    }
+    Heap& h = *hp;
+    if (size <= SMALL_MAX && align <= SMALL_MAX_ALIGN) {
+        return allocate_small<false, Fatal>(h, size, align, 0);
+    }
+    if (size <= MEDIUM_MAX && align <= MEDIUM_MAX) {
+        return finish_allocate<Fatal>(allocate_medium(h, size, align), size);
+    }
+    return finish_allocate<Fatal>(allocate_mapped(h, size, align), size);
+}
+
+template <bool Fatal>
+void* allocate_in_to(std::size_t size, std::size_t align, std::uint16_t pool) {
+    check_align(align);
+    Heap* hp;
+    if constexpr (Fatal) {
+        hp = &local_heap();
+    } else {
+        hp = local_heap_or_null();
+        if (hp == nullptr) [[unlikely]]
+            return nullptr;
+    }
+    Heap& h = *hp;
+    if (size <= SMALL_MAX && align <= SMALL_MAX_ALIGN) {
+        return allocate_small<true, Fatal>(h, size, align, pool);
+    }
+    ScopeOverride scope{h.attrib, pool};
+    if (size <= MEDIUM_MAX && align <= MEDIUM_MAX) {
+        return finish_allocate<Fatal>(allocate_medium(h, size, align), size);
+    }
+    return finish_allocate<Fatal>(allocate_mapped(h, size, align), size);
+}
+
 }  // namespace
 
 void* page_allocate(std::size_t size, std::size_t align) {
-    check_align(align);
-    Heap& h = local_heap();
-    if (size <= SMALL_MAX && align <= SMALL_MAX_ALIGN) {
-        return allocate_small<false>(h, size, align, 0);
-    }
-    if (size <= MEDIUM_MAX && align <= MEDIUM_MAX) {
-        return allocate_medium(h, size, align);
-    }
-    return allocate_mapped(h, size, align);
+    return allocate_in<true>(size, align);
+}
+
+void* page_try_allocate(std::size_t size, std::size_t align) {
+    return allocate_in<false>(size, align);
 }
 
 void* page_allocate_to(std::size_t size, std::size_t align,
                        std::uint16_t pool) {
-    check_align(align);
-    Heap& h = local_heap();
-    if (size <= SMALL_MAX && align <= SMALL_MAX_ALIGN) {
-        return allocate_small<true>(h, size, align, pool);
-    }
-    ScopeOverride scope{h.attrib, pool};
-    if (size <= MEDIUM_MAX && align <= MEDIUM_MAX) {
-        return allocate_medium(h, size, align);
-    }
-    return allocate_mapped(h, size, align);
+    return allocate_in_to<true>(size, align, pool);
+}
+
+void* page_try_allocate_to(std::size_t size, std::size_t align,
+                           std::uint16_t pool) {
+    return allocate_in_to<false>(size, align, pool);
 }
 
 void page_deallocate(void* p) noexcept { release(p, 0, false); }
@@ -1484,13 +1545,13 @@ void* page_grow_huge(void* p, std::size_t size, std::size_t align) {
     std::size_t offset = addr(p) - addr(s);
     if (size >
         std::numeric_limits<std::size_t>::max() - offset - 2 * HEAP_SPAN_SIZE) {
-        throw std::bad_alloc();
+        return nullptr;
     }
     std::size_t old_bytes = s->map_bytes;
     std::size_t old_usable = s->usable;
     std::size_t old_size = s->size;
     std::size_t bytes = round_up(offset + size, HEAP_PAGE_SIZE);
-    before_map(bytes - old_bytes);
+    if (!before_map(bytes - old_bytes)) return nullptr;
     asan_unpoison(p, old_usable);
     vg_free(p, old_usable);
     auto restore = [&] {
@@ -1504,14 +1565,14 @@ void* page_grow_huge(void* p, std::size_t size, std::size_t align) {
         void* target = map_aligned(bytes);
         if (target == nullptr) {
             restore();
-            throw std::bad_alloc();
+            return nullptr;
         }
         moved = ::mremap(s, old_bytes, old_bytes, MREMAP_MAYMOVE | MREMAP_FIXED,
                          target);
         if (moved == MAP_FAILED) {
             os_munmap(target, bytes);
             restore();
-            throw std::bad_alloc();
+            return nullptr;
         }
     }
     auto* grown = static_cast<SpanHeader*>(moved);
@@ -1531,8 +1592,9 @@ void* page_grow_huge(void* p, std::size_t size, std::size_t align) {
     void* grown;
     {
         ScopeOverride scope{local_heap().attrib, s->pool_id};
-        grown = page_allocate(size, align);
+        grown = page_try_allocate(size, align);
     }
+    if (grown == nullptr) return nullptr;
     std::memcpy(grown, p, s->size);
     page_deallocate(p);
     return grown;
@@ -1560,7 +1622,10 @@ void* page_reallocate(void* p, std::size_t old_size, std::size_t new_size,
     }
     if (s->kind == SpanKind::Huge && new_size > s->size &&
         (addr(p) & (align - 1)) == 0) {
-        return page_grow_huge(p, new_size, align);
+        void* grown = page_grow_huge(p, new_size, align);
+        if (grown == nullptr) [[unlikely]]
+            out_of_memory(new_size);
+        return grown;
     }
     void* moved;
     {

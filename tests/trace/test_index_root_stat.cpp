@@ -24,16 +24,16 @@ TEST_SUITE("IndexRootStat") {
         REQUIRE(dstd::fs::create_directories(root).has_value());
         CHECK(common::input_exists(root));
 
-        (void)dstd::fs::remove_all(root);
+        dstd::fs::remove_all(root).discard();
         common::forget_input(root);
         CHECK_FALSE(common::input_exists(root));
 
         REQUIRE(dstd::fs::create_directories(root).has_value());
         CHECK(common::input_exists(root));
-        (void)dstd::fs::remove_all(root);
+        dstd::fs::remove_all(root).discard();
         CHECK(common::input_exists(root));
 
-        (void)dstd::fs::remove_all(dir);
+        dstd::fs::remove_all(dir).discard();
     }
 
     TEST_CASE("forget_input without a scope does nothing") {
@@ -64,10 +64,10 @@ TEST_SUITE("IndexRootStat") {
         if (dstd::fs::create_symlink(dir, link).has_value()) {
             CHECK(a == trace::internal::index_root(dstd::String(
                            dstd::String((link / ".dftindex").str()))));
-            (void)dstd::fs::remove(link);
+            dstd::fs::remove(link).discard();
         }
 
-        (void)dstd::fs::remove_all(dir);
-        (void)dstd::fs::remove_all(other);
+        dstd::fs::remove_all(dir).discard();
+        dstd::fs::remove_all(other).discard();
     }
 }

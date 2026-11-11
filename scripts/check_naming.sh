@@ -30,13 +30,29 @@ if command -v xcrun >/dev/null 2>&1; then
     SYSROOT="-isysroot$(xcrun --show-sdk-path 2>/dev/null)"
 fi
 
+# With GCC, parse against the build compiler's own C++ headers: clang-tidy
+# otherwise takes the system GCC's library, which may lack C++20 headers such
+# as <coroutine> and then reads function declarations as variables.
+STDINC=
+CXX=$(sed -n 's/^CMAKE_CXX_COMPILER:[A-Z]*=//p' "$BUILD/CMakeCache.txt" 2>/dev/null)
+if [ -z "$SYSROOT" ] && [ -n "$CXX" ] &&
+    "$CXX" --version 2>/dev/null | head -1 | grep -q -e 'g++' -e 'GCC'; then
+    DIRS=$(echo | "$CXX" -x c++ -std=c++20 -E -v - 2>&1 |
+        sed -n '/#include <...> search starts here:/,/End of search list./p' |
+        grep '^ ' | sed 's/^ *//')
+    for d in $DIRS; do
+        STDINC="$STDINC -isystem$d"
+    done
+    [ -n "$STDINC" ] && STDINC="-nostdinc++$STDINC"
+fi
+
 JOBS=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
 cd "$SRC" || exit 1
 TIDY="$*"
-export TIDY SRC BUILD SYSROOT WORK
+export TIDY SRC BUILD SYSROOT STDINC WORK
 find include -name '*.h' ! -path '*/dstd/vendor/*' | sort >"$WORK/headers"
 TOTAL=$(wc -l <"$WORK/headers" | tr -d ' ')
 if [ "$TOTAL" -eq 0 ]; then
@@ -47,7 +63,7 @@ fi
 xargs -P "$JOBS" -n 1 sh -c '
     id=$(printf "%s" "$1" | tr "/" "_")
     $TIDY --quiet --config-file="$SRC/cmake/clang_tidy_naming.yaml" \
-        --header-filter="^\$" "$1" -- $SYSROOT -std=c++20 -x c++-header \
+        --header-filter="^\$" "$1" -- $SYSROOT $STDINC -std=c++20 -x c++-header \
         -I"$SRC/include" -I"$BUILD/include" >"$WORK/$id.out" 2>&1
     echo $? >"$WORK/$id.rc"' sh <"$WORK/headers"
 

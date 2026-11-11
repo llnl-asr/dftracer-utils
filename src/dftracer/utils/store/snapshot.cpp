@@ -5,6 +5,7 @@
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dstd/algorithm.h>
 #include <dftracer/utils/dstd/deque.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/little_endian.h>
@@ -92,7 +93,7 @@ void warn_skipped(dstd::StringView dir, dstd::StringView name,
     const dstd::String path = path_string(dir, name);
     const bool unsupported = error.is(dstd::Condition::Unsupported);
     DFTRACER_UTILS_LOG_WARN(
-        "store: skipping data file %s: %s", path.c_str(),
+        "store: skipping data file {}: {}", path,
         unsupported ? "unsupported version" : "cannot be read");
 }
 
@@ -139,18 +140,19 @@ Runtime* fork_join_runtime() {
 }
 
 template <class Body>
-void for_each_index(Runtime* runtime, std::size_t count, std::int64_t grain,
-                    const Body& body) {
+dstd::Result<void> for_each_index(Runtime* runtime, std::size_t count,
+                                  std::int64_t grain, const Body& body) {
     if (runtime == nullptr) {
         for (std::size_t i = 0; i < count; ++i) body(i);
-        return;
+        return {};
     }
-    runtime->parallel_for(static_cast<std::int64_t>(count), grain,
-                          [&](std::int64_t begin, std::int64_t limit) {
-                              for (std::int64_t i = begin; i < limit; ++i) {
-                                  body(static_cast<std::size_t>(i));
-                              }
-                          });
+    return runtime->parallel_for(static_cast<std::int64_t>(count), grain,
+                                 [&](std::int64_t begin, std::int64_t limit) {
+                                     for (std::int64_t i = begin; i < limit;
+                                          ++i) {
+                                         body(static_cast<std::size_t>(i));
+                                     }
+                                 });
 }
 
 dstd::Unexpected<dstd::Error> bad_extent_error() {
@@ -383,7 +385,7 @@ void fill_commit(detail::Commit& commit,
 
 dstd::String verified_key(const detail::FileData& file,
                           std::uint64_t sequence) {
-    return common::str_cat(file.name, ":", file.writer_random, ":", sequence);
+    return dstd::fmt<"{}:{}:{}">(file.name, file.writer_random, sequence);
 }
 
 void build_commits(detail::FileData& file, std::size_t file_index) {
@@ -642,7 +644,9 @@ dstd::Expected<void, dstd::Error> Snapshot::load(dstd::StringView dir) {
         file.name = names[index];
         file.writer_random = file.reader.index().writer_random;
     };
-    for_each_index(runtime, names.size(), 1, open_one);
+    if (auto ran = for_each_index(runtime, names.size(), 1, open_one); !ran) {
+        return dstd::Unexpected<dstd::Error>(ran.error());
+    }
     const auto open_done = std::chrono::steady_clock::now();
 
     for (std::size_t index = 0; index < names.size(); ++index) {
@@ -666,7 +670,11 @@ dstd::Expected<void, dstd::Error> Snapshot::load(dstd::StringView dir) {
             }
         }
     };
-    for_each_index(runtime, files_.size(), COMMIT_GRAIN, group_commits);
+    if (auto ran =
+            for_each_index(runtime, files_.size(), COMMIT_GRAIN, group_commits);
+        !ran) {
+        return dstd::Unexpected<dstd::Error>(ran.error());
+    }
 
     dstd::Vector<detail::FileData> kept;
     kept.reserve(files_.size());
@@ -1062,7 +1070,11 @@ dstd::Expected<CheckReport, dstd::Error> Snapshot::check() const {
     const auto check_file = [&](std::size_t index) {
         FileCheck{*this, files_[index], outs[index], {}}.run();
     };
-    for_each_index(fork_join_runtime(), file_count, 1, check_file);
+    if (auto ran =
+            for_each_index(fork_join_runtime(), file_count, 1, check_file);
+        !ran) {
+        return dstd::Unexpected<dstd::Error>(ran.error());
+    }
 
     for (std::size_t index = 0; index < file_count; ++index) {
         FileCheckOut& out = outs[index];
@@ -2151,8 +2163,8 @@ void Snapshot::warm_window(const detail::FileData& file,
     }
     // A failed read here costs only the cache: the query reads its pages.
     BlockReads reads;
-    (void)file.reader.warm_range(window * READ_RUN_BYTES, READ_RUN_BYTES,
-                                 &reads);
+    file.reader.warm_range(window * READ_RUN_BYTES, READ_RUN_BYTES, &reads)
+        .discard();
     // A reader with direct reads warms nothing.
     if (reads.calls == 0) return;
     reads_->add_window(reads);

@@ -14,6 +14,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/chunk_verifier_utility.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <chrono>
 #include <cstdio>
@@ -59,7 +60,7 @@ static ChunkVerificationUtilityOutput run_verifier(
             *out_ptr = co_await (*verifier)(scope, input);
         });
 
-    rt.submit(std::move(task), "chunk-verify").wait();
+    dftu_utils_test::ok(rt.submit(std::move(task), "chunk-verify").wait());
     rt.shutdown();
     return output;
 }

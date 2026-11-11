@@ -2,15 +2,16 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/utilities/arrow/column_builder.h>
+#include <dftracer/utils/trace/arrow/column_builder.h>
 #include <doctest/doctest.h>
 #include <nanoarrow/nanoarrow.h>
+#include <task_result.h>
 
 #include <dftracer/utils/python/schema_reconcile.cpp>
 
 using namespace dftracer::utils;
-using utilities::arrow::ColumnType;
-using utilities::arrow::RecordBatchBuilder;
+using trace::arrow::ColumnType;
+using trace::arrow::RecordBatchBuilder;
 
 namespace {
 
@@ -19,7 +20,7 @@ auto int_batch() {
     const std::size_t x = b.add_or_get_column("x", ColumnType::Int64);
     b.append_int64(x, 7);
     b.end_row();
-    return b.finish();
+    return dftu_utils_test::ok(b.finish());
 }
 
 auto double_batch() {
@@ -27,7 +28,7 @@ auto double_batch() {
     const std::size_t x = b.add_or_get_column("x", ColumnType::Double);
     b.append_double(x, 1.5);
     b.end_row();
-    return b.finish();
+    return dftu_utils_test::ok(b.finish());
 }
 
 struct View {

@@ -2,13 +2,35 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_LAZY_NUMERIC_H
 #define DFTRACER_UTILS_DATAFRAME_LAZY_NUMERIC_H
 
+#include <dftracer/utils/dataframe/kernels/running.h>
 #include <dftracer/utils/dataframe/lazy/common.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/vector.h>
 
 namespace dftracer::utils::dataframe::lazy_internal {
 
 enum class NumClass { Signed, Unsigned, Float };
+
+// The first window step of one call that overflowed its type. The call reads
+// it once after its row loop and fails with @ref error, so the loop itself
+// carries no result.
+struct WindowOverflow {
+    const char* func = nullptr;
+    const char* type = nullptr;
+
+    void set(const char* f, const char* t) noexcept {
+        if (!func) {
+            func = f;
+            type = t;
+        }
+    }
+    bool hit() const noexcept { return func != nullptr; }
+    dstd::Unexpected<dstd::Error> error() const {
+        return common::make_error(common::ErrorCode::InvalidArgument,
+                                  steps::overflow_message(func, type));
+    }
+};
 
 inline bool num_class(TypeId t, NumClass& cls) {
     switch (t) {
@@ -104,7 +126,7 @@ inline NumCells read_cells(const Series& col) {
             });
             break;
         default:
-            throw std::logic_error("group transform: a non-numeric column");
+            dstd::fatal("group transform: a non-numeric column");
     }
     if (s.null_count() > 0)
         for (std::int64_t i = 0; i < n; ++i)
@@ -167,7 +189,7 @@ inline Series make_numeric(const dstd::Vector<std::uint64_t>& bits,
         case TypeId::Float64:
             return as(double{});
         default:
-            throw std::logic_error("group transform: a non-numeric output");
+            dstd::fatal("group transform: a non-numeric output");
     }
 }
 

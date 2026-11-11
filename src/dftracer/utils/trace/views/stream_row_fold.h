@@ -20,9 +20,9 @@
 #include <atomic>
 #include <cstdint>
 
-namespace dftracer::utils::index::plan {
+namespace dftracer::utils::trace::index::plan {
 class GroupResolver;
-}  // namespace dftracer::utils::index::plan
+}  // namespace dftracer::utils::trace::index::plan
 
 namespace dftracer::utils::trace::views::detail {
 
@@ -93,12 +93,12 @@ class StreamRowFold : public Fold {
             emit_dyn_, branch_, dropped_, by_path_, ordered_, json_);
     }
 
-    void step(const FoldBatch& batch) override;
+    dstd::Result<void> step(const FoldBatch& batch) override;
 
     void seal_unit(const ScanUnit& unit) override { end_unit(unit); }
     void drop_unit(const ScanUnit& unit) override { end_unit(unit); }
     void skip_unit(const ScanUnit& unit) override { end_unit(unit); }
-    void merge(Fold&) override {}
+    dstd::Result<void> merge(Fold&) override { return {}; }
 
     coro::CoroTask<bool> finalize(const CoverageSet&) override {
         co_return true;

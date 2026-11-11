@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/exception_helpers.h>
 #include <dftracer/utils/coro/parallel.h>
-#include <dftracer/utils/dstd/error.h>
+#include <dftracer/utils/dstd/fatal.h>
 
 #include <algorithm>
 
@@ -11,9 +9,7 @@ namespace dftracer::utils::coro::detail {
 ChunkPlan ChunkPlan::make(std::int64_t size, const ParallelForOptions& options,
                           const Executor* executor) {
     if (options.grain < 1) {
-        throw common::DFTUtilsException(
-            dstd::Error{dstd::Condition::InvalidArgument,
-                        "a parallel range needs a grain of at least 1"});
+        dstd::fatal("coro: a parallel range needs a grain of at least 1");
     }
     ChunkPlan plan;
     plan.partition = options.partition;

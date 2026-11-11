@@ -104,7 +104,10 @@ TEST_SUITE("ViewJoin") {
                              .agg({{AggOp::Count, "", "n"}});
             auto plan =
                 left.join(other.lazy(), {"cat"}, dataframe::JoinHow::Inner);
-            CHECK_THROWS(run(plan.collect()));
+            CHECK_FALSE(dftracer::utils::default_runtime()
+                            .submit(plan.collect())
+                            .get()
+                            .has_value());
         }
     }
 }

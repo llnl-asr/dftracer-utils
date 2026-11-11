@@ -6,6 +6,7 @@
 #include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <atomic>
 #include <cstddef>
@@ -35,7 +36,7 @@ struct Counted {
 
 template <typename T>
 T run(Runtime& rt, coro::CoroTask<T> task) {
-    return rt.submit(std::move(task)).get();
+    return dftu_utils_test::ok(rt.submit(std::move(task)).get());
 }
 
 }  // namespace
@@ -181,7 +182,9 @@ TEST_SUITE("or_fail") {
         };
         auto cancelled = task();
         cancelled.cancel();
-        CHECK_THROWS((void)run(rt, std::move(cancelled)));
+        const auto outcome = rt.submit(std::move(cancelled)).get();
+        REQUIRE_FALSE(outcome.has_value());
+        CHECK(outcome.error().condition() == dstd::Condition::Cancelled);
         CHECK(!went_on.load());
     }
 

@@ -5,6 +5,7 @@
 #include <dftracer/utils/coro/detail/resumption_helper.h>
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/vector.h>
 
 #include <array>
@@ -78,7 +79,7 @@ void post_resumption(Executor* executor, std::coroutine_handle<> handle) {
     // Every task carries an executor, so reaching here is a bug. Dropping
     // the resume would strand the coroutine as a hang far from the cause.
     DFTRACER_UTILS_LOG_ERROR(
-        "%s", "Coroutine resumption has no executor to resume through");
+        "{}", "Coroutine resumption has no executor to resume through");
     std::abort();
 }
 
@@ -89,6 +90,68 @@ struct ParkThreadState {
 };
 thread_local ParkThreadState t_park;
 }  // namespace
+
+namespace {
+// A frame that runs once and frees itself, so a cancel callback can hand the
+// stop of a waiter to the executor and not run it under the registry lock.
+struct StopJob {
+    struct promise_type {
+        StopJob get_return_object() noexcept {
+            return {std::coroutine_handle<promise_type>::from_promise(*this)};
+        }
+        std::suspend_always initial_suspend() noexcept { return {}; }
+        std::suspend_never final_suspend() noexcept { return {}; }
+        void return_void() noexcept {}
+        void unhandled_exception() noexcept {
+            dstd::fatal("coro: a stop job failed");
+        }
+    };
+    std::coroutine_handle<promise_type> handle;
+};
+
+StopJob run_stop(Executor* executor, ParkNode* node, ParkOwner owner) {
+    if (node != nullptr) executor->unpark(node);
+    if (!owner.ops->stop(owner.promise)) {
+        cancelled_unstoppable("a wait in a task that holds a scope");
+    }
+    co_return;
+}
+}  // namespace
+
+bool stop_task(Executor* executor, ParkNode* node, ParkOwner owner) noexcept {
+    if (owner.ops == nullptr || owner.ops->stop == nullptr ||
+        owner.ops->refuses_stop(owner.promise)) {
+        return false;
+    }
+    if (executor == nullptr) return owner.ops->stop(owner.promise);
+    StopJob job = run_stop(executor, node, owner);
+    executor->post(job.handle);
+    return true;
+}
+
+bool stop_parked(Executor* executor, ParkNode* node) noexcept {
+    if (node == nullptr) return false;
+    return stop_task(executor, node, node->owner);
+}
+
+void stop_or_continue(Executor* executor, ParkOwner owner,
+                      std::coroutine_handle<> handle) noexcept {
+    if (stop_task(executor, nullptr, owner)) return;
+    post_resumption(executor, handle);
+}
+
+void stop_or_resume(Executor* executor, ParkNode*& park,
+                    std::coroutine_handle<> handle) noexcept {
+    ParkNode* node = park;
+    park = nullptr;
+    if (stop_parked(executor, node)) return;
+    park = node;
+    post_resumption(executor, handle);
+}
+
+void cancelled_unstoppable(const char* what) noexcept {
+    dstd::fatal("coro: a cancel reached a wait that cannot stop", what);
+}
 
 void wake_cancelled_on(Executor* executor) noexcept {
     executor->wake_cancelled();
@@ -112,7 +175,7 @@ ParkOwnerScope::~ParkOwnerScope() {
 
 void abort_zero_channel_capacity() {
     DFTRACER_UTILS_LOG_ERROR(
-        "%s", "Channel capacity must be at least 1; use UnboundedChannel");
+        "{}", "Channel capacity must be at least 1; use UnboundedChannel");
     std::abort();
 }
 

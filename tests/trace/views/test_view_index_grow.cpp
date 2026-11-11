@@ -7,11 +7,13 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/build/resolve_and_build.h>
-#include <dftracer/utils/index/build/resolver.h>
-#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/runtime/fs/fs.h>
-#include <dftracer/utils/utilities/reader/trace_reader.h>
+#include <dftracer/utils/trace/index/build/resolve_and_build.h>
+#include <dftracer/utils/trace/index/build/resolver.h>
+#include <dftracer/utils/trace/index/tables.h>
+#include <dftracer/utils/trace/reader/trace_reader.h>
+#include <generator_ok.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -77,8 +79,8 @@ dstd::String member(const dstd::String& dir, const dstd::String& text) {
     }
     REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, gz));
     dstd::String bytes = read_bytes(gz);
-    (void)dstd::fs::remove(plain);
-    (void)dstd::fs::remove(gz);
+    dstd::fs::remove(plain).discard();
+    dstd::fs::remove(gz).discard();
     return bytes;
 }
 
@@ -121,28 +123,32 @@ void start_trace(const dstd::String& dir, const dstd::String& gz, int n,
 }
 
 coro::CoroTask<std::size_t> build_tier(dstd::String gz) {
-    index::build::ResolveAndBuildInput in;
+    trace::index::build::ResolveAndBuildInput in;
     in.files.push_back(dstd::String(dstd::StringView(gz)));
     in.require_checkpoints = true;
-    index::build::ResolverResult result;
+    trace::index::build::ResolverResult result;
     co_await coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-        result = co_await index::build::resolve_and_build_index(std::move(in));
+        result = dftu_utils_test::ok(
+            co_await trace::index::build::resolve_and_build_index(
+                std::move(in)));
     });
     REQUIRE(result.failures.empty());
     co_return result.appended_count;
 }
 
-coro::CoroTask<index::build::ResolverResult> resolve_entries(
-    index::build::ResolverInput in) {
-    index::build::ResolverResult result;
+coro::CoroTask<trace::index::build::ResolverResult> resolve_entries(
+    trace::index::build::ResolverInput in) {
+    trace::index::build::ResolverResult result;
     co_await coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
-        result = co_await index::build::Resolver{}(scope, in);
+        result = dftu_utils_test::ok(
+            co_await trace::index::build::Resolver{}(scope, in));
     });
     co_return result;
 }
 
-coro::CoroTask<index::build::ResolverResult> resolve_file(dstd::String gz) {
-    index::build::ResolverInput in;
+coro::CoroTask<trace::index::build::ResolverResult> resolve_file(
+    dstd::String gz) {
+    trace::index::build::ResolverInput in;
     in.files.emplace_back(gz);
     in.require_checkpoints = true;
     co_return co_await resolve_entries(std::move(in));
@@ -153,15 +159,16 @@ View dir_view(const dstd::String& dir) {
 }
 
 std::size_t rows(const dstd::String& dir, const dstd::String& q) {
-    return dir_view(dir).duql(q).collect().get().num_rows();
+    return dftu_utils_test::ok(dir_view(dir).duql(q).collect().get())
+        .num_rows();
 }
 
 std::int64_t count_of(const dstd::String& dir, const dstd::String& cat) {
-    const auto df = dir_view(dir)
-                        .group_by({GroupKey::cat()})
-                        .agg({{AggOp::Count, "", "n"}})
-                        .collect()
-                        .get();
+    const auto df = dftu_utils_test::ok(dir_view(dir)
+                                            .group_by({GroupKey::cat()})
+                                            .agg({{AggOp::Count, "", "n"}})
+                                            .collect()
+                                            .get());
     for (std::int64_t i = 0; i < df.num_rows(); ++i)
         if (bstr(df, i, "cat") == cat)
             return static_cast<std::int64_t>(bnum(df, i, "n"));
@@ -169,7 +176,7 @@ std::int64_t count_of(const dstd::String& dir, const dstd::String& cat) {
 }
 
 coro::CoroTask<std::size_t> count_json(
-    coro::AsyncGenerator<utilities::reader::JsonLine> gen) {
+    coro::AsyncGenerator<trace::reader::JsonLine> gen) {
     std::size_t n = 0;
     while (auto line = co_await gen.next()) ++n;
     co_return n;
@@ -264,8 +271,8 @@ TEST_SUITE("ViewIndexGrow") {
         struct NullSink : ExportSink {
             void write(dstd::StringView) override {}
         } sink;
-        const auto stats =
-            dir_view(dir).duql(R"(name == "second")").sink_json(sink).get();
+        const auto stats = dftu_utils_test::ok(
+            dir_view(dir).duql(R"(name == "second")").sink_json(sink).get());
         CHECK(stats.events_matched == MEMBER_EVENTS);
         CHECK(stats.chunks_skipped > 0);
     }
@@ -286,7 +293,7 @@ TEST_SUITE("ViewIndexGrow") {
         CHECK(run(build_tier(gz)) == 1);
 
         const auto refresh = [&] {
-            index::build::ResolverInput in;
+            trace::index::build::ResolverInput in;
             in.entries.push_back(runtime::fs::FoundFile{
                 dstd::Path(gz), scanned.size,
                 static_cast<std::uint64_t>(scanned.mtime_ns)});
@@ -398,10 +405,12 @@ TEST_SUITE("ViewIndexGrow") {
         const Rebuilt once(gz);
         CHECK(rows(once.dir, R"(name == "split")") == 1);
         CHECK(rows(dir, R"(name == "split")") == 1);
-        utilities::reader::TraceReader reader({.file_path = gz});
-        utilities::reader::ReadConfig config;
+        trace::reader::TraceReader reader({.file_path = gz});
+        trace::reader::ReadConfig config;
         config.query = R"(name == "split")";
-        CHECK(count_json(reader.read_json(config)).get() == 1);
+        CHECK(dftu_utils_test::ok(count_json(dftu_utils_test::ok_items(
+                                                 reader.read_json(config)))
+                                      .get()) == 1);
         CHECK(rows(dir, R"(ts >= 1000)") == MEMBER_EVENTS + 1);
         const Rebuilt fresh(gz);
         CHECK(all_lines(dir) == all_lines(fresh.dir));
@@ -415,7 +424,7 @@ TEST_SUITE("ViewIndexGrow") {
         start_trace(dir, gz, MEMBER_EVENTS, "A", "first");
         run(build_tier(gz));
 
-        (void)dstd::fs::remove(gz);
+        dstd::fs::remove(gz).discard();
         start_trace(dir, gz, 2 * MEMBER_EVENTS, "B", "other");
         const auto result = run(resolve_file(gz));
         CHECK(result.stale_detected);
@@ -448,16 +457,17 @@ TEST_SUITE("ViewIndexGrow") {
             text += events(i, 1, "A", name.c_str());
         }
         append_bytes(gz, member(dir, text));
-        index::build::ResolveAndBuildInput in;
+        trace::index::build::ResolveAndBuildInput in;
         in.files.emplace_back(gz);
         in.require_checkpoints = true;
         in.checkpoint_size = 32 * 1024;
-        (void)run(index::build::resolve_and_build_index(std::move(in)));
+        (void)run(trace::index::build::resolve_and_build_index(std::move(in)));
 
         const auto snapshot = dftu_utils_test::index_snapshot(
             dstd::String(determine_index_path(gz, "")));
         const auto file = dftu_utils_test::require_indexed_file(snapshot, gz);
-        const auto spans = common::unwrap(index::spans(snapshot, file));
+        const auto spans =
+            dftu_utils_test::ok(trace::index::spans(snapshot, file));
         std::size_t split_lines = 0;
         for (const auto& span : spans) {
             if (!span.opens_mid_line) continue;
@@ -469,10 +479,12 @@ TEST_SUITE("ViewIndexGrow") {
             const dstd::String name = dstd::to_string(id);
             CHECK(rows(dir, dstd::String(R"(name == "n_)") + name + R"(")") ==
                   1);
-            utilities::reader::TraceReader reader({.file_path = gz});
-            utilities::reader::ReadConfig config;
+            trace::reader::TraceReader reader({.file_path = gz});
+            trace::reader::ReadConfig config;
             config.query = dstd::String(R"(name == "n_)") + name + R"(")";
-            CHECK(count_json(reader.read_json(config)).get() == 1);
+            CHECK(dftu_utils_test::ok(count_json(dftu_utils_test::ok_items(
+                                                     reader.read_json(config)))
+                                          .get()) == 1);
         }
         CHECK(split_lines > 0);
     }

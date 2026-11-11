@@ -73,26 +73,26 @@ ViewDefinition ViewDefinition::from_json(const dstd::String& json) {
 
     auto name_result = root["name"];
     if (!name_result.error() && name_result.value_unsafe().is_string()) {
-        view_def.name =
-            dstd::String(name_result.value_unsafe().get_string().value());
+        view_def.name = dstd::String(
+            name_result.value_unsafe().get_string().value_unsafe());
     }
 
     auto desc_result = root["description"];
     if (!desc_result.error() && desc_result.value_unsafe().is_string()) {
-        view_def.description =
-            dstd::String(desc_result.value_unsafe().get_string().value());
+        view_def.description = dstd::String(
+            desc_result.value_unsafe().get_string().value_unsafe());
     }
 
     auto query_result = root["duql"];
     if (!query_result.error() && query_result.value_unsafe().is_string()) {
-        view_def.with_query(
-            dstd::String(query_result.value_unsafe().get_string().value()));
+        view_def.with_query(dstd::String(
+            query_result.value_unsafe().get_string().value_unsafe()));
     }
 
     auto all_result = root["all"];
     if (!all_result.error() && all_result.value_unsafe().is_bool()) {
         view_def.metadata_records =
-            all_result.value_unsafe().get_bool().value();
+            all_result.value_unsafe().get_bool().value_unsafe();
         view_def.include_metadata = view_def.metadata_records;
     }
 

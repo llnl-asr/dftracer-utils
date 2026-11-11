@@ -483,7 +483,7 @@ void exempt_from_exit_check(Pool& pool) noexcept;
  * order of registration and only when the exit check or report is on. A few
  * are kept and one more aborts. Safe from any thread.
  */
-void add_exit_hook(void (*hook)()) noexcept;
+void add_exit_hook(void (*hook)() noexcept) noexcept;
 
 }  // namespace dftracer::utils::memory::detail
 

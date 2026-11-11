@@ -19,6 +19,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 #include <cstring>
@@ -30,8 +31,9 @@ using namespace dftracer::utils::dataframe;
 
 namespace {
 
-DataFrame run(coro::CoroTask<DataFrame> t) {
-    return dftracer::utils::default_runtime().submit(std::move(t)).get();
+DataFrame run(coro::CoroTask<dstd::Result<DataFrame>> t) {
+    return dftu_utils_test::ok(
+        dftracer::utils::default_runtime().submit(std::move(t)).get());
 }
 
 Series i64s(const dstd::Vector<std::int64_t>& v,
@@ -126,13 +128,15 @@ TEST_SUITE("dataframe concat") {
                 dftracer::utils::dataframe::Encoding::Dictionary);
         REQUIRE(b.encoding() ==
                 dftracer::utils::dataframe::Encoding::Dictionary);
-        Series out = dftracer::utils::dataframe::concat_columns({&a, &b});
+        Series out = dftu_utils_test::ok(
+            dftracer::utils::dataframe::concat_columns({&a, &b}));
         CHECK(out.encoding() ==
               dftracer::utils::dataframe::Encoding::Dictionary);
         CHECK(texts(out) == dstd::Vector<S>{"a", "b", "a", "b", "c"});
         CHECK(dict_size(out) == 3);
 
-        Series alone = dftracer::utils::dataframe::concat_columns({&a});
+        Series alone = dftu_utils_test::ok(
+            dftracer::utils::dataframe::concat_columns({&a}));
         CHECK(alone.encoding() ==
               dftracer::utils::dataframe::Encoding::Dictionary);
         CHECK(texts(alone) == dstd::Vector<S>{"a", "b", "a"});
@@ -146,7 +150,8 @@ TEST_SUITE("dataframe concat") {
             codes, std::move(va), &valid);
         Series e = dict_of({});
         Series b = dict_of({"q", "r"});
-        Series out = dftracer::utils::dataframe::concat_columns({&a, &e, &b});
+        Series out = dftu_utils_test::ok(
+            dftracer::utils::dataframe::concat_columns({&a, &e, &b}));
         CHECK(out.encoding() ==
               dftracer::utils::dataframe::Encoding::Dictionary);
         CHECK(out.null_count() == 2);
@@ -157,7 +162,8 @@ TEST_SUITE("dataframe concat") {
     TEST_CASE("mixed flat and dictionary parts give a view column") {
         Series a = dict_of({"a", "b", "a"});
         Series f = Series::strings({"z", "a"});
-        Series out = dftracer::utils::dataframe::concat_columns({&a, &f});
+        Series out = dftu_utils_test::ok(
+            dftracer::utils::dataframe::concat_columns({&a, &f}));
         CHECK(out.encoding() == dftracer::utils::dataframe::Encoding::View);
         CHECK(texts(out) == dstd::Vector<S>{"a", "b", "a", "z", "a"});
     }
@@ -178,7 +184,8 @@ TEST_SUITE("dataframe concat") {
         std::memcpy(dftracer::utils::dataframe::writable(w->data), "xyy", 3);
         Series wide{w};
         Series a = dict_of({"a", "b", "a"});
-        Series out = dftracer::utils::dataframe::concat_columns({&a, &wide});
+        Series out = dftu_utils_test::ok(
+            dftracer::utils::dataframe::concat_columns({&a, &wide}));
         CHECK(out.type() == TypeId::String);
         CHECK(out.encoding() == dftracer::utils::dataframe::Encoding::View);
         CHECK(texts(out) == dstd::Vector<S>{"a", "b", "a", "x", "yy"});
@@ -187,7 +194,8 @@ TEST_SUITE("dataframe concat") {
     TEST_CASE("a dictionary column marked JSON concatenates with a flat one") {
         Series d = dict_of({"1", "2", "1"}).as_json();
         Series f = Series::strings({"3"}).as_json();
-        Series out = dftracer::utils::dataframe::concat_columns({&d, &f});
+        Series out = dftu_utils_test::ok(
+            dftracer::utils::dataframe::concat_columns({&d, &f}));
         CHECK(out.is_json());
         CHECK(texts(out) == dstd::Vector<S>{"1", "2", "1", "3"});
     }
@@ -195,7 +203,8 @@ TEST_SUITE("dataframe concat") {
     TEST_CASE("eager vertical keeps every row in order, nulls included") {
         DataFrame a = make_a();
         DataFrame b = make_b();
-        DataFrame out = dftracer::utils::dataframe::concat({&a, &b});
+        DataFrame out =
+            dftu_utils_test::ok(dftracer::utils::dataframe::concat({&a, &b}));
         CHECK(out.names == dstd::Vector<dstd::String>{"k", "s"});
         CHECK(i64_col(out, "k") == dstd::Vector<I>{1, 2, NI, 2, 4});
         CHECK(str_col(out, "s") == dstd::Vector<S>{"x", "y", "z", "y", "w"});
@@ -213,7 +222,8 @@ TEST_SUITE("dataframe concat") {
         };
         DataFrame a = part({0, 2, 2}, {1, 2}, {0, -1});
         DataFrame b = part({0, 0, 1}, {3}, {0, 1});
-        DataFrame out = dftracer::utils::dataframe::concat({&a, &b});
+        DataFrame out =
+            dftu_utils_test::ok(dftracer::utils::dataframe::concat({&a, &b}));
         const Series& l = out.columns.front();
         REQUIRE(l.type() == TypeId::List);
         REQUIRE(l.length() == 4);
@@ -239,7 +249,8 @@ TEST_SUITE("dataframe concat") {
             f.push_back(i64s({3}));
             s2.columns.push_back(Series::structs({"x"}, std::move(f)));
         }
-        DataFrame st = dftracer::utils::dataframe::concat({&s1, &s2});
+        DataFrame st =
+            dftu_utils_test::ok(dftracer::utils::dataframe::concat({&s1, &s2}));
         REQUIRE(st.columns.front().type() == TypeId::Struct);
         CHECK(st.columns.front().child(0).data<std::int64_t>()[2] == 3);
     }
@@ -247,7 +258,8 @@ TEST_SUITE("dataframe concat") {
     TEST_CASE("lazy parity with eager under one and many morsels") {
         DataFrame a = make_a();
         DataFrame b = make_b();
-        DataFrame eager = dftracer::utils::dataframe::concat({&a, &b});
+        DataFrame eager =
+            dftu_utils_test::ok(dftracer::utils::dataframe::concat({&a, &b}));
         for (std::int64_t morsel : dstd::Vector<std::int64_t>{0, 1, 2}) {
             LazyFrame la =
                 LazyFrame::scan(dstd::make_shared<InMemorySource>(make_a()));
@@ -319,18 +331,24 @@ TEST_SUITE("dataframe concat") {
         retyped.names = {"k", "s"};
         retyped.columns.push_back(Series::strings({"1"}));
         retyped.columns.push_back(Series::strings({"q"}));
-        CHECK_THROWS_WITH_AS(
+        dftu_utils_test::expect_error(
             la.concat(LazyFrame::scan(
-                dstd::make_shared<InMemorySource>(std::move(fewer)))),
-            "concat: column count differs (2 vs 1)", std::invalid_argument);
-        CHECK_THROWS_WITH_AS(
-            la.concat(LazyFrame::scan(
-                dstd::make_shared<InMemorySource>(std::move(renamed)))),
-            "concat: column 1 is 's' vs 't'", std::invalid_argument);
-        CHECK_THROWS_WITH_AS(
-            la.concat(LazyFrame::scan(
-                dstd::make_shared<InMemorySource>(std::move(retyped)))),
-            "concat: column 'k' type differs", std::invalid_argument);
+                          dstd::make_shared<InMemorySource>(std::move(fewer))))
+                .status(),
+            dftracer::utils::common::ErrorCode::InvalidArgument,
+            "concat: column count differs (2 vs 1)");
+        dftu_utils_test::expect_error(
+            la.concat(LazyFrame::scan(dstd::make_shared<InMemorySource>(
+                          std::move(renamed))))
+                .status(),
+            dftracer::utils::common::ErrorCode::InvalidArgument,
+            "concat: column 1 is 's' vs 't'");
+        dftu_utils_test::expect_error(
+            la.concat(LazyFrame::scan(dstd::make_shared<InMemorySource>(
+                          std::move(retyped))))
+                .status(),
+            dftracer::utils::common::ErrorCode::InvalidArgument,
+            "concat: column 'k' type differs");
     }
 
     TEST_CASE("C ABI: concat, concat2, union and lazy concat") {

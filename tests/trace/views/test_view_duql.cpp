@@ -10,8 +10,9 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/trace/index/indexer.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -114,15 +115,15 @@ struct PluginReducers {
     PluginReducers() {
         const dftu_op_desc ops[] = {
             {"myplug.total", DFTU_OP_SIG(F64, SERIES, NONE, NONE),
-             reinterpret_cast<const void*>(&plug_total)},
+             reinterpret_cast<dftu_op_generic_fn>(&plug_total)},
             {"myplug.scaled", DFTU_OP_SIG(F64, SERIES, F64, NONE),
-             reinterpret_cast<const void*>(&plug_scaled)},
+             reinterpret_cast<dftu_op_generic_fn>(&plug_scaled)},
             {"myplug.count_i", DFTU_OP_SIG(I64, SERIES, NONE, NONE),
-             reinterpret_cast<const void*>(&plug_count)},
+             reinterpret_cast<dftu_op_generic_fn>(&plug_count)},
             {"myplug.big", DFTU_OP_SIG(BOOL, SERIES, I32, NONE),
-             reinterpret_cast<const void*>(&plug_big)},
+             reinterpret_cast<dftu_op_generic_fn>(&plug_big)},
             {"myplug.unrun", DFTU_OP_SIG(SCALAR, SERIES, I32, NONE),
-             reinterpret_cast<const void*>(&plug_unrun)}};
+             reinterpret_cast<dftu_op_generic_fn>(&plug_unrun)}};
         for (const auto& op : ops) REQUIRE(dftu_op_register(&op) == 0);
     }
     ~PluginReducers() {
@@ -134,13 +135,13 @@ struct PluginOps {
     PluginOps() {
         const dftu_op_desc ops[] = {
             {"myplug.twice", DFTU_OP_SIG(SERIES, SERIES, NONE, NONE),
-             reinterpret_cast<const void*>(&plug_twice)},
+             reinterpret_cast<dftu_op_generic_fn>(&plug_twice)},
             {"myplug.add2", DFTU_OP_SIG(SERIES, SERIES, SERIES, NONE),
-             reinterpret_cast<const void*>(&plug_add2)},
+             reinterpret_cast<dftu_op_generic_fn>(&plug_add2)},
             {"myplug.scale", DFTU_OP_SIG(SERIES, SERIES, F64, NONE),
-             reinterpret_cast<const void*>(&plug_scale)},
+             reinterpret_cast<dftu_op_generic_fn>(&plug_scale)},
             {"myplug.head", DFTU_OP_SIG(FRAME, FRAME, I64, NONE),
-             reinterpret_cast<const void*>(&plug_head)}};
+             reinterpret_cast<dftu_op_generic_fn>(&plug_head)}};
         for (const auto& op : ops) REQUIRE(dftu_op_register(&op) == 0);
     }
     ~PluginOps() {
@@ -155,7 +156,24 @@ View base() {
     return View::from_file(dstd::String(s.gz), dstd::String(s.idx));
 }
 
-dataframe::DataFrame frame(const View& v) { return run(v.collect()); }
+dstd::Result<dataframe::DataFrame> frame_result(const View& v) {
+    return dftracer::utils::default_runtime().submit(v.collect()).get();
+}
+
+dataframe::DataFrame frame(const View& v) {
+    return dftu_utils_test::ok(frame_result(v));
+}
+
+// The message of the error a view fails with, from building it or from
+// running it; empty when it does not fail.
+dstd::String failure_of(const dstd::Function<View()>& make) {
+    const View built = make();
+    if (const auto kept = built.status(); !kept.has_value())
+        return kept.error().c_str();
+    const auto result = frame_result(built);
+    if (!result.has_value()) return result.error().c_str();
+    return {};
+}
 
 dataframe::DataFrame pipe(const dstd::String& text,
                           const duql::Params& p = {}) {
@@ -217,18 +235,14 @@ dstd::String text(const dataframe::DataFrame& f) {
 }
 
 bool fails_with(const dstd::String& q, dstd::Vector<dstd::String> words) {
-    try {
-        (void)frame(base().duql(q));
-    } catch (const dftracer::utils::common::DFTUtilsException& e) {
-        const dstd::String what = e.what();
-        for (const auto& w : words)
-            if (what.find(w) == dstd::String::npos) {
-                MESSAGE(what);
-                return false;
-            }
-        return true;
-    }
-    return false;
+    const dstd::String what = failure_of([&] { return base().duql(q); });
+    if (what.empty()) return false;
+    for (const auto& w : words)
+        if (what.find(w) == dstd::String::npos) {
+            MESSAGE(what);
+            return false;
+        }
+    return true;
 }
 
 dstd::String event(int ts, const dstd::String& args, int dur = 10) {
@@ -247,9 +261,11 @@ View view_of_lines(TestEnvironment& env,
     }
     const dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    (void)dstd::fs::remove(pfw);
-    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
-        .build();
+    dstd::fs::remove(pfw).discard();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                                {dstd::String(dstd::StringView(gz))}))
+            .build());
     return View::from_file(
         dstd::String(gz),
         dstd::String(dstd::String(determine_index_path(gz, ""))));
@@ -312,8 +328,7 @@ TEST_SUITE("View duql pipeline") {
         CHECK(pipe("where dur > 0.03ms").num_rows() == 18);
         CHECK(pipe("where dur between 10us and 0.012ms").num_rows() == 3);
         CHECK(pipe("derive x = 1 | where dur + 1us > 39us").num_rows() == 2);
-        CHECK_THROWS_AS(base().duql("where pid > 1ms"),
-                        dftracer::utils::common::DFTUtilsException);
+        expect_refused(base().duql("where pid > 1ms"), "");
     }
 
     TEST_CASE("a duration keeps its unit only where the unit is clear") {
@@ -334,8 +349,7 @@ TEST_SUITE("View duql pipeline") {
                               "group name { c = count() } | where c > 1ms",
                               "derive x = dur / 1000 | where x > 30us"}) {
             CAPTURE(q);
-            CHECK_THROWS_AS(base().duql(q),
-                            dftracer::utils::common::DFTUtilsException);
+            expect_refused(base().duql(q), "");
         }
     }
 
@@ -470,8 +484,7 @@ TEST_SUITE("View duql pipeline") {
              {"where name == $names", "where name in $one",
               "where name like $names", "where name in $nope"}) {
             CAPTURE(q);
-            CHECK_THROWS_AS(base().duql(q, p),
-                            dftracer::utils::common::DFTUtilsException);
+            expect_refused(base().duql(q, p), "");
         }
     }
 
@@ -625,6 +638,18 @@ TEST_SUITE("View duql pipeline") {
         CHECK(got.num_rows() == 3);
     }
 
+    TEST_CASE("a resolved column in a derived term is refused") {
+        CHECK(fails_with("derive x = resolved.fhash.path",
+                         {"resolved.", "fhash -> files.path"}));
+    }
+
+    TEST_CASE("a builder pipe that holds an error does not run") {
+        const duql::Pipe q =
+            duql::Pipe().time_range(dstd::nullopt, dstd::nullopt);
+        REQUIRE_FALSE(q.error().empty());
+        test_view_common::expect_refused(base().duql(q), "time_range");
+    }
+
     TEST_CASE("sort keeps nulls last unless nulls first") {
         const dstd::String q =
             "derive y = if(dur > 35, null, dur) | sort -y{} | take 9"
@@ -671,8 +696,7 @@ TEST_SUITE("View duql pipeline") {
         CHECK(nums(pipe("sort ts | take 1..1 | select ts"), "ts").size() == 1);
         for (const char* q : {"take 0..2", "take 5..3", "take 1..2 by cat"}) {
             CAPTURE(q);
-            CHECK_THROWS_AS(base().duql(q),
-                            dftracer::utils::common::DFTUtilsException);
+            expect_refused(base().duql(q), "");
         }
     }
 
@@ -707,13 +731,10 @@ TEST_SUITE("View duql pipeline") {
         for (const char* q :
              {"agg { count(), count() }", "group cat { count(), count() }"}) {
             CAPTURE(q);
-            try {
-                (void)base().duql(q);
-                FAIL("no error");
-            } catch (const dftracer::utils::common::DFTUtilsException& e) {
-                CHECK(dstd::String(e.what()).find("'count'") !=
-                      dstd::String::npos);
-            }
+            const dstd::String what =
+                failure_of([&] { return base().duql(q); });
+            REQUIRE_FALSE(what.empty());
+            CHECK(what.find("'count'") != dstd::String::npos);
         }
 
         CHECK(
@@ -755,9 +776,9 @@ TEST_SUITE("View duql pipeline") {
     }
 
     TEST_CASE("explain lists each step") {
-        const dstd::String plan = base().explain_duql(
+        const dstd::String plan = dftu_utils_test::ok(base().explain_duql(
             R"(where cat == "POSIX" | derive ms = dur / 1000 | sort -ms)"
-            " | take 5");
+            " | take 5"));
         CHECK(plan.find("scan filter: cat == \"POSIX\" (pushed)\n") == 0);
         CHECK(plan.find("with_column ms = dur / 1000\n") != dstd::String::npos);
         CHECK(plan.find("sort_by_multi ms\n") != dstd::String::npos);
@@ -770,17 +791,21 @@ TEST_SUITE("View duql pipeline") {
             INFO(dstd::String(plan));
             CHECK(plan.find(line) != dstd::StringView::npos);
         };
-        has(v.explain_duql("window name sort -dur { r = row_number() }"),
+        has(dftu_utils_test::ok(
+                v.explain_duql("window name sort -dur { r = row_number() }")),
             "window keys name; sort -dur; r = row_number()\n");
-        has(v.explain_duql("expand tags as t with_index i keep_empty"),
+        has(dftu_utils_test::ok(
+                v.explain_duql("expand tags as t with_index i keep_empty")),
             "expand tags as t with_index i keep_empty\n");
-        has(v.explain_duql("pivot cat { n = count() }"),
+        has(dftu_utils_test::ok(v.explain_duql("pivot cat { n = count() }")),
             "pivot cat (columns after the scan)\n");
-        has(v.explain_duql("pivot cat in [\"POSIX\"] { n = count() }"),
+        has(dftu_utils_test::ok(
+                v.explain_duql("pivot cat in [\"POSIX\"] { n = count() }")),
             "pivot cat in [POSIX]\n");
-        has(v.explain_duql("unpivot ts, dur as k, v"),
+        has(dftu_utils_test::ok(v.explain_duql("unpivot ts, dur as k, v")),
             "unpivot ts, dur as k, v\n");
-        has(v.explain_duql("derive z = 1 | where any(tags, . == \"a\")"),
+        has(dftu_utils_test::ok(
+                v.explain_duql("derive z = 1 | where any(tags, . == \"a\")")),
             "quantify __duql_q_0 = any(tags, . == \"a\")\n");
     }
 
@@ -815,7 +840,8 @@ TEST_SUITE("View duql pipeline") {
                                         dstd::String(dstd::String(
                                             determine_index_path(gz, ""))))
                             .duql(q);
-                    const dstd::String got = text(rt.submit(v.collect()).get());
+                    const dstd::String got =
+                        text(dftu_utils_test::ok(rt.submit(v.collect()).get()));
                     if (!want) want = got;
                     CHECK_MESSAGE(got == *want, gz, " workers ", workers, ": ",
                                   got.substr(0, 200), " vs ",
@@ -937,10 +963,11 @@ TEST_SUITE("View duql aggregation") {
             const dstd::String stage =
                 dstd::String(*keys ? "group " : "agg ") + keys + " " + aggs;
             INFO(stage);
-            const dstd::String trace_plan = v.explain_duql(stage);
+            const dstd::String trace_plan =
+                dftu_utils_test::ok(v.explain_duql(stage));
             CHECK(trace_plan.find("(trace plan)") != dstd::String::npos);
             const dstd::String frame_plan =
-                v.explain_duql("derive z = 1 | " + stage);
+                dftu_utils_test::ok(v.explain_duql("derive z = 1 | " + stage));
             CHECK(frame_plan.find("(frame plan)") != dstd::String::npos);
             const dataframe::DataFrame a = frame(v.duql(stage));
             const dataframe::DataFrame b =
@@ -971,7 +998,8 @@ TEST_SUITE("View duql aggregation") {
         const View v = view_of_lines(env, null_dur_lines());
         const auto agree = [&v](const dstd::String& stage, bool trace_plan) {
             INFO(stage);
-            const dstd::String plan = v.explain_duql(stage);
+            const dstd::String plan =
+                dftu_utils_test::ok(v.explain_duql(stage));
             CHECK(plan.find(trace_plan ? "(trace plan)" : "(frame plan)") !=
                   dstd::String::npos);
             const dataframe::DataFrame f = frame(v.duql(stage));
@@ -1028,8 +1056,8 @@ TEST_SUITE("View duql aggregation") {
         const dataframe::DataFrame f = pipe(
             "group cat { f = first(ts), l = last(ts), c = count_if(dur > 20),"
             " e = count(nope) }");
-        CHECK(base()
-                  .explain_duql("group cat { f = first(ts) }")
+        CHECK(dftu_utils_test::ok(
+                  base().explain_duql("group cat { f = first(ts) }"))
                   .find("(frame plan)") != dstd::String::npos);
         REQUIRE(f.num_rows() == 2);
         CHECK(bnum(f, 0, "f") == 1000);
@@ -1102,8 +1130,8 @@ TEST_SUITE("View duql aggregation") {
     TEST_CASE("time_range pushed and on the columns") {
         const dataframe::DataFrame pushed =
             pipe("time_range 1ms .. 2ms | select ts");
-        CHECK(base().explain_duql("time_range 1ms .. 2ms").find("(pushed)") !=
-              dstd::String::npos);
+        CHECK(dftu_utils_test::ok(base().explain_duql("time_range 1ms .. 2ms"))
+                  .find("(pushed)") != dstd::String::npos);
         CHECK(text(pushed) ==
               text(frame(base().time_range(1000, 2000).select({"ts"}))));
         CHECK(pushed.num_rows() == 10);
@@ -1127,8 +1155,7 @@ TEST_SUITE("View duql aggregation") {
               text(pipe("where ts < 2000 | select ts")));
         CHECK(pipe("time_range .. 1006 overlap").num_rows() ==
               pipe("where ts < 1006").num_rows());
-        CHECK_THROWS_AS(base().duql("time_range 2ms .. 1ms"),
-                        dftracer::utils::common::DFTUtilsException);
+        expect_refused(base().duql("time_range 2ms .. 1ms"), "");
     }
 
     TEST_CASE("sample takes parameters and bucket a name") {
@@ -1189,9 +1216,10 @@ TEST_SUITE("View duql aggregation") {
 
     TEST_CASE("fill stops at DUQL_FILL_MAX_ROWS") {
         ::setenv("DUQL_FILL_MAX_ROWS", "5", 1);
-        CHECK_THROWS_AS(
-            frame(base().duql("bucket 100us fill | agg { n = count() }")),
-            dftracer::utils::common::DFTUtilsException);
+        CHECK_FALSE(failure_of([&] {
+                        return base().duql(
+                            "bucket 100us fill | agg { n = count() }");
+                    }).empty());
         ::unsetenv("DUQL_FILL_MAX_ROWS");
     }
 
@@ -1318,10 +1346,11 @@ TEST_SUITE("View duql aggregation") {
             fails_with("bucket 1ms fill from 5ms to 2ms | agg { n = count() }",
                        {"lo <= hi"}));
         ::setenv("DUQL_FILL_MAX_ROWS", "5", 1);
-        CHECK_THROWS_AS(
-            frame(
-                v.duql("bucket 1ms fill from 0 to 8ms | agg { n = count() }")),
-            dftracer::utils::common::DFTUtilsException);
+        CHECK_FALSE(
+            failure_of([&] {
+                return v.duql(
+                    "bucket 1ms fill from 0 to 8ms | agg { n = count() }");
+            }).empty());
         ::unsetenv("DUQL_FILL_MAX_ROWS");
     }
 
@@ -1506,8 +1535,8 @@ TEST_SUITE("View duql aggregation") {
         }
         for (const auto& [s, n] : by) want.push_back(n);
         CHECK(nums(trace, "n") == want);
-        const dstd::String plan =
-            base().explain_duql("bucket 2ms at 500us | agg { n = count() }");
+        const dstd::String plan = dftu_utils_test::ok(
+            base().explain_duql("bucket 2ms at 500us | agg { n = count() }"));
         CHECK(plan.find("time_bucket 2000 us at 500 us\n") !=
               dstd::String::npos);
     }
@@ -1524,14 +1553,14 @@ TEST_SUITE("View duql aggregation") {
                          "count_distinct(args.size) }"));
         CHECK(nums(plain, "bucket") == nums(fold, "bucket"));
         CHECK(nums(plain, "n") == nums(fold, "n"));
-        CHECK(base()
-                  .explain_duql("bucket 1500ns | agg { n = count() }")
+        CHECK(dftu_utils_test::ok(
+                  base().explain_duql("bucket 1500ns | agg { n = count() }"))
                   .find("group (frame plan)") != dstd::String::npos);
     }
 
     TEST_CASE("hopping buckets explain and refuse occupancy") {
-        const dstd::String plan = base().explain_duql(
-            "bucket 2ms every 1ms at 500us | agg { n = count() }");
+        const dstd::String plan = dftu_utils_test::ok(base().explain_duql(
+            "bucket 2ms every 1ms at 500us | agg { n = count() }"));
         CHECK(plan.find("hop buckets 2000 every 1000 at 500\n") !=
               dstd::String::npos);
         CHECK(plan.find("group (frame plan)") != dstd::String::npos);
@@ -1543,13 +1572,10 @@ TEST_SUITE("View duql aggregation") {
 
     TEST_CASE("a trace stage needs its role") {
         const View generic = base().record_schema("generic");
-        try {
-            (void)generic.duql("time_range 1s .. 2s");
-            FAIL("expected a failure");
-        } catch (const dftracer::utils::common::DFTUtilsException& e) {
-            CHECK(dstd::String(e.what()).find("time role") !=
-                  dstd::String::npos);
-        }
+        const dstd::String what =
+            failure_of([&] { return generic.duql("time_range 1s .. 2s"); });
+        REQUIRE_FALSE(what.empty());
+        CHECK(what.find("time role") != dstd::String::npos);
     }
 
     TEST_CASE("call_tree gives depth and parent") {
@@ -1564,9 +1590,9 @@ TEST_SUITE("View duql aggregation") {
     }
 
     TEST_CASE("explain names each new step") {
-        const dstd::String plan = base().explain_duql(
+        const dstd::String plan = dftu_utils_test::ok(base().explain_duql(
             "time_range 0 .. 10s | bucket 1ms | group cat { n = count() }"
-            " | take 1 by cat | sample 5 seed 3");
+            " | take 1 by cat | sample 5 seed 3"));
         CHECK(plan.find("scan time_range 0 .. 10000000 (pushed)\n") !=
               dstd::String::npos);
         CHECK(plan.find("time_bucket 1000 us\n") != dstd::String::npos);
@@ -1685,9 +1711,9 @@ TEST_SUITE("View duql quantifiers") {
             INFO(cond);
             CHECK(rows(frame(v.duql(both(cond).front()))) == want);
             // After the scan, elements of mixed types have no column kernel.
-            CHECK_THROWS_WITH_AS(frame(v.duql(both(cond).back())),
-                                 doctest::Contains("mix types"),
-                                 dftracer::utils::common::DFTUtilsException);
+            CHECK(failure_of([&] {
+                      return v.duql(both(cond).back());
+                  }).find("mix types") != dstd::String::npos);
         }
     }
 
@@ -1700,9 +1726,9 @@ TEST_SUITE("View duql quantifiers") {
             CHECK(rows(frame(v.duql(q))) == "1");
         }
         CHECK(rows(frame(v.duql(both("any(g[-1], . == 2)").front()))) == "2");
-        CHECK_THROWS_WITH_AS(frame(v.duql(both("any(g[-1], . == 2)").back())),
-                             doctest::Contains("negative index"),
-                             dftracer::utils::common::DFTUtilsException);
+        CHECK(failure_of([&] {
+                  return v.duql(both("any(g[-1], . == 2)").back());
+              }).find("negative index") != dstd::String::npos);
     }
 
     TEST_CASE("a quantifier in a derive") {
@@ -1813,9 +1839,10 @@ TEST_SUITE("View duql window") {
         CHECK(by_group("quantile(x, 0.5)") == "a;a;b;a;b");
         CHECK(rows(frame(v.duql("window g { h = histogram(x) } | derive n = "
                                 "len(h) | select n"))) ==
-              rows(frame(v.duql("group g { h = histogram(x) } | derive n = "
-                                "len(h) | select g, n"))
-                       .select({"n"})
+              rows(dftu_utils_test::ok(
+                       frame(v.duql("group g { h = histogram(x) } | derive n = "
+                                    "len(h) | select g, n"))
+                           .select({"n"}))
                        .take(dstd::Vector<std::int64_t>{0, 0, 1, 0, 1})));
         CHECK(rows(frame(v.duql("window { n = count(), r = rank() }"
                                 " | select n, r"))) == "5,1;5,1;5,1;5,1;5,1");
@@ -2357,12 +2384,8 @@ TEST_SUITE("View duql pivot and unpivot") {
             env, {line("io", 1, R"("m":"x")"), line("io", 2, R"("m":"y")"),
                   line("io", 3, R"("m":"z")")});
         setenv("DUQL_PIVOT_MAX_COLUMNS", "2", 1);
-        dstd::String what;
-        try {
-            (void)frame(v.duql("select m | pivot m { n = count() }"));
-        } catch (const dftracer::utils::common::DFTUtilsException& e) {
-            what = e.what();
-        }
+        const dstd::String what = failure_of(
+            [&] { return v.duql("select m | pivot m { n = count() }"); });
         unsetenv("DUQL_PIVOT_MAX_COLUMNS");
         CHECK(what.find("gives 3") != dstd::String::npos);
         CHECK(what.find("(2)") != dstd::String::npos);
@@ -2387,12 +2410,8 @@ TEST_SUITE("View duql pivot and unpivot") {
             view_of_lines(env, {line("io", 1, R"("a":1,"b":2.5,"s":"t")")});
         CHECK(rows(frame(v.duql("select a, b | unpivot a, b as k, v"))) ==
               "a,1;b,2.500000");
-        dstd::String what;
-        try {
-            (void)frame(v.duql("select a, s | unpivot a, s as k, v"));
-        } catch (const dftracer::utils::common::DFTUtilsException& e) {
-            what = e.what();
-        }
+        const dstd::String what = failure_of(
+            [&] { return v.duql("select a, s | unpivot a, s as k, v"); });
         CHECK(what.find("mixes") != dstd::String::npos);
     }
 }
@@ -2419,10 +2438,11 @@ TEST_SUITE("View duql reshape determinism") {
         const dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz,
                                                            member_bytes);
-        (void)dstd::fs::remove(pfw);
-        dftracer::utils::index::Indexer::open(
-            {dstd::String(dstd::StringView(gz))})
-            .build();
+        dstd::fs::remove(pfw).discard();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                                    {dstd::String(dstd::StringView(gz))}))
+                .build());
         return gz;
     }
 
@@ -2452,7 +2472,8 @@ TEST_SUITE("View duql reshape determinism") {
                                         dstd::String(dstd::String(
                                             determine_index_path(gz, ""))))
                             .duql(q);
-                    const dstd::String got = rows(rt.submit(v.collect()).get());
+                    const dstd::String got =
+                        rows(dftu_utils_test::ok(rt.submit(v.collect()).get()));
                     if (!want) want = got;
                     CHECK_MESSAGE(got == *want, gz, " workers ", workers, ": ",
                                   got.substr(0, 200), " vs ",
@@ -2498,7 +2519,8 @@ TEST_SUITE("View duql folded aggregates") {
         const dstd::String q =
             "group g { n = count(), d = count_distinct(x), c = collect(x),"
             " hi = arg_max(x, y), lo = arg_min(x, y), s = sum(x) }";
-        CHECK(v.explain_duql(q).find("group fold over") != dstd::String::npos);
+        CHECK(dftu_utils_test::ok(v.explain_duql(q)).find("group fold over") !=
+              dstd::String::npos);
         for (const dstd::String& stage : {q, "derive z = 1 | " + q}) {
             INFO(stage);
             const dataframe::DataFrame f = frame(v.duql(stage));
@@ -2615,8 +2637,9 @@ TEST_SUITE("View duql array and object functions") {
             const dstd::String scan = dstd::String("where ") + cond;
             const dstd::String after =
                 dstd::String("derive z = 1 | where ") + cond;
-            CHECK(v.explain_duql(scan).find("with_column") ==
-                  dstd::String::npos);
+            CHECK(
+                dftu_utils_test::ok(v.explain_duql(scan)).find("with_column") ==
+                dstd::String::npos);
             CHECK(frame(v.duql(scan)).num_rows() == 1);
             CHECK(frame(v.duql(after)).num_rows() == 1);
         }
@@ -2644,13 +2667,10 @@ TEST_SUITE("View duql array and object functions") {
     TEST_CASE("a function of parse_json after the scan is a compile error") {
         TestEnvironment env(10);
         const View v = functions_view(env);
-        try {
-            (void)frame(v.duql(R"(derive p = split(parse_json(j), ","))"));
-            FAIL("split(parse_json(j)) compiled");
-        } catch (const dftracer::utils::common::DFTUtilsException& e) {
-            CHECK(dstd::String(e.what()).find("scan filter") !=
-                  dstd::String::npos);
-        }
+        const dstd::String what = failure_of(
+            [&] { return v.duql(R"(derive p = split(parse_json(j), ","))"); });
+        REQUIRE_MESSAGE(!what.empty(), "split(parse_json(j)) compiled");
+        CHECK(what.find("scan filter") != dstd::String::npos);
         CHECK(frame(v.duql(R"(where split(parse_json(j), ",") is null)"))
                   .num_rows() == 2);
     }
@@ -2658,13 +2678,10 @@ TEST_SUITE("View duql array and object functions") {
     TEST_CASE("values of fields with different types is a compile error") {
         TestEnvironment env(10);
         const View v = view_of_lines(env, {event(1, R"("o":{"a":1,"b":"x"})")});
-        try {
-            (void)frame(v.duql("derive w = values(o)"));
-            FAIL("values() of mixed fields compiled");
-        } catch (const dftracer::utils::common::DFTUtilsException& e) {
-            CHECK(dstd::String(e.what()).find("different types") !=
-                  dstd::String::npos);
-        }
+        const dstd::String what =
+            failure_of([&] { return v.duql("derive w = values(o)"); });
+        REQUIRE_MESSAGE(!what.empty(), "values() of mixed fields compiled");
+        CHECK(what.find("different types") != dstd::String::npos);
     }
 }
 
@@ -2715,8 +2732,8 @@ TEST_SUITE("View duql array indexes and lists") {
             CHECK(f.columns[static_cast<std::size_t>(bcol(f, n))].is_null(1));
             CHECK(f.columns[static_cast<std::size_t>(bcol(f, n))].is_null(2));
         }
-        CHECK(v.explain_duql("derive a = xs[i]").find("call __duql_c_") !=
-              dstd::String::npos);
+        CHECK(dftu_utils_test::ok(v.explain_duql("derive a = xs[i]"))
+                  .find("call __duql_c_") != dstd::String::npos);
     }
 
     TEST_CASE("a list value") {
@@ -2807,8 +2824,10 @@ TEST_SUITE("View duql array indexes and lists") {
         CHECK(bstr(g, 2, "c").empty());
         CHECK(g.columns[static_cast<std::size_t>(bcol(g, "d"))].is_null(2) ==
               false);
-        CHECK(v.explain_duql("derive s = sort(tags), j = join(tags, \",\")")
-                  .find("call __duql_c_") != dstd::String::npos);
+        CHECK(
+            dftu_utils_test::ok(
+                v.explain_duql("derive s = sort(tags), j = join(tags, \",\")"))
+                .find("call __duql_c_") != dstd::String::npos);
     }
 
     TEST_CASE("each form in the scan filter and after it") {
@@ -2828,8 +2847,9 @@ TEST_SUITE("View duql array indexes and lists") {
             const dstd::String scan = dstd::String("where ") + cond;
             const dstd::String after =
                 dstd::String("derive z = 1 | where ") + cond;
-            CHECK(v.explain_duql(scan).find("with_column") ==
-                  dstd::String::npos);
+            CHECK(
+                dftu_utils_test::ok(v.explain_duql(scan)).find("with_column") ==
+                dstd::String::npos);
             CHECK(static_cast<std::size_t>(frame(v.duql(scan)).num_rows()) ==
                   rows);
             CHECK(static_cast<std::size_t>(frame(v.duql(after)).num_rows()) ==
@@ -2843,25 +2863,21 @@ TEST_SUITE("View duql array indexes and lists") {
         CHECK(fails_with("derive a = xs[i].b", {"index"}));
         duql::Params p;
         p.emplace("n", duql::LiteralValue{dstd::String("x")});
-        try {
-            (void)frame(v.duql("derive a = xs[$n]", p));
-            FAIL("xs[$n] with a string compiled");
-        } catch (const dftracer::utils::common::DFTUtilsException& e) {
-            CHECK(dstd::String(e.what()).find("$n") != dstd::String::npos);
-        }
+        const dstd::String what =
+            failure_of([&] { return v.duql("derive a = xs[$n]", p); });
+        REQUIRE_MESSAGE(!what.empty(), "xs[$n] with a string compiled");
+        CHECK(what.find("$n") != dstd::String::npos);
     }
 
     TEST_CASE("an index inside a quantifier after the scan is an error") {
         TestEnvironment env(10);
         const View v = arrays_view(env);
         CHECK_NOTHROW((void)frame(v.duql("where any(xs, . > 1)")));
-        try {
-            (void)frame(v.duql("derive z = 1 | where any(tags, xs[i] > 1)"));
-            FAIL("an index in a quantifier compiled");
-        } catch (const dftracer::utils::common::DFTUtilsException& e) {
-            CHECK(dstd::String(e.what()).find("call_column") !=
-                  dstd::String::npos);
-        }
+        const dstd::String what = failure_of([&] {
+            return v.duql("derive z = 1 | where any(tags, xs[i] > 1)");
+        });
+        REQUIRE_FALSE(what.empty());
+        CHECK(what.find("call_column") != dstd::String::npos);
     }
 }
 
@@ -2883,10 +2899,11 @@ TEST_SUITE("View duql session") {
         const dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz,
                                                            member_bytes);
-        (void)dstd::fs::remove(pfw);
-        dftracer::utils::index::Indexer::open(
-            {dstd::String(dstd::StringView(gz))})
-            .build();
+        dstd::fs::remove(pfw).discard();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                                    {dstd::String(dstd::StringView(gz))}))
+                .build());
         return gz;
     }
 
@@ -2919,18 +2936,14 @@ TEST_SUITE("View duql session") {
     TEST_CASE("one scan reads the keys, time and duration") {
         TestEnvironment env(10);
         const dstd::String gz = session_trace(env, {{1, 1, 0, 5}});
-        const dstd::String plan = view_of(gz).explain_duql(
-            "session pid gap 1s | group pid, session { n = count() }");
+        const dstd::String plan = dftu_utils_test::ok(view_of(gz).explain_duql(
+            "session pid gap 1s | group pid, session { n = count() }"));
         CHECK(plan.find("scan select: pid, ts, dur\n") != dstd::String::npos);
         CHECK(plan.find("session keys pid; time ts end ts + dur; gap "
                         "1000000; max none; as session\n") !=
               dstd::String::npos);
-        dstd::String what;
-        try {
-            (void)frame(view_of(gz).duql("session pid gap 1 as ts"));
-        } catch (const std::exception& e) {
-            what = e.what();
-        }
+        const dstd::String what = failure_of(
+            [&] { return view_of(gz).duql("session pid gap 1 as ts"); });
         CHECK(what.find("already a column") != dstd::String::npos);
     }
 
@@ -2960,8 +2973,8 @@ TEST_SUITE("View duql session") {
             for (const auto& gz : files)
                 for (std::size_t workers : {1, 2, 8}) {
                     dftracer::utils::Runtime rt(workers);
-                    const dstd::String got =
-                        rows(rt.submit(view_of(gz).duql(q).collect()).get());
+                    const dstd::String got = rows(dftu_utils_test::ok(
+                        rt.submit(view_of(gz).duql(q).collect()).get()));
                     if (!want) want = got;
                     CHECK(got == *want);
                 }

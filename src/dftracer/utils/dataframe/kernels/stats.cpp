@@ -11,6 +11,8 @@
 #include <dftracer/utils/dataframe/kernels/stats.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dstd/deque.h>
+#include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
@@ -22,7 +24,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
-#include <stdexcept>
 #include <utility>
 
 namespace dftracer::utils::dataframe {
@@ -109,9 +110,9 @@ bool equal_at(const Series& v, std::int64_t a, std::int64_t b) {
         case ValueDomain::Numeric:
             return read_f64(v, a) == read_f64(v, b);
         case ValueDomain::None:
-            throw std::invalid_argument(
-                (dstd::String("column type '") + type_name(v.type()) +
-                 "' has no comparable per-row value (nested type)")
+            dstd::fatal(
+                dstd::fmt<"column type '{}' has no comparable per-row value "
+                          "(nested type)">(type_name(v.type()))
                     .c_str());
     }
     return false;
@@ -124,7 +125,7 @@ bool refuse_non_numeric(const char* op, TypeId t) {
     if (value_domain(t) == ValueDomain::Numeric || t == TypeId::Decimal128 ||
         t == TypeId::Decimal256)
         return false;
-    DFTRACER_UTILS_LOG_ERROR("%s: no numeric value for type '%s'", op,
+    DFTRACER_UTILS_LOG_ERROR("{}: no numeric value for type '{}'", op,
                              type_name(t));
     return true;
 }

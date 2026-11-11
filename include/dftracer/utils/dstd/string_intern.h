@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_DSTD_STRING_INTERN_H
 
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 
 #include <array>
@@ -83,9 +84,16 @@ class StringIntern {
     StringIntern(StringIntern&&) = delete;
     StringIntern& operator=(StringIntern&&) = delete;
 
-    /// Throws std::logic_error on a deterministic id collision and
-    /// std::length_error when the chunk table or the id space is exhausted.
+    /// The id of `sv`, inserting it when new. Ends the process on a
+    /// deterministic id collision, so a table with deterministic ids takes
+    /// @ref try_get_or_insert. Also ends the process when the chunk table or
+    /// the id space is exhausted.
     std::uint32_t get_or_insert(StringView sv);
+
+    /// Like @ref get_or_insert, but a deterministic id collision, which the
+    /// strings cause, comes back as an error. Without deterministic ids it
+    /// never fails.
+    [[nodiscard]] Result<std::uint32_t> try_get_or_insert(StringView sv);
 
     /// The id of `sv`, or NO_ID when the table does not hold it. Takes no
     /// lock.
@@ -96,8 +104,8 @@ class StringIntern {
     /// string it holds. Must precede any `resolve(id)` at that id.
     [[nodiscard]] InsertStatus insert_at_id(std::uint32_t id, StringView sv);
 
-    /// Empty means no string at this id. An id past the table's reach throws
-    /// std::out_of_range.
+    /// Empty means no string at this id. An id past the table's reach ends the
+    /// process.
     StringView resolve(std::uint32_t id) const;
 
     Location locate(std::uint32_t id) const;
@@ -119,8 +127,8 @@ class StringIntern {
     }
 
     /// Derive ids from string content instead of a counter, so ids match across
-    /// MPI ranks. A hash collision throws, so use it for small dictionaries.
-    /// Must precede any `get_or_insert`.
+    /// MPI ranks. A hash collision is an error of @ref try_get_or_insert, so
+    /// use it for small dictionaries. Must precede any `get_or_insert`.
     void enable_deterministic_ids() noexcept {
         deterministic_ids_.store(true, std::memory_order_release);
     }
@@ -201,8 +209,7 @@ class StringIntern {
     static std::uint32_t record_chunk(const char* rec);
     const ChunkRef* chunk_ref(std::uint32_t i) const;
     static std::size_t shard_of(std::size_t h);
-    [[noreturn]] static void throw_collision(const char* existing,
-                                             StringView sv);
+    static Error collision(const char* existing, StringView sv);
     std::uint32_t add_chunk(std::size_t bytes);
     const char* write_record(Shard& sh, StringView sv);
     Index* make_index(std::size_t slots);

@@ -70,8 +70,8 @@ last indexed, so explicit indexing only warms it.
 
       .. code-block:: cpp
 
-         #include <dftracer/utils/index/indexer.h>
-         using namespace dftracer::utils::index;
+         #include <dftracer/utils/trace/index/indexer.h>
+         using namespace dftracer::utils::trace::index;
 
          Indexer indexer = Indexer::open({"traces/"});
          indexer.build();  // no-op if already built

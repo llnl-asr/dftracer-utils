@@ -3,13 +3,15 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/plan/prune.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/fileio/file_helpers.h>
+#include <dftracer/utils/trace/index/indexer.h>
+#include <dftracer/utils/trace/index/plan/prune.h>
+#include <dftracer/utils/trace/reader/trace_reader.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
-#include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
+#include <generator_ok.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -49,7 +51,7 @@ dstd::String create_metadata_trace(TestEnvironment& env, bool numeric_ph) {
     ofs.close();
     const dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    (void)dstd::fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     return gz;
 }
 
@@ -57,7 +59,9 @@ dstd::String create_metadata_trace(TestEnvironment& env, bool numeric_ph) {
 // index must already exist).
 void prime_index(const dstd::String& gz, const dstd::String& idx) {
     StringSink sink;
-    View::from_file(dstd::String(gz), dstd::String(idx)).sink_json(sink).get();
+    dftu_utils_test::ok(View::from_file(dstd::String(gz), dstd::String(idx))
+                            .sink_json(sink)
+                            .get());
 }
 
 // Rows whose top-level name column equals `name`.
@@ -103,7 +107,8 @@ void check_metadata_variant(bool numeric_ph) {
         views::detail::scan::phase(
             views::detail::scan::from_file(dstd::String(gz), dstd::String(idx)),
             Phase::Metadata),
-        duql::parse_or_throw("args.name == \"time_metric\""));
+        dftu_utils_test::ok(
+            duql::Query::from_string("args.name == \"time_metric\"")));
     dataframe::LazyFrame filtered_lazy = views::detail::scan::collect(filtered);
     dataframe::DataFrame f_lazy = run(filtered_lazy.collect());
     dataframe::DataFrame f_eager =
@@ -117,7 +122,7 @@ void check_metadata_variant(bool numeric_ph) {
         views::detail::scan::phase(
             views::detail::scan::from_file(dstd::String(gz), dstd::String(idx)),
             Phase::Metadata),
-        duql::parse_or_throw("args.name == \"nope\""));
+        dftu_utils_test::ok(duql::Query::from_string("args.name == \"nope\"")));
     dataframe::LazyFrame no_match_lazy = views::detail::scan::collect(no_match);
     CHECK(run(no_match_lazy.collect()).num_rows() == 0);
     CHECK(run(views::detail::scan::collect_frame(no_match)).num_rows() == 0);
@@ -175,9 +180,11 @@ dstd::String create_threaded_trace(TestEnvironment& env) {
     const dstd::String gz = pfw + ".gz";
     REQUIRE(
         dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, 4 * 1024));
-    (void)dstd::fs::remove(pfw);
-    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
-        .build();
+    dstd::fs::remove(pfw).discard();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                                {dstd::String(dstd::StringView(gz))}))
+            .build());
     return gz;
 }
 
@@ -189,8 +196,8 @@ TEST_SUITE("View - metadata under pruning") {
         const dstd::String gz = create_threaded_trace(env);
         const auto snapshot = dftu_utils_test::index_snapshot(
             dstd::String(determine_index_path(gz, "")));
-        auto counts =
-            dftu_utils_test::index_take(dftracer::utils::index::chunk_meta(
+        auto counts = dftu_utils_test::index_take(
+            dftracer::utils::trace::index::chunk_meta(
                 snapshot, dftu_utils_test::require_indexed_file(snapshot, gz)));
         REQUIRE(counts.has_value());
         std::uint64_t records = 0, with_records = 0;
@@ -208,22 +215,22 @@ TEST_SUITE("View - metadata under pruning") {
         const dstd::String gz = create_threaded_trace(env);
         const dstd::String idx = dstd::String(determine_index_path(gz, ""));
         StringSink data;
-        View::from_file(dstd::String(gz), dstd::String(idx))
-            .sink_json(data)
-            .get();
+        dftu_utils_test::ok(View::from_file(dstd::String(gz), dstd::String(idx))
+                                .sink_json(data)
+                                .get());
         CHECK(count_containing(data.lines(), "thread_name") == 0);
         StringSink every;
-        View::from_file(dstd::String(gz), dstd::String(idx))
-            .phase(Phase::Any)
-            .sink_json(every)
-            .get();
+        dftu_utils_test::ok(View::from_file(dstd::String(gz), dstd::String(idx))
+                                .phase(Phase::Any)
+                                .sink_json(every)
+                                .get());
         CHECK(count_containing(every.lines(), "thread_name") == 40);
         StringSink pruned;
-        View::from_file(dstd::String(gz), dstd::String(idx))
-            .phase(Phase::Any)
-            .duql(R"(name in ["open", "thread_name"])")
-            .sink_json(pruned)
-            .get();
+        dftu_utils_test::ok(View::from_file(dstd::String(gz), dstd::String(idx))
+                                .phase(Phase::Any)
+                                .duql(R"(name in ["open", "thread_name"])")
+                                .sink_json(pruned)
+                                .get());
         CHECK(count_containing(pruned.lines(), "thread_name") == 40);
         CHECK(count_containing(pruned.lines(), R"("name":"open")") == 50);
     }
@@ -236,13 +243,15 @@ TEST_SUITE("View - metadata under pruning") {
             views::detail::scan::phase(views::detail::scan::from_file(
                                            dstd::String(gz), dstd::String(idx)),
                                        Phase::Metadata),
-            duql::parse_or_throw(R"(args.name == "t37")"));
+            dftu_utils_test::ok(
+                duql::Query::from_string(R"(args.name == "t37")")));
         CHECK(run(views::detail::scan::collect_frame(q)).num_rows() == 1);
         views::detail::scan::ScanPlan all = views::detail::scan::filter(
             views::detail::scan::phase(views::detail::scan::from_file(
                                            dstd::String(gz), dstd::String(idx)),
                                        Phase::Metadata),
-            duql::parse_or_throw(R"(name == "thread_name")"));
+            dftu_utils_test::ok(
+                duql::Query::from_string(R"(name == "thread_name")")));
         CHECK(run(views::detail::scan::collect_frame(all)).num_rows() == 40);
     }
 
@@ -259,9 +268,10 @@ TEST_SUITE("View - metadata under pruning") {
         const dstd::String gz = pfw + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz,
                                                                    4 * 1024));
-        dftracer::utils::index::Indexer::open(
-            {dstd::String(dstd::StringView(gz))})
-            .build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                                    {dstd::String(dstd::StringView(gz))}))
+                .build());
         StringSink sink;
         const auto stats =
             run(View::from_file(
@@ -277,13 +287,14 @@ TEST_SUITE("View - metadata under pruning") {
         TestEnvironment env(200);
         const dstd::String gz = create_threaded_trace(env);
         const dstd::String idx = dstd::String(determine_index_path(gz, ""));
-        dftracer::utils::index::Indexer::open(
-            {dstd::String(dstd::StringView(gz))})
-            .drop_extension("dft.metadata");
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                                    {dstd::String(dstd::StringView(gz))}))
+                .drop_extension("dft.metadata"));
         {
             const auto snapshot = dftu_utils_test::index_snapshot(idx);
             CHECK_FALSE(dftu_utils_test::index_take(
-                            dftracer::utils::index::chunk_meta(
+                            dftracer::utils::trace::index::chunk_meta(
                                 snapshot, dftu_utils_test::require_indexed_file(
                                               snapshot, gz)))
                             .has_value());
@@ -292,14 +303,15 @@ TEST_SUITE("View - metadata under pruning") {
             views::detail::scan::phase(views::detail::scan::from_file(
                                            dstd::String(gz), dstd::String(idx)),
                                        Phase::Metadata),
-            duql::parse_or_throw(R"(name == "thread_name")"));
+            dftu_utils_test::ok(
+                duql::Query::from_string(R"(name == "thread_name")")));
         CHECK(run(views::detail::scan::collect_frame(all)).num_rows() == 40);
         StringSink pruned;
-        View::from_file(dstd::String(gz), dstd::String(idx))
-            .phase(Phase::Any)
-            .duql(R"(name in ["open", "thread_name"])")
-            .sink_json(pruned)
-            .get();
+        dftu_utils_test::ok(View::from_file(dstd::String(gz), dstd::String(idx))
+                                .phase(Phase::Any)
+                                .duql(R"(name in ["open", "thread_name"])")
+                                .sink_json(pruned)
+                                .get());
         CHECK(count_containing(pruned.lines(), "thread_name") == 40);
     }
 
@@ -308,12 +320,12 @@ TEST_SUITE("View - metadata under pruning") {
         const dstd::String gz = create_threaded_trace(env);
         auto count_with = [&](const dstd::String& text, bool skip) {
             auto run = [&]() -> coro::CoroTask<std::size_t> {
-                dftracer::utils::utilities::reader::TraceReader reader(
+                dftracer::utils::trace::reader::TraceReader reader(
                     {.file_path = dstd::String(gz)});
-                dftracer::utils::utilities::reader::ReadConfig cfg;
+                dftracer::utils::trace::reader::ReadConfig cfg;
                 cfg.query = text;
                 cfg.skip_pruning = skip;
-                auto gen = reader.read_json(cfg);
+                auto gen = dftu_utils_test::ok_items(reader.read_json(cfg));
                 std::size_t n = 0;
                 while (auto line = co_await gen.next()) ++n;
                 co_return n;
@@ -326,21 +338,22 @@ TEST_SUITE("View - metadata under pruning") {
         auto count_all = [&](const dstd::String& t) {
             return count_with(t, true);
         };
-        CHECK(count("") == 2044);
-        CHECK(count_all(R"(ph == "M")") == 44);
-        CHECK(count(R"(name == "thread_name")") == 40);
-        CHECK(count_all(R"(name == "thread_name")") == 40);
-        CHECK(count(R"(args.name == "t37")") == 1);
-        CHECK(count(R"(name == "open")") == 50);
+        CHECK(dftu_utils_test::ok(count("")) == 2044);
+        CHECK(dftu_utils_test::ok(count_all(R"(ph == "M")")) == 44);
+        CHECK(dftu_utils_test::ok(count(R"(name == "thread_name")")) == 40);
+        CHECK(dftu_utils_test::ok(count_all(R"(name == "thread_name")")) == 40);
+        CHECK(dftu_utils_test::ok(count(R"(args.name == "t37")")) == 1);
+        CHECK(dftu_utils_test::ok(count(R"(name == "open")")) == 50);
     }
 
     TEST_CASE("metadata evidence prunes chunks no record can match") {
         TestEnvironment env(200);
         const dstd::String gz = create_threaded_trace(env);
         auto chunks = [&](const dstd::String& text,
-                          index::plan::MetadataUse use) {
-            const auto q = dftracer::utils::duql::parse_or_throw(text);
-            auto out = index::plan::prune_file(
+                          trace::index::plan::MetadataUse use) {
+            const auto q = dftu_utils_test::ok(
+                dftracer::utils::duql::Query::from_string(text));
+            auto out = trace::index::plan::prune_file(
                            {.index_path = determine_index_path(gz, ""),
                             .file_path = dstd::String(dstd::StringView(gz)),
                             .query = &q,
@@ -350,22 +363,23 @@ TEST_SUITE("View - metadata under pruning") {
             REQUIRE_FALSE(out->all_chunks);
             return out->candidates.size();
         };
-        const auto total = chunks("dur >= 0", index::plan::MetadataUse::All);
+        const auto total =
+            chunks("dur >= 0", trace::index::plan::MetadataUse::All);
         const auto open =
-            chunks(R"(name == "open")", index::plan::MetadataUse::None);
+            chunks(R"(name == "open")", trace::index::plan::MetadataUse::None);
         // No metadata record is named "open" or has a dur.
-        CHECK(chunks(R"(name == "open")", index::plan::MetadataUse::All) ==
-              open);
-        CHECK(chunks("dur > 5", index::plan::MetadataUse::Records) == 0);
+        CHECK(chunks(R"(name == "open")",
+                     trace::index::plan::MetadataUse::All) == open);
+        CHECK(chunks("dur > 5", trace::index::plan::MetadataUse::Records) == 0);
         const auto named = chunks(R"(name == "thread_name")",
-                                  index::plan::MetadataUse::Records);
+                                  trace::index::plan::MetadataUse::Records);
         CHECK(named > 1);
         CHECK(named < total);
-        CHECK(chunks(R"(name == "FH")", index::plan::MetadataUse::Records) <=
-              4);
+        CHECK(chunks(R"(name == "FH")",
+                     trace::index::plan::MetadataUse::Records) <= 4);
         CHECK(chunks(R"(args.name == "t37")",
-                     index::plan::MetadataUse::Records) >= 1);
-        CHECK(chunks(R"(args.name == "t37")", index::plan::MetadataUse::All) >=
-              1);
+                     trace::index::plan::MetadataUse::Records) >= 1);
+        CHECK(chunks(R"(args.name == "t37")",
+                     trace::index::plan::MetadataUse::All) >= 1);
     }
 }

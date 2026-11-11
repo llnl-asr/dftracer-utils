@@ -128,16 +128,24 @@ Dispatch dispatch() noexcept {
 // The page heap and system paths below are tail calls, so they run without a
 // frame of their own and keep the return address of the public entry as the
 // site.
+template <bool Fatal>
 [[gnu::noinline]] void* allocate_other(std::size_t size, std::size_t align,
                                        void* site) {
     switch (dispatch()) {
         case Dispatch::PageHeap:
-            return page_allocate(size, align);
+            if constexpr (Fatal) return page_allocate(size, align);
+            return page_try_allocate(size, align);
         case Dispatch::System:
-            return system_allocate(size, align);
+            if constexpr (Fatal) return system_allocate(size, align);
+            return system_try_allocate(size, align);
         case Dispatch::DebugPageHeap:
-        case Dispatch::DebugSystem:
-            return debug_allocate(size, align, site);
+        case Dispatch::DebugSystem: {
+            void* p = debug_allocate(size, align, site);
+            if constexpr (Fatal) {
+                if (p == nullptr) out_of_memory(size);
+            }
+            return p;
+        }
         case Dispatch::Unresolved:
             break;
     }
@@ -222,6 +230,27 @@ AttribCache& attrib_local() {
     abort_with("dftracer-utils memory: unknown backend\n");
 }
 
+void out_of_memory(std::size_t size) noexcept {
+    char message[256];
+    std::size_t cap = hard_cap();
+    if (cap != 0) {
+        std::snprintf(message, sizeof(message),
+                      "dftracer-utils memory: out of memory allocating %zu "
+                      "bytes; the hard limit %s is %zu bytes\n",
+                      size, constants::HARD_LIMIT_ENV, cap);
+    } else {
+        std::snprintf(message, sizeof(message),
+                      "dftracer-utils memory: out of memory allocating %zu "
+                      "bytes\n",
+                      size);
+    }
+    abort_with(message);
+}
+
+void size_overflow() noexcept {
+    abort_with("dftracer-utils memory: allocation size overflows\n");
+}
+
 void* allocate(std::size_t size, std::size_t align) {
     switch (static_cast<Dispatch>(g_dispatch.load(std::memory_order_acquire))) {
         case Dispatch::PageHeap:
@@ -229,20 +258,35 @@ void* allocate(std::size_t size, std::size_t align) {
         case Dispatch::System:
             return system_allocate(size, align);
         default:
-            return allocate_other(size, align, __builtin_return_address(0));
+            return allocate_other<true>(size, align,
+                                        __builtin_return_address(0));
     }
 }
 
-void* allocate_at(std::size_t size, std::size_t align, Pool& pool, void* site) {
+namespace {
+
+template <bool Fatal>
+void* allocate_at_in(std::size_t size, std::size_t align, Pool& pool,
+                     void* site) {
     switch (static_cast<Dispatch>(g_dispatch.load(std::memory_order_acquire))) {
         case Dispatch::PageHeap:
-            return page_allocate_to(size, align, detail::PoolAccess::id(pool));
+            if constexpr (Fatal) {
+                return page_allocate_to(size, align,
+                                        detail::PoolAccess::id(pool));
+            }
+            return page_try_allocate_to(size, align,
+                                        detail::PoolAccess::id(pool));
         default:
             break;
     }
     ScopeOverride scope{attrib_local(), detail::PoolAccess::id(pool)};
-    if (debug_enabled()) return debug_allocate(size, align, site);
-    return allocate(size, align);
+    return allocate_other<Fatal>(size, align, site);
+}
+
+}  // namespace
+
+void* allocate_at(std::size_t size, std::size_t align, Pool& pool, void* site) {
+    return allocate_at_in<true>(size, align, pool, site);
 }
 
 void* allocate(std::size_t size, std::size_t align, Pool& pool) {
@@ -250,14 +294,12 @@ void* allocate(std::size_t size, std::size_t align, Pool& pool) {
 }
 
 void* try_allocate(std::size_t size, std::size_t align) noexcept {
-    try {
-        if (debug_enabled()) {
-            return debug_allocate(size, align, __builtin_return_address(0));
-        }
-        return allocate(size, align);
-    } catch (const std::bad_alloc&) {
-        return nullptr;
-    }
+    return allocate_other<false>(size, align, __builtin_return_address(0));
+}
+
+void* try_allocate_at(std::size_t size, std::size_t align, Pool& pool,
+                      void* site) noexcept {
+    return allocate_at_in<false>(size, align, pool, site);
 }
 
 void deallocate(void* p) noexcept {
@@ -314,9 +356,12 @@ void* reallocate(void* p, std::size_t old_size, std::size_t new_size,
         case Dispatch::System:
             return system_reallocate(p, old_size, new_size, align);
         case Dispatch::DebugPageHeap:
-        case Dispatch::DebugSystem:
-            return debug_reallocate(p, old_size, new_size, align,
-                                    __builtin_return_address(0));
+        case Dispatch::DebugSystem: {
+            void* moved = debug_reallocate(p, old_size, new_size, align,
+                                           __builtin_return_address(0));
+            if (moved == nullptr) out_of_memory(new_size);
+            return moved;
+        }
         case Dispatch::Unresolved:
             break;
     }
@@ -334,11 +379,7 @@ void trim(Mode mode) noexcept {
 }
 
 void* c_malloc(std::size_t size) noexcept {
-    try {
-        return allocate(size, alignof(std::max_align_t));
-    } catch (...) {
-        return nullptr;
-    }
+    return try_allocate(size, alignof(std::max_align_t));
 }
 
 void c_free(void* p) noexcept {

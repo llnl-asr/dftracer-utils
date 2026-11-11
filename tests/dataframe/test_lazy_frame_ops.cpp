@@ -19,6 +19,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <algorithm>
 #include <cmath>
@@ -32,8 +33,9 @@ using namespace dftracer::utils::dataframe;
 
 namespace {
 
-DataFrame run(coro::CoroTask<DataFrame> t) {
-    return dftracer::utils::default_runtime().submit(std::move(t)).get();
+DataFrame run(coro::CoroTask<dstd::Result<DataFrame>> t) {
+    return dftu_utils_test::ok(
+        dftracer::utils::default_runtime().submit(std::move(t)).get());
 }
 
 Series i64s(const dstd::Vector<std::int64_t>& v) {
@@ -108,7 +110,8 @@ DataFrame row_numbered_eager(const DataFrame& df) {
     dftracer::utils::dataframe::WindowColumn w{};
     w.func = dftracer::utils::dataframe::WindowFunc::RowNumber;
     w.out = "rn";
-    return dftracer::utils::dataframe::window(df, {}, {}, {w});
+    return dftu_utils_test::ok(
+        dftracer::utils::dataframe::window(df, {}, {}, {w}));
 }
 
 dftu_dataframe* to_abi(const DataFrame& df) {
@@ -134,7 +137,7 @@ TEST_SUITE("lazy frame ops") {
         CHECK(s.fields[1].type.id == TypeId::String);
         CHECK(s.fields[2].type.id == TypeId::Int64);
         CHECK(plan.explain().find("unnest tk") != dstd::String::npos);
-        DataFrame eager = make_nested().unnest("tk");
+        DataFrame eager = dftu_utils_test::ok(make_nested().unnest("tk"));
         for (std::int64_t morsel : dstd::Vector<std::int64_t>{0, 1}) {
             DataFrame out =
                 run(scan(make_nested()).unnest("tk").collect(morsel));
@@ -151,9 +154,12 @@ TEST_SUITE("lazy frame ops") {
                                 .filter(col(2) > std::int64_t{6})
                                 .collect());
         CHECK(i64_col(big, "count") == dstd::Vector<I>{7, 9});
-        CHECK_THROWS_AS(scan(make_nested()).unnest("nope"), std::out_of_range);
-        CHECK_THROWS_AS(scan(make_nested()).unnest("pid"),
-                        std::invalid_argument);
+        dftu_utils_test::expect_error(
+            scan(make_nested()).unnest("nope").status(),
+            dftracer::utils::common::ErrorCode::NotFound);
+        dftu_utils_test::expect_error(
+            scan(make_nested()).unnest("pid").status(),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
     }
 
     TEST_CASE(
@@ -162,7 +168,8 @@ TEST_SUITE("lazy frame ops") {
         CHECK(plan.schema() == dstd::Vector<dstd::String>{"k", "l_n", "r_n",
                                                           "delta_n", "pct_n"});
         CHECK(plan.explain().find("frame_op") == dstd::String::npos);
-        DataFrame eager = make_base().compare_agg(make_variant(), 1);
+        DataFrame eager =
+            dftu_utils_test::ok(make_base().compare_agg(make_variant(), 1));
         for (std::int64_t morsel : dstd::Vector<std::int64_t>{0, 1}) {
             DataFrame out = run(plan.collect(morsel));
             CHECK(out.names == eager.names);
@@ -180,12 +187,16 @@ TEST_SUITE("lazy frame ops") {
         DataFrame spilled = run(plan.memory_budget(1).collect(1));
         CHECK(spilled.names == eager.names);
         CHECK(i64_col(spilled, "delta_n") == dstd::Vector<I>{-5, NI, NI});
-        CHECK_THROWS_AS(scan(make_base()).compare_agg(scan(make_variant()), 0),
-                        std::invalid_argument);
-        CHECK_THROWS_AS(
+        dftu_utils_test::expect_error(
+            scan(make_base()).compare_agg(scan(make_variant()), 0).status(),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
+        dftu_utils_test::expect_error(
             scan(make_base())
-                .compare_agg(scan(make_variant().rename({"j", "n"})), 1),
-            std::invalid_argument);
+                .compare_agg(scan(dftu_utils_test::ok(
+                                 make_variant().rename({"j", "n"}))),
+                             1)
+                .status(),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
     }
 
     TEST_CASE("compare_agg: a plan with unknown columns is collected") {
@@ -196,9 +207,9 @@ TEST_SUITE("lazy frame ops") {
         CHECK(plan.explain().find("frame_op dftu.frame.compare_agg") !=
               dstd::String::npos);
         DataFrame out = run(plan.collect(1));
-        DataFrame eager =
+        DataFrame eager = dftu_utils_test::ok(
             row_numbered_eager(make_base())
-                .compare_agg(row_numbered_eager(make_variant()), 1);
+                .compare_agg(row_numbered_eager(make_variant()), 1));
         CHECK(out.names == eager.names);
         CHECK(i64_col(out, "k") == i64_col(eager, "k"));
         CHECK(i64_col(out, "delta_n") == i64_col(eager, "delta_n"));
@@ -253,20 +264,23 @@ TEST_SUITE("lazy frame ops") {
         CHECK(i64_col(run(native.collect(1)), "n") == dstd::Vector<I>{20});
 
         OpArgs none;
-        CHECK_THROWS_WITH_AS(
-            scan(make_base()).frame_op("dftu.frame.nope", none),
+        dftu_utils_test::expect_error(
+            scan(make_base()).frame_op("dftu.frame.nope", none).status(),
+            dftracer::utils::common::ErrorCode::InvalidArgument,
             "lazy frame op 'dftu.frame.nope': no op "
-            "registered under this name",
-            std::invalid_argument);
-        CHECK_THROWS_AS(scan(make_base()).frame_op("dftu.series.add", none),
-                        std::invalid_argument);
-        CHECK_THROWS_AS(scan(make_base()).frame_op("dftu.frame.union", none),
-                        std::invalid_argument);
-        CHECK_THROWS_AS(
+            "registered under this name");
+        dftu_utils_test::expect_error(
+            scan(make_base()).frame_op("dftu.series.add", none).status(),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
+        dftu_utils_test::expect_error(
+            scan(make_base()).frame_op("dftu.frame.union", none).status(),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
+        dftu_utils_test::expect_error(
             scan(make_base())
                 .frame_op("dftu.frame.union", none,
-                          {scan(make_variant()), scan(make_variant())}),
-            std::invalid_argument);
+                          {scan(make_variant()), scan(make_variant())})
+                .status(),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
         DataFrame u =
             run(scan(make_base())
                     .frame_op("dftu.frame.union", none, {scan(make_variant())})
@@ -285,37 +299,43 @@ TEST_SUITE("lazy frame ops") {
         df.columns.push_back(i64s({1, 2, 3, 4}));
         df.columns.push_back(Series::flat_f64(b, 4));
 
-        DataFrame sum = df.reduce(Agg::Sum);
+        DataFrame sum = dftu_utils_test::ok(df.reduce(Agg::Sum));
         CHECK(sum.names == dstd::Vector<dstd::String>{"a", "b"});
         REQUIRE(sum.num_rows() == 1);
         CHECK(i64_col(sum, "a") == dstd::Vector<I>{10});
         CHECK(sum.column("b").materialize().data<double>()[0] ==
               doctest::Approx(14.0));
-        DataFrame present = df.reduce(Agg::CountValid);
+        DataFrame present = dftu_utils_test::ok(df.reduce(Agg::CountValid));
         CHECK(present.names == dstd::Vector<dstd::String>{"k", "s", "a", "b"});
         CHECK(i64_col(present, "s") == dstd::Vector<I>{4});
         // The grouped broadcast lives on the group-by object.
-        DataFrame by_k = df.group_by({"k"}).max();
+        DataFrame by_k = dftu_utils_test::ok(df.group_by({"k"}).max());
         CHECK(by_k.names == dstd::Vector<dstd::String>{"k", "a", "b"});
         CHECK(i64_col(by_k, "a") == dstd::Vector<I>{3, 4});
-        DataFrame size = df.group_by({"k"}).size();
+        DataFrame size = dftu_utils_test::ok(df.group_by({"k"}).size());
         CHECK(size.names == dstd::Vector<dstd::String>{"k", "size"});
         CHECK(i64_col(size, "size") == dstd::Vector<I>{2, 2});
-        CHECK_THROWS_AS(df.reduce(Agg::Corr), std::invalid_argument);
-        CHECK_THROWS_AS(df.group_by({"k"}).reduce(Agg::Corr),
-                        std::invalid_argument);
-        CHECK_THROWS_AS(df.group_by({"nope"}), std::out_of_range);
+        dftu_utils_test::expect_error(
+            df.reduce(Agg::Corr),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
+        dftu_utils_test::expect_error(
+            df.group_by({"k"}).reduce(Agg::Corr),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
+        dftu_utils_test::expect_error(
+            df.group_by({"nope"}).size(),
+            dftracer::utils::common::ErrorCode::NotFound);
 
         // The general form: any spec, one row, or per group.
         dstd::Vector<GroupAgg> specs;
         specs.push_back(GroupAgg{Agg::Corr, "b", "c", 0.0, "a"});
         specs.push_back(GroupAgg{Agg::Count, "", "n"});
-        DataFrame gen = df.reduce(specs);
+        DataFrame gen = dftu_utils_test::ok(df.reduce(specs));
         CHECK(gen.names == dstd::Vector<dstd::String>{"c", "n"});
         CHECK(i64_col(gen, "n") == dstd::Vector<I>{4});
-        CHECK(i64_col(df.group_by().agg(specs), "n") == dstd::Vector<I>{4});
-        CHECK(i64_col(df.group_by({"k"}).agg(specs), "n") ==
-              dstd::Vector<I>{2, 2});
+        CHECK(i64_col(dftu_utils_test::ok(df.group_by().agg(specs)), "n") ==
+              dstd::Vector<I>{4});
+        CHECK(i64_col(dftu_utils_test::ok(df.group_by({"k"}).agg(specs)),
+                      "n") == dstd::Vector<I>{2, 2});
 
         // Lazy: a streaming group-by with the same broadcast.
         auto scan_df = [&] {
@@ -334,9 +354,12 @@ TEST_SUITE("lazy frame ops") {
         CHECK(i64_col(lz_k, "a") == dstd::Vector<I>{3, 4});
         DataFrame lz_size = run(scan_df().group_by({"k"}).size().collect(1));
         CHECK(i64_col(lz_size, "size") == dstd::Vector<I>{2, 2});
-        CHECK_THROWS_AS(scan_df().group_by({"nope"}), std::out_of_range);
-        CHECK_THROWS_AS(scan_df().reduce_specs(Agg::Sum, {"nope"}),
-                        std::out_of_range);
+        dftu_utils_test::expect_error(
+            scan_df().group_by({"nope"}).sum().status(),
+            dftracer::utils::common::ErrorCode::NotFound);
+        dftu_utils_test::expect_error(
+            scan_df().reduce_specs(Agg::Sum, {"nope"}),
+            dftracer::utils::common::ErrorCode::NotFound);
 
         dftu_dataframe* h = to_abi(df);
         REQUIRE(h);
@@ -381,16 +404,23 @@ TEST_SUITE("lazy frame ops") {
         df.names = {"k", "a"};
         df.columns.push_back(Series::strings({"x", "y", "x"}));
         df.columns.push_back(Series::flat_i64(av, 3, valid));
-        CHECK(i64_col(df.group_by({"k"}).min(), "a") == dstd::Vector<I>{1, NI});
-        CHECK(i64_col(df.group_by({"k"}).max(), "a") == dstd::Vector<I>{3, NI});
-        CHECK(i64_col(df.group_by({"k"}).sum(), "a") == dstd::Vector<I>{4, 0});
-        CHECK(i64_col(df.group_by({"k"}).count(), "a") ==
+        CHECK(i64_col(dftu_utils_test::ok(df.group_by({"k"}).min()), "a") ==
+              dstd::Vector<I>{1, NI});
+        CHECK(i64_col(dftu_utils_test::ok(df.group_by({"k"}).max()), "a") ==
+              dstd::Vector<I>{3, NI});
+        CHECK(i64_col(dftu_utils_test::ok(df.group_by({"k"}).sum()), "a") ==
+              dstd::Vector<I>{4, 0});
+        CHECK(i64_col(dftu_utils_test::ok(df.group_by({"k"}).count()), "a") ==
               dstd::Vector<I>{2, 0});
-        Series mean = df.group_by({"k"}).mean().column("a").materialize();
+        Series mean = dftu_utils_test::ok(df.group_by({"k"}).mean())
+                          .column("a")
+                          .materialize();
         CHECK(mean.data<double>()[0] == doctest::Approx(2.0));
         CHECK(mean.is_null(1));
         // A sample variance needs two values: x has them, y has none.
-        Series var = df.group_by({"k"}).var().column("a").materialize();
+        Series var = dftu_utils_test::ok(df.group_by({"k"}).var())
+                         .column("a")
+                         .materialize();
         CHECK(var.data<double>()[0] == doctest::Approx(2.0));
         CHECK(var.is_null(1));
         // A Bool column casts to 0 / 1.
@@ -412,12 +442,13 @@ TEST_SUITE("lazy frame ops") {
         df.names = {"k", "v"};
         df.columns.push_back(i64s({1, 1, 2, 2, 3}));
         df.columns.push_back(i64s({1, 2, 3, 3, 4}));
-        DataFrame all = df.unique();
+        DataFrame all = dftu_utils_test::ok(df.unique());
         CHECK(i64_col(all, "v") == dstd::Vector<I>{1, 2, 3, 4});
-        DataFrame by_k = df.unique({"k"});
+        DataFrame by_k = dftu_utils_test::ok(df.unique({"k"}));
         CHECK(i64_col(by_k, "k") == dstd::Vector<I>{1, 2, 3});
         CHECK(i64_col(by_k, "v") == dstd::Vector<I>{1, 3, 4});
-        CHECK_THROWS_AS(df.unique({"nope"}), std::out_of_range);
+        dftu_utils_test::expect_error(
+            df.unique({"nope"}), dftracer::utils::common::ErrorCode::NotFound);
 
         auto scan_df = [&] {
             DataFrame c;
@@ -438,7 +469,9 @@ TEST_SUITE("lazy frame ops") {
             run(scan_df().memory_budget(1).unique({"k"}).collect(1));
         CHECK(i64_col(spilled, "k") == dstd::Vector<I>{1, 2, 3});
         CHECK(i64_col(spilled, "v") == dstd::Vector<I>{1, 3, 4});
-        CHECK_THROWS_AS(scan_df().unique({"nope"}), std::out_of_range);
+        dftu_utils_test::expect_error(
+            scan_df().unique({"nope"}).status(),
+            dftracer::utils::common::ErrorCode::NotFound);
 
         dftu_dataframe* h = to_abi(df);
         REQUIRE(h);
@@ -487,7 +520,7 @@ TEST_SUITE("lazy frame ops") {
             return df;
         };
         const dstd::Vector<I> want{NI, NI, BIG};
-        DataFrame eager = frame().group_by({"k"}).sum();
+        DataFrame eager = dftu_utils_test::ok(frame().group_by({"k"}).sum());
         CHECK(eager.column("v").type() == TypeId::Int64);
         CHECK(i64_col(eager, "v") == want);
         const dstd::Vector<GroupAgg> aggs{GroupAgg{Agg::Sum, "v", "s"},
@@ -595,7 +628,9 @@ TEST_SUITE("lazy frame ops") {
             CHECK(i64_col(run(scan(frame()).head_by({}, 3).collect(morsel)),
                           "v") == dstd::Vector<I>{0, 1, 2});
         }
-        CHECK_THROWS_AS(scan(frame()).head_by({"nope"}, 1), std::out_of_range);
+        dftu_utils_test::expect_error(
+            scan(frame()).head_by({"nope"}, 1).status(),
+            dftracer::utils::common::ErrorCode::NotFound);
 
         // Equal numbers are one key: 0.0 and -0.0, and every NaN.
         const double fv[5] = {0.0, -0.0, std::nan(""), -std::nan(""), 1.5};
@@ -759,77 +794,87 @@ TEST_SUITE("lazy frame ops") {
         const DataFrame df = make_groups();
         GroupBy g = df.group_by({"k"});
 
-        DataFrame cs = g.cumsum();
+        DataFrame cs = dftu_utils_test::ok(g.cumsum());
         CHECK(cs.names == dstd::Vector<dstd::String>{"a", "b"});
         CHECK(i64_col(cs, "a") == dstd::Vector<I>{3, 1, NI, 3, 6});
         CHECK(f64_col(cs, "b") == dstd::Vector<D>{1.0, 5.0, 3.0, 10.0, 3.5});
-        CHECK(i64_col(g.cummax(), "a") == dstd::Vector<I>{3, 1, NI, 2, 3});
-        CHECK(f64_col(g.cummax(), "b") ==
+        CHECK(i64_col(dftu_utils_test::ok(g.cummax()), "a") ==
+              dstd::Vector<I>{3, 1, NI, 2, 3});
+        CHECK(f64_col(dftu_utils_test::ok(g.cummax()), "b") ==
               dstd::Vector<D>{1.0, 5.0, 2.0, 5.0, 2.0});
-        CHECK(i64_col(g.cummin(), "a") == dstd::Vector<I>{3, 1, NI, 1, 3});
-        CHECK(f64_col(g.cummin(), "b") ==
+        CHECK(i64_col(dftu_utils_test::ok(g.cummin()), "a") ==
+              dstd::Vector<I>{3, 1, NI, 1, 3});
+        CHECK(f64_col(dftu_utils_test::ok(g.cummin()), "b") ==
               dstd::Vector<D>{1.0, 5.0, 1.0, 5.0, 0.5});
-        DataFrame cc = g.cumcount();
+        DataFrame cc = dftu_utils_test::ok(g.cumcount());
         CHECK(cc.names == dstd::Vector<dstd::String>{"cumcount"});
         CHECK(i64_col(cc, "cumcount") == dstd::Vector<I>{0, 0, 1, 1, 2});
-        CHECK(i64_col(g.ngroup(), "ngroup") == dstd::Vector<I>{0, 1, 0, 1, 0});
+        CHECK(i64_col(dftu_utils_test::ok(g.ngroup()), "ngroup") ==
+              dstd::Vector<I>{0, 1, 0, 1, 0});
 
-        DataFrame sh = g.shift();
+        DataFrame sh = dftu_utils_test::ok(g.shift());
         CHECK(sh.names == dstd::Vector<dstd::String>{"a", "b"});
         CHECK(i64_col(sh, "a") == dstd::Vector<I>{NI, NI, 3, 1, NI});
         CHECK(f64_col(sh, "b") == dstd::Vector<D>{ND, ND, 1.0, 5.0, 2.0});
-        CHECK(i64_col(g.shift(-1), "a") == dstd::Vector<I>{NI, 2, 3, NI, NI});
-        CHECK(f64_col(g.shift(-1), "b") ==
+        CHECK(i64_col(dftu_utils_test::ok(g.shift(-1)), "a") ==
+              dstd::Vector<I>{NI, 2, 3, NI, NI});
+        CHECK(f64_col(dftu_utils_test::ok(g.shift(-1)), "b") ==
               dstd::Vector<D>{2.0, 5.0, 0.5, ND, ND});
-        CHECK(i64_col(g.diff(), "a") == dstd::Vector<I>{NI, NI, NI, 1, NI});
-        CHECK(f64_col(g.diff(), "b") ==
+        CHECK(i64_col(dftu_utils_test::ok(g.diff()), "a") ==
+              dstd::Vector<I>{NI, NI, NI, 1, NI});
+        CHECK(f64_col(dftu_utils_test::ok(g.diff()), "b") ==
               dstd::Vector<D>{ND, ND, 1.0, 0.0, -1.5});
-        CHECK(f64_col(g.pct_change(), "b") ==
+        CHECK(f64_col(dftu_utils_test::ok(g.pct_change()), "b") ==
               dstd::Vector<D>{ND, ND, 1.0, 0.0, -0.75});
 
-        CHECK(f64_col(g.rank(), "a") ==
+        CHECK(f64_col(dftu_utils_test::ok(g.rank()), "a") ==
               dstd::Vector<D>{1.5, 1.0, ND, 2.0, 1.5});
-        CHECK(f64_col(g.rank(), "b") ==
+        CHECK(f64_col(dftu_utils_test::ok(g.rank()), "b") ==
               dstd::Vector<D>{2.0, 1.5, 3.0, 1.5, 1.0});
-        CHECK(f64_col(g.rank(RankMethod::Average, false), "b") ==
-              dstd::Vector<D>{2.0, 1.5, 1.0, 1.5, 3.0});
-        CHECK(f64_col(g.rank(RankMethod::Min), "b") ==
+        CHECK(f64_col(dftu_utils_test::ok(g.rank(RankMethod::Average, false)),
+                      "b") == dstd::Vector<D>{2.0, 1.5, 1.0, 1.5, 3.0});
+        CHECK(f64_col(dftu_utils_test::ok(g.rank(RankMethod::Min)), "b") ==
               dstd::Vector<D>{2.0, 1.0, 3.0, 1.0, 1.0});
-        CHECK(f64_col(g.rank(RankMethod::Dense), "a") ==
+        CHECK(f64_col(dftu_utils_test::ok(g.rank(RankMethod::Dense)), "a") ==
               dstd::Vector<D>{1.0, 1.0, ND, 2.0, 1.0});
-        CHECK(f64_col(g.rank(RankMethod::Ordinal), "a") ==
+        CHECK(f64_col(dftu_utils_test::ok(g.rank(RankMethod::Ordinal)), "a") ==
               dstd::Vector<D>{1.0, 1.0, ND, 2.0, 2.0});
-        CHECK(f64_col(g.rank(RankMethod::Ordinal, false), "b") ==
-              dstd::Vector<D>{2.0, 1.0, 1.0, 2.0, 3.0});
-        CHECK(f64_col(g.rank(RankMethod::Max), "b") ==
+        CHECK(f64_col(dftu_utils_test::ok(g.rank(RankMethod::Ordinal, false)),
+                      "b") == dstd::Vector<D>{2.0, 1.0, 1.0, 2.0, 3.0});
+        CHECK(f64_col(dftu_utils_test::ok(g.rank(RankMethod::Max)), "b") ==
               dstd::Vector<D>{2.0, 2.0, 3.0, 2.0, 1.0});
-        CHECK(f64_col(g.rank(RankMethod::Max, false), "b") ==
-              dstd::Vector<D>{2.0, 2.0, 1.0, 2.0, 3.0});
-        CHECK(f64_col(g.rank(RankMethod::Max), "a") ==
+        CHECK(f64_col(dftu_utils_test::ok(g.rank(RankMethod::Max, false)),
+                      "b") == dstd::Vector<D>{2.0, 2.0, 1.0, 2.0, 3.0});
+        CHECK(f64_col(dftu_utils_test::ok(g.rank(RankMethod::Max)), "a") ==
               dstd::Vector<D>{2.0, 1.0, ND, 2.0, 2.0});
 
-        DataFrame h2 = g.head(2);
+        DataFrame h2 = dftu_utils_test::ok(g.head(2));
         CHECK(h2.names == dstd::Vector<dstd::String>{"k", "a", "b"});
         CHECK(f64_col(h2, "b") == dstd::Vector<D>{1.0, 5.0, 2.0, 5.0});
-        CHECK(f64_col(g.tail(1), "b") == dstd::Vector<D>{5.0, 0.5});
-        CHECK(f64_col(g.nth(1), "b") == dstd::Vector<D>{2.0, 5.0});
-        CHECK(f64_col(g.nth(-1), "b") == dstd::Vector<D>{5.0, 0.5});
+        CHECK(f64_col(dftu_utils_test::ok(g.tail(1)), "b") ==
+              dstd::Vector<D>{5.0, 0.5});
+        CHECK(f64_col(dftu_utils_test::ok(g.nth(1)), "b") ==
+              dstd::Vector<D>{2.0, 5.0});
+        CHECK(f64_col(dftu_utils_test::ok(g.nth(-1)), "b") ==
+              dstd::Vector<D>{5.0, 0.5});
 
         // A trailing window within the group, null until it holds `n`
         // present values (a null inside the window counts for nothing).
-        CHECK(f64_col(g.rolling_sum(2), "b") ==
+        CHECK(f64_col(dftu_utils_test::ok(g.rolling_sum(2)), "b") ==
               dstd::Vector<D>{ND, ND, 3.0, 10.0, 2.5});
-        CHECK(i64_col(g.rolling_sum(2), "a") ==
+        CHECK(i64_col(dftu_utils_test::ok(g.rolling_sum(2)), "a") ==
               dstd::Vector<I>{NI, NI, NI, 3, NI});
-        CHECK(f64_col(g.rolling_mean(2), "b") ==
+        CHECK(f64_col(dftu_utils_test::ok(g.rolling_mean(2)), "b") ==
               dstd::Vector<D>{ND, ND, 1.5, 5.0, 1.25});
-        CHECK(f64_col(g.rolling_max(2), "b") ==
+        CHECK(f64_col(dftu_utils_test::ok(g.rolling_max(2)), "b") ==
               dstd::Vector<D>{ND, ND, 2.0, 5.0, 2.0});
-        CHECK(f64_col(g.rolling_min(2), "b") ==
+        CHECK(f64_col(dftu_utils_test::ok(g.rolling_min(2)), "b") ==
               dstd::Vector<D>{ND, ND, 1.0, 5.0, 0.5});
-        CHECK(i64_col(g.rolling_sum(1), "a") ==
+        CHECK(i64_col(dftu_utils_test::ok(g.rolling_sum(1)), "a") ==
               dstd::Vector<I>{3, 1, NI, 2, 3});
-        CHECK_THROWS_AS(g.rolling_sum(0), std::invalid_argument);
+        dftu_utils_test::expect_error(
+            g.rolling_sum(0),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
 
         // The group-wise fills: a null before the group's first present value
         // stays null under ffill, after its last under bfill.
@@ -840,33 +885,41 @@ TEST_SUITE("lazy frame ops") {
         const std::uint8_t hvalid[1] = {0x06};
         holes.columns.push_back(Series::flat_i64(hv, 5, hvalid));
         GroupBy hg = holes.group_by({"k"});
-        CHECK(i64_col(hg.ffill(), "a") == dstd::Vector<I>{NI, 1, 2, 2, 1});
-        CHECK(i64_col(hg.bfill(), "a") == dstd::Vector<I>{2, 1, 2, NI, NI});
+        CHECK(i64_col(dftu_utils_test::ok(hg.ffill()), "a") ==
+              dstd::Vector<I>{NI, 1, 2, 2, 1});
+        CHECK(i64_col(dftu_utils_test::ok(hg.bfill()), "a") ==
+              dstd::Vector<I>{2, 1, 2, NI, NI});
 
         // The lazy object builds the same plan; the eager one collects it.
         LazyGroupBy lg = df.lazy().group_by({"k"});
-        CHECK(i64_col(run(lg.cumsum().collect()), "a") ==
+        CHECK(i64_col(run(dftu_utils_test::ok(lg.cumsum()).collect()), "a") ==
               dstd::Vector<I>{3, 1, NI, 3, 6});
-        CHECK(f64_col(run(lg.rolling_mean(2).collect()), "b") ==
-              dstd::Vector<D>{ND, ND, 1.5, 5.0, 1.25});
-        CHECK(i64_col(run(holes.lazy().group_by({"k"}).ffill().collect()),
-                      "a") == dstd::Vector<I>{NI, 1, 2, 2, 1});
-        CHECK(f64_col(run(lg.rank().collect()), "a") ==
+        CHECK(f64_col(run(dftu_utils_test::ok(lg.rolling_mean(2)).collect()),
+                      "b") == dstd::Vector<D>{ND, ND, 1.5, 5.0, 1.25});
+        CHECK(i64_col(
+                  run(dftu_utils_test::ok(holes.lazy().group_by({"k"}).ffill())
+                          .collect()),
+                  "a") == dstd::Vector<I>{NI, 1, 2, 2, 1});
+        CHECK(f64_col(run(dftu_utils_test::ok(lg.rank()).collect()), "a") ==
               dstd::Vector<D>{1.5, 1.0, ND, 2.0, 1.5});
-        CHECK(f64_col(run(lg.tail(1).collect()), "b") ==
+        CHECK(f64_col(run(dftu_utils_test::ok(lg.tail(1)).collect()), "b") ==
               dstd::Vector<D>{5.0, 0.5});
-        CHECK(run(lg.transform(GroupwiseOp::Head, 2).collect()).num_rows() ==
-              4);
+        CHECK(run(dftu_utils_test::ok(lg.transform(GroupwiseOp::Head, 2))
+                      .collect())
+                  .num_rows() == 4);
 
         // No keys: the whole frame is one group; ngroup has nothing to number.
-        CHECK(i64_col(df.group_by({}).cumsum(), "a") ==
+        CHECK(i64_col(dftu_utils_test::ok(df.group_by({}).cumsum()), "a") ==
               dstd::Vector<I>{3, 4, NI, 6, 9});
-        CHECK_THROWS_AS(df.group_by({}).ngroup(), std::invalid_argument);
+        dftu_utils_test::expect_error(
+            df.group_by({}).ngroup(),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
         DataFrame keys_only;
         keys_only.names = {"k"};
         keys_only.columns.push_back(Series::strings({"x", "y"}));
-        CHECK_THROWS_AS(keys_only.group_by({"k"}).cumsum(),
-                        std::invalid_argument);
+        dftu_utils_test::expect_error(
+            keys_only.group_by({"k"}).cumsum(),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
     }
 
     TEST_CASE("column_op: a registered column op over one column") {

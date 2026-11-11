@@ -198,7 +198,13 @@ class [[nodiscard]] Expected {
         mark_checked();
         return has_;
     }
-    explicit operator bool() const noexcept { return has_value(); }
+    /// Absent for a bool value, where `if (result)` would read as the value
+    /// and mean the state: use has_value().
+    explicit operator bool() const noexcept
+        requires(!std::is_same_v<std::remove_cv_t<T>, bool>)
+    {
+        return has_value();
+    }
 
     /// Marks the result as handled with nothing to do, for a caller that may
     /// drop an error. Say why at the call.

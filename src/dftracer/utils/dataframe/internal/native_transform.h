@@ -24,10 +24,9 @@ dstd::Optional<LazyFrame> native_group_transform(
     GroupwiseOp kind, std::int64_t n, const Schema& typed);
 
 /// The window plan of the same transform: what the native step must equal.
-LazyFrame composed_group_transform(const LazyFrame& plan,
-                                   const dstd::Vector<dstd::String>& keys,
-                                   GroupwiseOp kind, std::int64_t n,
-                                   RankMethod method, bool ascending);
+dstd::Result<LazyFrame> composed_group_transform(
+    const LazyFrame& plan, const dstd::Vector<dstd::String>& keys,
+    GroupwiseOp kind, std::int64_t n, RankMethod method, bool ascending);
 
 /// The rows the native transform has grouped on one numeric key column with no
 /// key string, since the process started. For tests: a plan that should take

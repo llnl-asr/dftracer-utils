@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/domains/analysis/comparator/comparison_config.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/trace/comparator/comparison_config.h>
 #include <doctest/doctest.h>
 
 using namespace dftracer::utils;
 
-using namespace dftracer::utils::trace::comparator;
+using namespace dftracer::utils::domains::analysis::comparator;
 
 TEST_SUITE("ComparisonConfig") {
     TEST_CASE("from_cli - default query and group_by") {

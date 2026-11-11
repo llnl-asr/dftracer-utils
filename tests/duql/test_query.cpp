@@ -67,14 +67,6 @@ TEST_CASE("Query::to_string") {
     CHECK(q->to_string() == R"(cat == "POSIX")");
 }
 
-TEST_CASE("parse_or_throw - valid") {
-    CHECK_NOTHROW(parse_or_throw(R"(cat == "POSIX")"));
-}
-
-TEST_CASE("parse_or_throw - invalid throws") {
-    CHECK_THROWS_AS(parse_or_throw("cat =="), DuqlParseError);
-}
-
 TEST_CASE("try_parse - valid") {
     auto q = try_parse(R"(cat == "POSIX")");
     REQUIRE(q.has_value());

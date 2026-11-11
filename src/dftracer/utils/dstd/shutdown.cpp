@@ -17,7 +17,7 @@ constexpr std::size_t HOOK_SLOTS = 24;
 struct Table {
     std::mutex mutex;
     std::size_t count[STAGE_COUNT]{};
-    void (*hooks[STAGE_COUNT][HOOK_SLOTS])(){};
+    void (*hooks[STAGE_COUNT][HOOK_SLOTS])() noexcept {};
     bool armed = false;
     bool ran = false;
 };
@@ -34,7 +34,7 @@ Table& table() {
 
 }  // namespace
 
-void add_shutdown_hook(ShutdownStage stage, void (*hook)()) {
+void add_shutdown_hook(ShutdownStage stage, void (*hook)() noexcept) {
     Table& t = table();
     std::lock_guard<std::mutex> lock(t.mutex);
     if (!t.armed) {
@@ -53,7 +53,7 @@ void add_shutdown_hook(ShutdownStage stage, void (*hook)()) {
 
 void shutdown() {
     Table& t = table();
-    void (*hooks[STAGE_COUNT][HOOK_SLOTS])(){};
+    void (*hooks[STAGE_COUNT][HOOK_SLOTS])() noexcept {};
     std::size_t count[STAGE_COUNT]{};
     {
         std::lock_guard<std::mutex> lock(t.mutex);
@@ -68,7 +68,7 @@ void shutdown() {
     // a hook cannot deadlock.
     for (std::size_t index = 0; index < STAGE_COUNT; ++index) {
         for (std::size_t slot = count[index]; slot > 0; --slot) {
-            if (void (*hook)() = hooks[index][slot - 1]) hook();
+            if (void (*hook)() noexcept = hooks[index][slot - 1]) hook();
         }
     }
 }

@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/io/backend_type.h>
@@ -138,7 +139,9 @@ struct ExecutorProgress {
  */
 class TaskExecutor : public coro::Executor {
    public:
-    virtual void start() = 0;
+    /// Fails when the executor cannot get what it needs to run, such as an
+    /// I/O backend.
+    virtual dstd::Result<void> start() = 0;
     virtual void shutdown() = 0;
 
     /// Records tracked task @p id as running on the calling worker. Called
@@ -196,10 +199,9 @@ class TaskExecutor : public coro::Executor {
     static void set_current_backend(TaskExecutor* executor) noexcept;
 };
 
-/// Marks the tracked task @p id as failed with the what() of @p error, or
-/// "Unknown exception" for an error that is not a std::exception.
+/// Marks the tracked task @p id as failed with the text of @p error.
 void mark_coro_failed(TaskExecutor& executor, common::TaskIndex id,
-                      std::exception_ptr error) noexcept;
+                      const dstd::Error& error) noexcept;
 
 /// Build the executor described by `config`. The implementation is chosen
 /// here so callers never name a concrete executor type.

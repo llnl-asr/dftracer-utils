@@ -8,6 +8,7 @@
 #include <doctest/doctest.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
+#include <task_result.h>
 #include <testing_runtime.h>
 #include <unistd.h>
 
@@ -41,7 +42,7 @@ int most_at_once(int tasks) {
     for (int i = 0; i < tasks; ++i)
         handles.push_back(default_runtime().submit(
             busy(&c, std::chrono::milliseconds(50)), "busy"));
-    for (auto& h : handles) h.wait();
+    for (auto& h : handles) dftu_utils_test::ok(h.wait());
     return c.most.load();
 }
 
@@ -99,7 +100,7 @@ TEST_SUITE("ProcessRuntime") {
         auto handle = default_runtime().submit(wait_for(&go, &done), "early");
         Runtime& after = configure_default_runtime({.threads = 3});
         go = true;
-        handle.wait();
+        dftu_utils_test::ok(handle.wait());
         CHECK(done.load());
         CHECK(&after == before);
         CHECK(after.threads() == dftu_utils_test::pool_width(3));
@@ -140,8 +141,8 @@ TEST_SUITE("ProcessRuntime") {
         const auto before = cpu_time();
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
         const auto used = cpu_time() - before;
-        for (auto& h : long_tasks) h.wait();
-        for (auto& h : waiting) h.wait();
+        for (auto& h : long_tasks) dftu_utils_test::ok(h.wait());
+        for (auto& h : waiting) dftu_utils_test::ok(h.wait());
         MESSAGE("cpu while waiting: " << used.count() << " us");
         CHECK(used < std::chrono::milliseconds(150));
     }

@@ -8,31 +8,35 @@
 
 namespace dftracer::utils::trace::views::detail {
 
-IndexRuleFold::Rules::Rules(const ViewPlan& p, AggQuery q,
+IndexRuleFold::Rules::Rules(const ViewPlan& p, AggInputSpec s, AggQuery q,
                             dftracer::utils::dstd::StringIntern& read,
                             bool filter)
     : texts(),
       query(std::move(q)),
       events(query, read, texts),
+      spec(std::move(s)),
       plan(&p),
       apply_query(filter) {}
 
 IndexRuleFold::IndexRuleFold(Key, dstd::SharedPtr<Rules> rules)
     : rules_(std::move(rules)), folder_(rules_->events, rows_, stats_) {}
 
-dstd::UniquePtr<IndexRuleFold> IndexRuleFold::make(
+dstd::Result<dstd::UniquePtr<IndexRuleFold>> IndexRuleFold::make(
     const ViewPlan& plan, dftracer::utils::dstd::StringIntern& scan_intern,
     bool apply_query) {
     auto query = trace_fold_query(plan);
-    if (!query) return nullptr;
-    return make(plan, std::move(*query), scan_intern, apply_query);
+    if (!query) return query.error();
+    if (!*query) return dstd::UniquePtr<IndexRuleFold>();
+    return make(plan, std::move(**query), scan_intern, apply_query);
 }
 
-dstd::UniquePtr<IndexRuleFold> IndexRuleFold::make(
+dstd::Result<dstd::UniquePtr<IndexRuleFold>> IndexRuleFold::make(
     const ViewPlan& plan, AggQuery query,
     dftracer::utils::dstd::StringIntern& scan_intern, bool apply_query) {
-    auto rules = dstd::make_shared<Rules>(plan, std::move(query), scan_intern,
-                                          apply_query);
+    auto spec = make_agg_input_spec(plan);
+    if (!spec) return spec.error();
+    auto rules = dstd::make_shared<Rules>(
+        plan, std::move(*spec), std::move(query), scan_intern, apply_query);
     return dstd::make_unique<IndexRuleFold>(Key{}, std::move(rules));
 }
 
@@ -40,7 +44,7 @@ dstd::UniquePtr<Fold> IndexRuleFold::slice() const {
     return dstd::make_unique<IndexRuleFold>(Key{}, rules_);
 }
 
-void IndexRuleFold::step(const FoldBatch& batch) {
+dstd::Result<void> IndexRuleFold::step(const FoldBatch& batch) {
     const bool filter = rules_->apply_query && rules_->plan->query.has_value();
     for (const FoldEvent& ev : batch.events) {
         if (filter &&
@@ -48,9 +52,10 @@ void IndexRuleFold::step(const FoldBatch& batch) {
             continue;
         folder_.add_event(ev, nullptr);
     }
+    return {};
 }
 
-void IndexRuleFold::merge(Fold& other) {
+dstd::Result<void> IndexRuleFold::merge(Fold& other) {
     auto& o = static_cast<IndexRuleFold&>(other);
     rows_.reserve(rows_.size() + o.rows_.size());
     for (auto& [key, partial] : o.rows_) {
@@ -62,10 +67,12 @@ void IndexRuleFold::merge(Fold& other) {
     }
     o.rows_ = AggQueryResult::Rows();
     stats_.events_read += o.stats_.events_read;
+    return {};
 }
 
 coro::CoroTask<bool> IndexRuleFold::finalize(const CoverageSet&) {
-    state_ = seed_rows(*rules_->plan, rules_->query, rules_->texts, rows_);
+    state_ = seed_rows(*rules_->plan, rules_->spec, rules_->query,
+                       rules_->texts, rows_);
     rows_ = AggQueryResult::Rows();
     co_return true;
 }

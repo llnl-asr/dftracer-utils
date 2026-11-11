@@ -116,12 +116,18 @@ void finish_meter(const Meter &start, Result &r) {
     r.peak_heap = dftu::bench::peak_heap_bytes();
 }
 
+void require_ran(const dstd::Result<void> &ran) {
+    if (ran.has_value()) return;
+    std::fprintf(stderr, "coro_bench: %s\n", ran.error().format().c_str());
+    std::exit(1);
+}
+
 // Runs `body` as the only top-level coroutine and returns what it stored.
 template <class Body>
 Result run_on_executor(Body body) {
     Runtime rt(ExecutorConfig{.thread_count = THREADS}, false);
     Result result;
-    rt.block_on(body(result));
+    require_ran(rt.block_on(body(result)));
     return result;
 }
 

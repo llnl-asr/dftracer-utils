@@ -73,13 +73,17 @@ function(target_set_warnings TARGET_NAME)
               -Wmisleading-indentation # Warn about misleading indentation
               -Wmissing-declarations # Warn about missing function declarations
               -Wmissing-include-dirs # Warn about missing include directories
-              -Wnon-virtual-dtor # Warn about non-virtual destructors
+              $<$<COMPILE_LANGUAGE:CXX>:-Wnon-virtual-dtor> # C++ only: warn about non-virtual
+                                                       # destructors
               -Wnull-dereference # Warn about null pointer dereferences
-              -Wno-old-style-cast # Suppress warnings about old-style casts
-              -Woverloaded-virtual # Warn about overloaded virtual functions
+              $<$<COMPILE_LANGUAGE:CXX>:-Wno-old-style-cast> # C++ only: suppress old-style cast
+                                                      # warnings
+              $<$<COMPILE_LANGUAGE:CXX>:-Woverloaded-virtual> # C++ only: warn about overloaded
+                                                       # virtual functions
               -Wredundant-decls # Warn about redundant declarations
               -Wshadow # Warn about variable shadowing
               -Wno-sign-conversion # Suppress warnings about sign conversions
+              -Werror=switch # Fail on an enum switch that misses a case
               # -Wswitch-default        # Warn about switch statements without
               # default case -Wswitch-enum         # Disabled: causes issues
               # with spdlog/fmt library -Wundef                 # Warn about
@@ -92,8 +96,9 @@ function(target_set_warnings TARGET_NAME)
     if("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
       target_compile_options(
         ${TARGET_NAME}
-        PRIVATE -Wctor-dtor-privacy # Warn about inaccessible
-                                    # constructors/destructors
+        PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wctor-dtor-privacy> # C++ only: warn about
+                                                       # inaccessible
+                                                       # constructors/destructors
                 -Wdisabled-optimization # Warn when optimizations are disabled
                 -Wduplicated-branches # Warn about duplicated branches in
                                       # if-else statements
@@ -102,8 +107,8 @@ function(target_set_warnings TARGET_NAME)
                 -Wlogical-op # Warn about suspicious logical operations
                 # -Wnoexcept              # Warn about noexcept violations
                 -Wrestrict # Warn about restrict violations
-                -Wstrict-null-sentinel # Warn about non-literal null sentinels
-                -Wstrict-overflow=2 # Warn about strict overflow assumptions
+                $<$<COMPILE_LANGUAGE:CXX>:-Wstrict-null-sentinel> # C++ only: warn about
+                                                        # non-literal null sentinels
                 -Wno-maybe-uninitialized # Suppress warnings about
                                          # maybe-uninitialized variables
                 -Wno-missing-field-initializers # GCC false positive with
@@ -139,8 +144,9 @@ function(target_set_warnings TARGET_NAME)
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
       target_compile_options(
         ${TARGET_NAME}
-        PRIVATE -Wmove # Warn about move semantics issues
-                -Wrange-loop-analysis # Warn about range-based for loop issues
+        PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wmove> # C++ only: warn about move semantics issues
+                $<$<COMPILE_LANGUAGE:CXX>:-Wrange-loop-analysis> # C++ only: warn about range-based for
+                                                     # loop issues
                 -Wstring-conversion # Warn about string conversion issues
                 -Wthread-safety # Warn about thread safety issues
                 -Wimplicit-int-float-conversion # Warn about implicit int to

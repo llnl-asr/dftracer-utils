@@ -2,10 +2,10 @@
 #include <dftracer/utils/dataframe/internal/frame_native.h>
 #include <dftracer/utils/dataframe/internal/spill.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 
 #include <cstring>
-#include <exception>
 
 namespace dftracer::utils::dataframe {
 
@@ -29,7 +29,7 @@ bool take(const std::uint8_t*& p, const std::uint8_t* end, T& v) {
 
 }  // namespace
 
-dstd::String frame_to_native(const DataFrame& f) {
+dstd::Result<dstd::String> frame_to_native(const DataFrame& f) {
     dstd::String out(MAGIC, sizeof MAGIC);
     put<std::uint32_t>(out, VERSION);
     put<std::int64_t>(out, f.num_rows());
@@ -38,41 +38,40 @@ dstd::String frame_to_native(const DataFrame& f) {
         const dstd::String& name = f.names[c];
         put<std::uint32_t>(out, static_cast<std::uint32_t>(name.size()));
         out += name;
-        spill::put_series(out, f.columns[c]);
+        auto put_one = spill::put_series(out, f.columns[c]);
+        if (!put_one) return put_one.error();
     }
     return out;
 }
 
 dstd::Optional<DataFrame> frame_from_native(dstd::StringView bytes) noexcept {
-    try {
-        if (bytes.size() < sizeof MAGIC ||
-            std::memcmp(bytes.data(), MAGIC, sizeof MAGIC) != 0)
-            return dstd::nullopt;
-        const auto* p = reinterpret_cast<const std::uint8_t*>(bytes.data());
-        const auto* end = p + bytes.size();
-        p += sizeof MAGIC;
-        std::uint32_t version = 0;
-        std::int64_t rows = 0;
-        std::uint32_t columns = 0;
-        if (!take(p, end, version) || version != VERSION ||
-            !take(p, end, rows) || !take(p, end, columns))
-            return dstd::nullopt;
-        DataFrame f;
-        for (std::uint32_t c = 0; c < columns; ++c) {
-            std::uint32_t name_bytes = 0;
-            if (!take(p, end, name_bytes) ||
-                static_cast<std::size_t>(end - p) < name_bytes)
-                return dstd::nullopt;
-            f.names.emplace_back(reinterpret_cast<const char*>(p), name_bytes);
-            p += name_bytes;
-            f.columns.push_back(spill::get_series(p, end));
-            if (f.columns.back().length() != rows) return dstd::nullopt;
-        }
-        if (p != end) return dstd::nullopt;
-        return f;
-    } catch (const std::exception&) {
+    if (bytes.size() < sizeof MAGIC ||
+        std::memcmp(bytes.data(), MAGIC, sizeof MAGIC) != 0)
         return dstd::nullopt;
+    const auto* p = reinterpret_cast<const std::uint8_t*>(bytes.data());
+    const auto* end = p + bytes.size();
+    p += sizeof MAGIC;
+    std::uint32_t version = 0;
+    std::int64_t rows = 0;
+    std::uint32_t columns = 0;
+    if (!take(p, end, version) || version != VERSION || !take(p, end, rows) ||
+        !take(p, end, columns))
+        return dstd::nullopt;
+    DataFrame f;
+    for (std::uint32_t c = 0; c < columns; ++c) {
+        std::uint32_t name_bytes = 0;
+        if (!take(p, end, name_bytes) ||
+            static_cast<std::size_t>(end - p) < name_bytes)
+            return dstd::nullopt;
+        f.names.emplace_back(reinterpret_cast<const char*>(p), name_bytes);
+        p += name_bytes;
+        auto column = spill::get_series(p, end);
+        if (!column) return dstd::nullopt;
+        f.columns.push_back(std::move(*column));
+        if (f.columns.back().length() != rows) return dstd::nullopt;
     }
+    if (p != end) return dstd::nullopt;
+    return f;
 }
 
 }  // namespace dftracer::utils::dataframe

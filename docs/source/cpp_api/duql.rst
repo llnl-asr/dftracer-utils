@@ -18,9 +18,15 @@ Pipeline builder
 ``duql::Pipe`` and ``duql::Col`` build a whole query that parses to the same
 tree as the equal text; ``Pipe::text()`` prints the canonical text and
 ``View::duql(pipe)`` runs it with the parameters bound by ``Pipe::bind``.
-A value no duql literal can hold, and a query that does not parse in
-``text()``, throw ``std::invalid_argument``. The header links nothing, so a
-plugin can build text with ``raw()``.
+A builder call that gets a value no duql literal can hold, or a call that
+cannot make a valid query, does not throw.
+The ``Col``, ``Pipe`` or ``Source`` it returns keeps the first such error,
+``error()`` reads it, and every value built from it keeps it.
+``Pipe::text()`` returns a ``dstd::Expected<dstd::String, DuqlError>`` that
+holds the first error, or the parser's error when the text does not parse.
+``View::duql(pipe)`` throws ``INVALID_ARGUMENT`` for a ``Pipe`` that holds an
+error. The header links nothing, so a plugin can build text with ``raw()``.
+``raw()`` does not check the error, so test ``error()`` before it.
 
 .. code-block:: cpp
 
@@ -46,17 +52,19 @@ and ``Pipe::use(name, args)`` calls it as a stage.
 ``rowset(name, pipe)`` adds a row set, ``define(name, params, body)`` a
 macro and ``flag(name, value)`` a flag such as ``args_fallback``.
 ``text()`` returns the canonical member text a schema stores (row sets
-first, then macros and flags, each in the order added) and throws
-``std::invalid_argument`` when a member does not parse. A row set whose pipe
-starts with a source (``from ...``) is refused.
+first, then macros and flags, each in the order added) as a
+``dstd::Expected<dstd::String, DuqlError>``. It holds the first input error,
+or the parser's error when a member does not parse. A row set whose pipe
+starts with a source (``from ...``) is an input error.
 
 .. code-block:: cpp
 
-   const std::string source =
+   const auto source =
        duql::Source()
            .rowset("data", duql::Pipe().where(duql::c("ph") != "M"))
            .flag("args_fallback", true)
            .text();
+   // *source holds the member text:
    // data = where ph != "M";
    // def args_fallback = true
 

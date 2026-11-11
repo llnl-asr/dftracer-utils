@@ -1,0 +1,200 @@
+// SPDX-License-Identifier: MIT
+#ifndef DFTRACER_UTILS_DOMAINS_SERVER_VIZ_RECORD_EVENT_H
+#define DFTRACER_UTILS_DOMAINS_SERVER_VIZ_RECORD_EVENT_H
+
+// The trace fields of the served records, read through their record schema.
+// The viz folds read trace events (name, pid, tid, ts, dur in microseconds);
+// a path-decoded record becomes one at the scan boundary. Internal to the
+// server.
+
+#include <dftracer/utils/domains/server/json_builder.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/json/dom_form.h>
+#include <dftracer/utils/json/record_parser.h>
+#include <dftracer/utils/json/value.h>
+#include <dftracer/utils/trace/index/record_schema.h>
+#include <simdjson.h>
+
+#include <cmath>
+#include <cstdint>
+
+namespace dftracer::utils::domains::server {
+
+// Parse the text of `s` in place when its spare capacity holds the simdjson
+// padding, as simdjson does for a std::string.
+template <class Parser>
+inline auto parse_string(Parser& parser, const dstd::String& s) {
+    return parser.parse(s.data(), s.size(),
+                        s.capacity() - s.size() < simdjson::SIMDJSON_PADDING);
+}
+
+// The value at dotted `path` under `root`.
+inline dstd::Optional<simdjson::dom::element> find_path(
+    simdjson::dom::element root, dstd::StringView path) {
+    simdjson::dom::element cur = root;
+    std::size_t start = 0;
+    while (start <= path.size()) {
+        const auto dot = path.find('.', start);
+        const auto key = path.substr(start, dot == dstd::StringView::npos
+                                                ? path.size() - start
+                                                : dot - start);
+        if (!key.empty()) {
+            if (!cur.is_object()) return dstd::nullopt;
+            auto next = cur[key];
+            if (next.error()) return dstd::nullopt;
+            cur = next.value_unsafe();
+        }
+        if (dot == dstd::StringView::npos) break;
+        start = dot + 1;
+    }
+    return cur;
+}
+
+// A scalar as display text; "" for null, objects and arrays.
+inline dstd::String scalar_text(simdjson::dom::element el) {
+    if (el.is_string()) return dstd::String(el.get_string().value_unsafe());
+    if (el.is_int64()) return dstd::to_string(el.get_int64().value_unsafe());
+    if (el.is_uint64()) return dstd::to_string(el.get_uint64().value_unsafe());
+    if (el.is_double()) return dstd::to_string(el.get_double().value_unsafe());
+    if (el.is_bool()) return el.get_bool().value_unsafe() ? "true" : "false";
+    return "";
+}
+
+// The timeline id of an entity or lane value (trace::index::entity_id).
+inline std::int64_t lane_id(simdjson::dom::element el) {
+    if (el.is_int64()) return el.get_int64().value_unsafe();
+    if (el.is_uint64())
+        return static_cast<std::int64_t>(el.get_uint64().value_unsafe());
+    if (el.is_double()) {
+        const double d = el.get_double().value_unsafe();
+        if (auto whole = dftracer::utils::trace::index::whole_int64(d))
+            return *whole;
+    }
+    return dftracer::utils::trace::index::entity_id(scalar_text(el));
+}
+
+// Where each trace field of the served records lives. dftracer traces keep
+// their own names; a path schema maps them to its roles and a label field.
+struct TraceFields {
+    bool by_path = false;
+    dstd::String time = "ts";
+    dstd::String duration = "dur";
+    dstd::String entity = "pid";
+    dstd::String lane = "tid";
+    dstd::String label = "name";
+    // The entity field's name, which keys the source's hosts and ranks rows.
+    dstd::String entity_name = "pid";
+    // Microseconds per unit of time and duration.
+    double time_us = 1;
+    double duration_us = 1;
+    // The event name of a record without a label.
+    dstd::String fallback_label;
+
+    explicit TraceFields(const dftracer::utils::trace::index::RecordSchema& s) {
+        if (s.decoder != trace::index::Decoder::Path) return;
+        by_path = true;
+        time = s.roles.time;
+        duration = s.roles.duration;
+        entity = s.roles.entity;
+        lane = s.roles.lane;
+        time_us = trace::index::micros_per(s.roles.time_unit);
+        duration_us = trace::index::micros_per(s.roles.duration_unit);
+        fallback_label = s.id;
+        // The label is the name role, else the field named "name", else the
+        // first string field without a role.
+        label = s.roles.name;
+        entity_name.clear();
+        for (const auto& f : s.fields) {
+            if (f.role == trace::index::Role::Entity) entity_name = f.name;
+            if (label.empty() && f.name == "name") label = f.path;
+        }
+        for (const auto& f : s.fields)
+            if (label.empty() && f.role == trace::index::Role::None &&
+                f.type == trace::index::FieldType::String)
+                label = f.path;
+    }
+
+    // `raw` as a trace event: name (the label), pid (the entity), tid (the
+    // lane), ts and dur in microseconds (dur 0 for an instant, ts absent for
+    // a record without a time), ph 1 and args (the record itself). False
+    // when `raw` is not a JSON object.
+    bool to_event(dstd::StringView raw, dstd::String& out) const {
+        thread_local dftracer::utils::json::RecordParser parser;
+        thread_local dstd::String buf;
+        thread_local simdjson::builder::string_builder b;
+        buf.assign(raw);
+        buf.append(simdjson::SIMDJSON_PADDING, '\0');
+        auto res = parser.parse(buf.data(), raw.size(), false);
+        if (res.error()) res = json::parse_refused(parser, raw);
+        if (res.error() || !res.value_unsafe().is_object()) return false;
+        const auto root = res.value_unsafe();
+        auto at = [&](const dstd::String& path) {
+            return path.empty() ? dstd::nullopt : find_path(root, path);
+        };
+        auto number = [](dstd::Optional<simdjson::dom::element> el)
+            -> dstd::Optional<double> {
+            if (!el || !(el->is_int64() || el->is_uint64() || el->is_double()))
+                return dstd::nullopt;
+            return el->get_double().value_unsafe();
+        };
+        b.clear();
+        b.start_object();
+        const auto name = at(label);
+        const dstd::String text = name ? scalar_text(*name) : dstd::String();
+        b.append_key_value(
+            "name", dstd::StringView(text.empty() ? fallback_label : text));
+        b.append_comma();
+        const auto pid = at(entity);
+        b.append_key_value("pid", pid ? lane_id(*pid) : std::int64_t{0});
+        b.append_comma();
+        const auto tid = at(lane);
+        b.append_key_value("tid", tid ? lane_id(*tid) : std::int64_t{0});
+        if (const auto ts = number(at(time))) {
+            b.append_comma();
+            b.append_key_value("ts", std::llround(*ts * time_us));
+        }
+        const auto dur = number(at(duration));
+        b.append_comma();
+        b.append_key_value("dur", dur ? std::llround(*dur * duration_us) : 0LL);
+        b.append_comma();
+        b.append_key_value("ph", 1);
+        b.append_comma();
+        b.escape_and_append_with_quotes("args");
+        b.append_colon();
+        b.append_raw(raw);
+        b.end_object();
+        out.assign(json_view(b));
+        return true;
+    }
+
+    // Calls `fn(root, event)` with the path record `raw` read as a trace
+    // event, parsed on demand; both last until `fn` returns.
+    template <typename Fn>
+    void with_event(dstd::StringView raw, Fn&& fn) const {
+        thread_local dftracer::utils::json::Document document;
+        thread_local dstd::String ev;
+        if (!to_event(raw, ev)) return;
+        auto parsed = document.parse(ev);
+        if (parsed) fn(*parsed, dstd::StringView(ev));
+    }
+
+    // Calls `fn` with each of `events` as a trace event; the view it gets
+    // lasts until `fn` returns.
+    template <typename Fn>
+    void for_each_event(const dstd::Vector<dstd::StringView>& events,
+                        Fn&& fn) const {
+        if (!by_path) {
+            for (auto e : events) fn(e);
+            return;
+        }
+        thread_local dstd::String ev;
+        for (auto e : events)
+            if (to_event(e, ev)) fn(dstd::StringView(ev));
+    }
+};
+
+}  // namespace dftracer::utils::domains::server
+
+#endif  // DFTRACER_UTILS_DOMAINS_SERVER_VIZ_RECORD_EVENT_H

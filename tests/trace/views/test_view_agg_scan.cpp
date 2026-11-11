@@ -3,6 +3,7 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/agg_parity_common.h>
 
@@ -36,20 +37,21 @@ TEST_SUITE("View") {
         }
         dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         auto collect_engine = [](const views::detail::scan::ScanPlan& v) {
             static dftracer::utils::Runtime rt;
             dataframe::DataFrame result;
-            rt.block_on(coro::named(
+            dftu_utils_test::ok(rt.block_on(coro::named(
                 "occ-engine",
                 coro::with_scope(
                     [&](coro::Scope&) -> dftracer::utils::coro::CoroTask<void> {
-                        result =
-                            co_await views::detail::run_collect_via_engine(*v);
-                    })));
-            return views::detail::apply_agg_post_ops(std::move(result), *v);
+                        result = dftu_utils_test::ok(
+                            co_await views::detail::run_collect_via_engine(*v));
+                    }))));
+            return dftu_utils_test::ok(
+                views::detail::apply_agg_post_ops(std::move(result), *v));
         };
         auto collect_groupmap = [](const views::detail::scan::ScanPlan& v) {
             return gmoracle::groupmap_oracle(v);
@@ -57,8 +59,10 @@ TEST_SUITE("View") {
         auto check_match = [](const dataframe::DataFrame& a0,
                               const dataframe::DataFrame& b0,
                               const dstd::String& key) {
-            dataframe::DataFrame a = a0.sort_by(key, false);
-            dataframe::DataFrame b = b0.sort_by(key, false);
+            dataframe::DataFrame a =
+                dftu_utils_test::ok(a0.sort_by(key, false));
+            dataframe::DataFrame b =
+                dftu_utils_test::ok(b0.sort_by(key, false));
             REQUIRE(a.names.size() == b.names.size());
             for (std::size_t i = 0; i < a.names.size(); ++i) {
                 CHECK(a.names[i] == b.names[i]);
@@ -169,7 +173,7 @@ TEST_SUITE("View") {
         }
         dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         auto build = [&](std::uint64_t mem) {
@@ -290,7 +294,7 @@ TEST_SUITE("View") {
         SUBCASE("lone branch") {
             auto run = base.session();
             auto d = run.collect(q().lazy());
-            run.execute().get();
+            dftu_utils_test::ok(run.execute().get());
             frames_equal(*d, fresh, {"cat", "name"});
         }
         // A second collect branch forces the fused multi-branch scan (AggFold +
@@ -301,7 +305,7 @@ TEST_SUITE("View") {
             auto d2 = run.collect(base.group_by({GroupKey::pid()})
                                       .agg({{AggOp::Count, "", "n"}})
                                       .lazy());
-            run.execute().get();
+            dftu_utils_test::ok(run.execute().get());
             frames_equal(*d, fresh, {"cat", "name"});
             frames_equal(*d2,
                          engine_collect(views::detail::scan::agg(
@@ -334,7 +338,7 @@ TEST_SUITE("View") {
         }
         dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         auto q = [&] {

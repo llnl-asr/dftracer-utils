@@ -42,7 +42,7 @@ dstd::Vector<dstd::String> records_of(dstd::StringView text,
 // The elements of the top-level sequence, or the documents, of a whole parse.
 dstd::Vector<dstd::String> whole_elements(dstd::StringView text) {
     auto doc = Document::parse(dstd::String(text), "");
-    REQUIRE(doc.has_value());
+    if (!doc.has_value()) FAIL(dstd::String(doc.error().message()));
     dstd::Vector<dstd::String> out;
     doc->root().for_each_element(
         [&](Value element) { out.push_back(dump(element)); });

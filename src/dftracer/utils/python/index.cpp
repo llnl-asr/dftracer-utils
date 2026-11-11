@@ -35,7 +35,7 @@ StaleCheck stale_check(
     const index::Index &index,
     const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> &paths) {
     const index::Snapshot snapshot =
-        dftracer::utils::common::unwrap(index.snapshot());
+        dftracer::utils::python::py_unwrap(index.snapshot());
 
     StaleCheck result;
     dftracer::utils::dstd::StringViewSet listed;
@@ -62,7 +62,7 @@ StaleCheck stale_check(
     }
 
     for (const index::FileRef &file :
-         dftracer::utils::common::unwrap(snapshot.files())) {
+         dftracer::utils::python::py_unwrap(snapshot.files())) {
         const dftracer::utils::dstd::StringView path = file.path();
         const dftracer::utils::dstd::StringView logical(path.data(),
                                                         path.size());
@@ -91,7 +91,7 @@ int Index_init(IndexObject *self, PyObject *args, PyObject *kwds) {
                                      const_cast<char **>(kwlist), &index_path))
         return -1;
     try {
-        auto opened = dftracer::utils::common::unwrap(
+        auto opened = dftracer::utils::python::py_unwrap(
             index::Index::open(index::normalize_index_root(index_path)));
         dftracer::utils::dstd::UniquePtr<index::Index>(self->index).reset();
         self->index =
@@ -158,11 +158,12 @@ PyObject *Index_write_agg_config(IndexObject *self, PyObject *args) {
     if (!PyArg_ParseTuple(args, "O", &config_obj)) return nullptr;
     const auto config = python::agg_config_from_py(config_obj);
     if (!run_blocking([&] {
-            common::unwrap(index::schemas::dft::agg::tier::write_config(
-                *self->index,
-                index::schemas::dft::agg::tier::Config{
-                    config.time_interval_us, config.params_hash(),
-                    config.group_by_file, config.extra_group_keys}));
+            dftracer::utils::python::py_unwrap(
+                index::schemas::dft::agg::tier::write_config(
+                    *self->index,
+                    index::schemas::dft::agg::tier::Config{
+                        config.time_interval_us, config.params_hash(),
+                        config.group_by_file, config.extra_group_keys}));
         }))
         return nullptr;
     Py_RETURN_NONE;

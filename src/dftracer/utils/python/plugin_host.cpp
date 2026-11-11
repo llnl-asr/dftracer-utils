@@ -126,7 +126,7 @@ coro::CoroTask<void> run_host_scan(
             auto found = co_await dftracer::utils::runtime::fs::find_all(
                 scope, dftracer::utils::dstd::PathView(p), std::move(options));
             if (!found)
-                throw dftracer::utils::common::DFTUtilsException(found.error());
+                throw dftracer::utils::python::PyErrorException(found.error());
             for (auto& e : *found) files.emplace_back(e.path.str());
         } else {
             files.push_back(p);
@@ -134,7 +134,7 @@ coro::CoroTask<void> run_host_scan(
     }
     std::sort(files.begin(), files.end());
     if (files.empty())
-        throw dftracer::utils::common::DFTUtilsException(
+        throw dftracer::utils::python::PyErrorException(
             dftracer::utils::common::ErrorCode::NotFound,
             "no trace files found");
 
@@ -145,7 +145,7 @@ coro::CoroTask<void> run_host_scan(
             to_check.emplace_back(dftracer::utils::dstd::StringView(file));
         dftracer::utils::dstd::String index_dir_arg{
             dftracer::utils::dstd::StringView(index_dir)};
-        dftracer::utils::common::unwrap(
+        dftracer::utils::python::py_unwrap(
             co_await dftracer::utils::index::build::ensure_indexes_fresh(
                 "", std::move(to_check), std::move(index_dir_arg)));
     }
@@ -161,7 +161,7 @@ coro::CoroTask<void> run_host_scan(
     trace::views::View view =
         trace::views::View::from_files(std::move(view_files));
     auto run = co_await plugins->run(view);
-    if (!run) throw dftracer::utils::common::DFTUtilsException(run.error());
+    if (!run) throw dftracer::utils::python::PyErrorException(run.error());
     *out = std::move(*run);
 }
 
@@ -375,7 +375,7 @@ PyObject* ph_run(PluginHostObject* self, PyObject* args, PyObject* kwds) {
     dftracer::utils::dstd::String index_dir_s = index_dir ? index_dir : "";
     PluginRun run;
     if (!run_blocking([&] {
-            common::unwrap(
+            dftracer::utils::python::py_unwrap(
                 rt->submit(dftracer::utils::coro::with_scope(
                                [&](dftracer::utils::coro::Scope& scope) {
                                    return run_host_scan(

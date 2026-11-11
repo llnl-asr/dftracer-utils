@@ -190,7 +190,7 @@ static PyObject *CheckpointIndexer_build(CheckpointIndexerObject *self,
         IndexBuildBatchResult batch_result;
 
         if (!run_blocking([&] {
-                common::unwrap(
+                dftracer::utils::python::py_unwrap(
                     rt->submit(coro::with_scope(
                                    [cfg = batch_config, out = &batch_result](
                                        coro::Scope &) -> coro::CoroTask<void> {
@@ -263,7 +263,7 @@ static PyObject *CheckpointIndexer_get_max_bytes(CheckpointIndexerObject *self,
     }
 
     try {
-        dftracer::utils::common::unwrap((*self->handle)->load());
+        dftracer::utils::python::py_unwrap((*self->handle)->load());
         return PyLong_FromUnsignedLongLong((*self->handle)->max_bytes());
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_RuntimeError, e.what());
@@ -279,7 +279,7 @@ static PyObject *CheckpointIndexer_get_num_lines(CheckpointIndexerObject *self,
     }
 
     try {
-        dftracer::utils::common::unwrap((*self->handle)->load());
+        dftracer::utils::python::py_unwrap((*self->handle)->load());
         return PyLong_FromUnsignedLongLong((*self->handle)->line_count());
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_RuntimeError, e.what());

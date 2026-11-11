@@ -74,12 +74,14 @@ void destroy(T &member) {
 
 template <class T>
 T take(dstd::Expected<T, dstd::Error> &&result) {
-    if (!result) throw common::DFTUtilsException(result.error());
+    if (!result)
+        throw dftracer::utils::python::PyErrorException(result.error());
     return std::move(*result);
 }
 
 void check(const dstd::Expected<void, dstd::Error> &result) {
-    if (!result) throw common::DFTUtilsException(result.error());
+    if (!result)
+        throw dftracer::utils::python::PyErrorException(result.error());
 }
 
 template <class F>
@@ -900,7 +902,8 @@ PyObject *Cursor_iternext(CursorObject *self) {
                 }
                 if (cursor.at_end()) {
                     if (cursor.error()) {
-                        throw common::DFTUtilsException(*cursor.error());
+                        throw dftracer::utils::python::PyErrorException(
+                            *cursor.error());
                     }
                     return 0;
                 }

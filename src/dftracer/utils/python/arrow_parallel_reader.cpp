@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/python/py_errors.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
 #define PY_SSIZE_T_CLEAN
@@ -55,7 +56,7 @@ static PyObject* py_read_arrow_files_parallel(PyObject* /*self*/,
     if (!run_blocking_r(
             [&] {
                 auto task = read_arrow_files_parallel(std::move(paths));
-                return common::unwrap(
+                return dftracer::utils::python::py_unwrap(
                     runtime->submit(std::move(task), "read_arrow_files").get());
             },
             result)) {

@@ -102,19 +102,16 @@ PyObject *py_error_type_for(common::ErrorCode code) {
     return g_dft_error;
 }
 
-PyObject *py_error_type_for(
-    const dftracer::utils::common::DFTUtilsException &e) {
+PyObject *py_error_type_for(const dftracer::utils::dstd::Error &error) {
     // Domain-specific types take precedence over the portable-condition map.
-    if (e.domain() == dftracer::utils::duql::ERROR_DOMAIN.id)
+    if (error.domain().id == dftracer::utils::duql::ERROR_DOMAIN.id)
         return g_dft_duql_error;
-    return py_error_type_for(common::errorcode_of(e.error()));
+    return py_error_type_for(common::errorcode_of(error));
 }
 
 void set_typed_py_error(const std::exception &e) {
-    if (const auto *de =
-            dynamic_cast<const dftracer::utils::common::DFTUtilsException *>(
-                &e)) {
-        PyErr_SetString(py_error_type_for(*de), e.what());
+    if (const auto *de = dynamic_cast<const PyErrorException *>(&e)) {
+        PyErr_SetString(py_error_type_for(de->error()), e.what());
     } else if (dynamic_cast<const std::invalid_argument *>(&e)) {
         PyErr_SetString(g_dft_value_error, e.what());
     } else {

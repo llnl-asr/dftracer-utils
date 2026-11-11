@@ -7,6 +7,7 @@
 #include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/python/op_runner.h>
+#include <dftracer/utils/python/py_errors.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dlfcn.h>
 
@@ -79,11 +80,12 @@ PyObject* jit_run_op(PyObject*, PyObject* args) {
                     compose->run(host.h, op, in_data, out_buf.data(), &rc);
                 if (task) {
                     Py_BEGIN_ALLOW_THREADS;
-                    common::unwrap(default_runtime().block_on(
-                        coro::named("jit-op", [&]() -> coro::CoroTask<void> {
-                            co_await *reinterpret_cast<coro::CoroTask<void>*>(
-                                task);
-                        }())));
+                    dftracer::utils::python::py_unwrap(
+                        default_runtime().block_on(coro::named(
+                            "jit-op", [&]() -> coro::CoroTask<void> {
+                                co_await *reinterpret_cast<
+                                    coro::CoroTask<void>*>(task);
+                            }())));
                     Py_END_ALLOW_THREADS;
                 }
                 ran = true;

@@ -845,7 +845,8 @@ PyObject* LazyFrame_collect(PyObject* self, PyObject* args, PyObject* kwds) {
     if (!rt) return nullptr;
     dataframe::DataFrame out;
     if (!run_blocking([&] {
-            out = common::unwrap(rt->submit(b->lf.collect(batch_size)).get());
+            out = dftracer::utils::python::py_unwrap(
+                rt->submit(b->lf.collect(batch_size)).get());
         }))
         return nullptr;
     return dftracer::utils::python::wrap_dataframe(std::move(out));
@@ -864,7 +865,8 @@ dftracer::utils::coro::CoroTask<void> drain_stream(
             auto next_frame = co_await gen.next();
             if (!next_frame) break;
             if (state->cancelled()) break;
-            dataframe::DataFrame df = common::unwrap(std::move(*next_frame));
+            dataframe::DataFrame df =
+                dftracer::utils::python::py_unwrap(std::move(*next_frame));
             const std::size_t bytes =
                 static_cast<std::size_t>(df.num_rows()) *
                 static_cast<std::size_t>(df.num_columns() + 1) * 16;
@@ -1103,7 +1105,7 @@ PyObject* collect_all_py(PyObject*, PyObject* args, PyObject* kwds) {
     Py_DECREF(seq);
     dftracer::utils::dstd::Vector<dataframe::DataFrame> frames;
     if (!run_blocking([&] {
-            frames = common::unwrap(
+            frames = dftracer::utils::python::py_unwrap(
                 rt->submit(dataframe::collect_all(std::move(plans))).get());
         }))
         return nullptr;

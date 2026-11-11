@@ -110,7 +110,7 @@ static PyObject *scan_files_fn(PyObject * /*self*/, PyObject *args,
                       "scan-files")
                     .get();
             if (!found)
-                throw dftracer::utils::common::DFTUtilsException(found.error());
+                throw dftracer::utils::python::PyErrorException(found.error());
             entries = std::move(*found);
         })) {
         return NULL;
@@ -276,7 +276,7 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
     dftracer::utils::dstd::Optional<dftracer::utils::common::ScratchSession>
         scratch;
     dftracer::utils::dstd::String build_dir = index_dir;
-    if (!dftracer::utils::common::unwrap(
+    if (!dftracer::utils::python::py_unwrap(
             dftracer::utils::dstd::fs::exists(dftracer::utils::dstd::PathView(
                 dftracer::utils::index::store_dir(final_root)))) &&
         dftracer::utils::common::should_stage(final_root)) {
@@ -341,7 +341,7 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
 
     IndexBuildBatchResult result;
     if (!run_blocking([&] {
-            dftracer::utils::common::unwrap(
+            dftracer::utils::python::py_unwrap(
                 rt->submit(dftracer::utils::coro::with_scope(
                                [cfg = batch_config,
                                 out = &result](dftracer::utils::coro::Scope &)
@@ -377,7 +377,7 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
                 dftracer::utils::index::store_dir(final_root)));
         if (!published) {
             dftracer::utils::python::set_typed_py_error(
-                dftracer::utils::common::DFTUtilsException(published.error()));
+                dftracer::utils::python::PyErrorException(published.error()));
             return NULL;
         }
     }
@@ -400,7 +400,7 @@ static PyObject *write_shard_set_fn(PyObject * /*self*/, PyObject *args) {
         dirs.reserve(shard_dirs.size());
         for (const auto &d : shard_dirs)
             dirs.emplace_back(dftracer::utils::dstd::StringView(d));
-        dftracer::utils::common::unwrap(
+        dftracer::utils::python::py_unwrap(
             dftracer::utils::trace::views::write_shard_set(
                 dftracer::utils::dstd::String(normalized_root), dirs));
     } catch (const std::exception &e) {
@@ -417,7 +417,7 @@ static PyObject *consolidate_shard_set_fn(PyObject * /*self*/, PyObject *args) {
     try {
         const auto normalized_root =
             dftracer::utils::index::normalize_index_root(root);
-        files = dftracer::utils::common::unwrap(
+        files = dftracer::utils::python::py_unwrap(
             dftracer::utils::trace::views::consolidate_shard_set(
                 dftracer::utils::dstd::String(normalized_root)));
     } catch (const std::exception &e) {

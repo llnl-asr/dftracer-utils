@@ -242,7 +242,7 @@ PyObject* DataFrame_query(PyObject* self, PyObject* args, PyObject* kwds) {
         if (dsl && *dsl) {
             auto parsed = duql::Query::from_string(dsl);
             if (!parsed)
-                throw dftracer::utils::common::DFTUtilsException(
+                throw dftracer::utils::python::PyErrorException(
                     dftracer::utils::dstd::Error{duql::DuqlErrc::Parse,
                                                  parsed.error().format()});
             q.emplace(std::move(*parsed));
@@ -282,8 +282,7 @@ PyObject* DataFrame_query(PyObject* self, PyObject* args, PyObject* kwds) {
                 dftracer::utils::common::errorcode_of(error) ==
                         dftracer::utils::common::ErrorCode::NotFound
                     ? dftracer::utils::python::g_dft_error
-                    : dftracer::utils::python::py_error_type_for(
-                          dftracer::utils::common::DFTUtilsException(error));
+                    : dftracer::utils::python::py_error_type_for(error);
             PyErr_SetString(type, error.c_str());
             return nullptr;
         }

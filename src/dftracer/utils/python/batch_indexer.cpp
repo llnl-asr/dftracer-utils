@@ -374,7 +374,7 @@ static bool with_indexer(IndexerObject* self, Fn fn) {
     if (!options) return false;
     auto paths = indexer_paths(self);
     return run_blocking([&] {
-        fn(dftracer::utils::common::unwrap(
+        fn(dftracer::utils::python::py_unwrap(
             dftracer::utils::index::Indexer::open(std::move(paths),
                                                   std::move(*options))));
     });
@@ -389,29 +389,29 @@ static bool run_indexer(IndexerObject* self, IndexerCall call,
     auto paths = indexer_paths(self);
     const bool force = self->force_rebuild != 0;
     return run_blocking([&] {
-        auto ix = dftracer::utils::common::unwrap(
+        auto ix = dftracer::utils::python::py_unwrap(
             dftracer::utils::index::Indexer::open(std::move(paths),
                                                   std::move(*options)));
         switch (call) {
             case IndexerCall::Status:
-                out = dftracer::utils::common::unwrap(ix.status());
+                out = dftracer::utils::python::py_unwrap(ix.status());
                 break;
             case IndexerCall::Build:
-                out = dftracer::utils::common::unwrap(ix.build());
+                out = dftracer::utils::python::py_unwrap(ix.build());
                 break;
             case IndexerCall::Rebuild:
-                out = dftracer::utils::common::unwrap(ix.rebuild());
+                out = dftracer::utils::python::py_unwrap(ix.rebuild());
                 break;
             case IndexerCall::Ensure: {
                 if (!force) {
-                    out = dftracer::utils::common::unwrap(ix.build());
+                    out = dftracer::utils::python::py_unwrap(ix.build());
                     break;
                 }
-                auto before = dftracer::utils::common::unwrap(ix.status());
+                auto before = dftracer::utils::python::py_unwrap(ix.status());
                 out = before.needs_work.empty() &&
                               !before.aggregation_needs_rebuild
                           ? std::move(before)
-                          : dftracer::utils::common::unwrap(ix.rebuild());
+                          : dftracer::utils::python::py_unwrap(ix.rebuild());
                 break;
             }
         }
@@ -491,7 +491,7 @@ static PyObject* Indexer_manifest(IndexerObject* self,
     dftracer::utils::dstd::String json;
     if (!with_indexer(self, [&](dftracer::utils::index::Indexer ix) {
             json = dftracer::utils::index::to_json(
-                dftracer::utils::common::unwrap(ix.manifest()));
+                dftracer::utils::python::py_unwrap(ix.manifest()));
         }))
         return nullptr;
     return PyUnicode_FromStringAndSize(json.data(),
@@ -504,7 +504,7 @@ static PyObject* Indexer_explain(IndexerObject* self, PyObject* args) {
     dftracer::utils::dstd::String json;
     if (!with_indexer(self, [&](dftracer::utils::index::Indexer ix) {
             json = dftracer::utils::index::to_json(
-                dftracer::utils::common::unwrap(ix.explain(query)));
+                dftracer::utils::python::py_unwrap(ix.explain(query)));
         }))
         return nullptr;
     return PyUnicode_FromStringAndSize(json.data(),
@@ -517,7 +517,7 @@ static PyObject* Indexer_rebuild_extension(IndexerObject* self,
     if (!PyArg_ParseTuple(args, "s", &name)) return nullptr;
     dftracer::utils::index::IndexStatus st;
     if (!with_indexer(self, [&](dftracer::utils::index::Indexer ix) {
-            st = dftracer::utils::common::unwrap(ix.rebuild_extension(name));
+            st = dftracer::utils::python::py_unwrap(ix.rebuild_extension(name));
         }))
         return nullptr;
     return status_dict(st);
@@ -528,7 +528,7 @@ static PyObject* Indexer_drop_extension(IndexerObject* self, PyObject* args) {
     if (!PyArg_ParseTuple(args, "s", &name)) return nullptr;
     dftracer::utils::index::IndexStatus st;
     if (!with_indexer(self, [&](dftracer::utils::index::Indexer ix) {
-            st = dftracer::utils::common::unwrap(ix.drop_extension(name));
+            st = dftracer::utils::python::py_unwrap(ix.drop_extension(name));
         }))
         return nullptr;
     return status_dict(st);
@@ -618,7 +618,7 @@ static PyObject* Indexer_rowset(IndexerObject* self, PyObject* args) {
     if (!PyArg_ParseTuple(args, "s", &name)) return nullptr;
     dftracer::utils::dataframe::DataFrame frame;
     if (!with_indexer(self, [&](dftracer::utils::index::Indexer ix) {
-            frame = dftracer::utils::common::unwrap(ix.rowset(name));
+            frame = dftracer::utils::python::py_unwrap(ix.rowset(name));
         }))
         return nullptr;
     return dftracer::utils::python::wrap_dataframe(std::move(frame));
@@ -645,7 +645,7 @@ using PidsByPath = dstd::HashMap<dftracer::utils::dstd::String, PidSet>;
 PidSet file_pids(const dftracer::utils::index::Snapshot& snapshot,
                  const dftracer::utils::index::FileRef& file) {
     PidSet pids;
-    auto counts = dftracer::utils::common::unwrap(
+    auto counts = dftracer::utils::python::py_unwrap(
         dftracer::utils::index::pid_tid_counts(snapshot, file));
     if (!counts) return pids;
     for (const auto& [key, _] : *counts) pids.insert(pid_of(key));
@@ -654,10 +654,11 @@ PidSet file_pids(const dftracer::utils::index::Snapshot& snapshot,
 
 // Every indexed file with its PID set, keyed by the path the index names it by.
 PidsByPath all_file_pids(const dftracer::utils::dstd::String& index_path) {
-    const auto snapshot = dftracer::utils::common::unwrap(
+    const auto snapshot = dftracer::utils::python::py_unwrap(
         dftracer::utils::index::plan::open_snapshot(index_path));
     PidsByPath out;
-    for (const auto& file : dftracer::utils::common::unwrap(snapshot.files())) {
+    for (const auto& file :
+         dftracer::utils::python::py_unwrap(snapshot.files())) {
         const auto path = file.path();
         out.emplace(dftracer::utils::dstd::String(path.data(), path.size()),
                     file_pids(snapshot, file));
@@ -713,7 +714,7 @@ static PyObject* Indexer_query_file_pids(IndexerObject* self, PyObject* args) {
     PidSet pids;
     if (!run_blocking_r(
             [&] {
-                const auto snapshot = dftracer::utils::common::unwrap(
+                const auto snapshot = dftracer::utils::python::py_unwrap(
                     dftracer::utils::index::plan::open_snapshot(index_path));
                 const auto file = snapshot.file(
                     dftracer::utils::index::store::internal::get_logical_path(
@@ -861,7 +862,7 @@ namespace {
 template <class Fn>
 PyObject* schema_str(Fn fn) {
     try {
-        const auto s = dftracer::utils::common::unwrap(fn());
+        const auto s = dftracer::utils::python::py_unwrap(fn());
         return PyUnicode_FromStringAndSize(s.data(),
                                            static_cast<Py_ssize_t>(s.size()));
     } catch (const std::exception& e) {

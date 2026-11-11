@@ -252,7 +252,7 @@ static PyObject *Runtime_set_timeout(RuntimeObject *self, PyObject *args,
         self->runtime->set_global_timeout(std::chrono::milliseconds(ms));
     Py_END_ALLOW_THREADS if (!set) {
         dftracer::utils::python::set_typed_py_error(
-            dftracer::utils::common::DFTUtilsException(set.error()));
+            dftracer::utils::python::PyErrorException(set.error()));
         return NULL;
     }
     Py_RETURN_NONE;
@@ -279,7 +279,7 @@ static PyObject *Runtime_set_default_task_timeout(RuntimeObject *self,
         self->runtime->set_default_task_timeout(std::chrono::milliseconds(ms));
     Py_END_ALLOW_THREADS if (!set) {
         dftracer::utils::python::set_typed_py_error(
-            dftracer::utils::common::DFTUtilsException(set.error()));
+            dftracer::utils::python::PyErrorException(set.error()));
         return NULL;
     }
     Py_RETURN_NONE;

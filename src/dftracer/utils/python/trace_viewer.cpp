@@ -106,12 +106,12 @@ PyObject* guarded(Fn&& fn) {
 // A view or plan that kept an error is that error here: the call that built it
 // raised it before they kept errors.
 LazyFrame checked(LazyFrame lf) {
-    common::unwrap(lf.status());
+    dftracer::utils::python::py_unwrap(lf.status());
     return lf;
 }
 
 View checked(View tv) {
-    common::unwrap(tv.status());
+    dftracer::utils::python::py_unwrap(tv.status());
     return tv;
 }
 
@@ -369,8 +369,9 @@ bool run_on(PyObject* runtime_arg, Make&& make, T& out) {
     dftracer::utils::dstd::SharedPtr<dftracer::utils::Runtime> rt =
         runtime_from_arg(runtime_arg);
     if (!rt) return false;
-    return run_blocking(
-        [&] { out = common::unwrap(rt->submit(make()).get()); });
+    return run_blocking([&] {
+        out = dftracer::utils::python::py_unwrap(rt->submit(make()).get());
+    });
 }
 
 PyObject* tv_new(PyTypeObject* type, PyObject*, PyObject*) {
@@ -418,11 +419,11 @@ int tv_init(TraceViewerObject* self, PyObject* args, PyObject* kwds) {
     View tv;
     if (dir) {
         if (!run_blocking([&] {
-                tv = common::unwrap(
+                tv = dftracer::utils::python::py_unwrap(
                     python::get_default_runtime()
                         ->submit(View::from_directory(*dir, DS(index_dir)))
                         .get());
-                common::unwrap(tv.status());
+                dftracer::utils::python::py_unwrap(tv.status());
             }))
             return -1;
     } else {
@@ -436,7 +437,7 @@ int tv_init(TraceViewerObject* self, PyObject* args, PyObject* kwds) {
         }
         if (!run_blocking([&] {
                 tv = View::from_files(std::move(vfiles));
-                common::unwrap(tv.status());
+                dftracer::utils::python::py_unwrap(tv.status());
             }))
             return -1;
     }
@@ -564,7 +565,8 @@ PyObject* tv_explain_duql(PyObject* self, PyObject* args) {
     if (!duql_args(args, text, params)) return nullptr;
     return guarded([&] {
         const dftracer::utils::dstd::String plan =
-            common::unwrap(tv_of(self).explain_duql(text, params));
+            dftracer::utils::python::py_unwrap(
+                tv_of(self).explain_duql(text, params));
         return PyUnicode_FromStringAndSize(
             plan.data(), static_cast<Py_ssize_t>(plan.size()));
     });
@@ -752,8 +754,8 @@ PyObject* tv_memory_budget(PyObject* self, PyObject* arg) {
 PyObject* tv_columns(PyObject* self, PyObject*) {
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> cols;
     if (!run_blocking([&] {
-            common::unwrap(tv_of(self).schema_status());
-            cols = common::unwrap(tv_of(self).columns());
+            dftracer::utils::python::py_unwrap(tv_of(self).schema_status());
+            cols = dftracer::utils::python::py_unwrap(tv_of(self).columns());
         }))
         return nullptr;
     return str_list_dstd(cols);
@@ -762,8 +764,9 @@ PyObject* tv_columns(PyObject* self, PyObject*) {
 PyObject* tv_column_info(PyObject* self, PyObject*) {
     dftracer::utils::dstd::Vector<trace::views::ColumnInfo> info;
     if (!run_blocking([&] {
-            common::unwrap(tv_of(self).schema_status());
-            info = common::unwrap(tv_of(self).column_info());
+            dftracer::utils::python::py_unwrap(tv_of(self).schema_status());
+            info =
+                dftracer::utils::python::py_unwrap(tv_of(self).column_info());
         }))
         return nullptr;
     PyObject* d = PyDict_New();
@@ -783,9 +786,9 @@ PyObject* tv_column_info(PyObject* self, PyObject*) {
 PyObject* tv_schema_tree(PyObject* self, PyObject*) {
     dftracer::utils::dstd::String json;
     if (!run_blocking([&] {
-            common::unwrap(tv_of(self).schema_status());
+            dftracer::utils::python::py_unwrap(tv_of(self).schema_status());
             json = trace::views::schema_tree_json(
-                common::unwrap(tv_of(self).schema_tree()));
+                dftracer::utils::python::py_unwrap(tv_of(self).schema_tree()));
         }))
         return nullptr;
     return PyUnicode_FromStringAndSize(json.data(),
@@ -1024,8 +1027,10 @@ PyObject* tv_merge_partials(PyObject* self, PyObject* arg) {
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView> parts(
         owned.begin(), owned.end());
     DataFrame out;
-    if (!run_blocking(
-            [&] { out = common::unwrap(tv_of(self).merge_partials(parts)); }))
+    if (!run_blocking([&] {
+            out = dftracer::utils::python::py_unwrap(
+                tv_of(self).merge_partials(parts));
+        }))
         return nullptr;
     return python::wrap_dataframe(std::move(out));
 }
@@ -1048,7 +1053,7 @@ PyObject* tv_materialize_partials(PyObject* self, PyObject* args,
         runtime_from_arg(runtime_arg);
     if (!rt) return nullptr;
     if (!run_blocking([&] {
-            common::unwrap(
+            dftracer::utils::python::py_unwrap(
                 rt->submit(tv_of(self).materialize_partials(parts)).get());
         }))
         return nullptr;
@@ -1057,8 +1062,10 @@ PyObject* tv_materialize_partials(PyObject* self, PyObject* args,
 
 PyObject* tv_reconstruct_if_cached(PyObject* self, PyObject*) {
     dftracer::utils::dstd::Optional<DataFrame> out;
-    if (!run_blocking(
-            [&] { out = common::unwrap(tv_of(self).reconstruct_if_cached()); }))
+    if (!run_blocking([&] {
+            out = dftracer::utils::python::py_unwrap(
+                tv_of(self).reconstruct_if_cached());
+        }))
         return nullptr;
     if (!out) Py_RETURN_NONE;
     return python::wrap_dataframe(std::move(*out));
@@ -1066,15 +1073,19 @@ PyObject* tv_reconstruct_if_cached(PyObject* self, PyObject*) {
 
 PyObject* tv_mv_source(PyObject* self, PyObject*) {
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> out;
-    if (!run_blocking([&] { out = common::unwrap(tv_of(self).mv_source()); }))
+    if (!run_blocking([&] {
+            out = dftracer::utils::python::py_unwrap(tv_of(self).mv_source());
+        }))
         return nullptr;
     return str_list_dstd(out);
 }
 
 PyObject* tv_materialize_dir(PyObject* self, PyObject*) {
     dftracer::utils::dstd::String out;
-    if (!run_blocking(
-            [&] { out = common::unwrap(tv_of(self).materialize_dir()); }))
+    if (!run_blocking([&] {
+            out = dftracer::utils::python::py_unwrap(
+                tv_of(self).materialize_dir());
+        }))
         return nullptr;
     return PyUnicode_FromStringAndSize(out.data(),
                                        static_cast<Py_ssize_t>(out.size()));
@@ -1085,8 +1096,10 @@ PyObject* tv_register_materialized(PyObject* self, PyObject* arg) {
     if (!dir) return nullptr;
     const dftracer::utils::dstd::String d{
         dftracer::utils::dstd::StringView(dir)};
-    if (!run_blocking(
-            [&] { common::unwrap(tv_of(self).register_materialized(d)); }))
+    if (!run_blocking([&] {
+            dftracer::utils::python::py_unwrap(
+                tv_of(self).register_materialized(d));
+        }))
         return nullptr;
     Py_RETURN_NONE;
 }
@@ -1242,7 +1255,8 @@ PyObject* duql_load_path_py(PyObject*, PyObject* arg) {
     if (!path) return nullptr;
     return guarded([&]() -> PyObject* {
         auto loaded = dftracer::utils::duql::load_macros(path);
-        if (!loaded) common::throw_error(loaded.error());
+        if (!loaded)
+            throw dftracer::utils::python::PyErrorException(loaded.error());
         Py_RETURN_NONE;
     });
 }
@@ -1320,14 +1334,18 @@ int ltv_init(LiveTraceViewerObject* self, PyObject* args, PyObject* kwds) {
 
 PyObject* ltv_snapshot(PyObject* self, PyObject*) {
     View tv;
-    if (!run_blocking([&] { tv = common::unwrap(live_of(self).snapshot()); }))
+    if (!run_blocking([&] {
+            tv = dftracer::utils::python::py_unwrap(live_of(self).snapshot());
+        }))
         return nullptr;
     return guarded([&] { return make_viewer(checked(std::move(tv))); });
 }
 
 PyObject* ltv_new_rows(PyObject* self, PyObject*) {
     dstd::Optional<View> tv;
-    if (!run_blocking([&] { tv = common::unwrap(live_of(self).new_rows()); }))
+    if (!run_blocking([&] {
+            tv = dftracer::utils::python::py_unwrap(live_of(self).new_rows());
+        }))
         return nullptr;
     if (!tv) Py_RETURN_NONE;
     return guarded([&] { return make_viewer(checked(std::move(*tv))); });

@@ -12,7 +12,6 @@
 #include <dftracer/utils/domains/server/http_parser.h>
 #include <dftracer/utils/dstd/string.h>
 
-#include <cctype>
 #include <cstddef>
 
 namespace dftracer::utils::domains::server::parser {

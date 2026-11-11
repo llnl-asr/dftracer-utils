@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/function.h>
@@ -159,7 +160,7 @@ class DialectScan {
             if (close == dstd::StringView::npos) return 1;
             const dstd::StringView body = p_.substr(i_ + 1, close - i_ - 1);
             if (body.empty() ||
-                !((body[0] >= '0' && body[0] <= '9') || body[0] == ','))
+                !(dstd::is_ascii_digit(body[0]) || body[0] == ','))
                 return 1;
             q = body[0] == ',' ||
                         (body[0] == '0' && (body.size() == 1 || body[1] == ','))
@@ -247,9 +248,7 @@ class DialectScan {
                 break;
         }
         i_ += 2;
-        if ((e >= 'a' && e <= 'z') || (e >= 'A' && e <= 'Z') ||
-            (e >= '0' && e <= '9'))
-            return false;
+        if (dstd::is_ascii_alnum(e)) return false;
         lit.assign(1, e);
         return true;
     }
@@ -332,7 +331,7 @@ class DialectScan {
             fail("atomic group");
             return false;
         }
-        if (c == 'R' || c == '&' || c == '+' || (c >= '0' && c <= '9') ||
+        if (c == 'R' || c == '&' || c == '+' || dstd::is_ascii_digit(c) ||
             (c == 'P' && i_ + 1 < p_.size() &&
              (p_[i_ + 1] == '>' || p_[i_ + 1] == '='))) {
             i_ = open;
@@ -889,7 +888,6 @@ compile_substitution(const CompiledPattern& p, dstd::StringView to) {
         sub.pieces.push_back({dstd::String(), g, true});
         return dstd::nullopt;
     };
-    auto digit = [](char c) { return c >= '0' && c <= '9'; };
     constexpr const char* BAD_DOLLAR =
         "'$' must be followed by a group number, {group} or $";
     for (std::size_t i = 0; i < to.size(); ++i) {
@@ -903,9 +901,9 @@ compile_substitution(const CompiledPattern& p, dstd::StringView to) {
         if (c == '$') {
             lit += '$';
             ++i;
-        } else if (digit(c)) {
+        } else if (dstd::is_ascii_digit(c)) {
             std::size_t g = 0, j = i + 1;
-            for (; j < to.size() && digit(to[j]); ++j)
+            for (; j < to.size() && dstd::is_ascii_digit(to[j]); ++j)
                 g = std::min<std::size_t>(g * 10 + (to[j] - '0'), 1u << 30);
             if (auto e = group(g, at))
                 return dftracer::utils::dstd::Unexpected(*e);
@@ -915,7 +913,8 @@ compile_substitution(const CompiledPattern& p, dstd::StringView to) {
             if (close == dstd::StringView::npos || close == i + 2)
                 return fail(BAD_DOLLAR, at);
             const dstd::StringView ref = to.substr(i + 2, close - i - 2);
-            const bool numeric = std::all_of(ref.begin(), ref.end(), digit);
+            const bool numeric =
+                std::all_of(ref.begin(), ref.end(), dstd::is_ascii_digit);
             std::size_t g = 0;
             if (numeric) {
                 for (const char d : ref)

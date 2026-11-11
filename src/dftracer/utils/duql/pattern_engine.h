@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_DUQL_PATTERN_ENGINE_H
 #define DFTRACER_UTILS_DUQL_PATTERN_ENGINE_H
 
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -42,9 +43,7 @@ struct GlobToken {
 
 struct RegexCode;
 
-inline char fold(char c) {
-    return c >= 'A' && c <= 'Z' ? static_cast<char>(c | 0x20) : c;
-}
+inline char fold(char c) { return dstd::to_ascii_lower(c); }
 
 inline bool continuation(char c) {
     return (static_cast<unsigned char>(c) & 0xC0) == 0x80;

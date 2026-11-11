@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -77,7 +78,7 @@ dstd::String write_trace(const dstd::String& dir, int n,
             fhash, R"("}})", "\n");
         dstd::String lower = cat;
         std::transform(lower.begin(), lower.end(), lower.begin(),
-                       [](unsigned char c) { return std::tolower(c); });
+                       dstd::to_ascii_lower);
         durations[{lower, name}].push_back(dur);
     }
     out += "]\n";

@@ -1,25 +1,20 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/syntax/lexer.h>
 
-#include <cctype>
-
 namespace dftracer::utils::duql::syntax {
 
 namespace {
 
-bool name_start(char c) {
-    return std::isalpha(static_cast<unsigned char>(c)) || c == '_';
-}
+bool name_start(char c) { return dstd::is_ascii_alpha(c) || c == '_'; }
 
-bool name_char(char c) {
-    return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
-}
+bool name_char(char c) { return dstd::is_ascii_alnum(c) || c == '_'; }
 
-bool digit(char c) { return std::isdigit(static_cast<unsigned char>(c)); }
+bool digit(char c) { return dstd::is_ascii_digit(c); }
 
 constexpr dstd::StringView DURATION_UNITS[] = {"ns", "us", "ms", "s",
                                                "m",  "h",  "d"};
@@ -62,7 +57,7 @@ dftracer::utils::dstd::Expected<dstd::Vector<Token>, duql::DuqlError> lex(
 
     while (true) {
         while (pos < src.size()) {
-            if (::dftracer::utils::common::detail::is_ascii_space(src[pos])) {
+            if (::dftracer::utils::dstd::is_ascii_space(src[pos])) {
                 ++pos;
                 adjacent = false;
             } else if (src[pos] == '#') {

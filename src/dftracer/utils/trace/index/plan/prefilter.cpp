@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/cpu_features.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -38,9 +39,7 @@ constexpr std::size_t MIN_NEEDLE = 3;
 constexpr dstd::StringView LETTERS_BY_RARITY = "zqxjkvbpygfwmucldrhsnioate";
 
 std::size_t letter_rank(char c) {
-    const char lower =
-        (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
-    const auto i = LETTERS_BY_RARITY.find(lower);
+    const auto i = LETTERS_BY_RARITY.find(dstd::to_ascii_lower(c));
     return i == dstd::StringView::npos ? 0 : i;
 }
 
@@ -133,11 +132,9 @@ Clauses clauses_of(const duql::detail::QueryNode& node) {
 // escape.
 bool plain_key(dstd::StringView k) {
     bool digits_only = true;
-    for (unsigned char c : k) {
-        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-              (c >= '0' && c <= '9') || c == '_'))
-            return false;
-        digits_only = digits_only && c >= '0' && c <= '9';
+    for (char c : k) {
+        if (!(dstd::is_ascii_alnum(c) || c == '_')) return false;
+        digits_only = digits_only && dstd::is_ascii_digit(c);
     }
     return !k.empty() && !digits_only;
 }
@@ -190,20 +187,18 @@ void ranges_of(const duql::detail::QueryNode& node,
 
 // JSON lines are mostly structure, digits and lowercase keys; a needle's
 // byte outside those is rare, so memchr on it stops seldom.
-int rarity(unsigned char c) {
+int rarity(char c) {
     if (c == '"' || c == ':' || c == ',' || c == '{' || c == '}' || c == ' ')
         return 0;
-    if (c >= '0' && c <= '9') return 1;
-    if (c >= 'a' && c <= 'z') return 2;
+    if (dstd::is_ascii_digit(c)) return 1;
+    if (dstd::is_ascii_lower(c)) return 2;
     return 3;
 }
 
 std::size_t pivot_of(const dstd::String& n) {
     std::size_t best = 0;
     for (std::size_t i = 1; i < n.size(); ++i)
-        if (rarity(static_cast<unsigned char>(n[i])) >
-            rarity(static_cast<unsigned char>(n[best])))
-            best = i;
+        if (rarity(n[i]) > rarity(n[best])) best = i;
     return best;
 }
 

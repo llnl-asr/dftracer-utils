@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/span.h>
@@ -172,8 +173,7 @@ dstd::Vector<Ev> make_events(std::size_t n, std::uint64_t seed) {
 }
 
 dstd::String lower(dstd::String s) {
-    for (char& c : s)
-        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+    for (char& c : s) c = dstd::to_ascii_lower(c);
     return s;
 }
 

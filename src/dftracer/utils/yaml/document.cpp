@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/yaml/document.h>
@@ -139,32 +140,19 @@ void each_member(const DocumentStorage* storage, std::size_t root,
     }
 }
 
-bool is_lower(char c) { return c >= 'a' && c <= 'z'; }
-bool is_upper(char c) { return c >= 'A' && c <= 'Z'; }
-
 bool is_flexible_case(dstd::StringView s) {
     if (s.empty()) return true;
     bool lower = true;
-    for (char c : s) lower = lower && is_lower(c);
+    for (char c : s) lower = lower && dstd::is_ascii_lower(c);
     if (lower) return true;
-    if (!is_upper(s[0])) return false;
+    if (!dstd::is_ascii_upper(s[0])) return false;
     bool rest_lower = true;
     bool rest_upper = true;
     for (std::size_t i = 1; i < s.size(); ++i) {
-        rest_lower = rest_lower && is_lower(s[i]);
-        rest_upper = rest_upper && is_upper(s[i]);
+        rest_lower = rest_lower && dstd::is_ascii_lower(s[i]);
+        rest_upper = rest_upper && dstd::is_ascii_upper(s[i]);
     }
     return rest_lower || rest_upper;
-}
-
-bool equals_lowered(dstd::StringView s, dstd::StringView lower_name) {
-    if (s.size() != lower_name.size()) return false;
-    for (std::size_t i = 0; i < s.size(); ++i) {
-        const char c =
-            is_upper(s[i]) ? static_cast<char>(s[i] - 'A' + 'a') : s[i];
-        if (c != lower_name[i]) return false;
-    }
-    return true;
 }
 
 }  // namespace
@@ -253,9 +241,9 @@ dstd::Optional<bool> Value::as_bool() const {
     static constexpr dstd::StringView FALSE_NAMES[] = {"n", "no", "false",
                                                        "off"};
     for (const dstd::StringView name : TRUE_NAMES)
-        if (equals_lowered(text, name)) return true;
+        if (dstd::ascii_iequals(text, name)) return true;
     for (const dstd::StringView name : FALSE_NAMES)
-        if (equals_lowered(text, name)) return false;
+        if (dstd::ascii_iequals(text, name)) return false;
     return dstd::nullopt;
 }
 

@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/calendar.h>
 #include <dftracer/utils/common/field_ref.h>
 #include <dftracer/utils/dstd/algorithm.h>
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/fmt.h>
@@ -1287,10 +1288,8 @@ class TermEval {
                 if (!s) return VNull{};
                 dstd::String out(*s);
                 for (char& ch : out) {
-                    if (c.fn == Fn::Lower && ch >= 'A' && ch <= 'Z')
-                        ch = static_cast<char>(ch - 'A' + 'a');
-                    if (c.fn == Fn::Upper && ch >= 'a' && ch <= 'z')
-                        ch = static_cast<char>(ch - 'a' + 'A');
+                    ch = c.fn == Fn::Lower ? dstd::to_ascii_lower(ch)
+                                           : dstd::to_ascii_upper(ch);
                 }
                 return t_scratch.own(std::move(out));
             }
@@ -1513,8 +1512,7 @@ struct JsonRecord {
 
 bool is_position(dstd::StringView digits) {
     return !digits.empty() &&
-           std::all_of(digits.begin(), digits.end(),
-                       [](char c) { return c >= '0' && c <= '9'; });
+           std::all_of(digits.begin(), digits.end(), dstd::is_ascii_digit);
 }
 
 bool is_position_of(dstd::StringView key, dstd::StringView path) {

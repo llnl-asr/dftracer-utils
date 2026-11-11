@@ -8,6 +8,7 @@
 #include <dftracer/utils/dataframe/kernels/string_match.h>
 #include <dftracer/utils/dataframe/kernels/string_ops.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/hash/hex64.h>
 #include <dftracer/utils/dstd/hash_map.h>
@@ -1066,8 +1067,6 @@ Bits compute_bits(dataframe::strsimd::BitKind kind, const std::uint8_t* p,
     return b;
 }
 
-bool lower_byte(std::uint8_t c) { return c >= 'a' && c <= 'z'; }
-
 // Narrow String out of a List<String> shape: row i of the list holds
 // `list_off[i + 1] - list_off[i]` strings.
 dftu_series* make_str_list(
@@ -1152,8 +1151,9 @@ dftu_series* case_impl(const dftu_series* v, dataframe::strsimd::CaseKind kind,
             for (std::int64_t i = 0; i < f.n; ++i) {
                 if (f.len(i) <= 0) continue;
                 const std::int64_t s = f.off[i];
-                o[s] = lower_byte(in[s]) ? static_cast<std::uint8_t>(in[s] - 32)
-                                         : in[s];
+                o[s] = dstd::is_ascii_lower(static_cast<char>(in[s]))
+                           ? static_cast<std::uint8_t>(in[s] - 32)
+                           : in[s];
             }
         }
         return out;
@@ -1245,7 +1245,7 @@ dftu_series* is_impl(const dftu_series* v, int cls) {
                 if (title) {
                     // The first byte has no previous byte, so it breaks the
                     // rule when lower; the rest read the bit array.
-                    yes = !lower_byte(p[s]) &&
+                    yes = !dstd::is_ascii_lower(static_cast<char>(p[s])) &&
                           !dataframe::strsimd::bits_any(bad, s + 1, t) &&
                           dataframe::strsimd::bits_any(aux, s, t);
                 } else {
@@ -2047,15 +2047,17 @@ struct WrapChunk {
     std::int64_t len() const { return static_cast<std::int64_t>(e - s); }
 };
 
-bool wrap_is_ws(std::uint32_t c) { return (c >= 9 && c <= 13) || c == ' '; }
+bool wrap_is_ws(std::uint32_t c) {
+    return c < 0x80 && dstd::is_ascii_space(static_cast<char>(c));
+}
 
 bool wrap_is_letter(std::uint32_t c) {
-    return c >= 0x80 || c == '_' || (c >= 'a' && c <= 'z') ||
-           (c >= 'A' && c <= 'Z');
+    return c >= 0x80 || c == '_' || dstd::is_ascii_alpha(static_cast<char>(c));
 }
 
 bool wrap_is_word(std::uint32_t c) {
-    return wrap_is_letter(c) || (c >= '0' && c <= '9');
+    return wrap_is_letter(c) ||
+           (c < 0x80 && dstd::is_ascii_digit(static_cast<char>(c)));
 }
 
 bool wrap_is_punct_word(std::uint32_t c) {

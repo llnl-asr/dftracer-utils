@@ -4,6 +4,7 @@
 
 #ifdef __cplusplus
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
@@ -14,7 +15,6 @@
 #include <unistd.h>
 
 #include <atomic>
-#include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -408,14 +408,14 @@ template <class T>
 T to_number(dftracer::utils::dstd::StringView text) {
     std::size_t begin = 0;
     while (begin < text.size() &&
-           std::isspace(static_cast<unsigned char>(text[begin])))
+           dftracer::utils::dstd::is_ascii_space(text[begin]))
         ++begin;
     if (begin < text.size() && text[begin] == '+') ++begin;
     std::size_t end = begin;
     if (end < text.size() && text[end] == '-') ++end;
     while (end < text.size()) {
         const char c = text[end];
-        const bool digit = c >= '0' && c <= '9';
+        const bool digit = dftracer::utils::dstd::is_ascii_digit(c);
         const bool real = std::is_floating_point_v<T> &&
                           (c == '.' || c == 'e' || c == 'E' ||
                            ((c == '-' || c == '+') &&

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -133,7 +134,7 @@ namespace {
 struct UpperEscape {
     static std::size_t bound(dstd::StringView s) { return s.size(); }
     static char* write(char* d, dstd::StringView s) {
-        for (char c : s) *d++ = c >= 'a' && c <= 'z' ? char(c - 'a' + 'A') : c;
+        for (char c : s) *d++ = dstd::to_ascii_upper(c);
         return d;
     }
 };

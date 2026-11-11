@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/domains/plugins/config.h>
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -148,13 +149,13 @@ ConfigTree::Node ConfigTree::infer_leaf(dstd::StringView raw) {
             return n;
         }
     }
-    using ::dftracer::utils::common::detail::iequals;
-    if (iequals(raw, "true")) {
+    using ::dftracer::utils::dstd::ascii_iequals;
+    if (ascii_iequals(raw, "true")) {
         n.kind = DFTU_VAL_BOOL;
         n.b = true;
         return n;
     }
-    if (iequals(raw, "false")) {
+    if (ascii_iequals(raw, "false")) {
         n.kind = DFTU_VAL_BOOL;
         n.b = false;
         return n;

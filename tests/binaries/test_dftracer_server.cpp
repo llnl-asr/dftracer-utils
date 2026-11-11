@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <arpa/inet.h>
 #include <dftracer/utils/domains/server/trace_index.h>
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
@@ -235,12 +236,11 @@ dstd::String extract_body(const dstd::String& response) {
             for (std::size_t k = i; k < crlf && valid; ++k) {
                 const char c = raw[k];
                 std::size_t digit = 0;
-                if (c >= '0' && c <= '9') {
+                if (dstd::is_ascii_digit(c)) {
                     digit = static_cast<std::size_t>(c - '0');
-                } else if (c >= 'a' && c <= 'f') {
-                    digit = static_cast<std::size_t>(c - 'a' + 10);
-                } else if (c >= 'A' && c <= 'F') {
-                    digit = static_cast<std::size_t>(c - 'A' + 10);
+                } else if (dstd::is_ascii_xdigit(c)) {
+                    digit = static_cast<std::size_t>(dstd::to_ascii_lower(c) -
+                                                     'a' + 10);
                 } else {
                     valid = false;
                 }

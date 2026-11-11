@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_DUQL_BUILDER_H
 #define DFTRACER_UTILS_DUQL_BUILDER_H
 
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -465,7 +466,7 @@ class Col {
     }
 
     bool is_path() const {
-        if (text_.empty() || (text_[0] >= '0' && text_[0] <= '9')) return false;
+        if (text_.empty() || dstd::is_ascii_digit(text_[0])) return false;
         int depth = 0;
         bool tick = false;
         for (char ch : text_) {
@@ -477,10 +478,8 @@ class Col {
                 ++depth;
             } else if (ch == ']') {
                 --depth;
-            } else if (depth == 0 &&
-                       !(ch == '_' || ch == '.' || ch == '^' ||
-                         (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'z') ||
-                         (ch >= 'A' && ch <= 'Z'))) {
+            } else if (depth == 0 && !(ch == '_' || ch == '.' || ch == '^' ||
+                                       dstd::is_ascii_alnum(ch))) {
                 return false;
             }
         }

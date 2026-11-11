@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
@@ -59,10 +60,7 @@ dstd::Vector<BaseId> plan_bases(const trace::views::detail::ViewPlan& plan) {
     return out;
 }
 
-bool allowed(char c) {
-    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-           (c >= '0' && c <= '9') || c == '_' || c == '-';
-}
+bool allowed(char c) { return dstd::is_ascii_alnum(c) || c == '_' || c == '-'; }
 
 void replace_all(dstd::String& s, const dstd::String& from,
                  const dstd::String& to) {
@@ -210,12 +208,10 @@ dstd::Optional<std::uint64_t> parse_hex(dstd::StringView text) {
     std::uint64_t out = 0;
     for (const char c : text) {
         unsigned digit = 0;
-        if (c >= '0' && c <= '9')
+        if (dstd::is_ascii_digit(c))
             digit = static_cast<unsigned>(c - '0');
-        else if (c >= 'a' && c <= 'f')
-            digit = static_cast<unsigned>(c - 'a') + 10;
-        else if (c >= 'A' && c <= 'F')
-            digit = static_cast<unsigned>(c - 'A') + 10;
+        else if (dstd::is_ascii_xdigit(c))
+            digit = static_cast<unsigned>(dstd::to_ascii_lower(c) - 'a') + 10;
         else
             return dstd::nullopt;
         out = (out << 4) | digit;

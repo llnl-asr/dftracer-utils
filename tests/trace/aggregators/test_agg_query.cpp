@@ -7,6 +7,7 @@
 #include <checkpoint_indexer_helpers.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/domains/analysis/comparator/comparison_aggregation.h>
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -263,8 +264,7 @@ dstd::String write_trace(const dstd::String& dir, int n,
 }
 
 dstd::String lower(dstd::String s) {
-    for (char& c : s)
-        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+    for (char& c : s) c = dstd::to_ascii_lower(c);
     return s;
 }
 

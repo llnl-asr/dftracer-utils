@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -257,12 +258,10 @@ constexpr std::array<dstd::StringView, 12> RESERVED = {
 
 bool is_ident(dstd::StringView s) {
     if (s.empty()) return false;
-    auto head = [](char c) {
-        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
-    };
+    auto head = [](char c) { return dstd::is_ascii_alpha(c) || c == '_'; };
     if (!head(s[0])) return false;
     for (char c : s) {
-        if (!head(c) && !(c >= '0' && c <= '9')) return false;
+        if (!head(c) && !dstd::is_ascii_digit(c)) return false;
     }
     return true;
 }
@@ -272,9 +271,7 @@ bool is_reserved(dstd::StringView s) {
         if (r.size() != s.size()) continue;
         bool same = true;
         for (std::size_t i = 0; i < s.size() && same; ++i) {
-            char c = s[i];
-            if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
-            same = c == r[i];
+            same = dstd::to_ascii_lower(s[i]) == r[i];
         }
         if (same) return true;
     }
@@ -286,9 +283,7 @@ void put_string(dstd::String& out, const dstd::String& raw) {
 }
 
 bool all_digits(dstd::StringView s) {
-    return !s.empty() && std::all_of(s.begin(), s.end(), [](char c) {
-        return c >= '0' && c <= '9';
-    });
+    return !s.empty() && std::all_of(s.begin(), s.end(), dstd::is_ascii_digit);
 }
 
 void put_key(dstd::String& out, const PathStep& step, bool first) {

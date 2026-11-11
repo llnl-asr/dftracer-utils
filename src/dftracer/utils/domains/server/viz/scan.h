@@ -11,6 +11,7 @@
 #include <dftracer/utils/domains/server/http_response.h>
 #include <dftracer/utils/domains/server/trace_index.h>
 #include <dftracer/utils/domains/server/viz/record_event.h>
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -40,12 +41,10 @@ inline bool rewrite_uint_field(dstd::String& json, dstd::StringView key,
     auto pos = json.find(key);
     if (pos == dstd::String::npos) return false;
     pos += key.size();
-    while (pos < json.size() &&
-           ::dftracer::utils::common::detail::is_ascii_space(json[pos]))
-        ++pos;
+    while (pos < json.size() && dstd::is_ascii_space(json[pos])) ++pos;
     auto end_pos = pos;
     while (end_pos < json.size() &&
-           (std::isdigit(json[end_pos]) || json[end_pos] == '-')) {
+           (dstd::is_ascii_digit(json[end_pos]) || json[end_pos] == '-')) {
         ++end_pos;
     }
     if (end_pos == pos) return false;
@@ -200,7 +199,7 @@ inline void append_lane_clause(dstd::String& dsl, const char* field,
     bool numeric =
         val.size() > digits &&
         std::all_of(val.begin() + static_cast<std::ptrdiff_t>(digits),
-                    val.end(), [](char c) { return std::isdigit(c); });
+                    val.end(), dstd::is_ascii_digit);
     if (numeric) {
         dsl += dstd::fmt<"{} == {}">(field, val);
     } else {
@@ -299,7 +298,7 @@ inline void apply_filters(dstd::String& dsl, dstd::StringView filters_str,
         }
         if (field_str.empty()) continue;
         if (us != 1 && !val.empty() &&
-            (std::isdigit(static_cast<unsigned char>(val[0])) || val[0] == '-'))
+            (dstd::is_ascii_digit(val[0]) || val[0] == '-'))
             val = dstd::to_string(std::strtod(val.c_str(), nullptr) / us);
 
         dstd::String query_op;
@@ -317,7 +316,8 @@ inline void apply_filters(dstd::String& dsl, dstd::StringView filters_str,
             continue;
 
         if (!dsl.empty()) dsl += " and ";
-        bool numeric = !val.empty() && (std::isdigit(val[0]) || val[0] == '-');
+        bool numeric =
+            !val.empty() && (dstd::is_ascii_digit(val[0]) || val[0] == '-');
         if (numeric || query_op != "==") {
             dsl += dstd::fmt<"{} {} {}">(field_str, query_op, val);
         } else {

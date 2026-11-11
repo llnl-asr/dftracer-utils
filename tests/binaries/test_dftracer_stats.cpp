@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/string.h>
@@ -12,7 +13,6 @@
 #include <zlib.h>
 
 #include <algorithm>
-#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -95,7 +95,7 @@ Fixture write_fixture(const dstd::String& dir) {
 
             dstd::String lower = cat;
             std::transform(lower.begin(), lower.end(), lower.begin(),
-                           [](unsigned char c) { return std::tolower(c); });
+                           dstd::to_ascii_lower);
             ++fx.categories[lower];
             ++fx.names[name];
             ++fx.pid_tids[dstd::to_string(pid) + ":" + dstd::to_string(tid)];

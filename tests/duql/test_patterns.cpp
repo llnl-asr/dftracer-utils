@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -207,8 +208,7 @@ TEST_SUITE("duql patterns") {
             dstd::String needle;
             for (int k = 1 + rng() % 4; k > 0; --k) needle += "abz!"[rng() % 4];
             dstd::String lower = hay;
-            for (char& c : lower)
-                if (c >= 'A' && c <= 'Z') c = static_cast<char>(c | 0x20);
+            for (char& c : lower) c = dstd::to_ascii_lower(c);
             const auto want = static_cast<std::int64_t>(lower.find(needle));
             const auto got = detail::substr_find_icase(
                 hay.data(), static_cast<std::int64_t>(hay.size()),

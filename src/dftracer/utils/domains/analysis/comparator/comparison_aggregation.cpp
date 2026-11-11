@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/domains/analysis/comparator/comparison_aggregation.h>
 #include <dftracer/utils/domains/analysis/comparator/comparison_collapse.h>
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/hash_map.h>
@@ -68,8 +69,7 @@ bool is_category(const duql::detail::FieldNode& f) {
 void lower_literals(duql::detail::ArrayNode& values) {
     for (auto& e : values.elements)
         if (auto* text = std::get_if<dstd::String>(&e.value))
-            for (char& c : *text)
-                if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+            for (char& c : *text) c = dstd::to_ascii_lower(c);
     values.set.reset();
 }
 
@@ -104,9 +104,7 @@ dstd::String fold_category(const duql::detail::QueryNode& n) {
             return dstd::String(duql::detail::to_string(n));
         duql::detail::CompareNode leaf = *c;
         if (auto* text = std::get_if<dstd::String>(&leaf.value.value))
-            for (char& ch : *text)
-                if (ch >= 'A' && ch <= 'Z')
-                    ch = static_cast<char>(ch - 'A' + 'a');
+            for (char& ch : *text) ch = dstd::to_ascii_lower(ch);
         return lowered_leaf(std::move(leaf));
     }
     if (const auto* in = std::get_if<duql::detail::InNode>(&n.data)) {

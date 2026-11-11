@@ -7,6 +7,7 @@
 #include <dftracer/utils/dataframe/internal/numeric_dispatch.h>
 #include <dftracer/utils/dataframe/internal/varwidth_offsets.h>
 #include <dftracer/utils/dataframe/kernels/cast.h>
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -143,10 +144,8 @@ template <class T>
 dstd::Optional<T> parse_trimmed(dstd::StringView s) {
     std::size_t b = 0;
     std::size_t e = s.size();
-    while (b < e && ::dftracer::utils::common::detail::is_ascii_space(s[b]))
-        ++b;
-    while (e > b && ::dftracer::utils::common::detail::is_ascii_space(s[e - 1]))
-        --e;
+    while (b < e && ::dftracer::utils::dstd::is_ascii_space(s[b])) ++b;
+    while (e > b && ::dftracer::utils::dstd::is_ascii_space(s[e - 1])) --e;
     if (b < e && s[b] == '+') {
         ++b;
         if (b < e && (s[b] == '-' || s[b] == '+')) return dstd::nullopt;

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
@@ -106,9 +107,8 @@ const char* skip_string(const char* q, const char* end) {
 }
 
 int hex_digit(char c) {
-    if (c >= '0' && c <= '9') return c - '0';
-    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    if (dstd::is_ascii_digit(c)) return c - '0';
+    if (dstd::is_ascii_xdigit(c)) return dstd::to_ascii_lower(c) - 'a' + 10;
     return -1;
 }
 
@@ -278,20 +278,19 @@ dstd::Optional<double> refused_number(dstd::StringView token) {
     const char* const end = p + token.size();
     const bool negative = p < end && *p == '-';
     if (negative) ++p;
-    const auto is_digit = [](char c) { return c >= '0' && c <= '9'; };
-    if (p == end || !is_digit(*p)) return dstd::nullopt;
+    if (p == end || !dstd::is_ascii_digit(*p)) return dstd::nullopt;
     const char* const int_begin = p;
     if (*p == '0') {
         ++p;
     } else {
-        while (p < end && is_digit(*p)) ++p;
+        while (p < end && dstd::is_ascii_digit(*p)) ++p;
     }
     const char* const int_end = p;
     const char* frac_begin = p;
     const char* frac_end = p;
     if (p < end && *p == '.') {
         frac_begin = ++p;
-        while (p < end && is_digit(*p)) ++p;
+        while (p < end && dstd::is_ascii_digit(*p)) ++p;
         frac_end = p;
         if (frac_end == frac_begin) return dstd::nullopt;
     }
@@ -302,7 +301,7 @@ dstd::Optional<double> refused_number(dstd::StringView token) {
         if (p < end && (*p == '+' || *p == '-'))
             exponent_negative = *p++ == '-';
         const char* const digits = p;
-        for (; p < end && is_digit(*p); ++p)
+        for (; p < end && dstd::is_ascii_digit(*p); ++p)
             if (exponent < EXPONENT_CAP) exponent = exponent * 10 + (*p - '0');
         if (p == digits) return dstd::nullopt;
         if (exponent_negative) exponent = -exponent;

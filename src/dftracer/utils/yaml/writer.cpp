@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -25,19 +26,6 @@ namespace {
 // bytes of the written form, which is never fewer.
 constexpr std::size_t MAX_IMPLICIT_KEY = 1024;
 
-constexpr bool is_digit(char c) { return c >= '0' && c <= '9'; }
-
-constexpr char lower(char c) {
-    return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
-}
-
-bool equals_ignoring_case(dstd::StringView s, dstd::StringView lower_name) {
-    if (s.size() != lower_name.size()) return false;
-    for (std::size_t i = 0; i < s.size(); ++i)
-        if (lower(s[i]) != lower_name[i]) return false;
-    return true;
-}
-
 bool starts_with(dstd::StringView s, dstd::StringView prefix) {
     return s.size() >= prefix.size() && s.substr(0, prefix.size()) == prefix;
 }
@@ -45,7 +33,7 @@ bool starts_with(dstd::StringView s, dstd::StringView prefix) {
 // A character a number, a timestamp or a sexagesimal in YAML 1.1 or 1.2 is
 // spelled with.
 bool is_number_character(char c) {
-    if (is_digit(c)) return true;
+    if (dstd::is_ascii_digit(c)) return true;
     switch (c) {
         case 'a':
         case 'b':
@@ -81,22 +69,22 @@ bool resolves_to_non_string(dstd::StringView s) {
                                                  "yes", "no",   "on",   "off",
                                                  "y",   "n",    "<<",   "="};
     for (const dstd::StringView w : WORDS)
-        if (equals_ignoring_case(s, w)) return true;
+        if (dstd::ascii_iequals(s, w)) return true;
     dstd::StringView rest = s;
     if (!rest.empty() && (rest.front() == '+' || rest.front() == '-'))
         rest.remove_prefix(1);
-    if (equals_ignoring_case(rest, ".inf") ||
-        equals_ignoring_case(rest, ".nan"))
+    if (dstd::ascii_iequals(rest, ".inf") || dstd::ascii_iequals(rest, ".nan"))
         return true;
     const char first = s.front();
-    if (is_digit(first) || first == '+' || first == '.') {
+    if (dstd::is_ascii_digit(first) || first == '+' || first == '.') {
         bool all = true;
         for (const char c : s) all = all && is_number_character(c);
         if (all) return true;
     }
     // YYYY-MM-DD, alone or followed by a time.
-    if (s.size() >= 5 && is_digit(s[0]) && is_digit(s[1]) && is_digit(s[2]) &&
-        is_digit(s[3]) && s[4] == '-')
+    if (s.size() >= 5 && dstd::is_ascii_digit(s[0]) &&
+        dstd::is_ascii_digit(s[1]) && dstd::is_ascii_digit(s[2]) &&
+        dstd::is_ascii_digit(s[3]) && s[4] == '-')
         return true;
     return false;
 }

@@ -14,6 +14,7 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/spill.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/bits.h>
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/fmt.h>
@@ -734,11 +735,10 @@ bool spill_compression_on(const dstd::String& path) {
     const auto v = common::Env::get(common::constants::SPILL_COMPRESS_ENV);
     const auto is = [&](dstd::StringView a, dstd::StringView b = {},
                         dstd::StringView c = {}) {
-        return v && (::dftracer::utils::common::detail::iequals(*v, a) ||
-                     (!b.empty() &&
-                      ::dftracer::utils::common::detail::iequals(*v, b)) ||
-                     (!c.empty() &&
-                      ::dftracer::utils::common::detail::iequals(*v, c)));
+        return v &&
+               (::dftracer::utils::dstd::ascii_iequals(*v, a) ||
+                (!b.empty() && ::dftracer::utils::dstd::ascii_iequals(*v, b)) ||
+                (!c.empty() && ::dftracer::utils::dstd::ascii_iequals(*v, c)));
     };
     if (is("off", "0")) return false;
     if (is("on", "1", "zstd")) return true;

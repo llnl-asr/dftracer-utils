@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_DSTD_PATH_H
 #define DFTRACER_UTILS_DSTD_PATH_H
 
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/string.h>
 
@@ -40,9 +41,7 @@ constexpr char preferred_separator(PathStyle style) noexcept {
     return style == PathStyle::Windows ? '\\' : '/';
 }
 
-constexpr bool is_drive_letter(char c) noexcept {
-    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
-}
+constexpr bool is_drive_letter(char c) noexcept { return is_ascii_alpha(c); }
 
 /// The length of the root, such as `/` on POSIX, or `C:`, `C:\` or
 /// `\\server\share` on Windows. Zero for a relative path.

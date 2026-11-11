@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/duql/substr_simd.h>
 
 #include <cstddef>
@@ -21,7 +22,8 @@ namespace HWY_NAMESPACE {
 constexpr std::int64_t SUBSTR_SIMD_MAX_NEEDLE = 64;
 
 inline std::uint8_t fold(std::uint8_t c) {
-    return c >= 'A' && c <= 'Z' ? static_cast<std::uint8_t>(c | 0x20) : c;
+    return static_cast<std::uint8_t>(
+        dstd::to_ascii_lower(static_cast<char>(c)));
 }
 
 // Whether the `m` bytes at `h` equal `needle`, ASCII letters folded when

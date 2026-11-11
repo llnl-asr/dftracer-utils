@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/file.h>
@@ -1148,7 +1149,7 @@ dstd::Optional<std::int64_t> iso8601_micros(dstd::StringView s) {
     std::int64_t frac = 0;
     if (at < s.size() && s[at] == '.') {
         std::int64_t scale = 100000;
-        for (++at; at < s.size() && s[at] >= '0' && s[at] <= '9'; ++at) {
+        for (++at; at < s.size() && dstd::is_ascii_digit(s[at]); ++at) {
             frac += (s[at] - '0') * scale;
             scale /= 10;
         }

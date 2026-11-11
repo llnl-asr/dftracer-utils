@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_TRACE_READER_INTERNAL_TRACE_READER_SHARED_H
 
 #include <dftracer/utils/coro/async_generator.h>
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -149,8 +150,7 @@ inline bool is_bigint_token(dstd::StringView token) {
         token.remove_suffix(1);
     if (!token.empty() && token.front() == '-') token.remove_prefix(1);
     if (token.size() < 19 || token.front() == '0') return false;
-    return std::all_of(token.begin(), token.end(),
-                       [](char c) { return c >= '0' && c <= '9'; });
+    return std::all_of(token.begin(), token.end(), dstd::is_ascii_digit);
 }
 
 // A field's value for the evaluator: JSON null as a null cell, an object or

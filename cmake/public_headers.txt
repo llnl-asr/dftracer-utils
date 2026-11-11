@@ -71,6 +71,7 @@ dftracer/utils/dataframe/sketch.h
 dftracer/utils/dataframe/types.h
 dftracer/utils/dstd/algorithm.h
 dftracer/utils/dstd/any.h
+dftracer/utils/dstd/ascii.h
 dftracer/utils/dstd/base64.h
 dftracer/utils/dstd/big_endian.h
 dftracer/utils/dstd/bits.h

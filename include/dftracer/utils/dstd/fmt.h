@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_DSTD_FMT_H
 #define DFTRACER_UTILS_DSTD_FMT_H
 
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 
@@ -58,8 +59,6 @@ struct Spec {
     constexpr bool plain() const { return type == 0 && width == 0; }
 };
 
-constexpr bool is_digit(char c) { return c >= '0' && c <= '9'; }
-
 /// Parses the text between `{:` and `}`.
 constexpr bool parse_spec(StringView s, Spec& out) {
     const std::size_t n = s.size();
@@ -69,7 +68,7 @@ constexpr bool parse_spec(StringView s, Spec& out) {
         ++i;
         unsigned width = 0;
         std::size_t digits = 0;
-        while (i < n && is_digit(s[i])) {
+        while (i < n && is_ascii_digit(s[i])) {
             width = width * 10 + static_cast<unsigned>(s[i] - '0');
             if (width > 255) return false;
             ++digits;
@@ -77,7 +76,7 @@ constexpr bool parse_spec(StringView s, Spec& out) {
         }
         if (digits == 0) return false;
         r.width = static_cast<std::uint8_t>(width);
-    } else if (i < n && is_digit(s[i])) {
+    } else if (i < n && is_ascii_digit(s[i])) {
         return false;
     }
     bool has_prec = false;
@@ -85,7 +84,7 @@ constexpr bool parse_spec(StringView s, Spec& out) {
         ++i;
         unsigned prec = 0;
         std::size_t digits = 0;
-        while (i < n && is_digit(s[i])) {
+        while (i < n && is_ascii_digit(s[i])) {
             prec = prec * 10 + static_cast<unsigned>(s[i] - '0');
             if (prec > 99) return false;
             ++digits;

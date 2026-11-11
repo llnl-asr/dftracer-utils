@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -619,7 +620,7 @@ TEST_CASE("a number with a bad grammar stays a read error") {
         CHECK_FALSE(a->as_double().has_value());
         CHECK_FALSE(a->as_int().has_value());
         const bool reaches_parser =
-            bad[0] == '-' || (bad[0] >= '0' && bad[0] <= '9');
+            bad[0] == '-' || dstd::is_ascii_digit(bad[0]);
         if (reaches_parser) CHECK_FALSE(parsed->find("b").has_value());
     }
 }

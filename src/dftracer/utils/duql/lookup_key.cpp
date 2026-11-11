@@ -10,7 +10,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
 #include <cstring>
 #include <limits>
 
@@ -77,8 +76,8 @@ dstd::String key_text(dstd::StringView key) {
         } else if (tag == DOUBLE_TAG) {
             const double d = dstd::bits_double(get_u64(key));
             char buf[32];
-            std::snprintf(buf, sizeof buf, "%.17g", d);
-            out += buf;
+            out.append(buf,
+                       dstd::to_chars_general(buf, buf + sizeof(buf), d, 17));
             key.remove_prefix(8);
         } else if (tag == STRING_TAG) {
             const auto n = static_cast<std::size_t>(get_u64(key));

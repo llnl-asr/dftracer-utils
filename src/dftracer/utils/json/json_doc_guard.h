@@ -8,7 +8,6 @@
 #include <simdjson.h>
 
 #include <cstddef>
-#include <cstdio>
 
 namespace dftracer::utils::json {
 
@@ -58,13 +57,7 @@ inline dstd::String ondemand_value_to_string(simdjson::ondemand::value& val) {
             }
             auto d = val.get_double();
             if (!d.error()) {
-                // %f is what dstd::to_string(double) prints; 512 bytes holds
-                // every magnitude.
-                char text[512];
-                const int n =
-                    std::snprintf(text, sizeof(text), "%f", d.value_unsafe());
-                if (n > 0 && static_cast<std::size_t>(n) < sizeof(text))
-                    return dstd::String(text, static_cast<std::size_t>(n));
+                return dstd::fixed_text(d.value_unsafe());
             }
             return {};
         }

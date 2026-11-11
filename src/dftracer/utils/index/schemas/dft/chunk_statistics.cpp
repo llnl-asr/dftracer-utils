@@ -12,7 +12,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
@@ -304,11 +303,12 @@ dstd::String double_map_to_json(const Map& map) {
         first = false;
         // 17 significant digits, as the stored index text has always been.
         char buf[32];
-        const int n = std::snprintf(buf, sizeof(buf), "%.17g", value);
+        char* const end = dstd::to_chars_general(
+            buf, buf + sizeof(buf), static_cast<double>(value), 17);
         out += '"';
         out += key;
         out += "\":";
-        out.append(buf, static_cast<std::size_t>(n));
+        out.append(buf, static_cast<std::size_t>(end - buf));
     }
     out += '}';
     return out;

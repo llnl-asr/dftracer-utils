@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -217,18 +218,18 @@ coro::CoroTask<dstd::Result<ChunkIndexerOutput>> ChunkIndexer::operator()(
 
                 if (need_pid) {
                     char pid_buf[32];
-                    int n = std::snprintf(pid_buf, sizeof(pid_buf), "%llu",
-                                          static_cast<unsigned long long>(pid));
+                    const auto text =
+                        dstd::fmt_to<"{}">(pid_buf, sizeof(pid_buf), pid);
                     output.bloom_filters[DIM_PID].add(
-                        dstd::StringView(pid_buf, n));
+                        dstd::StringView(pid_buf, text.size));
                 }
 
                 if (need_tid) {
                     char tid_buf[32];
-                    int n = std::snprintf(tid_buf, sizeof(tid_buf), "%llu",
-                                          static_cast<unsigned long long>(tid));
+                    const auto text =
+                        dstd::fmt_to<"{}">(tid_buf, sizeof(tid_buf), tid);
                     output.bloom_filters[DIM_TID].add(
-                        dstd::StringView(tid_buf, n));
+                        dstd::StringView(tid_buf, text.size));
                 }
 
                 if (need_hhash || need_fhash || need_shash || has_extra_dims) {

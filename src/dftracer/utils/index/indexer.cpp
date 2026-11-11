@@ -30,7 +30,6 @@
 #include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/trace/internal/utils.h>
 
-#include <cstdio>
 #include <utility>
 
 namespace dftracer::utils::index {
@@ -665,10 +664,10 @@ dstd::String to_json(const dstd::Vector<FileManifest>& manifest) {
             out.append("{\"name\":");
             append_string(out, e.name);
             out.append(",\"version\":" + dstd::to_string(e.version));
-            char hash[17];
-            std::snprintf(hash, sizeof(hash), "%016llx",
-                          static_cast<unsigned long long>(e.params_hash));
-            out.append(",\"params_hash\":\"").append(hash).push_back('"');
+            out.append(",\"params_hash\":\"")
+                .append(dstd::fmt<"{:016x}">(
+                    static_cast<std::uint64_t>(e.params_hash)))
+                .push_back('"');
             out.append(",\"ready\":").append(json_bool(e.ready));
             out.append(",\"current\":").append(json_bool(e.current));
             out.push_back('}');

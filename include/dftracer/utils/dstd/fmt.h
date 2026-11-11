@@ -388,7 +388,7 @@ char* write(const F& f, char* dst, const A&... a) {
 
 constexpr std::size_t CLAMP_SCRATCH = 512;
 
-template <class F, std::size_t... I, class... A>
+template <class E, class F, std::size_t... I, class... A>
 FmtResult write_clamped_impl(const F& f, char* d, char* end,
                              std::index_sequence<I...>, const A&... a) {
     bool cut = false;
@@ -408,13 +408,26 @@ FmtResult write_clamped_impl(const F& f, char* d, char* end,
         if constexpr (StrLike<D> || std::is_same_v<D, RawText>) {
             if constexpr (std::is_same_v<D, RawText>) {
                 put(v.s.data(), v.s.size());
-            } else {
+            } else if constexpr (std::is_same_v<E, PlainEscape>) {
                 const StringView t = to_view(v);
                 put(t.data(), t.size());
+            } else {
+                // Escape in stack pieces so fmt_to never allocates. This
+                // needs a policy that escapes each byte on its own.
+                StringView t = to_view(v);
+                char escaped[256];
+                while (!t.empty() && !cut) {
+                    std::size_t n = t.size() < 32 ? t.size() : 32;
+                    while (n > 1 && E::bound(t.substr(0, n)) > sizeof escaped)
+                        n /= 2;
+                    char* const last = E::write(escaped, t.substr(0, n));
+                    put(escaped, static_cast<std::size_t>(last - escaped));
+                    t.remove_prefix(n);
+                }
             }
         } else {
             char scratch[CLAMP_SCRATCH];
-            char* e = put_arg<PlainEscape>(scratch, s, v);
+            char* e = put_arg<E>(scratch, s, v);
             put(scratch, static_cast<std::size_t>(e - scratch));
         }
     };
@@ -460,23 +473,45 @@ concept FmtArg = fmt_detail::ARG<std::decay_t<const T>>;
 template <FixedString S>
 inline constexpr std::size_t FMT_HOLES = fmt_detail::COUNTED<S>.holes;
 
-/// Formats into a dstd::String sized once from the bound of the arguments.
-template <FixedString S, class... A>
-String fmt(const A&... a) {
+/// @ref fmt with an escape policy `E` for string arguments: `E::bound(s)` is
+/// the most bytes `E::write(dst, s)` may write for the view `s`. Numbers, bools
+/// and chars print as in @ref fmt and a fmt_detail::RawText argument is not
+/// escaped.
+template <class E, FixedString S, class... A>
+String fmt_with(const A&... a) {
     static_assert(fmt_detail::Check<S, A...>::OK);
     constexpr fmt_detail::Static<S> FORMAT{};
     String out;
-    out.resize(fmt_detail::bound<fmt_detail::PlainEscape>(FORMAT, a...));
+    out.resize(fmt_detail::bound<E>(FORMAT, a...));
     char* const first = out.data();
-    char* const end =
-        fmt_detail::write<fmt_detail::PlainEscape>(FORMAT, first, a...);
+    char* const end = fmt_detail::write<E>(FORMAT, first, a...);
     out.resize(static_cast<std::size_t>(end - first));
     return out;
+}
+
+/// Formats into a dstd::String sized once from the bound of the arguments.
+template <FixedString S, class... A>
+String fmt(const A&... a) {
+    return fmt_with<fmt_detail::PlainEscape, S>(a...);
 }
 
 template <FixedString S, class... A>
 String fmt(Format<S>, const A&... a) {
     return fmt<S>(a...);
+}
+
+/// @ref fmt_to with an escape policy, as @ref fmt_with. The cut falls on the
+/// escaped text.
+template <class E, FixedString S, class... A>
+FmtResult fmt_to_with(char* buf, std::size_t cap, const A&... a) {
+    static_assert(fmt_detail::Check<S, A...>::OK);
+    constexpr fmt_detail::Static<S> FORMAT{};
+    if (fmt_detail::bound<E>(FORMAT, a...) <= cap)
+        return {static_cast<std::size_t>(
+                    fmt_detail::write<E>(FORMAT, buf, a...) - buf),
+                false};
+    return fmt_detail::write_clamped_impl<E>(
+        FORMAT, buf, buf + cap, std::index_sequence_for<A...>{}, a...);
 }
 
 /// Formats into `buf`, never allocates and never writes past `cap` bytes. No
@@ -485,16 +520,7 @@ String fmt(Format<S>, const A&... a) {
 /// `truncated` is set.
 template <FixedString S, class... A>
 FmtResult fmt_to(char* buf, std::size_t cap, const A&... a) {
-    static_assert(fmt_detail::Check<S, A...>::OK);
-    constexpr fmt_detail::Static<S> FORMAT{};
-    if (fmt_detail::bound<fmt_detail::PlainEscape>(FORMAT, a...) <= cap)
-        return {
-            static_cast<std::size_t>(
-                fmt_detail::write<fmt_detail::PlainEscape>(FORMAT, buf, a...) -
-                buf),
-            false};
-    return fmt_detail::write_clamped_impl(
-        FORMAT, buf, buf + cap, std::index_sequence_for<A...>{}, a...);
+    return fmt_to_with<fmt_detail::PlainEscape, S>(buf, cap, a...);
 }
 
 template <FixedString S, class... A>

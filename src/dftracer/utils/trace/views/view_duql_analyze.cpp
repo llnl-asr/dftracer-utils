@@ -19,7 +19,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <cstdio>
 #include <utility>
 
 namespace dftracer::utils::trace::views::duql_detail {
@@ -499,8 +498,8 @@ dstd::String number_text(double v) {
     if (std::trunc(v) == v && std::abs(v) < 9.0e15)
         return dstd::to_string(static_cast<std::int64_t>(v));
     char buf[32];
-    std::snprintf(buf, sizeof buf, "%.17g", v);
-    return buf;
+    return dstd::String(buf,
+                        dstd::to_chars_general(buf, buf + sizeof(buf), v, 17));
 }
 
 bool is_count(duql::AggFn fn) {

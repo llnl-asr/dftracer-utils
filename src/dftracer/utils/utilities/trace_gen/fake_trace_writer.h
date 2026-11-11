@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/json/fmt.h>
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
@@ -120,22 +121,11 @@ inline void emit_metadata(TraceWriter& w, dstd::StringView kind,
         trace::phase_to_int(trace::RecordPhase::Metadata);
     static constexpr int TY_DFT =
         trace::event_type_to_int(trace::EventType::Dftracer);
-    dstd::String buf;
-    buf.reserve(256);
-    buf += R"({"name":")";
-    buf += kind;
-    buf += R"(","ph":)";
-    buf += dstd::int_text(PH_M);
-    buf += R"(,"type":)";
-    buf += dstd::int_text(TY_DFT);
-    buf += R"(,"args":{"hhash":")";
-    json::append_json_escaped(buf, hhash);
-    buf += R"(","name":")";
-    json::append_json_escaped(buf, resolved_name);
-    buf += R"(","value":")";
-    json::append_json_escaped(buf, hash_value);
-    buf += R"("}})";
-    buf += '\n';
+    dstd::String buf = json::fmt<
+        R"({"name":"{}","ph":{},"type":{},"args":{"hhash":"{}","name":"{}",)"
+        R"("value":"{}"}})"
+        "\n">(dstd::fmt_detail::RawText{kind}, PH_M, TY_DFT, hhash,
+              resolved_name, hash_value);
     w.write(buf);
 }
 
@@ -159,57 +149,25 @@ struct EventArgs {
 };
 
 inline void emit_event(TraceWriter& w, const EventArgs& a) {
-    char num_buf[128];
-    dstd::String buf;
-    buf.reserve(512);
+    const trace::EventType ty = a.type != trace::EventType::Unknown
+                                    ? a.type
+                                    : trace::event_type_from_cat(a.cat);
+    dstd::String buf = json::fmt<
+        R"({"id":{},"name":"{}","cat":"{}","pid":{},"tid":{},"ts":{},"dur":{},)"
+        R"("ph":{},"type":{},"args":{"hhash":"{}","level":{})">(
+        a.id, a.name, a.cat, a.pid, a.tid, a.ts, a.dur,
+        trace::phase_to_int(trace::RecordPhase::Complete),
+        trace::event_type_to_int(ty), a.hhash, a.level);
 
-    buf += R"({"id":)";
-    buf.append(num_buf,
-               dstd::fmt_to<"{}">(num_buf, sizeof(num_buf), a.id).size);
-
-    buf += R"(,"name":")";
-    json::append_json_escaped(buf, a.name);
-    buf += R"(","cat":")";
-    json::append_json_escaped(buf, a.cat);
-
-    trace::EventType ty = a.type != trace::EventType::Unknown
-                              ? a.type
-                              : trace::event_type_from_cat(a.cat);
-    buf.append(num_buf,
-               dstd::fmt_to<
-                   R"(","pid":{},"tid":{},"ts":{},"dur":{},"ph":{},"type":{})">(
-                   num_buf, sizeof(num_buf), a.pid, a.tid, a.ts, a.dur,
-                   trace::phase_to_int(trace::RecordPhase::Complete),
-                   trace::event_type_to_int(ty))
-                   .size);
-
-    buf += R"(,"args":{)";
-
-    buf += R"("hhash":")";
-    json::append_json_escaped(buf, a.hhash);
-    buf += '"';
-
-    buf.append(
-        num_buf,
-        dstd::fmt_to<R"(,"level":{})">(num_buf, sizeof(num_buf), a.level).size);
-
-    if (!a.fhash.empty()) {
-        buf += R"(,"fhash":")";
-        json::append_json_escaped(buf, a.fhash);
-        buf += '"';
-    }
-    if (!a.cmd_hash.empty()) {
-        buf += R"(,"cmd_hash":")";
-        json::append_json_escaped(buf, a.cmd_hash);
-        buf += '"';
-    }
+    if (!a.fhash.empty()) buf += json::fmt<R"(,"fhash":"{}")">(a.fhash);
+    if (!a.cmd_hash.empty())
+        buf += json::fmt<R"(,"cmd_hash":"{}")">(a.cmd_hash);
     if (!a.extra.empty()) {
         buf += ',';
         buf += a.extra;
     }
 
-    buf += R"(}})";
-    buf += '\n';
+    buf += "}}\n";
     w.write(buf);
 }
 

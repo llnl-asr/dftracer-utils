@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/file.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/span.h>
@@ -51,8 +52,9 @@ std::uint64_t calculate_file_hash(const dstd::File &file,
 
     // Hash the file size itself
     char size_buf[32];
-    int n = std::snprintf(size_buf, sizeof(size_buf), "%zu", file_size);
-    hasher.update(dstd::StringView(size_buf, static_cast<std::size_t>(n)));
+    const auto size_text =
+        dstd::fmt_to<"{}">(size_buf, sizeof(size_buf), file_size);
+    hasher.update(dstd::StringView(size_buf, size_text.size));
 
     unsigned char buf[SAMPLE_SIZE];
 

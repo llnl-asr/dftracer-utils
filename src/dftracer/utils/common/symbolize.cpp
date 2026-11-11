@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 #include <cxxabi.h>
 #include <dftracer/utils/common/symbolize.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dlfcn.h>
 
-#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
@@ -91,10 +91,7 @@ dstd::String symbolize_function(const void* fn) {
         if (const char* slash = std::strrchr(mod, '/')) mod = slash + 1;
         const auto off = reinterpret_cast<const char*>(fn) -
                          reinterpret_cast<const char*>(info.dli_fbase);
-        char buf[128];
-        std::snprintf(buf, sizeof(buf), "%s+0x%llx", mod,
-                      static_cast<unsigned long long>(off));
-        return buf;
+        return dstd::fmt<"{}+0x{:x}">(mod, static_cast<std::uint64_t>(off));
     }
     return "?";
 }

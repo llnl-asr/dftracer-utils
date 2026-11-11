@@ -206,14 +206,11 @@ bool Watchdog::check_task_timeouts() {
                 static_cast<long long>(execution.timeout.count()));
 
             {
-                char buf[1024];
-                std::snprintf(
-                    buf, sizeof(buf),
-                    "Task '%s' timed out after %lld ms (limit: %lld ms)",
-                    execution.name.c_str(),
-                    static_cast<long long>(elapsed_ms.count()),
-                    static_cast<long long>(execution.timeout.count()));
-                trigger_timeout(buf);
+                trigger_timeout(
+                    dstd::fmt<"Task '{}' timed out after {} ms (limit: {} ms)">(
+                        execution.name,
+                        static_cast<long long>(elapsed_ms.count()),
+                        static_cast<long long>(execution.timeout.count())));
             }
 
             return true;

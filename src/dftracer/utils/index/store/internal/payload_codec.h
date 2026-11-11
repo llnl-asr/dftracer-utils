@@ -11,34 +11,9 @@
 #include <dftracer/utils/index/store/error.h>
 
 #include <cstdint>
-#include <cstdio>
 #include <cstring>
 
 namespace dftracer::utils::index::store::internal {
-
-inline constexpr std::size_t DECODE_CONTEXT_BUF_SIZE = 256;
-inline thread_local char t_decode_context[DECODE_CONTEXT_BUF_SIZE] = {};
-
-struct DecodeContextGuard {
-    template <typename... Args>
-    explicit DecodeContextGuard(const char* fmt, Args... args) {
-        std::memcpy(previous_, t_decode_context, DECODE_CONTEXT_BUF_SIZE);
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wformat-nonliteral"
-        std::snprintf(t_decode_context, DECODE_CONTEXT_BUF_SIZE, fmt, args...);
-#pragma GCC diagnostic pop
-    }
-
-    ~DecodeContextGuard() {
-        std::memcpy(t_decode_context, previous_, DECODE_CONTEXT_BUF_SIZE);
-    }
-
-    DecodeContextGuard(const DecodeContextGuard&) = delete;
-    DecodeContextGuard& operator=(const DecodeContextGuard&) = delete;
-
-   private:
-    char previous_[DECODE_CONTEXT_BUF_SIZE];
-};
 
 inline void append_u8(dstd::String& out, std::uint8_t value) {
     out.push_back(static_cast<char>(value));
@@ -106,13 +81,8 @@ class Cursor {
     bool eof() const { return offset_ >= data_.size(); }
     bool failed() const { return failed_; }
 
-    /// The error of a failed cursor, naming the decode context.
+    /// The error of a failed cursor.
     dstd::Error error() const {
-        if (t_decode_context[0] != '\0')
-            return indexer_error(
-                IndexerErrorKind::DatabaseError,
-                dstd::fmt<"Corrupt index payload [{}]">(t_decode_context),
-                common::ErrorCode::Parse);
         return indexer_error(IndexerErrorKind::DatabaseError,
                              "Corrupt index payload", common::ErrorCode::Parse);
     }

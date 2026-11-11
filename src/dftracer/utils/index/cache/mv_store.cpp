@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/dstd/file.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/xxh3.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -23,7 +24,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
-#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -156,10 +156,7 @@ std::uint64_t identity_hash(const trace::views::detail::ViewPlan& plan) {
 }
 
 dstd::String hex8(std::uint64_t h) {
-    char buf[9];
-    std::snprintf(buf, sizeof(buf), "%08x",
-                  static_cast<unsigned>(h & 0xFFFFFFFFu));
-    return dstd::String(buf);
+    return dstd::fmt<"{:08x}">(static_cast<std::uint32_t>(h & 0xFFFFFFFFu));
 }
 
 dstd::Path manifest_path(dstd::StringView dir) {
@@ -532,14 +529,11 @@ dstd::String materialize_view_dir(const trace::views::detail::ViewPlan& plan) {
 
 void register_view(dstd::StringView dir,
                    const trace::views::detail::ViewPlan& plan) {
-    char schema[17];
-    std::snprintf(
-        schema, sizeof(schema), "%016llx",
-        static_cast<unsigned long long>(
-            plan.record_schema ? plan.record_schema->params_hash() : 0));
+    const dstd::String schema = dstd::fmt<"{:016x}">(static_cast<std::uint64_t>(
+        plan.record_schema ? plan.record_schema->params_hash() : 0));
     dstd::String j = "{\n";
     j += "  \"version\": " + dstd::int_text(MANIFEST_VERSION) + ",\n";
-    j += "  \"schema\": \"" + dstd::String(schema) + "\",\n";
+    j += "  \"schema\": \"" + schema + "\",\n";
     j += "  \"bytes\": " + dstd::int_text(dir_size(dir)) + ",\n";
     j += "  \"query\": \"";
     json::append_json_escaped(j, plan.query ? plan.query->source() : "");

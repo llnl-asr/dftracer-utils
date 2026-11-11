@@ -12,8 +12,6 @@
 #include <simdjson.h>
 #include <unistd.h>
 
-#include <cstdio>
-
 namespace dftracer::utils::index::store {
 
 namespace {
@@ -39,10 +37,8 @@ void append_escaped(dstd::String& out, dstd::StringView s) {
                 break;
             default:
                 if (static_cast<unsigned char>(c) < 0x20) {
-                    char buf[7];
-                    std::snprintf(buf, sizeof(buf), "\\u%04x",
-                                  static_cast<unsigned char>(c));
-                    out += buf;
+                    out +=
+                        dstd::fmt<"\\u{:04x}">(static_cast<unsigned char>(c));
                 } else {
                     out.push_back(c);
                 }

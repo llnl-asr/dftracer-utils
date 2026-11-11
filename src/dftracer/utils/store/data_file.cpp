@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/dstd/algorithm.h>
 #include <dftracer/utils/dstd/bits.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -24,9 +25,7 @@
 #include <unistd.h>
 
 #include <algorithm>
-#include <array>
 #include <chrono>
-#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <mutex>
@@ -453,10 +452,7 @@ dstd::String data_file_name(dstd::StringView host, std::uint32_t pid,
     const dstd::String pid_text = dstd::to_string(pid);
     out.append(pid_text.data(), pid_text.size());
     out.push_back('-');
-    std::array<char, 17> hex{};
-    std::snprintf(hex.data(), hex.size(), "%016llx",
-                  static_cast<unsigned long long>(random));
-    out.append(hex.data(), 16);
+    out += dstd::fmt<"{:016x}">(static_cast<std::uint64_t>(random));
     if (!label.empty()) {
         bool has_label = false;
         for (const char c : label) {

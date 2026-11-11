@@ -14,6 +14,31 @@
 #include <cstring>
 #include <utility>
 
+// The C headers rapidyaml includes come first: libc declarations carry no
+// visibility attribute, so one first seen inside the hidden region below is
+// hidden, and the shared library fails to link (undefined hidden `open`).
+#include <assert.h>
+#include <ctype.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <stdarg.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
+#if __has_include(<alloca.h>)
+#include <alloca.h>
+#endif
+#if __has_include(<endian.h>)
+#include <endian.h>
+#endif
+#if defined(__APPLE__)
+#include <sys/sysctl.h>
+#endif
+
 // The error callbacks of rapidyaml never return: they jump back to the parse.
 // Its templates and inline functions stay out of this library's symbols. The
 // handler below is a ParseEngine template argument, and the member functions

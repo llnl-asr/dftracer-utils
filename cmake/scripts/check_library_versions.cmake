@@ -56,14 +56,19 @@ if(APPLE)
   set(_ext dylib)
   # nm -m names weak definitions, which a dylib does not keep one for each
   # object that has them.
-  set(_nm_flags -gUm)
+  set(_sym_tool "${_nm}")
+  set(_sym_flags -gUm)
   set(_text_filter "$2 == \"(__TEXT,__text)\" && $3 == \"external\" { print $NF }")
   find_program(_otool otool REQUIRED)
 else()
   set(_ext so)
-  set(_nm_flags -g --defined-only)
-  set(_text_filter "$2 == \"T\" { print $3 }")
   find_program(_readelf readelf REQUIRED)
+  # readelf, not nm: nm cannot tell a hidden symbol in an archive member from
+  # a default one, and hidden symbols are meant to be absent from the library.
+  set(_sym_tool "${_readelf}")
+  set(_sym_flags -sW)
+  set(_text_filter
+      "$4 == \"FUNC\" && $5 == \"GLOBAL\" && $6 == \"DEFAULT\" && $(NF-1) != \"UND\" { n = $NF; sub(/@.*/, \"\", n); print n }")
 endif()
 
 # Writes the sorted global text symbols of a library or archive to <out>.
@@ -71,7 +76,7 @@ function(_text_symbols lib out)
   get_filename_component(_dir "${out}" DIRECTORY)
   file(MAKE_DIRECTORY "${_dir}")
   execute_process(
-    COMMAND "${_nm}" ${_nm_flags} "${lib}"
+    COMMAND "${_sym_tool}" ${_sym_flags} "${lib}"
     COMMAND "${_awk}" "${_text_filter}"
     COMMAND "${CMAKE_COMMAND}" -E env LC_ALL=C "${_sort}" -u
     OUTPUT_FILE "${out}"

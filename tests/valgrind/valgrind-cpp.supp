@@ -67,3 +67,13 @@
    ...
    fun:*dom_parser_implementation*stage2*
 }
+
+# --- derive_io_size: GCC reads the payload of an empty optional ---------------
+# GCC turns each `opt && *opt > 0` check into a branch-free AND that loads the
+# payload even when the optional is empty. The result cannot depend on that
+# payload, but Memcheck sees a branch on bytes never written.
+{
+   derive-io-size-empty-optional-cond
+   Memcheck:Cond
+   fun:derive_io_size
+}

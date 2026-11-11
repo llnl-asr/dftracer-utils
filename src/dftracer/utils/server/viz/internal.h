@@ -43,7 +43,8 @@ struct EventScalars {
 inline bool parse_event_scalars(simdjson::dom::element root,
                                 EventScalars& out) {
     if (!root.is_object()) return false;
-    for (auto field : root.get_object().value_unsafe()) {
+    simdjson::dom::object items = root.get_object().value_unsafe();
+    for (auto field : items) {
         dstd::StringView k = field.key;
         simdjson::dom::element v = field.value;
         if (k == "ts") {

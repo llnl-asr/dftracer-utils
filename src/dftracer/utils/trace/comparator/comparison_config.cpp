@@ -54,7 +54,9 @@ bool ComparisonConfig::parse_node(simdjson::dom::element val,
 
     auto gb_result = val["group_by"];
     if (!gb_result.error() && gb_result.value_unsafe().is_array()) {
-        for (auto elem : gb_result.value_unsafe().get_array().value_unsafe()) {
+        simdjson::dom::array items =
+            gb_result.value_unsafe().get_array().value_unsafe();
+        for (auto elem : items) {
             if (elem.is_string()) {
                 node.group_by.push_back(
                     dstd::String(elem.get_string().value_unsafe()));
@@ -65,8 +67,9 @@ bool ComparisonConfig::parse_node(simdjson::dom::element val,
     auto metrics_result = val["metrics"];
     if (!metrics_result.error() && metrics_result.value_unsafe().is_array()) {
         dstd::Vector<dstd::String> metrics;
-        for (auto elem :
-             metrics_result.value_unsafe().get_array().value_unsafe()) {
+        simdjson::dom::array items =
+            metrics_result.value_unsafe().get_array().value_unsafe();
+        for (auto elem : items) {
             if (elem.is_string()) {
                 metrics.push_back(
                     dstd::String(elem.get_string().value_unsafe()));
@@ -78,7 +81,9 @@ bool ComparisonConfig::parse_node(simdjson::dom::element val,
     auto pct_result = val["percentiles"];
     if (!pct_result.error() && pct_result.value_unsafe().is_array()) {
         dstd::Vector<double> percentiles;
-        for (auto elem : pct_result.value_unsafe().get_array().value_unsafe()) {
+        simdjson::dom::array items =
+            pct_result.value_unsafe().get_array().value_unsafe();
+        for (auto elem : items) {
             if (elem.is_double() || elem.is_int64() || elem.is_uint64()) {
                 percentiles.push_back(elem.get_double().value_unsafe());
             }
@@ -102,8 +107,9 @@ bool ComparisonConfig::parse_node(simdjson::dom::element val,
 
     auto children_result = val["children"];
     if (!children_result.error() && children_result.value_unsafe().is_array()) {
-        for (auto child_elem :
-             children_result.value_unsafe().get_array().value_unsafe()) {
+        simdjson::dom::array items =
+            children_result.value_unsafe().get_array().value_unsafe();
+        for (auto child_elem : items) {
             ComparisonNode child;
             if (!parse_node(child_elem, child, error)) return false;
             node.children.push_back(std::move(child));
@@ -163,8 +169,9 @@ dstd::Optional<ComparisonConfig> ComparisonConfig::from_json_file(
         auto dm_result = defaults_val["metrics"];
         if (!dm_result.error() && dm_result.value_unsafe().is_array()) {
             cfg.defaults.metrics.clear();
-            for (auto elem :
-                 dm_result.value_unsafe().get_array().value_unsafe()) {
+            simdjson::dom::array items =
+                dm_result.value_unsafe().get_array().value_unsafe();
+            for (auto elem : items) {
                 if (elem.is_string()) {
                     cfg.defaults.metrics.push_back(
                         dstd::String(elem.get_string().value_unsafe()));
@@ -175,8 +182,9 @@ dstd::Optional<ComparisonConfig> ComparisonConfig::from_json_file(
         auto dp_result = defaults_val["percentiles"];
         if (!dp_result.error() && dp_result.value_unsafe().is_array()) {
             cfg.defaults.percentiles.clear();
-            for (auto elem :
-                 dp_result.value_unsafe().get_array().value_unsafe()) {
+            simdjson::dom::array items =
+                dp_result.value_unsafe().get_array().value_unsafe();
+            for (auto elem : items) {
                 if (elem.is_double() || elem.is_int64() || elem.is_uint64()) {
                     cfg.defaults.percentiles.push_back(
                         elem.get_double().value_unsafe());
@@ -210,8 +218,9 @@ dstd::Optional<ComparisonConfig> ComparisonConfig::from_json_file(
 
     auto nodes_result = root["nodes"];
     if (!nodes_result.error() && nodes_result.value_unsafe().is_array()) {
-        for (auto node_elem :
-             nodes_result.value_unsafe().get_array().value_unsafe()) {
+        simdjson::dom::array items =
+            nodes_result.value_unsafe().get_array().value_unsafe();
+        for (auto node_elem : items) {
             ComparisonNode node;
             if (!parse_node(node_elem, node, error)) {
                 return dstd::nullopt;

@@ -451,7 +451,8 @@ static void fold_summary(std::size_t w, dstd::StringView event, SumBuild& b) {
             }
             auto args = root["args"];
             if (!args.error() && args.is_object()) {
-                for (auto field : args.get_object().value_unsafe()) {
+                simdjson::dom::object items = args.get_object().value_unsafe();
+                for (auto field : items) {
                     auto vv = field.value;
                     double val;
                     if (vv.is_int64())

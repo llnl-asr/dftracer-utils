@@ -29,18 +29,24 @@ LineTag tag_of(std::uint8_t tag) {
     return static_cast<LineTag>(tag & TAG_MASK);
 }
 
-dstd::StringView escaped(const LineIndex& ix, std::uint32_t line,
-                         bool is_value) {
+// The table entry of a line's key, or of its value: a scalar of several lines
+// is found through the first Cont line, any other by a search.
+const EscapeEntry& escape_entry(const LineIndex& ix, std::uint32_t line,
+                                bool is_value) {
+    if (is_value && ix.entries[line + 1].kind == LineKind::Cont)
+        return ix.escapes[ix.next[line + 1]];
     const std::uint32_t key = line * 2 + (is_value ? 1u : 0u);
-    const auto it = std::lower_bound(
+    return *std::lower_bound(
         ix.escapes.begin(), ix.escapes.end(), key,
         [](const EscapeEntry& e, std::uint32_t k) { return e.key < k; });
-    return dstd::StringView(ix.arena.data() + it->off, it->len);
 }
 
 dstd::StringView key_of(const LineIndex& ix, std::uint32_t line,
                         const LineParts& pt) {
-    if ((pt.flags & line_flag::KEY_ESC) != 0) return escaped(ix, line, false);
+    if ((pt.flags & line_flag::KEY_ESC) != 0) {
+        const EscapeEntry& e = escape_entry(ix, line, false);
+        return dstd::StringView(ix.arena.data() + e.off, e.len);
+    }
     return dstd::StringView(ix.text + pt.key_s, pt.key_e - pt.key_s);
 }
 
@@ -62,8 +68,9 @@ void parts_of(const LineIndex& ix, std::uint32_t line, LineParts& pt) {
     const LineEntry& e = ix.entries[line];
     const std::uint32_t end = ix.line_end(line);
     if ((e.flags & NOT_PLAIN) != 0 || e.kind == LineKind::Blank ||
-        e.kind == LineKind::Comment) {
-        classify_line(ix.text, e.start, end, ix.size, pt);
+        e.kind == LineKind::Comment || e.kind == LineKind::Root ||
+        e.kind == LineKind::RootDoc) {
+        classify_line(ix.text, e.start, end, pt);
         return;
     }
     const char* t = ix.text;
@@ -109,6 +116,8 @@ void each_member_line(const LineIndex& ix, std::uint32_t first,
     if (!f(k)) return;
     if (first_kind == LineKind::SeqMap || first_kind == LineKind::SeqMapOpen) {
         std::uint32_t c = k + 1;
+        if (ix.entries[c].kind == LineKind::Cont)
+            c = ix.escapes[ix.next[c]].end & ~ESCAPE_IN_TEXT;
         while (c < limit && is_skipped(ix.entries[c].kind)) ++c;
         while (c < limit && (ix.entries[c].indent > col ||
                              (ix.entries[c].indent == col &&
@@ -124,11 +133,15 @@ void each_member_line(const LineIndex& ix, std::uint32_t first,
     }
 }
 
+Value root_scalar(const DocumentStorage* storage, std::uint32_t line);
+
 }  // namespace
 
 Value LineAccess::container(const DocumentStorage* storage, std::uint32_t first,
                             std::uint32_t limit) {
     const LineEntry& e = storage->lines.entries[first];
+    if (e.kind == LineKind::Root || e.kind == LineKind::RootDoc)
+        return root_scalar(storage, first);
     const LineTag tag = is_seq_kind(e.kind) ? LineTag::Seq : LineTag::Map;
     return Value(storage, pack(first, limit), e.indent,
                  static_cast<std::uint8_t>(tag));
@@ -158,25 +171,27 @@ Value inline_value(const DocumentStorage* storage, std::uint32_t line,
         return LineAccess::make(
             storage, ix.text[pt.val_s] == '{' ? LineTag::Map : LineTag::Seq, 0,
             0);
+    if (((pt.flags | ix.entries[line].flags) & line_flag::VAL_ESC) != 0) {
+        const EscapeEntry& e = escape_entry(ix, line, true);
+        return LineAccess::make(storage, LineTag::Scalar,
+                                pack(e.off, e.off + e.len), 0,
+                                (e.end & ESCAPE_IN_TEXT) == 0);
+    }
     if ((pt.flags & line_flag::VAL_EMPTY) != 0)
         return LineAccess::make(storage, LineTag::Null, 0, 0);
-    if ((pt.flags & line_flag::VAL_QUOTED) != 0) {
-        if ((pt.flags & line_flag::VAL_ESC) != 0) {
-            const dstd::StringView text = escaped(ix, line, true);
-            const auto off =
-                static_cast<std::uint32_t>(text.data() - ix.arena.data());
-            return LineAccess::make(
-                storage, LineTag::Scalar,
-                pack(off, off + static_cast<std::uint32_t>(text.size())), 0,
-                true);
-        }
+    if ((pt.flags & line_flag::VAL_QUOTED) != 0)
         return LineAccess::make(storage, LineTag::Scalar,
                                 pack(pt.val_s, pt.val_e), 0);
-    }
     if (is_null_text(dstd::StringView(ix.text + pt.val_s, pt.val_e - pt.val_s)))
         return LineAccess::make(storage, LineTag::Null, 0, 0);
     return LineAccess::make(storage, LineTag::Scalar, pack(pt.val_s, pt.val_e),
                             0);
+}
+
+Value root_scalar(const DocumentStorage* storage, std::uint32_t line) {
+    LineParts pt;
+    parts_of(storage->lines, line, pt);
+    return inline_value(storage, line, pt);
 }
 
 Value member_value(const DocumentStorage* storage, std::uint32_t line,
@@ -220,9 +235,13 @@ bool LineAccess::next_document(const DocumentStorage* storage,
     first = k;
     std::uint32_t l = k + 1;
     if (ix.has_markers) {
-        while (l < ix.line_count && ix.entries[l].kind != LineKind::DocStart &&
-               ix.entries[l].kind != LineKind::DocEnd)
+        while (l < ix.line_count) {
+            const LineKind kind = ix.entries[l].kind;
+            if (kind == LineKind::DocStart || kind == LineKind::DocEnd ||
+                kind == LineKind::RootDoc)
+                break;
             ++l;
+        }
     } else {
         l = ix.line_count;
     }

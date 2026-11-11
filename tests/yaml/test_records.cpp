@@ -6,6 +6,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/yaml/document.h>
+#include <dftracer/utils/yaml/document_test.h>
 #include <dftracer/utils/yaml/records.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
@@ -308,5 +309,101 @@ TEST_CASE("yaml records: an anchor does not cross a document at any chunk") {
                 break;
         }
         CHECK(failed);
+    }
+}
+
+namespace {
+
+// The records of `text` with the tape reader forced, or not.
+dstd::Vector<dstd::String> records_with(dstd::StringView text,
+                                        std::size_t chunk, bool tape) {
+    yaml::detail::set_force_tape_for_test(tape);
+    dstd::Vector<dstd::String> out = records_of(text, chunk);
+    yaml::detail::set_force_tape_for_test(false);
+    return out;
+}
+
+}  // namespace
+
+TEST_CASE(
+    "yaml records: block and multi-line scalars go through the line index") {
+    // The hard items without the flow collection, which the line index leaves
+    // to the tape reader.
+    const dstd::String items =
+        "# a comment at column 0\n"
+        "- name: first\n"
+        "  text: |\n"
+        "    literal line one\n"
+        "    - not an item, a block scalar line\n"
+        "\n"
+        "    after a blank\n"
+        "  folded: >\n"
+        "    folded one\n"
+        "    folded two\n"
+        "# a comment between items\n"
+        "- plain: a multi line\n"
+        "    plain scalar that goes on\n"
+        "    and on\n"
+        "  quoted: \"a double\n"
+        "    quoted scalar with - dash\n"
+        "    lines\"\n"
+        "  single: 'a single\n"
+        "    quoted ''one'''\n"
+        "-\n"
+        "  more: x\n"
+        "- |\n"
+        "  top block scalar item\n"
+        "  - looks like an item\n"
+        "- last: 1\n"
+        "# trailing comment\n";
+    auto whole = Document::parse(items, "");
+    REQUIRE(whole.has_value());
+    CHECK(yaml::DocumentTestAccess::is_line_backed(*whole));
+    const dstd::Vector<dstd::String> expected = whole_elements(items);
+    REQUIRE(expected.size() == 5);
+    for (std::size_t chunk : {1u, 7u, 100000u}) {
+        CAPTURE(chunk);
+        CHECK(records_with(items, chunk, false) == expected);
+        CHECK(records_with(items, chunk, true) == expected);
+    }
+}
+
+TEST_CASE("yaml records: documents that are top-level scalars") {
+    const dstd::String text =
+        "--- |\n"
+        "  literal\n"
+        "   text\n"
+        "--- plain\n"
+        "  scalar\n"
+        "--- \"quoted\n"
+        "  scalar\"\n"
+        "--- >-\n"
+        "  folded\n"
+        "  text\n"
+        "---\n"
+        "bare\n"
+        "---\n"
+        "a: 1\n";
+    auto whole = Document::parse(text, "");
+    REQUIRE(whole.has_value());
+    CHECK(yaml::DocumentTestAccess::is_line_backed(*whole));
+    const dstd::Vector<dstd::String> expected =
+        records_with(text, 100000, true);
+    REQUIRE(expected.size() == 6);
+    CHECK(expected[0] == "'literal\n text\n'");
+    CHECK(expected[1] == "'plain scalar'");
+    CHECK(expected[2] == "'quoted scalar'");
+    CHECK(expected[3] == "'folded text'");
+    for (std::size_t chunk : {1u, 7u, 100000u}) {
+        CAPTURE(chunk);
+        CHECK(records_with(text, chunk, false) == expected);
+    }
+    // A text that is one scalar is one record.
+    for (const char* single : {"|\n x\n y\n", "a\nb\n", "\"a\n b\"\n"}) {
+        for (std::size_t chunk : {1u, 7u, 100000u}) {
+            CHECK(records_with(single, chunk, false) ==
+                  records_with(single, chunk, true));
+            CHECK(records_with(single, chunk, false).size() == 1);
+        }
     }
 }

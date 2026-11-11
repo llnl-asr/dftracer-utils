@@ -15,11 +15,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
-- Read plain block YAML (maps, sequences, quoted and plain scalars, comments, `---` and `...` markers) through a line index built with Highway, with no rapidyaml parse.
-  A parsed text holds its own bytes plus 0.82 times its size for a list of short records and 0.58 times for a deeply nested map (measured on 100 MB inputs), and a text outside that subset (flow collections that are not empty, block scalars, anchors, aliases, tags, `?` keys, directives, tabs in the indent, multi-line scalars) is read by the tape reader as before.
+- Read plain block YAML (maps, sequences, quoted and plain scalars, block scalars `|` and `>`, scalars of several lines, top-level scalar documents, comments, `---` and `...` markers) through a line index built with Highway, with no rapidyaml parse.
+  A parsed text holds its own bytes plus 0.82 times its size for a list of short records and 0.58 times for a deeply nested map (measured on 100 MB inputs), and a text outside that subset (flow collections that are not empty, anchors, aliases, tags, `?` keys, directives, tabs in the indent) is read by the tape reader as before.
   A leading byte order mark is skipped by both readers, so it is no longer read as part of the first key by the tape reader.
   The line index gives the same values as the tape reader, and reports its own errors (a duplicate key, an indent that matches no open level, an unclosed quote, a bad escape, a map key and a sequence item at one level) as `file:line:col: reason` with the line counted over the whole text, also in `yaml::Records`.
   Its reasons are worded differently from rapidyaml and name the line the fault is on, where rapidyaml often names the next one.
+  Where rapidyaml 0.16.0 departs from the YAML 1.2.2 spec, the line index follows the spec: an escaped line break before an empty line in a double quoted scalar, the final line feed of a block scalar at the end of a text with no line break, and a block scalar with no line before a document marker.
 - Read YAML from the events of rapidyaml into a flat tape of 16-byte entries, with no tree.
   A parsed text now holds its own bytes plus a tape of about 2.3 times its size for a list of small records and 1.8 times for a deeply nested map (measured on 100 MB inputs), where the rapidyaml tree held 17 to 23 times.
   The reader behaves as before, except that a duplicate key error names the line and column (`file:3:1: duplicate key 'a'`), two aliases that name the same key are a duplicate key, and an own key now overrides a key of every map in a `<<: [*a, *b]` merge.

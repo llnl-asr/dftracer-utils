@@ -43,6 +43,10 @@ std::size_t CountNewlines(const char* text, std::size_t size) {
     return total;
 }
 
+// A 64-bit mask for each byte class of each 64-byte block, built from vector
+// compares: the structure of the first stage of simdjson (Apache-2.0 OR MIT,
+// https://github.com/simdjson/simdjson; Langdale and Lemire, "Parsing
+// Gigabytes of JSON per Second", https://arxiv.org/abs/1902.08318).
 void LineMasks(const char* text, std::size_t block_count,
                const MaskArrays& out) {
     const Tag d;

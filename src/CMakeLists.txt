@@ -1067,6 +1067,7 @@ set(DFTRACER_UTILS_YAML_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/yaml/escape.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/yaml/line_index.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/yaml/line_index_simd.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/yaml/line_scalar.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/yaml/line_value.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/yaml/records.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/yaml/tape_parser.cpp

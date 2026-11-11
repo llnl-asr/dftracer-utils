@@ -15,6 +15,11 @@ namespace dftracer::utils::yaml {
 
 /// What a line of the accepted YAML subset is. The Open kinds are an entry or
 /// an item with no inline value that has a deeper block under it.
+///
+/// A scalar that goes on in later lines (a block scalar, a plain or quoted
+/// scalar of several lines) belongs to the line that holds its start, whose
+/// `VAL_ESC` flag says that its text is in the side table. The lines after it
+/// are Cont, up to the end the table entry names.
 enum class LineKind : std::uint8_t {
     Blank,
     Comment,
@@ -27,6 +32,13 @@ enum class LineKind : std::uint8_t {
     SeqMapOpen,
     DocStart,
     DocEnd,
+    /// A line inside a scalar of several lines.
+    Cont,
+    /// A top-level scalar that starts the line: plain, quoted, or the header
+    /// of a block scalar.
+    Root,
+    /// `--- ` and a top-level scalar on the same line.
+    RootDoc,
 };
 
 namespace line_flag {
@@ -53,13 +65,21 @@ struct LineEntry {
 };
 static_assert(sizeof(LineEntry) == 8, "a line entry is 8 bytes");
 
-/// An escaped scalar of a line, decoded into the arena: `key` is the line
-/// index times two, plus one for a value.
+/// The text of a scalar of a line that the text does not hold as it is: an
+/// escaped quoted scalar, a block scalar, a scalar of several lines. `key` is
+/// the line index times two, plus one for a value. `off` and `len` give the
+/// text in the arena, or in the text of the index when `end` has `IN_TEXT`. For
+/// a scalar of several lines, the rest of `end` is the line after its last
+/// line, and the first Cont line has the index of this entry in `next`.
 struct EscapeEntry {
     std::uint32_t key;
     std::uint32_t off;
     std::uint32_t len;
+    std::uint32_t end;
 };
+static_assert(sizeof(EscapeEntry) == 16, "an escape entry is 16 bytes");
+
+constexpr std::uint32_t ESCAPE_IN_TEXT = 0x80000000u;
 
 /// What makes a line invalid inside the subset, as classify_line finds it.
 namespace LineError {
@@ -70,7 +90,18 @@ constexpr std::uint8_t Unclosed = 1;
 constexpr std::uint8_t TrailingText = 2;
 /// A `: ` inside a plain value.
 constexpr std::uint8_t MapValue = 3;
+/// A block scalar header with text that is not an indicator or a comment.
+constexpr std::uint8_t BlockHeader = 4;
 }  // namespace LineError
+
+/// What goes on after the first line of a scalar, as classify_line finds it.
+namespace LineOpen {
+constexpr std::uint8_t NONE = 0;
+/// A quoted scalar that the line does not close.
+constexpr std::uint8_t Quoted = 1;
+/// A block scalar: the line holds its header.
+constexpr std::uint8_t Block = 2;
+}  // namespace LineOpen
 
 /// The facts of one line, read from its text.
 struct LineParts {
@@ -91,13 +122,16 @@ struct LineParts {
     std::uint32_t key_e = 0;
     std::uint32_t val_s = 0;
     std::uint32_t val_e = 0;
+    /// A @ref LineOpen, and the offset of the quote or of the `|` or `>`.
+    std::uint8_t open = LineOpen::NONE;
+    std::uint32_t open_at = 0;
 };
 
 /// Reads the facts of the line that holds `[start, end)`, with the CR cut.
 /// False when the line is outside the accepted subset, or invalid: then
-/// `parts.error` says which. `text_size` ends the text.
+/// `parts.error` says which.
 bool classify_line(const char* text, std::uint32_t start, std::uint32_t end,
-                   std::uint32_t text_size, LineParts& parts);
+                   LineParts& parts);
 
 /// What the line index made of a text.
 enum class BuildResult : std::uint8_t {
@@ -127,14 +161,16 @@ inline std::size_t bom_size(const char* text, std::size_t size) {
 
 /// The line index of a text in the accepted subset: a line for each line of
 /// the text, the end of the subtree of each content line, and the decoded text
-/// of the escaped scalars.
+/// of the scalars that the text does not hold as they are.
 struct LineIndex {
     dstd::RawBuffer<LineEntry> entries;
     /// The index of the first content line after the subtree of a line: the
     /// first one whose indent is not deeper. For a SeqMap line the subtree is
     /// the whole item.
+    /// For the first Cont line of a scalar of several lines: the index of its
+    /// entry in `escapes`.
     dstd::RawBuffer<std::uint32_t> next;
-    dstd::Vector<char> arena;
+    dstd::RawBuffer<char> arena;
     dstd::Vector<EscapeEntry> escapes;
     const char* text = nullptr;
     std::uint32_t size = 0;
@@ -182,8 +218,8 @@ std::size_t count_newlines(const char* text, std::size_t size);
 struct MaskArrays {
     /// '\n'.
     std::uint64_t* nl;
-    /// A byte that no line of the subset holds: a control character other than
-    /// LF, a CR that is not before a LF, DEL.
+    /// A byte that no line of the subset holds, unless it is a TAB: a control
+    /// character other than LF, a CR that is not before a LF, DEL.
     std::uint64_t* bad;
     /// A byte of 0x80 and above.
     std::uint64_t* high;

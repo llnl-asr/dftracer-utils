@@ -4,6 +4,8 @@
 //   records  a block sequence of 11-line maps (id, name, cat, pid, tid, ts,
 //            dur and an args map), the shape of a trace as YAML
 //   nested   four top maps, four levels, 20 x 20 integer leaves per group
+//   multiline  the records, each with a `|` block of 3 to 5 lines and a plain
+//            value of two lines
 //
 // Each shape is read these ways, parse and a full walk included:
 //
@@ -237,6 +239,38 @@ dstd::String make_records(std::size_t megabytes, Answer& truth) {
     return out;
 }
 
+dstd::String make_multiline(std::size_t megabytes, Answer& truth) {
+    static const char* const CATS[] = {"POSIX", "STDIO", "MPIIO", "DLIO"};
+    Rng rng;
+    dstd::String out;
+    out.reserve(megabytes * 1000000 + 1024);
+    std::uint64_t id = 0;
+    while (out.size() < megabytes * 1000000) {
+        const std::uint64_t pid = 4000 + rng.next() % 2000;
+        const std::uint64_t dur = rng.next() % 5000;
+        const char* cat = CATS[rng.next() % 4];
+        const std::uint64_t size = 512u << (rng.next() % 8);
+        const std::uint64_t lines = 3 + rng.next() % 3;
+        truth.sum += dur;
+        if (std::strcmp(cat, "POSIX") == 0 && size > 1024) ++truth.count;
+        out += dstd::fmt<
+            "- id: {}\n  cat: {}\n  pid: {}\n  dur: {}\n  args:\n"
+            "    size: {}\n  note: |\n">(id, cat, pid, dur, size);
+        for (std::uint64_t l = 0; l < lines; ++l) {
+            const dstd::String line =
+                dstd::fmt<"note line {} of record {}">(l, id);
+            out += "    " + line + "\n";
+            truth.sum += line.size() + 1;
+        }
+        const dstd::String first = dstd::fmt<"first part of {}">(id);
+        const dstd::String second = dstd::fmt<"second part of {}">(id);
+        out += "  desc: " + first + "\n    " + second + "\n";
+        truth.sum += first.size() + 1 + second.size();
+        ++id;
+    }
+    return out;
+}
+
 dstd::String make_nested(std::size_t megabytes, Answer& truth) {
     constexpr int SUBS = 20;
     constexpr int LEAVES = 20;
@@ -284,10 +318,19 @@ void walk_leaves(yaml::Value value, Answer& answer) {
     }
 }
 
-enum class Shape { Records, Nested };
+enum class Shape { Records, Nested, Multiline };
+
+void walk_multiline(yaml::Value record, Answer& answer) {
+    walk_record(record, answer);
+    if (auto note = record.find("note")) answer.sum += note->raw().size();
+    if (auto desc = record.find("desc")) answer.sum += desc->raw().size();
+}
 
 void walk(yaml::Value root, Shape shape, Answer& answer) {
-    if (shape == Shape::Records) {
+    if (shape == Shape::Multiline) {
+        root.for_each_element(
+            [&](yaml::Value record) { walk_multiline(record, answer); });
+    } else if (shape == Shape::Records) {
         root.for_each_element(
             [&](yaml::Value record) { walk_record(record, answer); });
     } else {
@@ -367,7 +410,9 @@ Outcome run_records(const dstd::Path& path, Shape shape,
         for (;;) {
             auto next = dftu::bench::ok(records.next());
             if (!next) break;
-            if (shape == Shape::Records)
+            if (shape == Shape::Multiline)
+                walk_multiline(*next, answer);
+            else if (shape == Shape::Records)
                 walk_record(*next, answer);
             else
                 walk_leaves(*next, answer);
@@ -431,14 +476,18 @@ int main(int argc, char** argv) {
     const dstd::Path file(dstd::fmt<"{}/yaml_read_bench_{}.yaml">(
         dir, static_cast<long>(getpid())));
     int failures = 0;
-    std::printf("%-8s %-9s %9s %10s %9s\n", "shape", "case", "MB/s", "extra MB",
+    std::printf("%-9s %-9s %9s %10s %9s\n", "shape", "case", "MB/s", "extra MB",
                 "x input");
-    for (const Shape shape : {Shape::Records, Shape::Nested}) {
-        const char* shape_name = shape == Shape::Records ? "records" : "nested";
+    for (const Shape shape :
+         {Shape::Records, Shape::Nested, Shape::Multiline}) {
+        const char* shape_name = shape == Shape::Records  ? "records"
+                                 : shape == Shape::Nested ? "nested"
+                                                          : "multiline";
         Answer truth;
-        const dstd::String text = shape == Shape::Records
-                                      ? make_records(megabytes, truth)
-                                      : make_nested(megabytes, truth);
+        const dstd::String text =
+            shape == Shape::Records  ? make_records(megabytes, truth)
+            : shape == Shape::Nested ? make_nested(megabytes, truth)
+                                     : make_multiline(megabytes, truth);
         dftu::bench::ok(dstd::fs::write_file(file, text));
         const double input_mb = static_cast<double>(text.size()) / 1e6;
 
@@ -485,7 +534,7 @@ int main(int argc, char** argv) {
         }
         const auto row = [&](const char* name, double seconds,
                              const Outcome& outcome) {
-            std::printf("%-8s %-9s %9.0f %10.1f %9.2f\n", shape_name, name,
+            std::printf("%-9s %-9s %9.0f %10.1f %9.2f\n", shape_name, name,
                         input_mb / seconds,
                         static_cast<double>(outcome.extra_bytes) / 1e6,
                         static_cast<double>(outcome.extra_bytes) /
@@ -494,7 +543,7 @@ int main(int argc, char** argv) {
         for (int which = 0; which < CASES; ++which)
             if (!seconds[which].empty())
                 row(NAMES[which], median(seconds[which]), outcomes[which]);
-        std::printf("%-8s answer sum=%llu count=%llu\n", shape_name,
+        std::printf("%-9s answer sum=%llu count=%llu\n", shape_name,
                     static_cast<unsigned long long>(outcomes[1].answer.sum),
                     static_cast<unsigned long long>(outcomes[1].answer.count));
     }

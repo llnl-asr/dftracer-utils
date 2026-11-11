@@ -6206,8 +6206,7 @@ PlanParts finish_tree(PlannedTree t) {
 // Source::collect_batch(), each leaf then scanning its result from memory.
 // Either way a leaf keeps its remaining ops above its source.
 coro::CoroTask<dstd::Result<void>> batch_leaves(
-    dstd::Vector<PlannedTree*> leaves,
-    const dstd::Vector<PlannedTree*>& roots = {}) {
+    dstd::Vector<PlannedTree*> leaves, dstd::Vector<PlannedTree*> roots = {}) {
     struct Group {
         std::type_index type;
         dstd::String key;
@@ -6388,7 +6387,7 @@ coro::CoroTask<dstd::Result<dstd::Vector<DataFrame>>> collect_all(
         roots.push_back(&t);
         tree_leaves(t, leaves);
     }
-    auto batching = batch_leaves(std::move(leaves), roots);
+    auto batching = batch_leaves(std::move(leaves), std::move(roots));
     auto batched = co_await std::move(batching);
     if (!batched) co_return batched.error();
 

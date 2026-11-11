@@ -348,6 +348,7 @@ ARCHITECTURE_MMD = """graph BT
     query["dftracer_utils_duql<br/><i>predicate IR, string codec, evaluator</i>"]
     io["dftracer_utils_fileio<br/><i>gzip, file I/O, hashing</i>"]
     json["dftracer_utils_json<br/><i>simdjson-backed parsing</i>"]
+    yaml["dftracer_utils_yaml<br/><i>rapidyaml-backed reader, YAML writer</i>"]
     store["dftracer_utils_store<br/><i>key-value store engine</i>"]
     runtime["dftracer_utils_runtime<br/><i>coroutines, tasks, task graph, io backend,<br/>pipelines, primitives</i>"]
 
@@ -357,6 +358,7 @@ ARCHITECTURE_MMD = """graph BT
     io --> trace
     store --> trace
     trace --> utilities
+    yaml --> trace
     json --> query
     query --> dataframe
     dataframe --> trace
@@ -372,6 +374,7 @@ ARCHITECTURE_MMD = """graph BT
     style query fill:#f0f0f0,stroke:#999,color:#333
     style io fill:#f0f0f0,stroke:#999,color:#333
     style json fill:#f0f0f0,stroke:#999,color:#333
+    style yaml fill:#f0f0f0,stroke:#999,color:#333
     style compose fill:#fff6e0,stroke:#d9a94a,color:#333
 """
 

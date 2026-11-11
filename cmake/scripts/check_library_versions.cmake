@@ -7,8 +7,8 @@
 # libraries it bundles. Also check the libraries of ours that each shared
 # library needs: memory needs none, dstd needs only memory, common needs only
 # memory and dstd, coro needs only memory, dstd and common, fileio needs only memory,
-# dstd, common, coro, runtime and json, trace needs everything but domains,
-# and json and duql do not need runtime.
+# dstd, common, coro, runtime and json, yaml needs only memory, dstd and common,
+# trace needs everything but domains, and json and duql do not need runtime.
 # Library names come from the create_library NAME arguments in
 # src/CMakeLists.txt.
 #
@@ -237,6 +237,15 @@ foreach(_name ${_names})
          "dftracer_utils_json")
     if(_above_fileio)
       message(SEND_ERROR "${_name}: needs ${_above_fileio}, but fileio needs only memory, dstd, common, coro, runtime and json")
+      set(_failed TRUE)
+    endif()
+  endif()
+  if(_name STREQUAL "dftracer_utils_yaml")
+    set(_above_yaml ${_needed})
+    list(REMOVE_ITEM _above_yaml "dftracer_utils_memory" "dftracer_utils_dstd"
+         "dftracer_utils_common")
+    if(_above_yaml)
+      message(SEND_ERROR "${_name}: needs ${_above_yaml}, but yaml needs only memory, dstd and common")
       set(_failed TRUE)
     endif()
   endif()

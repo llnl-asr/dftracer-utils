@@ -10,7 +10,7 @@ need_libdeflate()
 need_zstd()
 need_simdjson()
 need_boost_math()
-need_yaml_cpp()
+need_rapidyaml()
 
 if(DFTRACER_UTILS_ENABLE_ARROW)
   need_nanoarrow()
@@ -45,6 +45,7 @@ if(DFTRACER_UTILS_HAVE_LUSTREAPI)
   set(DFTU_PC_PRIVATE_common "${DFTU_PC_PRIVATE_common} -llustreapi")
 endif()
 set(DFTU_PC_PRIVATE_json "-lsimdjson")
+set(DFTU_PC_PRIVATE_yaml "-ldftracer_ryml")
 set(DFTU_PC_PRIVATE_fileio "-ldftracer_zlib -ldeflate")
 set(DFTU_PC_PRIVATE_store "-ldeflate -lzstd")
 # Keep the static Vectorscan archive's symbols out of a shared library's
@@ -62,8 +63,8 @@ endfunction()
 
 set(DFTU_PC_PRIVATE_duql "-lsimdjson -lpcre2-8 ${DFTU_PC_VECTORSCAN} -ldftracer_hwy")
 set(DFTU_PC_PRIVATE_dataframe "-lsimdjson -ldftracer_hwy_contrib -ldftracer_hwy -ldftracer_utf8proc_static -lzstd ${DFTU_PC_NANOARROW}")
-set(DFTU_PC_PRIVATE_trace "-lsimdjson -lyaml-cpp -ldftracer_zlib -ldeflate -lzstd ${DFTU_PC_NANOARROW}")
-set(DFTU_PC_PRIVATE_domains "-lyaml-cpp ${DFTU_PC_NANOARROW}")
+set(DFTU_PC_PRIVATE_trace "-lsimdjson -ldftracer_zlib -ldeflate -lzstd ${DFTU_PC_NANOARROW}")
+set(DFTU_PC_PRIVATE_domains "${DFTU_PC_NANOARROW}")
 
 # Branch padding against the Intel JCC erratum. The flag acts on the assembler,
 # so a padded kernel is a second compile of the same source (string_match_jcc.cpp,
@@ -1058,6 +1059,77 @@ endforeach()
 use_precompiled_header(dftracer_utils_json_objects MIN_COUNT 1)
 
 # +++++++++++++++++++++++++++++++++++++++++
+# YAML Library (rapidyaml-backed reader and block-style writer)
+# +++++++++++++++++++++++++++++++++++++++++
+
+set(DFTRACER_UTILS_YAML_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/yaml/document.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/yaml/escape.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/yaml/writer.cpp)
+
+create_library(
+  NAME
+  dftracer_utils_yaml
+  NAMESPACE
+  dftracer_utils_yaml
+  SOURCES
+  ${DFTRACER_UTILS_YAML_SOURCES}
+  VERSION
+  ${PROJECT_VERSION}
+  DESCRIPTION
+  "DFTracer utils yaml library (rapidyaml-backed reader and block-style writer)"
+  URL
+  "https://github.com/llnl-asr/dftracer-utils"
+  BUILD_SHARED
+  ${DFTRACER_UTILS_BUILD_SHARED}
+  BUILD_STATIC
+  ${DFTRACER_UTILS_BUILD_STATIC}
+  SHARED_LINK_LIBRARIES
+  dftracer_utils_memory::shared
+  dftracer_utils_dstd::shared
+  dftracer_utils_common::shared
+  STATIC_LINK_LIBRARIES
+  dftracer_utils_memory::static
+  dftracer_utils_dstd::static
+  dftracer_utils_common::static
+  PUBLIC_INCLUDE_DIRS
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+  $<BUILD_INTERFACE:${CMAKE_BINARY_DIR}/include>
+  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+  PRIVATE_COMPILE_OPTIONS
+  ${COVERAGE_COMPILE_OPTIONS}
+  PKG_CONFIG_REQUIRES
+  "dftracer_utils_common"
+  PKG_CONFIG_LIBS_PRIVATE
+  "${DFTU_PC_PRIVATE_yaml}"
+  FIND_DEPENDENCIES
+  dftracer_utils_common
+  STATIC_BUNDLED_PACKAGES
+  dftracer_utils_ryml)
+
+foreach(variant objects shared static)
+  dftu_variant_target(VARIANT_TARGET dftracer_utils_yaml ${variant})
+  if(TARGET ${VARIANT_TARGET})
+    # The one library gets the archive from its objects, and a second entry
+    # makes the linker warn about a duplicate.
+    if(NOT DFTRACER_UTILS_SINGLE_LIBRARY OR variant STREQUAL "objects")
+      link_rapidyaml(${VARIANT_TARGET})
+    endif()
+    if(variant STREQUAL "objects")
+      target_set_warnings(dftracer_utils_yaml_objects)
+      target_compile_options(dftracer_utils_yaml_objects
+                             PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
+    elseif(COVERAGE_LINK_OPTIONS)
+      target_link_libraries(${VARIANT_TARGET}
+                            PRIVATE ${COVERAGE_LINK_OPTIONS})
+    endif()
+  endif()
+endforeach()
+
+use_precompiled_header(dftracer_utils_yaml_objects MIN_COUNT 1)
+
+# +++++++++++++++++++++++++++++++++++++++++
 # IO Library (file I/O, gzip, hashing, text)
 # +++++++++++++++++++++++++++++++++++++++++
 
@@ -1428,6 +1500,7 @@ create_library(
     dftracer_utils_duql::shared
     dftracer_utils_store::shared
     dftracer_utils_fileio::shared
+    dftracer_utils_yaml::shared
     dftracer_utils_dataframe::shared
   STATIC_LINK_LIBRARIES
     dftracer_utils_memory::static
@@ -1439,6 +1512,7 @@ create_library(
     dftracer_utils_duql::static
     dftracer_utils_store::static
     dftracer_utils_fileio::static
+    dftracer_utils_yaml::static
     dftracer_utils_dataframe::static
   PUBLIC_INCLUDE_DIRS
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
@@ -1448,7 +1522,7 @@ create_library(
   PRIVATE_COMPILE_OPTIONS
   ${COVERAGE_COMPILE_OPTIONS}
   PKG_CONFIG_REQUIRES
-  "dftracer_utils_runtime dftracer_utils_json dftracer_utils_duql dftracer_utils_store dftracer_utils_fileio dftracer_utils_dataframe"
+  "dftracer_utils_runtime dftracer_utils_json dftracer_utils_duql dftracer_utils_store dftracer_utils_fileio dftracer_utils_yaml dftracer_utils_dataframe"
   PKG_CONFIG_LIBS_PRIVATE
   "${DFTU_PC_PRIVATE_trace}"
   FIND_DEPENDENCIES
@@ -1457,30 +1531,24 @@ create_library(
   dftracer_utils_duql
   dftracer_utils_store
   dftracer_utils_fileio
+  dftracer_utils_yaml
   dftracer_utils_dataframe
   BUNDLED_PACKAGES
     simdjson ${DFTU_ARROW_PACKAGES}
   STATIC_BUNDLED_PACKAGES
     dftracer_utils_zlib
-    yaml-cpp
     libdeflate
     zstd)
-
-# The one file that reads YAML catches yaml-cpp's exceptions.
-set_source_files_properties(
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/record_schema_yaml.cpp
-  PROPERTIES COMPILE_OPTIONS -fexceptions SKIP_PRECOMPILE_HEADERS ON)
 
 foreach(variant objects shared static)
   dftu_variant_target(VARIANT_TARGET dftracer_utils_trace ${variant})
   set(VARIANT_UPPER ${DFTU_LINK_TYPE_${variant}})
   if(TARGET ${VARIANT_TARGET})
     link_simdjson(${VARIANT_TARGET} ${VARIANT_UPPER})
-    # The one library gets yaml-cpp, zlib-ng, libdeflate, zstd from domains,
+    # The one library gets zlib-ng, libdeflate, zstd from domains,
     # and a second entry for any of them makes the linker warn about a
     # duplicate. Vectorscan lives in duql; trace reaches it through duql.
     if(NOT DFTRACER_UTILS_SINGLE_LIBRARY OR variant STREQUAL "objects")
-      link_yaml_cpp(${VARIANT_TARGET})
       link_zlib(${VARIANT_TARGET})
       link_libdeflate(${VARIANT_TARGET})
       link_zstd(${VARIANT_TARGET})
@@ -1534,6 +1602,7 @@ create_library(
     dftracer_utils_duql::shared
     dftracer_utils_store::shared
     dftracer_utils_fileio::shared
+    dftracer_utils_yaml::shared
     dftracer_utils_trace::shared
   STATIC_LINK_LIBRARIES
     dftracer_utils_runtime::static
@@ -1542,6 +1611,7 @@ create_library(
     dftracer_utils_duql::static
     dftracer_utils_store::static
     dftracer_utils_fileio::static
+    dftracer_utils_yaml::static
     dftracer_utils_trace::static
   PUBLIC_INCLUDE_DIRS
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
@@ -1551,7 +1621,7 @@ create_library(
   PRIVATE_COMPILE_OPTIONS
   ${COVERAGE_COMPILE_OPTIONS}
   PKG_CONFIG_REQUIRES
-  "dftracer_utils_runtime dftracer_utils_json dftracer_utils_duql dftracer_utils_store dftracer_utils_fileio dftracer_utils_dataframe dftracer_utils_trace"
+  "dftracer_utils_runtime dftracer_utils_json dftracer_utils_duql dftracer_utils_store dftracer_utils_fileio dftracer_utils_yaml dftracer_utils_dataframe dftracer_utils_trace"
   PKG_CONFIG_LIBS_PRIVATE
   "${DFTU_PC_PRIVATE_domains}"
   FIND_DEPENDENCIES
@@ -1561,17 +1631,10 @@ create_library(
   dftracer_utils_duql
   dftracer_utils_store
   dftracer_utils_fileio
+  dftracer_utils_yaml
   dftracer_utils_trace
   BUNDLED_PACKAGES
-    ${DFTU_ARROW_PACKAGES}
-  STATIC_BUNDLED_PACKAGES
-    yaml-cpp)
-
-# The two files that call yaml-cpp catch its exceptions.
-set_source_files_properties(
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/workload/dlio/yaml_emit.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/domains/workload/dlio/event_map_yaml.cpp
-  PROPERTIES COMPILE_OPTIONS -fexceptions SKIP_PRECOMPILE_HEADERS ON)
+    ${DFTU_ARROW_PACKAGES})
 
 # Boost.Math reports a domain, pole, overflow, evaluation or rounding error
 # through errno and a NaN or infinite result, and never throws.
@@ -1634,9 +1697,6 @@ foreach(variant objects shared static)
     if(DFTRACER_UTILS_ENABLE_ARROW)
       link_nanoarrow(${VARIANT_TARGET} ${VARIANT_UPPER})
     endif()
-
-    # yaml-cpp for DLIO config emit.
-    link_yaml_cpp(${VARIANT_TARGET})
 
     # Lustre stripe query (optional). The config header carries the
     # DFTRACER_UTILS_HAVE_LUSTREAPI define; we just need to link the lib.
@@ -1818,6 +1878,26 @@ if(NOT DFTRACER_UTILS_SINGLE_LIBRARY)
 
   create_unified_library_config(
     NAME
+    dftracer_utils_yaml
+    VERSION
+    ${PROJECT_VERSION}
+    DESCRIPTION
+    "DFTracer utils yaml library (YAML reader and writer)"
+    URL
+    "https://github.com/llnl-asr/dftracer-utils"
+    BUILD_SHARED
+    ${DFTRACER_UTILS_BUILD_SHARED}
+    BUILD_STATIC
+    ${DFTRACER_UTILS_BUILD_STATIC}
+    PKG_CONFIG_REQUIRES
+    "dftracer_utils_common"
+    PKG_CONFIG_LIBS_PRIVATE
+    "${DFTU_PC_PRIVATE_yaml}"
+    FIND_DEPENDENCIES
+    dftracer_utils_common)
+
+  create_unified_library_config(
+    NAME
     dftracer_utils_fileio
     VERSION
     ${PROJECT_VERSION}
@@ -1891,7 +1971,7 @@ if(NOT DFTRACER_UTILS_SINGLE_LIBRARY)
     BUILD_STATIC
     ${DFTRACER_UTILS_BUILD_STATIC}
     PKG_CONFIG_REQUIRES
-    "dftracer_utils_runtime dftracer_utils_json dftracer_utils_duql dftracer_utils_store dftracer_utils_fileio dftracer_utils_dataframe"
+    "dftracer_utils_runtime dftracer_utils_json dftracer_utils_duql dftracer_utils_store dftracer_utils_fileio dftracer_utils_yaml dftracer_utils_dataframe"
     PKG_CONFIG_LIBS_PRIVATE
     "${DFTU_PC_PRIVATE_trace}"
     FIND_DEPENDENCIES
@@ -1900,6 +1980,7 @@ if(NOT DFTRACER_UTILS_SINGLE_LIBRARY)
     dftracer_utils_duql
     dftracer_utils_store
     dftracer_utils_fileio
+    dftracer_utils_yaml
     dftracer_utils_dataframe)
 
   create_unified_library_config(
@@ -1912,7 +1993,7 @@ if(NOT DFTRACER_UTILS_SINGLE_LIBRARY)
     URL
     "https://github.com/llnl-asr/dftracer-utils"
     PKG_CONFIG_REQUIRES
-    "dftracer_utils_runtime dftracer_utils_json dftracer_utils_duql dftracer_utils_store dftracer_utils_fileio dftracer_utils_dataframe dftracer_utils_trace"
+    "dftracer_utils_runtime dftracer_utils_json dftracer_utils_duql dftracer_utils_store dftracer_utils_fileio dftracer_utils_yaml dftracer_utils_dataframe dftracer_utils_trace"
     PKG_CONFIG_LIBS_PRIVATE
     "${DFTU_PC_PRIVATE_domains}"
     FIND_DEPENDENCIES
@@ -1921,6 +2002,7 @@ if(NOT DFTRACER_UTILS_SINGLE_LIBRARY)
     dftracer_utils_duql
     dftracer_utils_store
     dftracer_utils_fileio
+    dftracer_utils_yaml
     dftracer_utils_dataframe
     dftracer_utils_trace
     BUILD_SHARED
@@ -2021,7 +2103,7 @@ if(DFTRACER_UTILS_PREFERRED_TYPE)
     set(DFTU_SINGLE_PACKAGES simdjson ${DFTU_ARROW_PACKAGES})
     if(DFTRACER_UTILS_BUILD_STATIC)
       list(APPEND DFTU_SINGLE_PACKAGES pcre2 dftracer_utils_deps
-           dftracer_utils_zlib yaml-cpp libdeflate zstd
+           dftracer_utils_ryml dftracer_utils_zlib libdeflate zstd
            ${DFTU_VECTORSCAN_PACKAGES})
     endif()
     foreach(pkg ${DFTU_SINGLE_PACKAGES})

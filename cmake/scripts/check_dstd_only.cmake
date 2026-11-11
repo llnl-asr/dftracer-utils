@@ -32,6 +32,7 @@ set(_dirs
     src/dftracer/utils/store
     include/dftracer/utils/json
     src/dftracer/utils/json
+    src/dftracer/utils/yaml
     include/dftracer/utils/duql
     src/dftracer/utils/duql
     include/dftracer/utils/plugins
@@ -56,6 +57,7 @@ set(_dirs
     tests/io
     tests/layering
     tests/layout
+    tests/yaml
     tests/memory
     tests/reader
     tests/replay

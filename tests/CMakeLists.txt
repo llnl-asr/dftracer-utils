@@ -116,7 +116,7 @@ elseif(DFTRACER_UTILS_BUILD_SHARED)
 endif()
 if(DFTRACER_UTILS_BUILD_SHARED)
   set(CODEC_EXPORT_LIBS)
-  foreach(lib memory dstd common runtime store fileio json duql dataframe trace domains)
+  foreach(lib memory dstd common runtime store fileio json yaml duql dataframe trace domains)
     dftu_variant_target(_target dftracer_utils_${lib} shared)
     if(TARGET ${_target})
       list(APPEND CODEC_EXPORT_LIBS $<TARGET_FILE:${_target}>)
@@ -155,6 +155,12 @@ add_test(
   COMMAND
     sh -c
     [=[bad=$(grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/' "$0/src/dftracer/utils/fileio" | grep -vE '<dftracer/utils/(memory|dstd|common|coro|runtime|json|fileio)/'); if [ -n "$bad" ]; then echo "include from fileio into a library above it:"; echo "$bad"; exit 1; fi]=]
+    ${CMAKE_SOURCE_DIR})
+add_test(
+  NAME yaml_no_upward
+  COMMAND
+    sh -c
+    [=[bad=$(grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/' "$0/src/dftracer/utils/yaml" | grep -vE '<dftracer/utils/(memory|dstd|common|yaml)/'); if [ -n "$bad" ]; then echo "include from yaml into a library above it:"; echo "$bad"; exit 1; fi]=]
     ${CMAKE_SOURCE_DIR})
 add_test(
   NAME trace_no_upward
@@ -698,6 +704,12 @@ add_subdirectory(trace)
 # +++++++++++++++++++++++++++++++++++++++++
 
 add_subdirectory(json)
+
+# +++++++++++++++++++++++++++++++++++++++++
+# YAML Library Tests
+# +++++++++++++++++++++++++++++++++++++++++
+
+add_subdirectory(yaml)
 
 # +++++++++++++++++++++++++++++++++++++++++
 # Query Library Tests

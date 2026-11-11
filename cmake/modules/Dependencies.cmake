@@ -1114,49 +1114,96 @@ function(link_boost_math TARGET_NAME)
 endfunction()
 
 # ==============================================================================
-# yaml-cpp - YAML emit/parse for DLIO config generation
+# rapidyaml - YAML parser: the amalgamated release pair (header and source)
+# built as one static PIC archive with hidden visibility and no exceptions. The
+# yaml library links it privately, so no library of ours exports a ryml
+# symbol. No ryml header is installed: no public header includes one.
 # ==============================================================================
 
-function(need_yaml_cpp)
-  if(NOT yaml-cpp_ADDED)
-    cpmaddpackage(
-      NAME
-      yaml-cpp
-      GITHUB_REPOSITORY
-      jbeder/yaml-cpp
-      GIT_TAG
-      yaml-cpp-0.9.0
-      OPTIONS
-      "YAML_CPP_BUILD_TESTS OFF"
-      "YAML_CPP_BUILD_TOOLS OFF"
-      "YAML_CPP_BUILD_CONTRIB OFF"
-      "YAML_BUILD_SHARED_LIBS OFF"
-      "YAML_CPP_INSTALL OFF"
-      FORCE
-      YES)
-    # Libs.private names -lyaml-cpp in every build type.
-    set_target_properties(yaml-cpp PROPERTIES DEBUG_POSTFIX "")
-    install_dependency_archive(yaml-cpp yaml-cpp:: TARGETS yaml-cpp)
+function(need_rapidyaml)
+  if(TARGET dftracer::ryml)
+    return()
   endif()
-endfunction()
+  cpmaddpackage(
+    NAME
+    rapidyaml_hpp
+    URL
+    https://github.com/biojppm/rapidyaml/releases/download/v0.16.0/rapidyaml.v0.16.0.singlesrc.hpp
+    URL_HASH
+    SHA256=0bca851b19b009df75da25b39b61064d38c6d9bc40572ba8b636f5c4b69e4c3d
+    DOWNLOAD_NO_EXTRACT
+    TRUE
+    DOWNLOAD_ONLY
+    YES)
+  cpmaddpackage(
+    NAME
+    rapidyaml_cpp
+    URL
+    https://github.com/biojppm/rapidyaml/releases/download/v0.16.0/rapidyaml.v0.16.0.singlesrc.cpp
+    URL_HASH
+    SHA256=0ce37969e656a13871dc89295d6db7fda072d6674298da1edaf59ca036dbbc70
+    DOWNLOAD_NO_EXTRACT
+    TRUE
+    DOWNLOAD_ONLY
+    YES)
 
-# Link yaml-cpp PRIVATE so the static library is bundled into the consumer and
-# the header path stays out of the installed/exported target set.
-function(link_yaml_cpp TARGET_NAME)
-  if(NOT TARGET_NAME)
-    message(FATAL_ERROR "link_yaml_cpp: TARGET_NAME is required")
-  endif()
-  if(NOT TARGET ${TARGET_NAME})
-    message(FATAL_ERROR "link_yaml_cpp: target '${TARGET_NAME}' does not exist")
-  endif()
-  if(NOT TARGET yaml-cpp::yaml-cpp)
+  # The release source includes its header by the absolute path of the build
+  # machine that made it, so the copy we compile names it by file name.
+  file(READ ${rapidyaml_cpp_SOURCE_DIR}/rapidyaml.v0.16.0.singlesrc.cpp
+       _ryml_source)
+  set(_ryml_original "${_ryml_source}")
+  string(
+    REPLACE
+      "#include </home/runner/work/rapidyaml/rapidyaml/assets/rapidyaml.v0.16.0.singlesrc.hpp>"
+      "#include <rapidyaml.v0.16.0.singlesrc.hpp>" _ryml_source "${_ryml_source}")
+  set(_ryml_generated ${CMAKE_BINARY_DIR}/rapidyaml/rapidyaml.v0.16.0.singlesrc.cpp)
+  if(_ryml_source STREQUAL _ryml_original)
     message(
       FATAL_ERROR
-        "link_yaml_cpp: yaml-cpp::yaml-cpp target missing; call need_yaml_cpp() first"
+        "need_rapidyaml: the include of the header was not found in the release source"
     )
   endif()
-  target_link_libraries(${TARGET_NAME} PRIVATE yaml-cpp::yaml-cpp)
-  dftracer_utils_ok("Linked ${TARGET_NAME} to yaml-cpp")
+  set(_ryml_current "")
+  if(EXISTS ${_ryml_generated})
+    file(READ ${_ryml_generated} _ryml_current)
+  endif()
+  if(NOT _ryml_current STREQUAL _ryml_source)
+    file(WRITE ${_ryml_generated} "${_ryml_source}")
+  endif()
+
+  add_library(dftracer_ryml STATIC ${_ryml_generated})
+  target_include_directories(
+    dftracer_ryml SYSTEM
+    PUBLIC $<BUILD_INTERFACE:${rapidyaml_hpp_SOURCE_DIR}>)
+  target_compile_features(dftracer_ryml PUBLIC cxx_std_17)
+  # Third-party source: no warnings, and no exceptions. rapidyaml throws only
+  # when RYML_DEFAULT_CALLBACK_USES_EXCEPTIONS is defined, which it is not.
+  target_compile_options(dftracer_ryml PRIVATE -w
+                                               $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
+  set_target_properties(
+    dftracer_ryml
+    PROPERTIES OUTPUT_NAME dftracer_ryml
+               EXPORT_NAME ryml
+               ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
+               POSITION_INDEPENDENT_CODE ON
+               CXX_VISIBILITY_PRESET hidden
+               VISIBILITY_INLINES_HIDDEN ON)
+  add_library(dftracer::ryml ALIAS dftracer_ryml)
+  install_dependency_archive(dftracer_utils_ryml dftracer:: TARGETS
+                             dftracer_ryml)
+  dftracer_utils_ok("Using rapidyaml 0.16.0 (single source, static, hidden)")
+endfunction()
+
+# Links the rapidyaml archive into TARGET_NAME privately.
+function(link_rapidyaml TARGET_NAME)
+  if(NOT TARGET ${TARGET_NAME})
+    message(
+      FATAL_ERROR "link_rapidyaml: target '${TARGET_NAME}' does not exist")
+  endif()
+  if(NOT TARGET dftracer::ryml)
+    message(FATAL_ERROR "link_rapidyaml: call need_rapidyaml() first")
+  endif()
+  target_link_libraries(${TARGET_NAME} PRIVATE dftracer::ryml)
 endfunction()
 
 # ==============================================================================

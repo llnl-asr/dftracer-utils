@@ -47,7 +47,7 @@ build dirs land under ``build/build-<preset>/``).
    cmake --preset dev            # RelWithDebInfo, shared + static, no Python
    cmake --build --preset dev
 
-The build produces eight layered component libraries, each as shared and static:
+The build produces nine layered component libraries, each as shared and static:
 
 - ``dftracer_utils_runtime``, the async runtime (coroutines, tasks, I/O backend,
   pipelines, common primitives).
@@ -55,6 +55,7 @@ The build produces eight layered component libraries, each as shared and static:
 - ``dftracer_utils_fileio``, file formats (gzip readers and writers, line
   streams, parallel writers, hashing).
 - ``dftracer_utils_json``, JSON parsing (simdjson-backed).
+- ``dftracer_utils_yaml``, YAML reading (rapidyaml-backed) and writing.
 - ``dftracer_utils_duql``, the duql filter language (predicate IR, string codec, evaluator).
 - ``dftracer_utils_dataframe``, the columnar SIMD engine (``Series`` /
   ``DataFrame``, Highway kernels, the Arrow bridge, query execution / masking).
@@ -278,7 +279,7 @@ Each file requires the libraries of ours that it needs. For a static link, add
 
 The install holds only our own headers under ``<prefix>/include``. A static build
 also installs the archives and CMake configs of its bundled libraries (simdjson,
-zlib-ng, libdeflate, zstd, nanoarrow, pcre2, yaml-cpp, Highway), but no header
+zlib-ng, libdeflate, zstd, nanoarrow, pcre2, Highway), but no header
 of theirs.
 
 Verify the build

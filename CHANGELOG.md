@@ -27,10 +27,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Build the json and duql libraries without exceptions.
 - Build the io library without exceptions.
 - Build the trace library without exceptions.
-  Only the file that reads YAML keeps exceptions, to catch the ones of yaml-cpp.
   Python keeps its exception types.
 - Build the utilities library and the command line tools without exceptions.
-  Only the two files that call yaml-cpp keep exceptions, to catch the ones of yaml-cpp.
 - Make the viz server answer 400 for a bad query, such as an invalid argument or a duql parse error, and 500 for I/O and internal errors, where every failure answered 500 before.
 - Make a command line tool that fails print `Error: <message>` and exit with 1 in cases where it aborted before, such as an index folder that cannot be written.
 - Make `dftracer_stats` in detailed mode stop at the first error and exit with 1.
@@ -409,6 +407,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   A public header now reaches no CPM package, so a plugin built from a source checkout and a plugin built against an install prefix compile the same, and the vendored headers install with the rest of `include/`.
   `cmake/patches/concurrentqueue-thread-exit.patch` is removed: its change is in the vendored header.
 - Add the ctest `public_third_party_headers`, which fails on an include under `include/` that is not ours, standard, system, `<mpi.h>` or vendored; simdjson and nanoarrow are its known exceptions until the API cut moves them out of `include/`.
+- Parse YAML with rapidyaml in place of yaml-cpp, for record schema specs and the `--event-map` file of `dftracer_gen_dlio_config`, in the new library `libdftracer_utils_yaml`, which also holds a block-style YAML writer that the DLIO config uses.
+  No yaml-cpp archive is in the link line or the install any more, and the same input is accepted, except that a mapping with a duplicate key is now an error, as YAML 1.2.2 requires.
+  No source of ours except `common/error.cpp` builds with exceptions now.
 
 ### Added
 
@@ -585,6 +586,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Write every float of the DLIO config with a decimal point (`mean: 1.0`, `max_bound: 1.0`), where a whole number was written as `1`, so a YAML reader such as PyYAML reads it as a float and not as an int.
 - Fix `dftu_task_when_all` and `dftu_task_when_any` ending the process when an input task raises an exception.
   The combined task now reports the exception.
 - Fix `Store::commit` accepting a batch made before a `close()` when the next writer got the address of the closed one.

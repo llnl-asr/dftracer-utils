@@ -6,8 +6,10 @@ repository; every other one is fetched at configure time (via CPM, see
 `cmake/modules/Dependencies.cmake`) and statically or dynamically linked into
 the libraries, CLI binaries, and Python extension. Each component remains under
 its own license, reproduced in full in that component's source tree (under
-`.cpmsource/<name>/.../LICENSE` after a build, and in the vendored header
-itself) and available at the linked homepage.
+`.cpmsource/<name>/.../LICENSE` after a build, in the vendored header itself,
+and for rapidyaml with c4core, fast_float and debugbreak at the top of each
+part of its single-source files under `.cpmsource/rapidyaml_*/`) and available
+at the linked homepage.
 
 This project itself is licensed under the terms in [LICENSE](LICENSE); the
 notices here cover only the third-party dependencies.
@@ -23,7 +25,10 @@ notices here cover only the third-party dependencies.
 | Zstandard (zstd) | `BSD-3-Clause OR GPL-2.0-only` | https://github.com/meta/zstd |
 | libdeflate | `MIT` | https://github.com/ebiggers/libdeflate |
 | Boost.Math | `BSL-1.0` | https://github.com/boostorg/math |
-| yaml-cpp | `MIT` | https://github.com/jbeder/yaml-cpp |
+| rapidyaml | `MIT` | https://github.com/biojppm/rapidyaml |
+| c4core (in rapidyaml) | `MIT` | https://github.com/biojppm/c4core |
+| fast_float (in c4core) | `Apache-2.0 OR MIT OR BSL-1.0` | https://github.com/fastfloat/fast_float |
+| debugbreak (in c4core) | `BSD-2-Clause` | https://github.com/scottt/debugbreak |
 | moodycamel concurrentqueue | `BSD-2-Clause` | https://github.com/cameron314/concurrentqueue |
 | unordered_dense | `MIT` | https://github.com/martinus/unordered_dense |
 | PCRE2 | `BSD-3-Clause WITH PCRE2-exception` | https://github.com/PCRE2Project/pcre2 |

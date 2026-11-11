@@ -3,13 +3,9 @@
 
 namespace dftracer::utils::common {
 
-void throw_error(const dstd::Error& error) { throw DFTUtilsException(error); }
-
 dstd::Error error_of_exception(const std::exception_ptr& error) noexcept {
     try {
         std::rethrow_exception(error);
-    } catch (const DFTUtilsException& e) {
-        return e.error();
     } catch (const std::exception& e) {
         return dstd::Error{dstd::Condition::Unknown, e.what()};
     } catch (...) {

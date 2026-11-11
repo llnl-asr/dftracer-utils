@@ -21,16 +21,6 @@ struct DuqlError {
     dstd::String format() const;
 };
 
-/// Exception wrapping a @ref DuqlError.
-class DuqlParseError : public common::DFTUtilsException {
-   public:
-    explicit DuqlParseError(DuqlError err);
-    const DuqlError& error() const { return err_; }
-
-   private:
-    DuqlError err_;
-};
-
 }  // namespace dftracer::utils::duql
 
 #endif  // DFTRACER_UTILS_DUQL_ERROR_H

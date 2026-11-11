@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/duql/errc.h>
 #include <dftracer/utils/duql/lower.h>
 #include <dftracer/utils/duql/parser.h>
 #include <dftracer/utils/duql/syntax/parser.h>
@@ -21,11 +20,6 @@ dstd::String DuqlError::format() const {
     out += '\n';
     return out;
 }
-
-DuqlParseError::DuqlParseError(DuqlError err)
-    : common::DFTUtilsException(
-          dftracer::utils::dstd::Error{DuqlErrc::Parse, err.format()}),
-      err_(std::move(err)) {}
 
 dftracer::utils::dstd::Expected<detail::QueryNodePtr, DuqlError> parse(
     dstd::StringView input, const Params& params) {

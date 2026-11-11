@@ -650,7 +650,7 @@ foreach(variant objects shared static)
       target_set_warnings(dftracer_utils_common_objects)
       target_compile_options(dftracer_utils_common_objects
                              PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
-      # The throw delegate of common::unwrap is the one source that throws.
+      # error_of_exception reads a foreign exception, so this source catches.
       set_source_files_properties(
         ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/error.cpp
         PROPERTIES COMPILE_OPTIONS -fexceptions)

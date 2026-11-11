@@ -151,49 +151,47 @@ and combinator API.
 Error handling
 --------------
 
-An exception thrown in a task propagates to whoever awaits it: ``Runtime::block_on``
-rethrows it, and ``handle.get()`` rethrows it for a submitted task. The library
-throws ``common::DFTUtilsException`` and its subclasses, which derive from
-``std::runtime_error``; catch ``std::exception`` to handle any failure.
+A task reports a failure by returning a ``dstd::Result``. ``Runtime::block_on``
+gives the task's result back, so the caller checks it the same way; a task that
+was cancelled or stopped gives an error too.
 
 .. code-block:: cpp
 
-   auto task = []() -> coro::CoroTask<void> {
-       // Any exception thrown here propagates to the caller of block_on
+   auto task = []() -> coro::CoroTask<dstd::Result<void>> {
        if (risky_operation() < 0) {
-           throw common::DFTUtilsException(common::ErrorCode::Io,
-                                           "Failed to open file");
+           co_return common::make_error(common::ErrorCode::Io,
+                                        "Failed to open file");
        }
-       co_return;
+       co_return dstd::Result<void>{};
    };
-   try {
-       rt.block_on(task());
-   } catch (const std::exception& e) {
-       std::cerr << "Task failed: " << e.what() << std::endl;
-   }
+   auto done = rt.block_on(task());
+   if (!done) std::cerr << "Task failed: " << done.error().c_str() << std::endl;
 
-The error of a ``scope.spawn_future`` child goes only to its ``SpawnFuture``,
-so wrap the ``co_await`` in a try-catch:
+Inside a task, ``co_await coro::or_fail(std::move(r))`` gives the value of a
+``dstd::Result`` or ends the task with its error. The result of a
+``scope.spawn_future`` child goes only to its ``SpawnFuture``, so check it where
+you await it:
 
 .. code-block:: cpp
 
-   coro::CoroTask<void> spawned(coro::Scope& scope) {
-       auto future = scope.spawn_future([]() -> coro::CoroTask<int> {
-           int result = risky_operation();   // this might throw
-           if (result < 0) {
-               throw common::DFTUtilsException(common::ErrorCode::Internal,
-                                               "Operation failed");
-           }
-           co_return result;
-       });
-
-       try {
-           int result = co_await future;
-           use_data(result);
-       } catch (const std::exception& e) {
-           std::cerr << "Spawned task failed: " << e.what() << std::endl;
-       }
+   coro::CoroTask<dstd::Result<void>> spawned(coro::Scope& scope) {
+       auto future = scope.spawn_future(
+           []() -> coro::CoroTask<dstd::Result<int>> {
+               int result = risky_operation();
+               if (result < 0) {
+                   co_return common::make_error(common::ErrorCode::Internal,
+                                                "Operation failed");
+               }
+               co_return result;
+           });
+       dstd::Result<int> result = co_await future;
+       if (!result) co_return result.error();
+       use_data(*result);
+       co_return dstd::Result<void>{};
    }
+
+An exception that code built with exceptions throws in a task still reaches the
+caller of ``block_on`` as that exception.
 
 On a channel, check the values of ``send()`` and ``receive()``. Both are falsy
 on a closed channel, which means the other side exited or failed:

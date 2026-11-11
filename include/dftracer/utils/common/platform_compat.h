@@ -146,14 +146,6 @@ extern "C" void __tsan_release(void *);
 #define DFTRACER_UTILS_NO_THREAD_SAFETY_ANALYSIS
 #endif
 
-/// printf-style argument checking where the compiler has it, nothing on MSVC.
-#if defined(__GNUC__) || defined(__clang__)
-#define DFTRACER_UTILS_PRINTF_FORMAT(FMT_INDEX, ARG_INDEX) \
-    __attribute__((__format__(__printf__, FMT_INDEX, ARG_INDEX)))
-#else
-#define DFTRACER_UTILS_PRINTF_FORMAT(FMT_INDEX, ARG_INDEX)
-#endif
-
 /// Tells the CPU that this thread spins, so a contended cache line settles.
 #if defined(__x86_64__) || defined(__i386__)
 #define DFTRACER_UTILS_CPU_PAUSE() __builtin_ia32_pause()

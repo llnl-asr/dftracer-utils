@@ -392,11 +392,16 @@ void require_ran(const dstd::Result<void>& ran) {
 }
 
 dstd::String fixed(double value, int precision) {
-    return dftracer::utils::common::string_format("%.*f", precision, value);
+    char buf[64];
+    char* end = dstd::to_chars_fixed(buf, buf + sizeof(buf), value, precision);
+    return dstd::String(buf, end ? static_cast<std::size_t>(end - buf) : 0);
 }
 
 dstd::String general(double value, int precision) {
-    return dftracer::utils::common::string_format("%.*g", precision, value);
+    char buf[64];
+    char* end =
+        dstd::to_chars_general(buf, buf + sizeof(buf), value, precision);
+    return dstd::String(buf, end ? static_cast<std::size_t>(end - buf) : 0);
 }
 
 dstd::String format_ms(std::uint64_t nanos) {

@@ -45,7 +45,7 @@ namespace {
 
 duql::Query parsed_query(dstd::StringView text) {
     auto parsed = duql::Query::from_string(text);
-    if (!parsed) throw duql::DuqlParseError(parsed.error());
+    if (!parsed) dftu::bench::fail(parsed.error());
     return std::move(*parsed);
 }
 

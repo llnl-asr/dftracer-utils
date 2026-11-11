@@ -522,6 +522,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Removed
 
+- Remove `common::DFTUtilsException`, `common::throw_error`, `common::unwrap` and `duql::DuqlParseError`.
+  Library calls return `dstd::Result`, so check the result where you called `unwrap` before.
+- Remove `common::string_format`, `common::vstring_format` and the `DFTRACER_UTILS_PRINTF_FORMAT` macro. Use `dstd::fmt`.
 - Remove `TaskExecutor::enqueue`. Use `post`.
 - Remove the `--watchdog-idle-timeout` flag, which never had an effect.
 - Remove `runtime/compose.h` with `utilities::op`, `AsyncOpFor` and the `&&` and `||` operators. Use the stages and adaptors of `coro/stage.h`, and `coro::when_all` and `coro::when_any` to run two things at once or to race them.

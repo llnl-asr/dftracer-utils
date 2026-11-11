@@ -9,9 +9,7 @@
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 
-#include <cstdarg>
 #include <cstdint>
-#include <stdexcept>
 #include <type_traits>
 #include <utility>
 
@@ -162,66 +160,11 @@ dstd::Unexpected<dstd::Error> make_error(E code, dstd::Format<S> f,
         dstd::Error::from_format(code, f, a...));
 }
 
-/// Throwable carrying the (domain, condition) identity of a failure, so a
-/// domain error throws without collapsing to a coarse code.
-class DFTUtilsException : public std::exception {
-   public:
-    DFTUtilsException(ErrorCode code, dstd::StringView message)
-        : error_(code, message) {}
-    explicit DFTUtilsException(const dstd::Error& error) : error_(error) {}
-
-    const char* what() const noexcept override { return error_.c_str(); }
-
-    /// Concatenation factory (numbers via to_chars; no format string):
-    ///   throw DFTUtilsException::cat(ErrorCode::IO,
-    ///                                "Cannot open ", path, ": errno=", e);
-    template <typename... Args>
-    static DFTUtilsException cat(ErrorCode code, const Args&... args) {
-        return DFTUtilsException(code, str_cat(args...));
-    }
-
-    /// printf-style factory:
-    ///   throw DFTUtilsException::fmt(ErrorCode::IO,
-    ///                                "Cannot open %s: errno=%d", path.c_str(),
-    ///                                e);
-    /// For a literal '%' in the message, escape as "%%" or use cat().
-    DFTRACER_UTILS_PRINTF_FORMAT(2, 3)
-    static DFTUtilsException fmt(ErrorCode code, const char* format, ...) {
-        va_list ap;
-        va_start(ap, format);
-        dstd::String msg = vstring_format(format, ap);
-        va_end(ap);
-        return DFTUtilsException(code, std::move(msg));
-    }
-
-    std::uint64_t domain() const noexcept { return error_.domain().id; }
-    dstd::StringView domain_name() const noexcept {
-        return error_.domain().name;
-    }
-    std::int32_t code_int() const noexcept { return error_.code(); }
-    dstd::Condition condition() const noexcept { return error_.condition(); }
-    const dstd::Error& error() const noexcept { return error_; }
-
-   private:
-    dstd::Error error_;
-};
-
-/// Throws @ref DFTUtilsException with `error`. Defined in a source built with
-/// exceptions, so a header that calls it holds no `throw`.
-[[noreturn]] void throw_error(const dstd::Error& error);
-
-/// The error an exception stands for: the error of a @ref DFTUtilsException,
-/// the what() of another std::exception as dstd::Condition::Unknown, and
-/// "unknown error" for anything else. Defined in a source built with
-/// exceptions, so code that cannot catch can still read an exception.
+/// The error an exception stands for: the what() of a std::exception as
+/// dstd::Condition::Unknown, and "unknown error" for anything else. Defined in
+/// a source built with exceptions, so code that cannot catch can still read an
+/// exception.
 dstd::Error error_of_exception(const std::exception_ptr& error) noexcept;
-
-/// The value of `r`, or throws @ref DFTUtilsException with its error.
-template <typename T>
-T unwrap(dstd::Result<T>&& r) {
-    if (!r.has_value()) throw_error(r.error());
-    if constexpr (!std::is_void_v<T>) return std::move(*r);
-}
 
 }  // namespace dftracer::utils::common
 

@@ -1,9 +1,9 @@
-:description: Why errors carry a (domain, code) identity instead of one global enum, and when the codebase uses a value result versus an exception.
+:description: Why errors carry a (domain, code) identity instead of one global enum, and how a failure reaches the caller without an exception.
 
 The error model
 ================
 
-What this explains: why dftracer-utils errors carry a ``(domain, code)`` identity instead of one global enum, and when the codebase uses a value result versus an exception.
+What this explains: why dftracer-utils errors carry a ``(domain, code)`` identity instead of one global enum, and how a failure reaches the caller without an exception.
 
 The problem with one flat error enum
 ------------------------------------
@@ -63,26 +63,28 @@ An error holds a pointer to its table entry, so making one costs no lookup.
        Info --> Cond["condition"]
        Info --> Error["dstd::Error{entry, message}"]
 
-Values versus exceptions
-------------------------
+Results, fatal errors and foreign exceptions
+--------------------------------------------
 
-Two channels carry an error, chosen by whether the immediate caller is expected to handle the failure.
+The libraries build without exceptions.
+Only the Python bindings and the few sources that read a foreign exception, such as ``common::error_of_exception``, are built with them.
+A failure takes one of three paths, chosen by who can cause it.
 
-- ``dstd::Result<T>`` (``dstd::Expected<T, dstd::Error>``) is the channel for a failure in the ordinary course of use, such as a query that does not parse or a key that is not found.
+- ``dstd::Result<T>`` (``dstd::Expected<T, dstd::Error>``) carries every failure that input can cause, such as a query that does not parse, a key that is not found or an I/O error.
   The function returns it, and the caller checks it.
   ``make_error(code, message)`` builds the error side, and a caller passes it up with ``if (!r) return r.error();``.
   A coroutine task that returns a ``dstd::Expected`` writes ``co_await coro::or_fail(std::move(r))``, which gives the value or ends the task with the error.
   ``r.match(on_value, on_error)`` handles both sides, and the compiler rejects a call that leaves one out.
   ``value()`` and ``error()`` on the wrong side end the process with the message and a stack trace.
-  They never throw.
   A debug build (``DFTRACER_UTILS_DEBUG``) also ends the process when an error result is destroyed or overwritten before anyone tested it, read its error or matched it.
   A caller that may drop an error on purpose calls ``r.discard()`` and says why.
-- ``DFTUtilsException`` is for the case the caller cannot handle.
-  It is thrown, not returned, and it holds a ``dstd::Error``.
-  It crosses the Python boundary with its ``domain()``, ``code_int()`` and ``condition()`` intact, so a ``try`` and ``except`` in Python can branch on the same identity as a C++ caller.
+- ``dstd::fatal`` ends the process with the message and a stack trace when code breaks a contract that correct code never breaks, such as an internal invariant or a size overflow.
+  No input from a user reaches this path.
+- Code that is not ours can still throw: a plugin, a Python callback or a task that the caller wrote and built with exceptions.
+  ``coro::settle`` stops such an exception at the task boundary, and ``common::error_of_exception`` turns it into a ``dstd::Error`` with ``dstd::Condition::Unknown`` and the ``what()`` text.
+  ``Runtime::block_on`` gives the original exception back to a caller built with exceptions.
 
-Keeping exceptions for the failures that cannot be handled keeps the common failure paths (a malformed query, a missing file) as ordinary returned values.
-A coroutine checks such a value with a plain ``if`` before it decides whether to go on, so no exception has to survive a suspension point on that path.
+The Python bindings turn an error into a typed Python exception by its ``domain()`` and ``condition()``, so a ``try`` and ``except`` in Python can branch on the same identity as a C++ caller.
 
 See also
 --------

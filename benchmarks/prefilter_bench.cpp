@@ -8,6 +8,7 @@
 //
 //   prefilter_bench [lines] [rounds]
 
+#include <bench_ok.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -63,7 +64,7 @@ void run(
     const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& lines,
     int rounds) {
     auto parsed = duql::Query::from_string(query);
-    if (!parsed) throw duql::DuqlParseError(parsed.error());
+    if (!parsed) dftu::bench::fail(parsed.error());
     const Prefilter p(std::move(*parsed));
     std::size_t needles = 0;
     for (const auto& c : p.clauses()) needles += c.size();

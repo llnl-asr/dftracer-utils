@@ -92,25 +92,26 @@ std::remove_extent_t<T>* allocate_array(std::size_t n) {
     using E = std::remove_extent_t<T>;
     static_assert(std::is_trivially_destructible_v<E>,
                   "UniquePtr<T[]> needs a trivially destructible T");
-    // An overflowing count asks for more than any heap has, so allocate()
-    // reports it as bad_alloc.
-    const std::size_t bytes =
-        n > std::numeric_limits<std::size_t>::max() / sizeof(E)
-            ? std::numeric_limits<std::size_t>::max()
-            : n * sizeof(E);
-    return static_cast<E*>(memory::detail::allocate(bytes, alignof(E)));
+    if (n > std::numeric_limits<std::size_t>::max() / sizeof(E)) {
+        memory::detail::size_overflow();
+    }
+    return static_cast<E*>(memory::detail::allocate(n * sizeof(E), alignof(E)));
 }
 
 /// Builds @p n elements in @p p with @p make. If one throws, the block is
 /// freed. Built elements need no destructor, as T is trivially destructible.
 template <class T, class Make>
 UniquePtr<T> fill_array(std::remove_extent_t<T>* p, std::size_t n, Make make) {
+#if defined(__cpp_exceptions)
     try {
         for (std::size_t i = 0; i < n; ++i) make(p + i);
     } catch (...) {
         memory::detail::deallocate(p);
         throw;
     }
+#else
+    for (std::size_t i = 0; i < n; ++i) make(p + i);
+#endif
     return UniquePtr<T>(p);
 }
 
@@ -120,12 +121,16 @@ template <class T, class... Args>
     requires(!std::is_array_v<T>)
 UniquePtr<T> make_unique(Args&&... args) {
     void* raw = memory::detail::allocate(sizeof(T), alignof(T));
+#if defined(__cpp_exceptions)
     try {
         return UniquePtr<T>(::new (raw) T(std::forward<Args>(args)...));
     } catch (...) {
         memory::detail::deallocate(raw, sizeof(T));
         throw;
     }
+#else
+    return UniquePtr<T>(::new (raw) T(std::forward<Args>(args)...));
+#endif
 }
 
 /// An array of @p n value-initialized elements (zero for numbers).

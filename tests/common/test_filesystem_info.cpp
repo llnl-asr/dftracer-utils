@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/filesystem_info.h>
 #include <dftracer/utils/common/scratch.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
@@ -80,23 +81,24 @@ TEST_CASE("ScratchSession release keeps the directory") {
         s.release();
     }
     CHECK(dstd::fs::exists(dir).value());
-    (void)dstd::fs::remove_all(dir);
+    dstd::fs::remove_all(dir).discard();
 }
 
 TEST_CASE("publish_path moves a built directory to its destination") {
     common::ScratchSession s;
     REQUIRE(s.valid());
-    const dstd::String src = dstd::String(s.dir().str()) + "/build";
+    const dstd::String src = dstd::fmt<"{}/build">(s.dir().str());
     REQUIRE(dstd::fs::create_directories(src).has_value());
     {
-        dftu_utils_test::FileOut(src + "/marker.txt") << "hello";
+        dftu_utils_test::FileOut(dstd::fmt<"{}/marker.txt">(src)) << "hello";
     }
 
-    const dstd::String dst = dstd::String(s.dir().str()) + "/published";
-    common::publish_path(dstd::PathView(src), dstd::PathView(dst));
+    const dstd::String dst = dstd::fmt<"{}/published">(s.dir().str());
+    CHECK(common::publish_path(dstd::PathView(src), dstd::PathView(dst))
+              .has_value());
 
     CHECK_FALSE(dstd::fs::exists(src).value());
-    CHECK(dstd::fs::exists(dst + "/marker.txt").value());
+    CHECK(dstd::fs::exists(dstd::fmt<"{}/marker.txt">(dst)).value());
 }
 
 TEST_CASE("should_stage honors the never override") {

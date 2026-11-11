@@ -11,6 +11,7 @@
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/tuple.h>
@@ -75,22 +76,29 @@ struct Morsel {
     }
 };
 
+/// What reading a @ref Cursor gives: the next morsel, nullopt at the end of
+/// the stream, or the error that ended the read. After an error the cursor
+/// gives nothing more.
+using MorselResult = dstd::Result<dstd::Optional<Morsel>>;
+
 /// A stateful reader over one Source. next() returns the next morsel, or
-/// nullopt at end; `max_rows` is a size hint. The engine pulls it async
-/// (co_await), so a producer can suspend on real I/O inside next() instead of
-/// blocking a worker thread.
+/// nullopt at end, or the error that ended the read; `max_rows` is a size
+/// hint. The engine pulls it async (co_await), so a producer can suspend on
+/// real I/O inside next() instead of blocking a worker thread. A cursor that
+/// a source hands out may still throw from next(), narrow() or reclaim(): the
+/// engine awaits those through @ref coro::settle and turns an exception into
+/// an error result (a failed narrow() or reclaim() counts as nothing done).
+/// try_next(), out_names() and resident_bytes() must not throw.
 class Cursor {
    public:
     virtual ~Cursor();
-    virtual coro::CoroTask<dstd::Optional<Morsel>> next(
-        std::int64_t max_rows) = 0;
+    virtual coro::CoroTask<MorselResult> next(std::int64_t max_rows) = 0;
     /// Pull up to `max_rows` rows without suspending, when this cursor can
     /// answer from data it already holds. Returns false when it cannot, and
-    /// the caller must await next() instead. A true return with `out` unset
-    /// is end of stream, exactly as next() reports it.
-    virtual bool try_next(std::int64_t, dstd::Optional<Morsel>&) {
-        return false;
-    }
+    /// the caller must await next() instead. A true return with `out` holding
+    /// no morsel is end of stream, and one holding an error is a failed read,
+    /// exactly as next() reports them. Must not throw.
+    virtual bool try_next(std::int64_t, MorselResult&) { return false; }
     /// Output column names, when they are only known after producing (a
     /// data-dependent schema like pivot/to_dummies). nullopt means the plan's
     /// static schema is authoritative. Valid only after the cursor is drained.
@@ -160,7 +168,7 @@ struct ScanRequest {
     std::uint64_t memory_budget = 0;
 };
 
-/// The result of Source::scan: a fresh async Cursor plus, per @ref ScanRequest
+/// What Source::scan gives: a fresh async Cursor plus, per @ref ScanRequest
 /// filter, how completely the source applied it.
 struct ScanResult {
     dstd::UniquePtr<Cursor> cursor;
@@ -247,8 +255,9 @@ class Source {
     /// Open a Cursor honoring `req`. When req.projection is non-empty the
     /// cursor's morsels carry exactly those columns in that order; the returned
     /// ScanResult.filters reports, per req.filter, how completely it was
-    /// applied.
-    virtual ScanResult scan(const ScanRequest& req) const = 0;
+    /// applied. A scan that cannot open returns the error; it must not throw,
+    /// so a source built with exceptions catches at its own edge.
+    virtual dstd::Result<ScanResult> scan(const ScanRequest& req) const = 0;
     /// The resident frame when this source is already in memory, else nullptr
     /// (rows produced only by streaming). collect() runs a resident source
     /// whole-column, matching the eager path instead of paying the morsel tax.
@@ -310,9 +319,11 @@ class Source {
     }
     /// One frame per member, in order, each what collecting that member alone
     /// would return. Called on members.front(); every member shares its
-    /// batch_key(). The default throws std::logic_error: a source that returns
-    /// a batch_key() must override it.
-    virtual coro::CoroTask<dstd::Vector<DataFrame>> collect_batch(
+    /// batch_key(). The default is fatal: a source that returns a batch_key()
+    /// must override it. An error result fails the collect. An override may
+    /// also throw, as next() of a cursor may: the engine awaits it through
+    /// @ref coro::settle and turns an exception into an error result.
+    virtual coro::CoroTask<dstd::Result<dstd::Vector<DataFrame>>> collect_batch(
         dstd::Vector<dstd::SharedPtr<const Source>> members) const;
     /// One cursor per member, in order, over one shared read that runs in the
     /// background, each yielding what scanning that member alone would. Each
@@ -320,10 +331,11 @@ class Source {
     /// shared read, so the caller must drain every cursor concurrently.
     /// Called on members.front() for members sharing its batch_key();
     /// dstd::nullopt (the default) means the source only batches through
-    /// collect_batch().
-    virtual dstd::Optional<dstd::Vector<dstd::UniquePtr<Cursor>>> open_batch(
-        dstd::Vector<dstd::SharedPtr<const Source>>, std::uint64_t) const {
-        return dstd::nullopt;
+    /// collect_batch(). An error result fails the collect; it must not throw.
+    virtual dstd::Result<dstd::Optional<dstd::Vector<dstd::UniquePtr<Cursor>>>>
+    open_batch(dstd::Vector<dstd::SharedPtr<const Source>>,
+               std::uint64_t) const {
+        return dstd::Optional<dstd::Vector<dstd::UniquePtr<Cursor>>>{};
     }
 
     /// Whether open_batch() can feed this member. A member that cannot (it
@@ -348,7 +360,7 @@ class InMemorySource : public Source {
    public:
     explicit InMemorySource(DataFrame frame);
     Schema schema() const override;
-    ScanResult scan(const ScanRequest& req) const override;
+    dstd::Result<ScanResult> scan(const ScanRequest& req) const override;
     const DataFrame* as_frame() const override { return frame_.get(); }
 
    private:
@@ -376,10 +388,10 @@ class LazyFrame {
     /// morsel. A name no column carries is ignored.
     LazyFrame drop(dstd::Vector<dstd::String> names) const;
     /// Renames each `from` column to the `to` name at the same index, static or
-    /// per-morsel. A name no column carries is ignored. Throws
-    /// std::invalid_argument when the lengths differ or two columns end up
-    /// with one name (at plan time for static columns, per morsel for added
-    /// ones).
+    /// per-morsel. A name no column carries is ignored. An InvalidArgument
+    /// error, kept as @ref status() and returned by every terminal, when the
+    /// lengths differ or two columns end up with one name (at plan time for
+    /// static columns, per morsel for added ones).
     LazyFrame rename_columns(dstd::Vector<dstd::String> from,
                              dstd::Vector<dstd::String> to) const;
     LazyFrame slice(std::int64_t offset, std::int64_t len) const;
@@ -413,8 +425,9 @@ class LazyFrame {
     /// null list drops the row unless `keep_empty`, and a List<Struct>
     /// flattens into one column per field. schema() names the fields when the
     /// column's type is known at build time; otherwise it is empty until
-    /// collect(). Throws std::out_of_range for an absent column and
-    /// std::invalid_argument for a non-List one, when the schema can tell.
+    /// collect(). A NotFound error (kept as @ref status()) for an absent
+    /// column and an InvalidArgument one for a non-List one, when the schema
+    /// can tell.
     LazyFrame unnest(dstd::String column, bool keep_empty = false) const;
     /// Reshape wide -> long: keep `id_vars`, stack `value_vars` into a
     /// variable/value column pair.
@@ -441,9 +454,9 @@ class LazyFrame {
     /// The specs that broadcast `agg` over this plan's schema as it stands
     /// (batch_ops reduce_specs over the typed schema; a column of unknown
     /// type is included and refused at collect if it turns out non-numeric).
-    /// Throws std::invalid_argument for an `agg` that does not broadcast,
-    /// and std::out_of_range for a key the schema lacks.
-    dstd::Vector<GroupAgg> reduce_specs(
+    /// An InvalidArgument error for an `agg` that does not broadcast, and a
+    /// NotFound one for a key the schema lacks.
+    dstd::Result<dstd::Vector<GroupAgg>> reduce_specs(
         Agg agg, const dstd::Vector<dstd::String>& keys = {}) const;
     /// DataFrame::reduce as a plan step: the streaming one-group group_by
     /// with `agg` broadcast over the eligible columns. The grouped form is
@@ -474,8 +487,8 @@ class LazyFrame {
                             dstd::Vector<bool> descending) const;
     /// Distinct rows, first occurrence, in original order, keyed on every
     /// column or on `subset` (empty = all). Streams input and output; holds
-    /// only the distinct key set. Throws std::out_of_range for a subset name
-    /// the schema lacks, when the schema is known.
+    /// only the distinct key set. A NotFound error (kept as @ref status()) for
+    /// a subset name the schema lacks, when the schema is known.
     LazyFrame unique(dstd::Vector<dstd::String> subset = {}) const;
     /// Alias of unique().
     LazyFrame drop_duplicates(dstd::Vector<dstd::String> subset = {}) const;
@@ -486,8 +499,8 @@ class LazyFrame {
     /// input order. A null key value is its own key, and equal numbers are one
     /// key whatever their numeric type. Empty `keys` is head(n); n <= 0 keeps
     /// no rows. Streams input and output; holds one counter per distinct key.
-    /// Throws std::out_of_range for a key the schema lacks, when the schema
-    /// is known.
+    /// A NotFound error (kept as @ref status()) for a key the schema lacks,
+    /// when the schema is known.
     LazyFrame head_by(dstd::Vector<dstd::String> keys, std::int64_t n) const;
     /// One Bool column: true where the whole row is duplicated. Two-pass
     /// (count, then per-row mask in input order); state is the count map.
@@ -497,8 +510,8 @@ class LazyFrame {
     LazyFrame is_unique() const;
     /// Tumbling/sliding time-window aggregation over an ascending Int64 time
     /// column, as DataFrame::group_by_dynamic. Streaming: a window leaves once
-    /// a time past its end is seen, so it holds only the open windows. Throws
-    /// std::invalid_argument when the time goes back.
+    /// a time past its end is seen, so it holds only the open windows. The
+    /// collect returns an InvalidArgument error when the time goes back.
     LazyFrame group_by_dynamic(dstd::String time_col, std::int64_t every,
                                std::int64_t period, dstd::Vector<GroupAgg> aggs,
                                std::int64_t origin = 0,
@@ -529,8 +542,8 @@ class LazyFrame {
                    bool nulls_equal = false) const;
     /// Vertical concatenation: every row of this plan, then every row of
     /// `other`. Both plans must have the same column names in the same order
-    /// with the same types where known; a mismatch throws
-    /// std::invalid_argument here. Streams both sides in turn with no state.
+    /// with the same types where known; a mismatch is an InvalidArgument
+    /// error, kept as @ref status(). Streams both sides in turn with no state.
     /// An optimizer barrier: no filter or projection moves across it.
     LazyFrame concat(LazyFrame other) const;
     /// DataFrame::compare_agg over the two collected plans: keys, `l_`/`r_`
@@ -547,10 +560,11 @@ class LazyFrame {
     /// order. Both sides are sorted by (by, time) with the spilling sort and
     /// merged under the plan's budget (the automatic one when none is set),
     /// holding only the right rows of the current by-group window; over a plan
-    /// whose columns are only known once it runs, both are collected. Throws
-    /// std::invalid_argument for a negative or NaN `tolerance`, unequal or
-    /// non-numeric key types or a second name clash, and std::out_of_range
-    /// for a missing column, when the schemas are known here.
+    /// whose columns are only known once it runs, both are collected. An
+    /// InvalidArgument error (kept as @ref status()) for a negative or NaN
+    /// `tolerance`, unequal or non-numeric key types or a second name clash,
+    /// and a NotFound one for a missing column, when the schemas are known
+    /// here.
     LazyFrame asof(LazyFrame other, dstd::String on,
                    dstd::Vector<dstd::String> by, AsofDirection direction,
                    dstd::Optional<double> tolerance = dstd::nullopt) const;
@@ -573,8 +587,8 @@ class LazyFrame {
     /// the plan owns it. A pipeline breaker and an optimizer barrier. The
     /// output names are `out_names` when the caller can state them from the
     /// op's contract (a window keeps its input and appends its specs), else
-    /// data-dependent (schema() empty until collect()). Throws
-    /// std::invalid_argument if no such op is registered, it is not a
+    /// data-dependent (schema() empty until collect()). An InvalidArgument
+    /// error, kept as @ref status(), if no such op is registered, it is not a
     /// table -> table op, an operand has no owned form (EXPR / DUQL / LAZY)
     /// or `others` does not match the op's frame operands.
     LazyFrame frame_op(dstd::String name, OpArgs args,
@@ -612,13 +626,21 @@ class LazyFrame {
     /// now, so a later dftu_node_unregister of the same name is the same
     /// dangling-registration hazard dftu_provider_unregister documents for a
     /// captured provider, not a lookup that could fail at drive time.
-    /// Throws std::invalid_argument immediately if no node is registered
-    /// under `name`. The node is an optimization barrier: no filter or
-    /// projection is ever pushed through it, and the engine never reorders
+    /// An InvalidArgument error, kept as @ref status(), if no node is
+    /// registered under `name`. The node is an optimization barrier: no filter
+    /// or projection is ever pushed through it, and the engine never reorders
     /// around it. `args` is copied by value; a pointer-bearing operand it
     /// carries must outlive every future execution of the returned
     /// @ref LazyFrame, not merely this call.
     LazyFrame op(dstd::String name, OpArgs args) const;
+
+    /// The first error a builder hit (an unknown column, a bad join kind, a
+    /// concat whose columns differ, ...), or an empty result. The builders
+    /// keep it and every later builder keeps passing it on, so a chain reads
+    /// as before; every terminal (collect(), stream(), open_cursor(), ...)
+    /// returns it without running anything. A plan that holds an error still
+    /// reports the schema as it stood before the failing step.
+    dstd::Result<void> status() const;
 
     /// Output column names without running the query. Empty for a plan ending
     /// in a data-dependent op (pivot/to_dummies/describe).
@@ -637,49 +659,66 @@ class LazyFrame {
 
     /// Pull-based chunk generator: the streaming terminal. Each yielded
     /// @ref DataFrame is standalone, carrying its own schema. One-shot: re-run
-    /// from the @ref LazyFrame to restart. `morsel_rows` is the scan chunk
+    /// from the @ref LazyFrame to restart. `batch_size` is the scan chunk
     /// size;
-    /// <= 0 means auto. collect() drains this.
-    coro::AsyncGenerator<DataFrame> stream(std::int64_t morsel_rows = 0) const;
+    /// <= 0 means auto. collect() drains this. A chunk that cannot be made is
+    /// an error result, after which the generator ends; so is a plan whose
+    /// cursor chain cannot be built or that holds a @ref status() error.
+    coro::AsyncGenerator<dstd::Result<DataFrame>> stream(
+        std::int64_t batch_size = 0) const;
 
     /// The plan's cursor chain, undrained, so a caller can read each morsel's
     /// ordering before stream() materializes it away. One-shot, as stream().
-    dstd::UniquePtr<Cursor> open_cursor() const;
+    /// The error is the one stream() would end with first.
+    dstd::Result<dstd::UniquePtr<Cursor>> open_cursor() const;
 
-    /// Run the pipeline and materialize the surviving rows. `morsel_rows` is
+    /// Run the pipeline and materialize the surviving rows. `batch_size` is
     /// the scan chunk size; <= 0 (the default) means auto; one pass over a
-    /// resident source, the bounded streaming default otherwise.
-    coro::CoroTask<DataFrame> collect(std::int64_t morsel_rows = 0) const;
+    /// resident source, the bounded streaming default otherwise. The error is
+    /// the first one a builder kept (@ref status()) or the one that ended the
+    /// run: a column the data lacks, a type a kernel refuses, a spill file
+    /// that cannot be written or read, a failed plugin node, or a cursor that
+    /// threw (as an error of the exception's message).
+    coro::CoroTask<dstd::Result<DataFrame>> collect(
+        std::int64_t batch_size = 0) const;
 
     /// Group `keys` with `aggs` and return the mergeable partial instead of a
     /// finalized frame: streams this pipeline (no group op appended) and folds
     /// every morsel into one AggState. The caller finalizes (agg_finalize),
     /// coarsens (agg_regroup), or persists it. State is bounded by the distinct
-    /// group count, not the input; used by the rollup materialize path.
-    coro::CoroTask<AggStatePtr> collect_group_state(
+    /// group count, not the input; used by the rollup materialize path. The
+    /// errors are those of @ref collect.
+    coro::CoroTask<dstd::Result<AggStatePtr>> collect_group_state(
         dstd::Vector<dstd::String> keys, dstd::Vector<GroupAgg> aggs,
         dstd::Vector<AggDynSpec> dyn = {}, dstd::String dyn_prefix = {},
-        std::int64_t morsel_rows = 0) const;
+        std::int64_t batch_size = 0) const;
 
    private:
     friend struct detail::PlanAccess;
     LazyFrame(dstd::SharedPtr<const Source> source,
               dstd::Vector<dstd::SharedPtr<const LazyOp>> ops,
-              std::uint64_t memory_budget = 0)
+              std::uint64_t memory_budget = 0,
+              dstd::SharedPtr<const dstd::Error> error = nullptr)
         : source_(std::move(source)),
           ops_(std::move(ops)),
-          memory_budget_(memory_budget) {}
-    // Clone with a new op list, preserving the source and budget.
+          memory_budget_(memory_budget),
+          error_(std::move(error)) {}
+    // Clone with a new op list, preserving the source, budget and error.
     LazyFrame with_ops(dstd::Vector<dstd::SharedPtr<const LazyOp>> ops) const {
-        return LazyFrame(source_, std::move(ops), memory_budget_);
+        return LazyFrame(source_, std::move(ops), memory_budget_, error_);
     }
     // The ops over a resident frame, whole-column: an op with an eager form
     // runs it, any other runs its own cursor over the frame as one morsel.
-    static coro::CoroTask<DataFrame> run_ops_in_memory(
+    static coro::CoroTask<dstd::Result<DataFrame>> run_ops_in_memory(
         DataFrame df, dstd::Vector<dstd::SharedPtr<const LazyOp>> ops);
+    // This plan with `error` kept as its first error, unless it holds one.
+    LazyFrame failed(dstd::Error error) const;
+    // This plan with the first error of `other` kept, unless it holds one.
+    LazyFrame with_error_of(const LazyFrame& other) const;
     dstd::SharedPtr<const Source> source_;
     dstd::Vector<dstd::SharedPtr<const LazyOp>> ops_;
     std::uint64_t memory_budget_ = 0;
+    dstd::SharedPtr<const dstd::Error> error_;
 };
 
 /// The two-step lazy group-by: a plan and its key columns, with the
@@ -724,48 +763,68 @@ class LazyGroupBy {
     /// Shift periods (negative looks ahead), the Head / Tail count, the Nth
     /// position (0-based, negative from the end) or the rolling window;
     /// `method` / `ascending` apply to Rank (Float64, as pandas; Ordinal is
-    /// pandas' `first`). Throws std::invalid_argument when
-    /// no column is eligible, NGroup has no keys or the window op is not
-    /// registered; std::out_of_range for an absent key.
-    LazyFrame transform(GroupwiseOp kind, std::int64_t n = 0,
-                        RankMethod method = RankMethod::Average,
-                        bool ascending = true) const;
-    LazyFrame cumsum() const { return transform(GroupwiseOp::CumSum); }
-    LazyFrame cummax() const { return transform(GroupwiseOp::CumMax); }
-    LazyFrame cummin() const { return transform(GroupwiseOp::CumMin); }
-    LazyFrame cumcount() const { return transform(GroupwiseOp::CumCount); }
-    LazyFrame shift(std::int64_t periods = 1) const {
+    /// pandas' `first`). An InvalidArgument error when
+    /// no column is eligible, NGroup has no keys, the window is under 1 or the
+    /// window op is not registered, and a NotFound error for an absent key.
+    dstd::Result<LazyFrame> transform(GroupwiseOp kind, std::int64_t n = 0,
+                                      RankMethod method = RankMethod::Average,
+                                      bool ascending = true) const;
+    dstd::Result<LazyFrame> cumsum() const {
+        return transform(GroupwiseOp::CumSum);
+    }
+    dstd::Result<LazyFrame> cummax() const {
+        return transform(GroupwiseOp::CumMax);
+    }
+    dstd::Result<LazyFrame> cummin() const {
+        return transform(GroupwiseOp::CumMin);
+    }
+    dstd::Result<LazyFrame> cumcount() const {
+        return transform(GroupwiseOp::CumCount);
+    }
+    dstd::Result<LazyFrame> shift(std::int64_t periods = 1) const {
         return transform(GroupwiseOp::Shift, periods);
     }
-    LazyFrame diff() const { return transform(GroupwiseOp::Diff); }
-    LazyFrame pct_change() const { return transform(GroupwiseOp::PctChange); }
-    LazyFrame rank(RankMethod method = RankMethod::Average,
-                   bool ascending = true) const {
+    dstd::Result<LazyFrame> diff() const {
+        return transform(GroupwiseOp::Diff);
+    }
+    dstd::Result<LazyFrame> pct_change() const {
+        return transform(GroupwiseOp::PctChange);
+    }
+    dstd::Result<LazyFrame> rank(RankMethod method = RankMethod::Average,
+                                 bool ascending = true) const {
         return transform(GroupwiseOp::Rank, 0, method, ascending);
     }
-    LazyFrame ngroup() const { return transform(GroupwiseOp::NGroup); }
-    LazyFrame head(std::int64_t n = 5) const {
+    dstd::Result<LazyFrame> ngroup() const {
+        return transform(GroupwiseOp::NGroup);
+    }
+    dstd::Result<LazyFrame> head(std::int64_t n = 5) const {
         return transform(GroupwiseOp::Head, n);
     }
-    LazyFrame tail(std::int64_t n = 5) const {
+    dstd::Result<LazyFrame> tail(std::int64_t n = 5) const {
         return transform(GroupwiseOp::Tail, n);
     }
-    LazyFrame nth(std::int64_t n) const {
+    dstd::Result<LazyFrame> nth(std::int64_t n) const {
         return transform(GroupwiseOp::Nth, n);
     }
-    LazyFrame cumprod() const { return transform(GroupwiseOp::CumProd); }
-    LazyFrame ffill() const { return transform(GroupwiseOp::FFill); }
-    LazyFrame bfill() const { return transform(GroupwiseOp::BFill); }
-    LazyFrame rolling_sum(std::int64_t window) const {
+    dstd::Result<LazyFrame> cumprod() const {
+        return transform(GroupwiseOp::CumProd);
+    }
+    dstd::Result<LazyFrame> ffill() const {
+        return transform(GroupwiseOp::FFill);
+    }
+    dstd::Result<LazyFrame> bfill() const {
+        return transform(GroupwiseOp::BFill);
+    }
+    dstd::Result<LazyFrame> rolling_sum(std::int64_t window) const {
         return transform(GroupwiseOp::RollingSum, window);
     }
-    LazyFrame rolling_mean(std::int64_t window) const {
+    dstd::Result<LazyFrame> rolling_mean(std::int64_t window) const {
         return transform(GroupwiseOp::RollingMean, window);
     }
-    LazyFrame rolling_min(std::int64_t window) const {
+    dstd::Result<LazyFrame> rolling_min(std::int64_t window) const {
         return transform(GroupwiseOp::RollingMin, window);
     }
-    LazyFrame rolling_max(std::int64_t window) const {
+    dstd::Result<LazyFrame> rolling_max(std::int64_t window) const {
         return transform(GroupwiseOp::RollingMax, window);
     }
 
@@ -780,14 +839,16 @@ LazyFrame lazy(DataFrame frame);
 /// Collect every plan, one @ref DataFrame per plan in input order. After each
 /// plan is optimized, plans whose sources share a Source::batch_key() read
 /// their data in one Source::collect_batch() call; the rest collect as
-/// collect() would.
-coro::CoroTask<dstd::Vector<DataFrame>> collect_all(
+/// collect() would. The first error of any plan is the result.
+coro::CoroTask<dstd::Result<dstd::Vector<DataFrame>>> collect_all(
     dstd::Vector<LazyFrame> plans);
 
 /// A lazy result that is not one frame: the plans it reads, collected
 /// together, and the step that turns their frames into a `T`. A source-specific
 /// terminal (a trace flamegraph partial, a sink's stats) is one, and
-/// collect_all() batches its plans with every other root's.
+/// collect_all() batches its plans with every other root's. The finish step is
+/// the caller's code; its error result is the result of collect(), and it may
+/// also throw: collect() runs in the caller's translation unit.
 template <class T>
 class LazyResult {
    public:
@@ -795,15 +856,18 @@ class LazyResult {
     /// A shared, copyable handle on the step that turns frames into a `T`.
     class Finish {
        public:
-        using Fn = dstd::Function<coro::CoroTask<T>(dstd::Vector<DataFrame>)>;
+        using Fn = dstd::Function<coro::CoroTask<dstd::Result<T>>(
+            dstd::Vector<DataFrame>)>;
 
         template <class F>
             requires(!std::is_same_v<std::decay_t<F>, Finish> &&
-                     std::is_invocable_r_v<coro::CoroTask<T>, std::decay_t<F>&,
+                     std::is_invocable_r_v<coro::CoroTask<dstd::Result<T>>,
+                                           std::decay_t<F>&,
                                            dstd::Vector<DataFrame>>)
         Finish(F&& f) : fn_(dstd::make_shared<Fn>(std::forward<F>(f))) {}
 
-        coro::CoroTask<T> operator()(dstd::Vector<DataFrame> frames) const {
+        coro::CoroTask<dstd::Result<T>> operator()(
+            dstd::Vector<DataFrame> frames) const {
             return (*fn_)(std::move(frames));
         }
 
@@ -817,13 +881,22 @@ class LazyResult {
     const dstd::Vector<LazyFrame>& plans() const { return plans_; }
     const Finish& finish() const { return finish_; }
 
-    coro::CoroTask<T> collect() const { return run(plans_, finish_); }
+    /// The value of the finish step, or the first error of a plan.
+    coro::CoroTask<dstd::Result<T>> collect() const {
+        return run(plans_, finish_);
+    }
 
    private:
-    static coro::CoroTask<T> run(dstd::Vector<LazyFrame> plans, Finish finish) {
+    static coro::CoroTask<dstd::Result<T>> run(dstd::Vector<LazyFrame> plans,
+                                               Finish finish) {
         dstd::Vector<DataFrame> frames;
-        if (!plans.empty()) frames = co_await collect_all(std::move(plans));
-        co_return co_await finish(std::move(frames));
+        if (!plans.empty()) {
+            auto collected = co_await collect_all(std::move(plans));
+            if (!collected) co_return collected.error();
+            frames = std::move(*collected);
+        }
+        auto value = co_await finish(std::move(frames));
+        co_return std::move(value);
     }
 
     dstd::Vector<LazyFrame> plans_;
@@ -833,8 +906,8 @@ class LazyResult {
 namespace detail {
 
 template <class T>
-coro::CoroTask<T> ready(T value) {
-    co_return value;
+coro::CoroTask<dstd::Result<T>> ready(T value) {
+    co_return std::move(value);
 }
 
 inline LazyResult<DataFrame> as_result(LazyFrame plan) {
@@ -853,17 +926,22 @@ using ResultOfRoot =
     typename decltype(as_result(std::declval<R>()))::value_type;
 
 template <std::size_t I, class Results, class Out>
-coro::CoroTask<void> finish_roots(Results& results,
-                                  dstd::Vector<DataFrame>& frames,
-                                  std::size_t at, Out& out) {
+coro::CoroTask<dstd::Result<void>> finish_roots(Results& results,
+                                                dstd::Vector<DataFrame>& frames,
+                                                std::size_t at, Out& out) {
     if constexpr (I < std::tuple_size_v<Results>) {
         auto& r = std::get<I>(results);
         const std::size_t n = r.plans().size();
         dstd::Vector<DataFrame> mine(
             std::make_move_iterator(frames.begin() + at),
             std::make_move_iterator(frames.begin() + at + n));
-        std::get<I>(out) = co_await r.finish()(std::move(mine));
-        co_await finish_roots<I + 1>(results, frames, at + n, out);
+        auto value = co_await r.finish()(std::move(mine));
+        if (!value) co_return value.error();
+        std::get<I>(out) = std::move(*value);
+        auto rest = co_await finish_roots<I + 1>(results, frames, at + n, out);
+        co_return rest;
+    } else {
+        co_return dstd::Result<void>{};
     }
 }
 
@@ -872,9 +950,10 @@ coro::CoroTask<void> finish_roots(Results& results,
 /// Collect @ref LazyFrame and @ref LazyResult roots together, one value per
 /// root in argument order: a @ref DataFrame for a @ref LazyFrame, a `T` for a
 /// LazyResult<T>. Every root's plans batch as collect_all(plans) batches them.
+/// The first error of any plan is the result.
 template <class... R>
-coro::CoroTask<dstd::Tuple<detail::ResultOfRoot<R>...>> collect_all(
-    R... roots) {
+coro::CoroTask<dstd::Result<dstd::Tuple<detail::ResultOfRoot<R>...>>>
+collect_all(R... roots) {
     auto results = std::make_tuple(detail::as_result(std::move(roots))...);
     dstd::Vector<LazyFrame> plans;
     std::apply(
@@ -884,10 +963,15 @@ coro::CoroTask<dstd::Tuple<detail::ResultOfRoot<R>...>> collect_all(
         },
         results);
     dstd::Vector<DataFrame> frames;
-    if (!plans.empty()) frames = co_await collect_all(std::move(plans));
+    if (!plans.empty()) {
+        auto collected = co_await collect_all(std::move(plans));
+        if (!collected) co_return collected.error();
+        frames = std::move(*collected);
+    }
     dstd::Tuple<detail::ResultOfRoot<R>...> out;
-    co_await detail::finish_roots<0>(results, frames, 0, out);
-    co_return out;
+    auto finished = co_await detail::finish_roots<0>(results, frames, 0, out);
+    if (!finished) co_return finished.error();
+    co_return std::move(out);
 }
 
 /// Lower name-based GroupAggs to index-based AggSpecs plus the deduped list of
@@ -906,10 +990,11 @@ LoweredGroupAggs lower_group_aggs(const dstd::Vector<GroupAgg>& aggs);
 /// column whose name starts with `dyn_prefix` as a dyn input (prefix stripped).
 /// The per-morsel step collect_group_state runs, exposed for a non-@ref
 /// LazyFrame chunk driver (a trace Fold accumulating over a shared scan).
-void agg_accumulate_chunk(AggState& state, const DataFrame& frame,
-                          const dstd::Vector<dstd::String>& keys,
-                          const dstd::Vector<dstd::String>& value_names,
-                          const dstd::String& dyn_prefix);
+dstd::Result<void> agg_accumulate_chunk(
+    AggState& state, const DataFrame& frame,
+    const dstd::Vector<dstd::String>& keys,
+    const dstd::Vector<dstd::String>& value_names,
+    const dstd::String& dyn_prefix);
 
 }  // namespace dftracer::utils::dataframe
 

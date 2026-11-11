@@ -23,6 +23,7 @@
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
@@ -134,7 +135,7 @@ coro::CoroTask<void> stat_call_task(Shared& shared, std::size_t rounds) {
 }
 
 dstd::String task_dir(const Shared& shared, std::size_t seed) {
-    return common::str_cat(shared.path, ".d", seed);
+    return dstd::fmt<"{}.d{}">(shared.path, seed);
 }
 
 coro::CoroTask<void> mkdir_op_task(Shared& shared, std::size_t rounds,
@@ -199,14 +200,24 @@ coro::CoroTask<void> busy_syncer(Shared& shared, runtime::io::IoBackend& io,
 
 using Run = std::uint64_t (*)(const Config&, Runtime&, Shared&);
 
+template <class T>
+void require_ok(const dstd::Expected<T, dstd::Error>& result,
+                const char* what) {
+    if (result.has_value()) return;
+    std::fprintf(stderr, "%s failed: %s\n", what, result.error().c_str());
+    std::exit(1);
+}
+
 template <typename Make>
 std::uint64_t fan_out(Runtime& rt, std::size_t tasks, std::size_t rounds,
                       Make make) {
-    rt.block_on(
-        coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
-            for (std::size_t i = 0; i < tasks; ++i) scope.spawn(make(i));
-            co_return;
-        }));
+    require_ok(rt.block_on(coro::with_scope(
+                   [&](coro::Scope& scope) -> coro::CoroTask<void> {
+                       for (std::size_t i = 0; i < tasks; ++i)
+                           scope.spawn(make(i));
+                       co_return;
+                   })),
+               "fan_out");
     return tasks * rounds;
 }
 

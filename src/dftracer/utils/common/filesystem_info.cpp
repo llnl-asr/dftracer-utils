@@ -73,11 +73,12 @@ FilesystemKind classify_fstype_name(dstd::StringView name) noexcept {
 
 dstd::Path probe_path(dstd::StringView path) noexcept {
     const auto found = dstd::fs::exists(dstd::PathView(path));
-    if (found && *found) return dstd::Path(path);
+    if (found.has_value() && *found) return dstd::Path(path);
     const dstd::PathView parent = dstd::PathView(path).parent();
     if (parent.empty()) return dstd::Path(".");
     const auto parent_found = dstd::fs::exists(parent);
-    if (parent_found && *parent_found) return dstd::Path(parent.str());
+    if (parent_found.has_value() && *parent_found)
+        return dstd::Path(parent.str());
     return dstd::Path(".");
 }
 

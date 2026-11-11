@@ -2,7 +2,6 @@
 #ifndef DFTRACER_UTILS_CORO_ASYNC_MUTEX_H
 #define DFTRACER_UTILS_CORO_ASYNC_MUTEX_H
 
-#include <dftracer/utils/coro/cancelled.h>
 #include <dftracer/utils/coro/detail/parked.h>
 #include <dftracer/utils/coro/detail/resumption_helper.h>
 #include <dftracer/utils/coro/executor.h>
@@ -26,8 +25,8 @@ class AsyncMutexLockOperation;
  * blocking the thread and are resumed in FIFO order. An uncontended lock or
  * unlock is one atomic operation.
  *
- * A coroutine waiting for the lock when its executor shuts down is resumed
- * with a cancelled error (see coro::is_cancelled), without the lock.
+ * A coroutine waiting for the lock when its executor shuts down stops with its
+ * task, without the lock.
  *
  * Usage:
  * @code
@@ -177,7 +176,7 @@ class AsyncMutexLockOperation {
             const bool cancelled = park_->cancelled;
             executor_->unpark(park_);
             park_ = nullptr;
-            if (cancelled) throw_cancelled("mutex lock cancelled");
+            if (cancelled) detail::cancelled_unstoppable("mutex lock");
         }
     }
 
@@ -193,7 +192,7 @@ class AsyncMutexLockOperation {
             mutex_.remove_locked(this);
             park_->cancelled = true;
         }
-        detail::post_resumption(executor_, awaiter_);
+        detail::stop_or_resume(executor_, park_, awaiter_);
     }
 
    private:

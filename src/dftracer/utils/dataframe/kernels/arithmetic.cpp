@@ -247,7 +247,7 @@ dftu_series* temporal_scalar_op(const dftu_series* a, dftu_scalar s, BinOp op) {
     auto res = temporal_scalarop_result(a->type, a->time_unit(), op);
     if (!res) {
         DFTRACER_UTILS_LOG_ERROR(
-            "arithmetic: scalar op not defined for temporal type '%s'",
+            "arithmetic: scalar op not defined for temporal type '{}'",
             type_name(a->type));
         return nullptr;
     }
@@ -351,7 +351,7 @@ dftu_series* temporal_binop(const dftu_series* a, const dftu_series* b,
                               b->time_unit(), b->timezone(), op);
     if (!res) {
         DFTRACER_UTILS_LOG_ERROR(
-            "arithmetic: op not defined for temporal types '%s' and '%s'",
+            "arithmetic: op not defined for temporal types '{}' and '{}'",
             type_name(a->type), type_name(b->type));
         return nullptr;
     }

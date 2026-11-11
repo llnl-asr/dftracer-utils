@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/intern_table.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -10,6 +12,7 @@
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <atomic>
 #include <cstddef>
@@ -23,7 +26,7 @@ constexpr int HOPS = 8;
 constexpr int TASKS = 64;
 constexpr int STRINGS = 300;
 
-dstd::String name_of(int i) { return "string_" + dstd::to_string(i); }
+dstd::String name_of(int i) { return dstd::fmt<"string_{}">(i); }
 
 coro::CoroTask<void> hop_and_check(common::InternTable* expected,
                                    std::atomic<int>* bad) {
@@ -59,7 +62,8 @@ coro::CoroTask<void> sees_no_table(std::atomic<int>* bad) {
 }  // namespace
 
 TEST_CASE("the last holder frees the table") {
-    common::InternRef first = common::InternTable::create();
+    common::InternRef first =
+        dftu_utils_test::ok(common::InternTable::create());
     memory::Pool& pool = first->pool();
     const common::InternId alpha = first->intern("alpha");
     const common::InternId beta = first->intern("beta");
@@ -79,7 +83,8 @@ TEST_CASE("the last holder frees the table") {
 }
 
 TEST_CASE("a big string and many strings are freed with the table") {
-    common::InternRef table = common::InternTable::create();
+    common::InternRef table =
+        dftu_utils_test::ok(common::InternTable::create());
     memory::Pool& pool = table->pool();
     for (int i = 0; i < 20000; ++i) table->intern(name_of(i));
     const dstd::String big(dstd::StringIntern::CHUNK_BYTES + 1000, 'x');
@@ -92,7 +97,8 @@ TEST_CASE("a big string and many strings are freed with the table") {
 }
 
 TEST_CASE("InternId::NONE has no string") {
-    common::InternRef table = common::InternTable::create();
+    common::InternRef table =
+        dftu_utils_test::ok(common::InternTable::create());
     CHECK(common::InternId{} == common::InternId::NONE);
     CHECK(table->get(common::InternId::NONE).empty());
     const common::InternId id = table->intern("first");
@@ -103,8 +109,10 @@ TEST_CASE("InternId::NONE has no string") {
 
 TEST_CASE("InternScope nests and restores the current table") {
     CHECK(common::current_intern() == nullptr);
-    common::InternRef outer = common::InternTable::create();
-    common::InternRef inner = common::InternTable::create();
+    common::InternRef outer =
+        dftu_utils_test::ok(common::InternTable::create());
+    common::InternRef inner =
+        dftu_utils_test::ok(common::InternTable::create());
     {
         common::InternScope a{outer};
         CHECK(common::current_intern() == outer.get());
@@ -119,8 +127,10 @@ TEST_CASE("InternScope nests and restores the current table") {
 
 TEST_CASE(
     "a memory Scope keeps the current table, and one with a pointer sets it") {
-    common::InternRef table = common::InternTable::create();
-    common::InternRef other = common::InternTable::create();
+    common::InternRef table =
+        dftu_utils_test::ok(common::InternTable::create());
+    common::InternRef other =
+        dftu_utils_test::ok(common::InternTable::create());
     common::InternScope scope{table};
     memory::Pool& general = memory::detail::Manager::get().general();
     {
@@ -141,17 +151,19 @@ TEST_CASE(
 }
 
 TEST_CASE("ids from the scope survive a co_await on another thread") {
-    common::InternRef table = common::InternTable::create();
+    common::InternRef table =
+        dftu_utils_test::ok(common::InternTable::create());
     memory::Pool& pool = table->pool();
     std::atomic<int> bad{0};
     {
         Runtime rt(4);
         {
             common::InternScope scope{table};
-            rt.submit(hop_and_check(table.get(), &bad)).get();
+            dftu_utils_test::ok(
+                rt.submit(hop_and_check(table.get(), &bad)).get());
         }
         std::atomic<int> stale{0};
-        rt.submit(sees_no_table(&stale)).get();
+        dftu_utils_test::ok(rt.submit(sees_no_table(&stale)).get());
         CHECK(stale.load() == 0);
     }
     CHECK(bad.load() == 0);
@@ -161,7 +173,8 @@ TEST_CASE("ids from the scope survive a co_await on another thread") {
 }
 
 TEST_CASE("tasks on many threads intern and read one table") {
-    common::InternRef table = common::InternTable::create();
+    common::InternRef table =
+        dftu_utils_test::ok(common::InternTable::create());
     memory::Pool& pool = table->pool();
     std::atomic<int> bad{0};
     {
@@ -174,7 +187,7 @@ TEST_CASE("tasks on many threads intern and read one table") {
                     rt.submit(intern_and_read(table.get(), i, &bad)));
             }
         }
-        for (auto& h : handles) h.get();
+        for (auto& h : handles) dftu_utils_test::ok(h.get());
     }
     CHECK(bad.load() == 0);
     for (int k = 0; k < STRINGS; ++k) {
@@ -187,7 +200,8 @@ TEST_CASE("tasks on many threads intern and read one table") {
 }
 
 TEST_CASE("threads share and drop references to one table") {
-    common::InternRef table = common::InternTable::create();
+    common::InternRef table =
+        dftu_utils_test::ok(common::InternTable::create());
     memory::Pool& pool = table->pool();
     std::atomic<int> bad{0};
     dstd::Vector<dstd::Thread> threads;

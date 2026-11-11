@@ -38,13 +38,13 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/domains/workload/genesis/genesis.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/trace/genesis/genesis.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <memory_probe.h>
 #include <memory_workloads.h>
 
@@ -149,20 +149,23 @@ void group_by(const Sizes& s) {
         gen(s.frame_rows, s.frame_rows, 1)
             .group_by(dstd::Vector<dstd::String>{"k", "v"},
                       {dataframe::GroupAgg{dataframe::Agg::Sum, "t", "t_sum"}});
-    default_runtime()
-        .submit(drain_count(plan.memory_budget(PLAN_BUDGET)))
-        .get();
+    require_ok(default_runtime()
+                   .submit(drain_count(plan.memory_budget(PLAN_BUDGET)))
+                   .get(),
+               "task");
 }
 
 void genesis(const dstd::String& root) {
-    default_runtime()
-        .submit(coro::with_scope(
-            [&](coro::Scope& ctx) { return genesis_run(ctx, root); }))
-        .wait();
+    require_ok(default_runtime()
+                   .submit(coro::with_scope([&](coro::Scope& ctx) {
+                       return genesis_run(ctx, root);
+                   }))
+                   .wait(),
+               "task");
 }
 
 dstd::String prepare_genesis(const dstd::String& dir, const Sizes& s) {
-    (void)dstd::fs::remove_all(dir);
+    dstd::fs::remove_all(dir).discard();
     const dstd::String run = dir + "/genesis/app1/sys1/in1/nodes_1/ppn_1";
     require_ok(dstd::fs::create_directories(run), "create_directories");
     require_ok(
@@ -202,7 +205,7 @@ SizeMix collect_mix(const Sizes& s) {
         mix_out.counts[b] = dftu::memory_probe::histogram_count(b) - before[b];
         mix_out.total += mix_out.counts[b];
     }
-    (void)dstd::fs::remove_all(dir);
+    dstd::fs::remove_all(dir).discard();
     return mix_out;
 }
 

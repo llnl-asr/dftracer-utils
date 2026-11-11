@@ -151,49 +151,47 @@ and combinator API.
 Error handling
 --------------
 
-An exception thrown in a task propagates to whoever awaits it: ``Runtime::block_on``
-rethrows it, and ``handle.get()`` rethrows it for a submitted task. The library
-throws ``common::DFTUtilsException`` and its subclasses, which derive from
-``std::runtime_error``; catch ``std::exception`` to handle any failure.
+A task reports a failure by returning a ``dstd::Result``. ``Runtime::block_on``
+gives the task's result back, so the caller checks it the same way; a task that
+was cancelled or stopped gives an error too.
 
 .. code-block:: cpp
 
-   auto task = []() -> coro::CoroTask<void> {
-       // Any exception thrown here propagates to the caller of block_on
+   auto task = []() -> coro::CoroTask<dstd::Result<void>> {
        if (risky_operation() < 0) {
-           throw common::DFTUtilsException(common::ErrorCode::Io,
-                                           "Failed to open file");
+           co_return common::make_error(common::ErrorCode::Io,
+                                        "Failed to open file");
        }
-       co_return;
+       co_return dstd::Result<void>{};
    };
-   try {
-       rt.block_on(task());
-   } catch (const std::exception& e) {
-       std::cerr << "Task failed: " << e.what() << std::endl;
-   }
+   auto done = rt.block_on(task());
+   if (!done) std::cerr << "Task failed: " << done.error().c_str() << std::endl;
 
-The error of a ``scope.spawn_future`` child goes only to its ``SpawnFuture``,
-so wrap the ``co_await`` in a try-catch:
+Inside a task, ``co_await coro::or_fail(std::move(r))`` gives the value of a
+``dstd::Result`` or ends the task with its error. The result of a
+``scope.spawn_future`` child goes only to its ``SpawnFuture``, so check it where
+you await it:
 
 .. code-block:: cpp
 
-   coro::CoroTask<void> spawned(coro::Scope& scope) {
-       auto future = scope.spawn_future([]() -> coro::CoroTask<int> {
-           int result = risky_operation();   // this might throw
-           if (result < 0) {
-               throw common::DFTUtilsException(common::ErrorCode::Internal,
-                                               "Operation failed");
-           }
-           co_return result;
-       });
-
-       try {
-           int result = co_await future;
-           use_data(result);
-       } catch (const std::exception& e) {
-           std::cerr << "Spawned task failed: " << e.what() << std::endl;
-       }
+   coro::CoroTask<dstd::Result<void>> spawned(coro::Scope& scope) {
+       auto future = scope.spawn_future(
+           []() -> coro::CoroTask<dstd::Result<int>> {
+               int result = risky_operation();
+               if (result < 0) {
+                   co_return common::make_error(common::ErrorCode::Internal,
+                                                "Operation failed");
+               }
+               co_return result;
+           });
+       dstd::Result<int> result = co_await future;
+       if (!result) co_return result.error();
+       use_data(*result);
+       co_return dstd::Result<void>{};
    }
+
+An exception that code built with exceptions throws in a task still reaches the
+caller of ``block_on`` as that exception.
 
 On a channel, check the values of ``send()`` and ``receive()``. Both are falsy
 on a closed channel, which means the other side exited or failed:
@@ -278,9 +276,9 @@ Limit how long a task runs:
    using namespace std::chrono_literals;
 
    co_await coro::sleep(10ms);
-   int value = co_await coro::with_timeout(read_value(), 5s);
+   dstd::Result<int> value = co_await coro::with_timeout(read_value(), 5s);
 
-``with_timeout`` raises an error whose condition is ``dstd::Condition::Timeout``.
+``with_timeout`` gives a ``dstd::Result``. On a timeout the result holds an error whose condition is ``dstd::Condition::Timeout``.
 It wakes the task if the task is parked on a channel, an event, a semaphore, a mutex, a sleep or a spawned future.
 A task that computes without a wait, or that waits on I/O, ends only when it reaches its next wait.
 
@@ -297,7 +295,8 @@ Retry a failing task:
    auto data = co_await coro::retry([&]() { return fetch(path); }, std::move(policy));
 
 ``retry`` takes a function, since a task runs once.
-It never retries a cancelled error.
+It retries a task that raised an exception, and gives a result as it is.
+It never retries a stopped task.
 
 Run many jobs with a limit:
 
@@ -320,6 +319,7 @@ Stop a tree of tasks
 
 A ``coro::Scope`` stops its children when one fails, when ``request_stop`` runs or when the task that holds it is cancelled.
 A stopped child ends as cancelled at its next wait, and a parked child wakes at once.
+A task that is cancelled at a wait is not resumed. Its frame is destroyed, and the stop moves up to the first scope or combinator, which joins its children and stops its own task.
 ``with_scope`` links the scope to its task, so nested scopes stop together.
 
 .. code-block:: cpp
@@ -354,14 +354,14 @@ Each one is a function and an adaptor, so ``filter(gen, pred)`` and ``gen | filt
 - ``merge`` reads many generators at once and yields items as they come.
 - ``flat_map_merge`` does the same for the generators a function returns, with a limit on how many run.
 - ``buffer`` reads ahead of the reader by a bounded number of items.
-- ``with_item_timeout`` bounds the wait for each item.
+- ``with_item_timeout`` bounds the wait for each item and yields ``dstd::Result`` items. A wait that times out yields a ``dstd::Condition::Timeout`` error and ends the stream.
 
 A sync ``coro::Generator`` has the same ``map``, ``flat_map``, ``filter``, ``take``, ``take_until``, ``concat``, ``chunks``, ``zip`` and ``fold``, and the same ``next``.
 Its functions give plain values, because it cannot wait, so ``merge``, ``flat_map_merge``, ``map_ordered``, ``map_unordered``, ``buffer`` and ``with_item_timeout`` are only on ``AsyncGenerator``.
 ``coro::to_async(std::move(gen))`` turns a ``Generator`` into an ``AsyncGenerator`` for those.
 
 A stop or a cancel of the task that reads a generator also ends a wait inside the generator.
-The read then raises ``dstd::Condition::Cancelled``.
+The generator then ends as cancelled and the task that reads it stops.
 
 ``merge``, ``flat_map_merge`` and ``buffer`` run their sources in the background, so a source must own what it uses.
 Each of them keeps the order of one source, and raises the first error from the next read.

@@ -77,7 +77,7 @@ def _views(base):
 
 
 def _chunked(column):
-    out = DataFrame({"x": column}).lazy().collect(morsel_rows=2)["x"]
+    out = DataFrame({"x": column}).lazy().collect(batch_size=2)["x"]
     assert out.encoding == 5
     return out
 

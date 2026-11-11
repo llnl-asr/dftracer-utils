@@ -9,6 +9,7 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/float16.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -16,7 +17,6 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
@@ -1237,13 +1237,10 @@ dftracer::utils::dstd::String zone_name(PyObject* v, std::int64_t offset_us) {
     }
     if (!name.empty()) return name;
     if (offset_us == 0) return "UTC";
-    char buf[16];
     const std::int64_t abs_min =
         (offset_us < 0 ? -offset_us : offset_us) / 60'000'000;
-    std::snprintf(buf, sizeof buf, "%c%02d:%02d", offset_us < 0 ? '-' : '+',
-                  static_cast<int>(abs_min / 60),
-                  static_cast<int>(abs_min % 60));
-    return buf;
+    return dstd::fmt<"{}{:02}:{:02}">(offset_us < 0 ? '-' : '+', abs_min / 60,
+                                      abs_min % 60);
 }
 
 PyObject* build_datetimes(PyObject** items, Py_ssize_t n, Bits& bits) {

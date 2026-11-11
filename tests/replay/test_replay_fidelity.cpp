@@ -16,14 +16,15 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/domains/workload/replay/replay.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/utilities/replay/replay.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <algorithm>
@@ -35,7 +36,7 @@
 #include <thread>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities::replay;
+using namespace dftracer::utils::domains::workload::replay;
 
 namespace {
 
@@ -120,9 +121,9 @@ void run_pipelined(ReplayEngine& engine,
                    const dstd::Vector<dstd::String>& files,
                    ReplayResult& result, std::size_t threads) {
     Runtime rt(threads);
-    rt.block_on(coro::with_scope([&](coro::Scope& scope) {
+    dftu_utils_test::ok(rt.block_on(coro::with_scope([&](coro::Scope& scope) {
         return engine.run_pipelined(scope, files, result, /*cap=*/64);
-    }));
+    })));
 }
 
 bool is_ci_env() {
@@ -214,7 +215,7 @@ TEST_CASE("Replay fidelity - sync path") {
     auto stats = analyze(rec.samples);
     check_fidelity(stats, "sync");
 
-    (void)dstd::fs::remove_all(temp_dir);
+    dstd::fs::remove_all(temp_dir).discard();
 }
 
 TEST_CASE("Replay fidelity - pipelined path") {
@@ -243,15 +244,15 @@ TEST_CASE("Replay fidelity - pipelined path") {
     dstd::Vector<dstd::String> files = {dstd::String(trace_file)};
 
     Runtime rt(4);
-    rt.block_on(coro::with_scope([&](coro::Scope& scope) {
+    dftu_utils_test::ok(rt.block_on(coro::with_scope([&](coro::Scope& scope) {
         return engine.run_pipelined(scope, files, result, /*cap=*/64);
-    }));
+    })));
 
     CHECK(result.total_events == N);
     auto stats = analyze(rec.samples);
     check_fidelity(stats, "pipelined");
 
-    (void)dstd::fs::remove_all(temp_dir);
+    dstd::fs::remove_all(temp_dir).discard();
 }
 
 TEST_CASE("Replay fidelity - first-event anchor reset survives warmup gap") {
@@ -289,7 +290,7 @@ TEST_CASE("Replay fidelity - first-event anchor reset survives warmup gap") {
                                  "Valgrind/CI slowdown)");
     check_fidelity(stats, "anchor-reset");
 
-    (void)dstd::fs::remove_all(temp_dir);
+    dstd::fs::remove_all(temp_dir).discard();
 }
 
 TEST_CASE("Replay pipelined - files replay at the same time") {
@@ -339,7 +340,7 @@ TEST_CASE("Replay pipelined - files replay at the same time") {
     CHECK(result.pid_counts[PID_A] == N);
     CHECK(result.pid_counts[PID_B] == N);
 
-    (void)dstd::fs::remove_all(temp_dir);
+    dstd::fs::remove_all(temp_dir).discard();
 }
 
 TEST_CASE("Replay pipelined - each file keeps its own timeline") {

@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/batch_ops.h>
+#include <dftracer/utils/domains/analysis/statistics/stats_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/trace/statistics/stats_view.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -22,16 +23,18 @@ using namespace test_view_common;
 using namespace dftracer::utils::trace;
 
 // Run a StatsView collection on a Runtime (StatsView is async - no blocking).
-static statistics::ViewStats run_stats(const statistics::StatsView& sv,
-                                       statistics::StatNeeds needs = {}) {
+static domains::analysis::statistics::ViewStats run_stats(
+    const domains::analysis::statistics::StatsView& sv,
+    domains::analysis::statistics::StatNeeds needs = {}) {
     dftracer::utils::Runtime rt;
-    statistics::ViewStats result;
-    rt.block_on(coro::named(
-        "stats",
-        coro::with_scope(
-            [&](coro::Scope&) -> dftracer::utils::coro::CoroTask<void> {
-                result = co_await sv.collect(needs);
-            })));
+    domains::analysis::statistics::ViewStats result;
+    dftu_utils_test::ok(rt.block_on(coro::named(
+        "stats", coro::with_scope([&](coro::Scope&)
+                                      -> dftracer::utils::coro::CoroTask<void> {
+            auto collected = co_await sv.collect(needs);
+            REQUIRE(collected.has_value());
+            result = std::move(*collected);
+        }))));
     return result;
 }
 
@@ -65,12 +68,12 @@ TEST_SUITE("stats via View") {
             create_mixed_trace(env, 30, 20);  // posix=30, stdio=20
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        dataframe::DataFrame cats =
+        dataframe::DataFrame cats = dftu_utils_test::ok(
             View::from_file(dstd::String(gz), dstd::String(idx))
                 .group_by({GroupKey::cat()})
                 .agg({{AggOp::Count, "", "n"}})
                 .collect()
-                .get();
+                .get());
 
         // category_count == distinct groups; total events == sum of counts.
         CHECK(cats.num_rows() == 2);      // posix, stdio
@@ -83,21 +86,21 @@ TEST_SUITE("stats via View") {
         dstd::String gz = create_mixed_trace(env, 30, 20);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        dataframe::DataFrame names =
+        dataframe::DataFrame names = dftu_utils_test::ok(
             View::from_file(dstd::String(gz), dstd::String(idx))
                 .group_by({GroupKey::name()})
                 .agg({{AggOp::Count, "", "n"}})
                 .collect()
-                .get();
+                .get());
         CHECK(names.num_rows() > 0);  // unique_name_count
         CHECK(sum_i64(names, "n") == 50);
 
-        dataframe::DataFrame pt =
+        dataframe::DataFrame pt = dftu_utils_test::ok(
             View::from_file(dstd::String(gz), dstd::String(idx))
                 .group_by({GroupKey::pid(), GroupKey::tid()})
                 .agg({{AggOp::Count, "", "n"}})
                 .collect()
-                .get();
+                .get());
         CHECK(pt.num_rows() > 0);  // pid_tid_count
         CHECK(sum_i64(pt, "n") == 50);
     }
@@ -108,8 +111,9 @@ TEST_SUITE("stats via View") {
         dstd::String gz = create_mixed_trace(env, 30, 20);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        statistics::ViewStats s = run_stats(statistics::StatsView::from_file(
-            dstd::String(gz), dstd::String(idx)));
+        domains::analysis::statistics::ViewStats s =
+            run_stats(domains::analysis::statistics::StatsView::from_file(
+                dstd::String(gz), dstd::String(idx)));
 
         CHECK(s.total_events == 50);
         CHECK(s.category_counts.size() == 2);
@@ -135,10 +139,11 @@ TEST_SUITE("stats via View") {
         dstd::String gz = create_mixed_trace(env, 30, 20);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        statistics::ViewStats s = run_stats(statistics::StatsView::from_file(
-            dstd::String(gz), dstd::String(idx)));
-        dftracer::utils::index::schemas::dft::ChunkStatistics cs;
-        statistics::fill_chunk_statistics(cs, s);
+        domains::analysis::statistics::ViewStats s =
+            run_stats(domains::analysis::statistics::StatsView::from_file(
+                dstd::String(gz), dstd::String(idx)));
+        dftracer::utils::trace::index::schemas::dft::ChunkStatistics cs;
+        domains::analysis::statistics::fill_chunk_statistics(cs, s);
 
         CHECK(cs.total_events == 50);
         CHECK(cs.category_counts.size() == 2);
@@ -158,21 +163,25 @@ TEST_SUITE("stats via View") {
         dstd::String gz = create_mixed_trace(env, 30, 20);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        statistics::ViewStats cold = run_stats(statistics::StatsView::from_file(
-            dstd::String(gz), dstd::String(idx)));
+        domains::analysis::statistics::ViewStats cold =
+            run_stats(domains::analysis::statistics::StatsView::from_file(
+                dstd::String(gz), dstd::String(idx)));
 
         // Persist the rollups, then read them back.
         dftracer::utils::Runtime rt;
-        rt.block_on(coro::named(
+        dftu_utils_test::ok(rt.block_on(coro::named(
             "materialize",
             coro::with_scope(
                 [&](coro::Scope&) -> dftracer::utils::coro::CoroTask<void> {
-                    co_await statistics::StatsView::from_file(dstd::String(gz),
-                                                              dstd::String(idx))
-                        .materialize();
-                })));
-        statistics::ViewStats warm = run_stats(statistics::StatsView::from_file(
-            dstd::String(gz), dstd::String(idx)));
+                    auto done =
+                        co_await domains::analysis::statistics::StatsView::
+                            from_file(dstd::String(gz), dstd::String(idx))
+                                .materialize();
+                    REQUIRE(done.has_value());
+                }))));
+        domains::analysis::statistics::ViewStats warm =
+            run_stats(domains::analysis::statistics::StatsView::from_file(
+                dstd::String(gz), dstd::String(idx)));
 
         CHECK(warm.total_events == cold.total_events);
         CHECK(warm.category_counts.size() == cold.category_counts.size());
@@ -190,7 +199,7 @@ TEST_SUITE("stats via View") {
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         dftracer::utils::Runtime rt;
-        rt.block_on(coro::named(
+        dftu_utils_test::ok(rt.block_on(coro::named(
             "materialize",
             coro::with_scope(
                 [&](coro::Scope&) -> dftracer::utils::coro::CoroTask<void> {
@@ -204,8 +213,8 @@ TEST_SUITE("stats via View") {
                                 return dstd::Function<void(const ExportStats&)>(
                                     [](const ExportStats&) {});
                             });
-                    co_await plan.collect();
-                })));
+                    dftu_utils_test::ok(co_await plan.collect());
+                }))));
 
         // Both rollups are now reconstructable with no scan.
         auto cat = View::from_file(dstd::String(gz), dstd::String(idx))
@@ -216,10 +225,12 @@ TEST_SUITE("stats via View") {
                         .group_by({GroupKey::name()})
                         .agg({{AggOp::Count, "", "n"}})
                         .reconstruct_if_cached();
-        REQUIRE(cat.has_value());
-        REQUIRE(name.has_value());
-        CHECK(sum_i64(*cat, "n") == 50);
-        CHECK(sum_i64(*name, "n") == 50);
+        const auto cat_rows = dftu_utils_test::ok(std::move(cat));
+        const auto name_rows = dftu_utils_test::ok(std::move(name));
+        REQUIRE(cat_rows.has_value());
+        REQUIRE(name_rows.has_value());
+        CHECK(sum_i64(*cat_rows, "n") == 50);
+        CHECK(sum_i64(*name_rows, "n") == 50);
     }
 
     TEST_CASE("execute() serves materialized branches without scanning") {
@@ -229,7 +240,7 @@ TEST_SUITE("stats via View") {
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         dftracer::utils::Runtime rt;
-        rt.block_on(coro::named(
+        dftu_utils_test::ok(rt.block_on(coro::named(
             "materialize",
             coro::with_scope(
                 [&](coro::Scope&) -> dftracer::utils::coro::CoroTask<void> {
@@ -243,12 +254,12 @@ TEST_SUITE("stats via View") {
                                 return dstd::Function<void(const ExportStats&)>(
                                     [](const ExportStats&) {});
                             });
-                    co_await plan.collect();
-                })));
+                    dftu_utils_test::ok(co_await plan.collect());
+                }))));
 
         ExportStats stats;
         std::int64_t cat_sum = 0;
-        rt.block_on(coro::named(
+        dftu_utils_test::ok(rt.block_on(coro::named(
             "collect",
             coro::with_scope(
                 [&](coro::Scope&) -> dftracer::utils::coro::CoroTask<void> {
@@ -266,8 +277,8 @@ TEST_SUITE("stats via View") {
                                         cat_sum = sum_i64(cat.get(), "n");
                                     });
                             });
-                    co_await plan.collect();
-                })));
+                    dftu_utils_test::ok(co_await plan.collect());
+                }))));
 
         // Both branches were served from rollups, so nothing was scanned.
         CHECK(stats.chunks_scanned == 0);
@@ -285,7 +296,7 @@ TEST_SUITE("stats via View") {
         // run and k-way merge them back; the result must still be exact.
         dataframe::DataFrame cats;
         dftracer::utils::Runtime rt;
-        rt.block_on(coro::named(
+        dftu_utils_test::ok(rt.block_on(coro::named(
             "spill",
             coro::with_scope(
                 [&](coro::Scope&) -> dftracer::utils::coro::CoroTask<void> {
@@ -300,8 +311,8 @@ TEST_SUITE("stats via View") {
                                         cats = std::move(c.get());
                                     });
                             });
-                    co_await plan.collect();
-                })));
+                    dftu_utils_test::ok(co_await plan.collect());
+                }))));
         CHECK(cats.num_rows() == 2);
         CHECK(sum_i64(cats, "n") == 50);
     }
@@ -325,11 +336,12 @@ TEST_SUITE("stats via View") {
         }
         dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        statistics::ViewStats s = run_stats(statistics::StatsView::from_file(
-            dstd::String(gz), dstd::String(idx)));
+        domains::analysis::statistics::ViewStats s =
+            run_stats(domains::analysis::statistics::StatsView::from_file(
+                dstd::String(gz), dstd::String(idx)));
         dstd::Map<dstd::String, std::uint64_t> m;
         for (auto& [k, v] : s.pid_tid_counts) m[dstd::String(k)] = v;
         CHECK(m.count("1000:5000") == 1);
@@ -344,7 +356,7 @@ TEST_SUITE("stats via View") {
         dstd::String gz = create_mixed_trace(env, 30, 20);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        dataframe::DataFrame d =
+        dataframe::DataFrame d = dftu_utils_test::ok(
             View::from_file(dstd::String(gz), dstd::String(idx))
                 .group_by({GroupKey::cat()})
                 .agg({{AggOp::Mean, "dur", "mean"},
@@ -353,7 +365,7 @@ TEST_SUITE("stats via View") {
                       {AggOp::Min, "ts", "tmin"},
                       {AggOp::Max, "ts", "tmax"}})
                 .collect()
-                .get();
+                .get());
         REQUIRE(d.num_rows() == 2);
         const double* mean = d.columns[col(d, "mean")].data<double>();
         const std::int64_t* dmin =

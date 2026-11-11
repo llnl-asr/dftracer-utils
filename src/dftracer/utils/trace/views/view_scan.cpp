@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/intern_cache.h>
@@ -14,20 +15,21 @@
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/build/chunk_indexer.h>
-#include <dftracer/utils/index/extensions/bloom_fold.h>
-#include <dftracer/utils/index/extensions/catalog_fold.h>
-#include <dftracer/utils/index/gzip/checkpoint_indexer.h>
-#include <dftracer/utils/index/plan/prune.h>
-#include <dftracer/utils/index/plan/rowsets.h>
-#include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/index/source.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
-#include <dftracer/utils/index/store/root_layout.h>
-#include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/duql/errc.h>
+#include <dftracer/utils/fileio/file_helpers.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/json/value.h>
 #include <dftracer/utils/json/value_access.h>
+#include <dftracer/utils/trace/index/build/chunk_indexer.h>
+#include <dftracer/utils/trace/index/extensions/bloom_fold.h>
+#include <dftracer/utils/trace/index/extensions/catalog_fold.h>
+#include <dftracer/utils/trace/index/gzip/checkpoint_indexer.h>
+#include <dftracer/utils/trace/index/plan/prune.h>
+#include <dftracer/utils/trace/index/plan/rowsets.h>
+#include <dftracer/utils/trace/index/record_schema.h>
+#include <dftracer/utils/trace/index/source.h>
+#include <dftracer/utils/trace/index/store/root_layout.h>
+#include <dftracer/utils/trace/index/tables.h>
 #include <dftracer/utils/trace/metadata_collector_utility.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/coverage.h>
@@ -48,57 +50,82 @@ namespace dftracer::utils::trace::views::detail {
 
 std::size_t checkpoint_size_or_default(std::size_t s) {
     return s != 0 ? s
-                  : dftracer::utils::index::gzip::CheckpointIndexer::
+                  : dftracer::utils::trace::index::gzip::CheckpointIndexer::
                         DEFAULT_CHECKPOINT_SIZE;
 }
 
-const dftracer::utils::index::RecordSchema& plan_record_schema(
+const dftracer::utils::trace::index::RecordSchema& plan_record_schema(
     const ViewPlan& plan) {
     if (auto p = plan.record_schema) return *p;
-    dstd::Vector<index::plan::RowSetFile> files;
+    dstd::Vector<trace::index::plan::RowSetFile> files;
     files.reserve(plan.files.size());
     for (const auto& f : plan.files)
         files.push_back({dstd::String(dstd::StringView(f.file_path)),
                          dstd::String(dstd::StringView(f.index_path)),
                          f.fd.get()});
-    const index::RecordSchema* found = &index::plan::files_schema(files);
+    const trace::index::RecordSchema* found = nullptr;
+    auto resolved = trace::index::plan::files_schema(files);
+    if (resolved) {
+        found = *resolved;
+    } else {
+        // The error stays with the plan for resolve_record_schema; the
+        // callers that cannot fail read dftracer's schema meanwhile.
+        plan.record_schema_error =
+            dstd::make_shared<const dstd::Error>(resolved.error());
+        auto fallback = trace::index::get_schema("dftracer");
+        if (!fallback) dstd::fatal("the dftracer record schema is missing");
+        found = *fallback;
+    }
     // Registered record_schemas live until the process exits, so the pointer
     // never dangles.
-    plan.record_schema = dstd::SharedPtr<const index::RecordSchema>(
+    plan.record_schema = dstd::SharedPtr<const trace::index::RecordSchema>(
         dstd::SharedPtr<void>(), found);
     return *found;
 }
 
-void require_role(const ViewPlan& plan, dstd::StringView op, TraceRole role) {
+dstd::Result<void> resolve_record_schema(const ViewPlan& plan) {
+    if (plan.error) return *plan.error;
+    plan_record_schema(plan);
+    if (plan.record_schema_error) return *plan.record_schema_error;
+    return {};
+}
+
+dstd::Result<void> require_role(const ViewPlan& plan, dstd::StringView op,
+                                TraceRole role) {
+    if (auto resolved = resolve_record_schema(plan); !resolved) return resolved;
     const auto& record_schema = plan_record_schema(plan);
-    auto need = [&](const dstd::String& path, dstd::StringView name) {
+    auto need = [&](const dstd::String& path,
+                    dstd::StringView name) -> dstd::Result<void> {
         if (path.empty())
-            throw common::DFTUtilsException::cat(
-                common::ErrorCode::InvalidArgument, op, " needs a ", name,
-                " role; schema ", record_schema.id, " binds none");
+            return common::make_error<
+                "{} needs a {} role; schema {} binds "
+                "none">(common::ErrorCode::InvalidArgument, op, name,
+                        record_schema.id);
+        return {};
     };
-    need(record_schema.roles.time, "time");
+    if (auto needed = need(record_schema.roles.time, "time"); !needed)
+        return needed;
     if (role == TraceRole::Duration)
-        need(record_schema.roles.duration, "duration");
+        return need(record_schema.roles.duration, "duration");
+    return {};
 }
 
 bool plan_by_path(const ViewPlan& plan) {
     return plan_record_schema(plan).decoder ==
-           dftracer::utils::index::Decoder::Path;
+           dftracer::utils::trace::index::Decoder::Path;
 }
 
 namespace {
 
-dstd::Optional<duql::Query> phase_query(const ViewPlan& plan) {
+dstd::Result<dstd::Optional<duql::Query>> phase_query(const ViewPlan& plan) {
     // Path-decoded records are all data events and carry no phase field.
     if (plan_by_path(plan)) {
         if (plan.phase == Phase::Events || plan.phase == Phase::Any)
             return plan.query;
-        throw common::DFTUtilsException(
-            common::ErrorCode::InvalidArgument,
-            "record schema '" + plan_record_schema(plan).id +
-                "' decodes records by path, which have no phase; only the "
-                "events phase (every record) applies");
+        return common::make_error<
+            "record schema '{}' decodes records by path, which have no phase; "
+            "only the events phase (every record) applies">(
+            common::ErrorCode::InvalidArgument, plan_record_schema(plan).id);
     }
     RecordPhase rp;
     if (plan.phase == Phase::Events) {
@@ -114,22 +141,34 @@ dstd::Optional<duql::Query> phase_query(const ViewPlan& plan) {
     }
     // Match both the current integer "ph" and the legacy single-letter form so
     // the same View reads new- and old-format traces alike.
-    duql::Query q = duql::parse_or_throw(
+    auto q = duql::Query::from_string(
         "ph == " + dstd::to_string(phase_to_int(rp)) + " or ph == \"" +
         dstd::String(1, phase_to_letter(rp)) + "\"");
-    if (plan.query) return duql::conjoin(*plan.query, q);
-    return q;
+    if (!q)
+        return common::make_error(duql::DuqlErrc::Parse, q.error().format());
+    if (plan.query)
+        return dstd::Optional<duql::Query>(duql::conjoin(*plan.query, *q));
+    return dstd::Optional<duql::Query>(std::move(*q));
 }
 
 }  // namespace
 
-dstd::Optional<duql::Query> effective_query(const ViewPlan& plan) {
-    dstd::Optional<duql::Query> q = phase_query(plan);
+dstd::Result<dstd::Optional<duql::Query>> effective_query(
+    const ViewPlan& plan) {
+    if (auto resolved = resolve_record_schema(plan); !resolved)
+        return resolved.error();
+    auto phased = phase_query(plan);
+    if (!phased) return phased.error();
+    dstd::Optional<duql::Query> q = std::move(*phased);
     if (!plan.all_records) {
         const dstd::String& data = plan_record_schema(plan).data;
-        if (!data.empty() && data != dftracer::utils::index::NO_METADATA) {
-            duql::Query d = duql::parse_or_throw(data);
-            q = q ? duql::conjoin(*q, d) : std::move(d);
+        if (!data.empty() &&
+            data != dftracer::utils::trace::index::NO_METADATA) {
+            auto d = duql::Query::from_string(data);
+            if (!d)
+                return common::make_error(duql::DuqlErrc::Parse,
+                                          d.error().format());
+            q = q ? duql::conjoin(*q, *d) : std::move(*d);
         }
     }
     if (!plan.build_step) return q;
@@ -141,8 +180,8 @@ namespace {
 // Whether metadata records are rows of the plan: it reads `all`, or its
 // source's `data` keeps them.
 bool reads_metadata(const ViewPlan& plan) {
-    return plan.all_records ||
-           plan_record_schema(plan).data != dftracer::utils::index::NO_METADATA;
+    return plan.all_records || plan_record_schema(plan).data !=
+                                   dftracer::utils::trace::index::NO_METADATA;
 }
 
 }  // namespace
@@ -206,12 +245,13 @@ namespace {
 // non-negative time, and a time range bounds that field in its unit, widened
 // to whole units, so the field's zone map prunes; the window keeps the exact
 // microsecond test.
-void add_time_conditions(const ViewPlan& plan, ViewDefinition& vdef) {
+dstd::Result<void> add_time_conditions(const ViewPlan& plan,
+                                       ViewDefinition& vdef) {
     // ISO-8601 text times are compared after decoding, not on the raw record.
     const auto* time_field = plan_record_schema(plan).field_at(vdef.time_path);
     if (time_field &&
-        time_field->type == dftracer::utils::index::FieldType::String)
-        return;
+        time_field->type == dftracer::utils::trace::index::FieldType::String)
+        return {};
     dstd::Vector<dstd::String> conds;
     auto bound = [&](const char* op, double v) {
         conds.push_back(vdef.time_path + " " + op + " " +
@@ -223,26 +263,33 @@ void add_time_conditions(const ViewPlan& plan, ViewDefinition& vdef) {
         if (!vdef.window_overlap)
             bound(">=", std::floor(plan.time_range->first / vdef.time_factor));
     }
-    if (conds.empty()) return;
+    if (conds.empty()) return {};
     dstd::String q;
     for (const auto& c : conds) q += (q.empty() ? "" : " and ") + c;
-    duql::Query bounds = duql::parse_or_throw(q);
-    vdef.query = vdef.query ? duql::conjoin(*vdef.query, bounds) : bounds;
+    auto bounds = duql::Query::from_string(q);
+    if (!bounds)
+        return common::make_error(duql::DuqlErrc::Parse,
+                                  bounds.error().format());
+    vdef.query = vdef.query ? duql::conjoin(*vdef.query, *bounds) : *bounds;
+    return {};
 }
 
 }  // namespace
 
-ViewDefinition make_vdef(const ViewPlan& plan, bool for_aggregation) {
+dstd::Result<ViewDefinition> make_vdef(const ViewPlan& plan,
+                                       bool for_aggregation) {
     ViewDefinition vdef;
-    vdef.query = effective_query(plan);
+    auto query = effective_query(plan);
+    if (!query) return query.error();
+    vdef.query = std::move(*query);
     vdef.args_fallback = plan_record_schema(plan).args_fallback;
     if (plan_by_path(plan)) {
-        const index::RecordSchema& schema = plan_record_schema(plan);
+        const trace::index::RecordSchema& schema = plan_record_schema(plan);
         vdef.by_path = true;
         // A schema without fields changes no decoded value.
         if (!schema.fields.empty()) vdef.record_schema = &schema;
         vdef.paths = needed_paths(plan);
-        const index::Roles& roles = schema.roles;
+        const trace::index::Roles& roles = schema.roles;
         // Only trace operations read the roles.
         if (!vdef.paths.empty() && plan.timed) {
             for (const auto* p : {&roles.time, &roles.duration, &roles.entity,
@@ -257,9 +304,10 @@ ViewDefinition make_vdef(const ViewPlan& plan, bool for_aggregation) {
                 vdef.path_fields.push_back(schema.field_at(p));
         if (!roles.time.empty()) {
             vdef.time_path = roles.time;
-            vdef.time_factor = index::micros_per(roles.time_unit);
+            vdef.time_factor = trace::index::micros_per(roles.time_unit);
             vdef.duration_path = roles.duration;
-            vdef.duration_factor = index::micros_per(roles.duration_unit);
+            vdef.duration_factor =
+                trace::index::micros_per(roles.duration_unit);
         }
     }
     // Rows select by start; occupancy needs every event that overlaps the
@@ -282,7 +330,9 @@ ViewDefinition make_vdef(const ViewPlan& plan, bool for_aggregation) {
         vdef.metadata_records = rows;
         vdef.filter_metadata = !rows && metadata;
     }
-    if (!vdef.time_path.empty()) add_time_conditions(plan, vdef);
+    if (!vdef.time_path.empty())
+        if (auto timed = add_time_conditions(plan, vdef); !timed)
+            return timed.error();
     return vdef;
 }
 
@@ -304,12 +354,12 @@ ViewScannerInput make_scanner_input(const ScanUnit& u,
     return sin;
 }
 
-coro::CoroTask<dstd::Vector<ScanUnit>> gather_units(
+coro::CoroTask<dstd::Result<dstd::Vector<ScanUnit>>> gather_units(
     const ViewPlan& plan, const ViewDefinition& vdef,
     std::uint64_t& skipped_out) {
     dstd::Vector<dstd::Vector<ScanUnit>> per_file(plan.files.size());
     dstd::Vector<std::uint64_t> skip_v(plan.files.size(), 0);
-    dstd::Vector<std::exception_ptr> errors(plan.files.size());
+    dstd::Vector<dstd::Optional<dstd::Error>> errors(plan.files.size());
     dstd::Vector<std::uint64_t> uc_sizes(plan.files.size());
     dstd::Vector<std::size_t> ckpt_counts(plan.files.size());
     for (std::size_t fi = 0; fi < plan.files.size(); ++fi) {
@@ -325,45 +375,42 @@ coro::CoroTask<dstd::Vector<ScanUnit>> gather_units(
             if (uc_sizes[fi] != 0 && ckpt_counts[fi] != 0) continue;
             scope.spawn([&, fi]() -> coro::CoroTask<void> {
                 // Each file keeps its own error, so the first file's error is
-                // raised.
-                try {
-                    if (is_cancelled(plan)) co_return;
-                    const auto& f = plan.files[fi];
-                    trace::MetadataCollectorUtility meta;
-                    auto md = co_await meta(
-                        trace::MetadataCollectorUtilityInput::from_file(
-                            f.file_path)
-                            .with_checkpoint_size(
-                                checkpoint_size_or_default(f.checkpoint_size))
-                            .with_force_rebuild(false)
-                            .with_index(f.index_path));
-                    // Fail loudly: dropping the file would silently omit its
-                    // events from the result.
-                    if (!md.success)
-                        throw common::DFTUtilsException(
-                            common::ErrorCode::Io,
-                            "gather_units: metadata read failed for " +
-                                f.file_path + ": " + md.error_message);
-                    uc_sizes[fi] = md.uncompressed_size;
-                    ckpt_counts[fi] = md.checkpoint_count;
-                } catch (...) {
-                    errors[fi] = std::current_exception();
+                // returned.
+                if (is_cancelled(plan)) co_return;
+                const auto& f = plan.files[fi];
+                trace::MetadataCollectorUtility meta;
+                auto md = co_await meta(
+                    trace::MetadataCollectorUtilityInput::from_file(f.file_path)
+                        .with_checkpoint_size(
+                            checkpoint_size_or_default(f.checkpoint_size))
+                        .with_force_rebuild(false)
+                        .with_index(f.index_path));
+                // Fail loudly: dropping the file would silently omit its
+                // events from the result.
+                if (!md.success) {
+                    errors[fi] = dstd::Error::from_format<
+                        "gather_units: metadata read failed for {}: {}">(
+                        common::ErrorCode::Io, f.file_path, md.error_message);
+                    co_return;
                 }
+                uc_sizes[fi] = md.uncompressed_size;
+                ckpt_counts[fi] = md.checkpoint_count;
             });
         }
         co_return;
     });
     for (const auto& e : errors)
-        if (e) std::rethrow_exception(e);
+        if (e) co_return *e;
 
     // One snapshot per index root, taken after the metadata pass may have
     // built the index, and shared read-only by every planner.
-    dstd::HashMap<dstd::String, index::Snapshot> snapshots;
+    dstd::HashMap<dstd::String, trace::index::Snapshot> snapshots;
     dstd::HashSet<dstd::String> seen_roots;
     for (const auto& f : plan.files) {
         if (f.index_path.empty()) continue;
         if (!seen_roots.insert(dstd::String(f.index_path)).second) continue;
-        if (!common::input_exists(index::store_of(f.index_path))) continue;
+        if (!common::input_exists(trace::index::store_of(f.index_path)))
+            continue;
         if (auto taken = snapshot_of(plan, f.index_path))
             snapshots.emplace(dstd::String(f.index_path), std::move(*taken));
     }
@@ -371,63 +418,65 @@ coro::CoroTask<dstd::Vector<ScanUnit>> gather_units(
     co_await coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
         for (std::size_t fi = 0; fi < plan.files.size(); ++fi) {
             scope.spawn([&, fi]() -> coro::CoroTask<void> {
-                try {
-                    if (is_cancelled(plan)) co_return;
-                    const auto& f = plan.files[fi];
-                    const std::size_t ckpt =
-                        checkpoint_size_or_default(f.checkpoint_size);
-                    const dstd::String& index_path = f.index_path;
+                if (is_cancelled(plan)) co_return;
+                const auto& f = plan.files[fi];
+                const std::size_t ckpt =
+                    checkpoint_size_or_default(f.checkpoint_size);
+                const dstd::String& index_path = f.index_path;
 
-                    ViewPlannerInput pin;
-                    pin.with_view(vdef)
-                        .with_file_path(f.file_path)
-                        .with_index_path(
-                            common::input_exists(index::store_of(index_path))
-                                ? index_path
-                                : "")
-                        .with_uncompressed_size(uc_sizes[fi])
-                        .with_checkpoint_count(ckpt_counts[fi]);
-                    const auto held =
-                        snapshots.find(dstd::StringView(index_path));
-                    if (held != snapshots.end())
-                        pin.with_snapshot(&held->second);
-                    // Path-decoded files prune time through their time field.
-                    if (plan.time_range && !vdef.by_path)
-                        pin.with_time_range(plan.time_range->first,
-                                            plan.time_range->second);
+                ViewPlannerInput pin;
+                pin.with_view(vdef)
+                    .with_file_path(f.file_path)
+                    .with_index_path(
+                        common::input_exists(trace::index::store_of(index_path))
+                            ? index_path
+                            : "")
+                    .with_uncompressed_size(uc_sizes[fi])
+                    .with_checkpoint_count(ckpt_counts[fi]);
+                const auto held = snapshots.find(dstd::StringView(index_path));
+                if (held != snapshots.end()) pin.with_snapshot(&held->second);
+                // Path-decoded files prune time through their time field.
+                if (plan.time_range && !vdef.by_path)
+                    pin.with_time_range(plan.time_range->first,
+                                        plan.time_range->second);
 
-                    ViewPlannerUtility planner;
-                    auto planned = co_await planner(pin);
-                    // A planner error must propagate; file_may_match == false
-                    // is a legitimate prune, so that one stays a quiet skip.
-                    if (!planned)
-                        throw common::DFTUtilsException(planned.error());
-                    skip_v[fi] = planned->skipped_checkpoints;
-                    if (!planned->file_may_match) co_return;
+                ViewPlannerUtility planner;
+                auto planned = co_await planner(pin);
+                // A planner error must propagate; file_may_match == false
+                // is a legitimate prune, so that one stays a quiet skip.
+                if (!planned) {
+                    errors[fi] = planned.error();
+                    co_return;
+                }
+                skip_v[fi] = planned->skipped_checkpoints;
+                if (!planned->file_may_match) co_return;
 
-                    auto& out = per_file[fi];
-                    if (planned->candidates.empty()) co_return;
-                    // Without a store the first read builds the index.
-                    dstd::SharedPtr<index::gzip::CheckpointIndexer> indexer;
-                    if (common::input_exists(index::store_of(index_path)))
-                        indexer = index::gzip::CheckpointIndexerFactory::create(
-                            f.file_path, index_path, ckpt, false);
-                    for (const auto& c : planned->candidates) {
-                        std::uint64_t start = c.start_byte;
-                        std::uint64_t end = c.end_byte;
-                        // A rebuild can merge members, so a pin can fall inside
-                        // a chunk.
-                        if (f.pinned_c_end > 0) {
-                            start = std::max(start, f.pinned_uc_begin);
-                            end = std::min(end, f.pinned_uc_end);
-                            if (start >= end) continue;
-                        }
-                        out.push_back(ScanUnit{f.file_path, index_path, ckpt,
-                                               c.checkpoint_idx, start, end, 0,
-                                               nullptr, indexer});
+                auto& out = per_file[fi];
+                if (planned->candidates.empty()) co_return;
+                // Without a store the first read builds the index.
+                dstd::SharedPtr<trace::index::gzip::CheckpointIndexer> indexer;
+                if (common::input_exists(trace::index::store_of(index_path))) {
+                    auto made = trace::index::gzip::CheckpointIndexerFactory::
+                        try_create(f.file_path, index_path, ckpt, false);
+                    if (!made) {
+                        errors[fi] = made.error();
+                        co_return;
                     }
-                } catch (...) {
-                    errors[fi] = std::current_exception();
+                    indexer = std::move(*made);
+                }
+                for (const auto& c : planned->candidates) {
+                    std::uint64_t start = c.start_byte;
+                    std::uint64_t end = c.end_byte;
+                    // A rebuild can merge members, so a pin can fall inside
+                    // a chunk.
+                    if (f.pinned_c_end > 0) {
+                        start = std::max(start, f.pinned_uc_begin);
+                        end = std::min(end, f.pinned_uc_end);
+                        if (start >= end) continue;
+                    }
+                    out.push_back(ScanUnit{f.file_path, index_path, ckpt,
+                                           c.checkpoint_idx, start, end, 0,
+                                           nullptr, indexer});
                 }
             });
         }
@@ -435,7 +484,7 @@ coro::CoroTask<dstd::Vector<ScanUnit>> gather_units(
     });
 
     for (const auto& e : errors)
-        if (e) std::rethrow_exception(e);
+        if (e) co_return *e;
     skipped_out = 0;
     for (auto s : skip_v) skipped_out += s;
     dstd::Vector<ScanUnit> units;
@@ -461,23 +510,21 @@ namespace {
 // True if any file's index lacks extension `ext` at the current format, or has
 // no index yet. One snapshot serves every file of a root.
 bool any_file_missing_extension(
-    const ViewPlan& plan, dftracer::utils::index::store::IndexExtension ext) {
-    dstd::Map<dstd::String, index::Snapshot> snapshots;
+    const ViewPlan& plan,
+    dftracer::utils::trace::index::store::IndexExtension ext) {
+    dstd::Map<dstd::String, trace::index::Snapshot> snapshots;
     for (const auto& f : plan.files) {
-        try {
-            auto at = snapshots.find(f.index_path);
-            if (at == snapshots.end())
-                at = snapshots
-                         .emplace(f.index_path, common::unwrap(snapshot_of(
-                                                    plan, f.index_path)))
-                         .first;
-            const auto file = at->second.file(
-                index::store::internal::get_logical_path(f.file_path));
-            if (!file || !index::extension_current(at->second, *file, ext))
-                return true;
-        } catch (const std::exception&) {
-            return true;
+        auto at = snapshots.find(f.index_path);
+        if (at == snapshots.end()) {
+            // An index that cannot be read counts as missing the extension.
+            auto taken = snapshot_of(plan, f.index_path);
+            if (!taken) return true;
+            at = snapshots.emplace(f.index_path, std::move(*taken)).first;
         }
+        const auto file =
+            at->second.file(fileio::get_logical_path(f.file_path));
+        if (!file || !trace::index::extension_current(at->second, *file, ext))
+            return true;
     }
     return false;
 }
@@ -486,47 +533,52 @@ bool any_file_missing_extension(
 // ride-along stops attaching and a repeat scan pays no re-parse.
 bool any_file_missing_bloom(const ViewPlan& plan) {
     return any_file_missing_extension(
-        plan, dftracer::utils::index::store::IndexExtension::Stats);
+        plan, dftracer::utils::trace::index::store::IndexExtension::Stats);
 }
 
 bool any_file_missing_catalog(const ViewPlan& plan) {
     return any_file_missing_extension(
-        plan, dftracer::utils::index::store::IndexExtension::Catalog);
+        plan, dftracer::utils::trace::index::store::IndexExtension::Catalog);
 }
 
 }  // namespace
 
-dstd::Vector<dstd::UniquePtr<Fold>> select_index_folds(
+dstd::Result<dstd::Vector<dstd::UniquePtr<Fold>>> select_index_folds(
     const ViewPlan& plan, const ViewDefinition& vdef,
     dftracer::utils::dstd::StringIntern& intern) {
     dstd::Vector<dstd::UniquePtr<Fold>> kept;
-    if (plan.files.empty() || !any_file_missing_bloom(plan) ||
-        is_past_pin(plan))
-        return kept;
+    if (plan.files.empty() || !any_file_missing_bloom(plan)) return kept;
+    const auto past_pin = is_past_pin(plan);
+    if (!past_pin.has_value()) return past_pin.error();
+    if (*past_pin) return kept;
 
     const ScanShape shape = scan_shape(vdef);
     auto bloom =
-        dstd::make_unique<dftracer::utils::index::extensions::BloomFold>(
-            intern, dftracer::utils::index::build::for_schema(
+        dstd::make_unique<dftracer::utils::trace::index::extensions::BloomFold>(
+            intern, dftracer::utils::trace::index::build::for_schema(
                         {}, plan_record_schema(plan)));
     if (bloom->accepts(shape)) kept.push_back(std::move(bloom));
     return kept;
 }
 
-dstd::UniquePtr<Fold> select_catalog_fold(
+dstd::Result<dstd::UniquePtr<Fold>> select_catalog_fold(
     const ViewPlan& plan, const ViewDefinition& vdef,
     dftracer::utils::dstd::StringIntern& intern) {
-    if (plan.files.empty() || !any_file_missing_catalog(plan) ||
-        is_past_pin(plan))
-        return nullptr;
-    auto fold = dstd::make_unique<index::extensions::CatalogFold>(
-        intern, index::build::for_schema({}, plan_record_schema(plan))
-                    .params_hash(index::store::IndexExtension::Catalog));
-    if (!fold->accepts(scan_shape(vdef))) return nullptr;
+    if (plan.files.empty() || !any_file_missing_catalog(plan))
+        return dstd::UniquePtr<Fold>();
+    const auto past_pin = is_past_pin(plan);
+    if (!past_pin.has_value()) return past_pin.error();
+    if (*past_pin) return dstd::UniquePtr<Fold>();
+    dstd::UniquePtr<Fold> fold =
+        dstd::make_unique<trace::index::extensions::CatalogFold>(
+            intern,
+            trace::index::build::for_schema({}, plan_record_schema(plan))
+                .params_hash(trace::index::store::IndexExtension::Catalog));
+    if (!fold->accepts(scan_shape(vdef))) return dstd::UniquePtr<Fold>();
     return fold;
 }
 
-coro::CoroTask<ExportStats> for_each_scanned_batch(
+coro::CoroTask<dstd::Result<ExportStats>> for_each_scanned_batch(
     const ViewPlan& plan, const ViewDefinition& vdef, std::size_t slot_count,
     std::uint64_t limit,
     const dstd::Function<void(std::size_t,
@@ -534,7 +586,9 @@ coro::CoroTask<ExportStats> for_each_scanned_batch(
     dstd::Span<Fold* const> folds,
     dftracer::utils::dstd::StringIntern* intern) {
     std::uint64_t skipped = 0;
-    auto units = co_await gather_units(plan, vdef, skipped);
+    auto gathered = co_await gather_units(plan, vdef, skipped);
+    if (!gathered) co_return gathered.error();
+    auto units = std::move(*gathered);
     // 0 means one worker per unit (max parallelism); otherwise cap the fan-out.
     if (slot_count == 0) slot_count = std::max<std::size_t>(1, units.size());
 
@@ -545,6 +599,8 @@ coro::CoroTask<ExportStats> for_each_scanned_batch(
     dstd::Vector<ScanCounts> counts_v(slot_count);
     const std::size_t nworkers = std::min(slot_count, units.size());
     dstd::Vector<CoverageSet> covered_v(nworkers);
+    dstd::Vector<dstd::Optional<dstd::Error>> worker_errors(nworkers);
+    std::atomic<bool> failed{false};
 
     bool any_needs_args = false;
     bool any_wants_schema = false;
@@ -585,6 +641,7 @@ coro::CoroTask<ExportStats> for_each_scanned_batch(
                 const bool dom_decode = !vdef.by_path && any_wants_schema;
                 for (;;) {
                     if (produced.load(std::memory_order_relaxed) >= cap) break;
+                    if (failed.load(std::memory_order_relaxed)) break;
                     if (is_cancelled(plan)) break;
                     std::size_t i =
                         next_unit.fetch_add(1, std::memory_order_relaxed);
@@ -595,8 +652,15 @@ coro::CoroTask<ExportStats> for_each_scanned_batch(
                     auto gen = scanner(sin);
                     bool complete = true;
                     for (;;) {
-                        auto b = co_await gen.next();
-                        if (!b) break;
+                        auto next = co_await gen.next();
+                        if (!next) break;
+                        if (!*next) {
+                            worker_errors[w] = next->error();
+                            failed.store(true, std::memory_order_relaxed);
+                            complete = false;
+                            break;
+                        }
+                        auto& b = *next;
                         if (b->events.empty()) {
                             counts_v[w].add(*b);
                             continue;
@@ -663,7 +727,19 @@ coro::CoroTask<ExportStats> for_each_scanned_batch(
                                     fold_events.discard_last();
                             }
                             FoldBatch fb{fold_events.events(), units[i]};
-                            for (auto& s : slices) s->step(fb);
+                            bool step_failed = false;
+                            for (auto& s : slices) {
+                                auto stepped = s->step(fb);
+                                if (stepped) continue;
+                                worker_errors[w] = stepped.error();
+                                failed.store(true, std::memory_order_relaxed);
+                                step_failed = true;
+                                break;
+                            }
+                            if (step_failed) {
+                                complete = false;
+                                break;
+                            }
                         }
                         produced.fetch_add(b->events.size(),
                                            std::memory_order_relaxed);
@@ -682,6 +758,9 @@ coro::CoroTask<ExportStats> for_each_scanned_batch(
         }
         co_return;
     });
+
+    for (auto& e : worker_errors)
+        if (e) co_return *e;
 
     CoverageSet covered;
     for (auto& c : covered_v) covered.absorb(std::move(c));
@@ -707,7 +786,8 @@ coro::CoroTask<ExportStats> for_each_scanned_batch(
 
     for (std::size_t w = 0; w < nworkers; ++w)
         for (std::size_t k = 0; k < folds.size(); ++k)
-            folds[k]->merge(*fslice[w][k]);
+            if (auto merged = folds[k]->merge(*fslice[w][k]); !merged)
+                co_return merged.error();
 
     ExportStats st;
     st.chunks_skipped = skipped;

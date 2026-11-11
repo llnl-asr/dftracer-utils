@@ -11,6 +11,7 @@
 // baseline) instead of asserting.
 
 #define DOCTEST_CONFIG_IMPLEMENT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/async_generator.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/abi.h>
@@ -19,6 +20,7 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -35,6 +37,7 @@
 #include <signal.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
+#include <task_result.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -75,7 +78,7 @@ std::uint64_t budget_bytes() {
     return (v ? std::strtoull(v, nullptr, 10) : DEFAULT_BUDGET_MB) << 20;
 }
 const std::uint64_t BUDGET = budget_bytes();
-constexpr std::int64_t MORSEL_ROWS = 8192;
+constexpr std::int64_t BATCH_SIZE = 8192;
 // An op may use this many budgets above the streaming baseline: its own state
 // of one budget, a morsel or two in flight and the allocator's slack.
 #if defined(__APPLE__)
@@ -95,9 +98,9 @@ class GenCursor : public Cursor {
               std::size_t pad)
         : rows_(rows), keys_(keys), seed_(seed), pad_(pad) {}
 
-    coro::CoroTask<dstd::Optional<Morsel>> next(std::int64_t) override {
-        if (at_ >= rows_) co_return dstd::nullopt;
-        const std::int64_t n = std::min(MORSEL_ROWS, rows_ - at_);
+    coro::CoroTask<MorselResult> next(std::int64_t) override {
+        if (at_ >= rows_) co_return MorselResult(dstd::nullopt);
+        const std::int64_t n = std::min(BATCH_SIZE, rows_ - at_);
         dstd::Vector<std::int64_t> k(n), t(n), v(n), g(n);
         dstd::Vector<dstd::String> s(n);
         for (std::int64_t i = 0; i < n; ++i) {
@@ -107,8 +110,8 @@ class GenCursor : public Cursor {
                                              static_cast<std::uint64_t>(keys_));
             t[i] = at_ + i;
             v[i] = static_cast<std::int64_t>(h >> 20) % 1000003;
-            s[i] = pad_ ? dstd::String(pad_, 'x') + dstd::to_string(h)
-                        : "s" + dstd::to_string(h % 977);
+            s[i] = pad_ ? dstd::fmt<"{}{}">(dstd::String(pad_, 'x'), h)
+                        : dstd::fmt<"s{}">(h % 977);
             g[i] = static_cast<std::int64_t>((h >> 40) % 64);
         }
         at_ += n;
@@ -119,7 +122,7 @@ class GenCursor : public Cursor {
         m.columns.push_back(Series::flat_i64(v.data(), n));
         m.columns.push_back(Series::strings(s));
         m.columns.push_back(Series::flat_i64(g.data(), n));
-        co_return m;
+        co_return MorselResult(std::move(m));
     }
 
    private:
@@ -148,7 +151,7 @@ class GenSource : public Source {
         return out;
     }
 
-    ScanResult scan(const ScanRequest& req) const override {
+    dstd::Result<ScanResult> scan(const ScanRequest& req) const override {
         ScanResult r;
         r.cursor = dstd::make_unique<GenCursor>(rows_, keys_, seed_, pad_);
         r.filters.assign(req.filters.size(), Pushed::No);
@@ -172,7 +175,7 @@ Series make_tk(std::int64_t n, std::int64_t at) {
         offsets[static_cast<std::size_t>(i)] = static_cast<std::int32_t>(2 * i);
         for (std::int64_t j = 0; j < 2; ++j) {
             const auto e = static_cast<std::size_t>(2 * i + j);
-            value[e] = "v" + dstd::to_string((at + i + j) % 977);
+            value[e] = dstd::fmt<"v{}">((at + i + j) % 977);
             count[e] = at + i + j;
         }
     }
@@ -188,9 +191,9 @@ class ListCursor : public Cursor {
    public:
     explicit ListCursor(std::int64_t rows) : rows_(rows) {}
 
-    coro::CoroTask<dstd::Optional<Morsel>> next(std::int64_t) override {
-        if (at_ >= rows_) co_return dstd::nullopt;
-        const std::int64_t n = std::min(MORSEL_ROWS, rows_ - at_);
+    coro::CoroTask<MorselResult> next(std::int64_t) override {
+        if (at_ >= rows_) co_return MorselResult(dstd::nullopt);
+        const std::int64_t n = std::min(BATCH_SIZE, rows_ - at_);
         dstd::Vector<std::int64_t> pid(static_cast<std::size_t>(n));
         for (std::int64_t i = 0; i < n; ++i)
             pid[static_cast<std::size_t>(i)] = at_ + i;
@@ -199,7 +202,7 @@ class ListCursor : public Cursor {
         m.columns.push_back(Series::flat_i64(pid.data(), n));
         m.columns.push_back(make_tk(n, at_));
         at_ += n;
-        co_return m;
+        co_return MorselResult(std::move(m));
     }
 
    private:
@@ -220,7 +223,7 @@ class ListSource : public Source {
         return out;
     }
 
-    ScanResult scan(const ScanRequest& req) const override {
+    dstd::Result<ScanResult> scan(const ScanRequest& req) const override {
         ScanResult r;
         r.cursor = dstd::make_unique<ListCursor>(rows_);
         r.filters.assign(req.filters.size(), Pushed::No);
@@ -323,7 +326,15 @@ const dstd::Map<dstd::String, Recipe>& recipes() {
         {"pivot",
          [](const LazyFrame& b) { return b.pivot("k", "g", "v", "sum"); }},
         {"group_transform",
-         [](const LazyFrame& b) { return b.group_by({"s"}).cumsum(); }},
+         [](const LazyFrame& b) {
+             auto summed = b.group_by({"s"}).cumsum();
+             if (!summed.has_value()) {
+                 std::fprintf(stderr, "group_transform: %s\n",
+                              summed.error().c_str());
+                 std::abort();
+             }
+             return std::move(*summed);
+         }},
         // Strings of about 200 bytes, unique per row: 50 MB of keys.
         {"sort_by_long_strings",
          [](const LazyFrame&) {
@@ -351,7 +362,7 @@ const dstd::Map<dstd::String, Recipe>& recipes() {
          [](const LazyFrame& b) {
              LazyFrame w = b.select({"k", "v"});
              for (int i = 0; i < 16; ++i)
-                 w = w.with_column("arg.c" + dstd::to_string(i),
+                 w = w.with_column(dstd::fmt<"arg.c{}">(i),
                                    col(1) + lit(std::int64_t{i}));
              return w.group_by(dstd::Vector<dstd::String>{"k"},
                                {GroupAgg{Agg::Count, "", "n"}},
@@ -657,8 +668,14 @@ dstd::Set<dstd::String> registry_ops() {
 
 coro::CoroTask<std::int64_t> drain_count(LazyFrame lf) {
     std::int64_t n = 0;
-    auto g = lf.stream(MORSEL_ROWS);
-    while (auto df = co_await g.next()) n += df->num_rows();
+    auto g = lf.stream(BATCH_SIZE);
+    while (auto df = co_await g.next()) {
+        if (!*df) {
+            std::fprintf(stderr, "stream failed: %s\n", df->error().c_str());
+            co_return -1;
+        }
+        n += (*df)->num_rows();
+    }
     co_return n;
 }
 
@@ -670,8 +687,14 @@ int child_main(const dstd::String& op) {
         if (it == recipes().end()) return 2;
         plan = it->second(base).memory_budget(BUDGET);
     }
-    const std::int64_t n =
+    const auto drained =
         dftracer::utils::default_runtime().submit(drain_count(plan)).get();
+    if (!drained.has_value()) {
+        std::fprintf(stderr, "%s\n", drained.error().c_str());
+        return 4;
+    }
+    const std::int64_t n = *drained;
+    if (n < 0) return 3;
     std::printf("rows=%lld\n", static_cast<long long>(n));
     return 0;
 }

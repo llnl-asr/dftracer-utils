@@ -35,17 +35,13 @@ set(_dirs
     include/dftracer/utils/duql
     src/dftracer/utils/duql
     include/dftracer/utils/plugins
-    src/dftracer/utils/plugins
-    include/dftracer/utils/index
-    src/dftracer/utils/index
-    include/dftracer/utils/utilities
-    src/dftracer/utils/utilities
+    src/dftracer/utils/fileio
     include/dftracer/utils/trace
     src/dftracer/utils/trace
     include/dftracer/utils/dataframe
     src/dftracer/utils/dataframe
-    src/dftracer/utils/server
-    src/dftracer/utils/binaries
+    src/dftracer/utils/domains
+    src/dftracer/utils/cli
     src/dftracer/utils/python
     benchmarks
     tests/binaries

@@ -5,9 +5,9 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/domains/plugins/fold_adapter.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/memory/budget.h>
-#include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/runtime/runtime.h>
 
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
@@ -23,6 +23,7 @@
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 #include <variant>
@@ -126,13 +127,14 @@ dstd::Vector<dstd::Vector<trace::views::detail::FoldEvent>> wide_slices(
     return {std::move(a), std::move(b)};
 }
 
-void finalize_now(plugins::PluginFold& f) {
+void finalize_now(domains::plugins::PluginFold& f) {
     Runtime rt(1);
-    rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                  co_await f.finalize(trace::views::detail::CoverageSet{});
-              }),
-              "fin")
-        .wait();
+    dftu_utils_test::ok(
+        rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                      co_await f.finalize(trace::views::detail::CoverageSet{});
+                  }),
+                  "fin")
+            .wait());
     rt.shutdown();
 }
 
@@ -209,22 +211,22 @@ dstd::Map<dstd::String, Row> run_with_budget(dftu_plugin& p,
                                              std::size_t* runs, bool nested) {
     dstd::StringIntern intern;
     plugins::NamedResultRegistry named;
-    plugins::PluginFold master(&p, intern, nullptr, &named, "spill_test",
-                               budget);
+    domains::plugins::PluginFold master(&p, intern, nullptr, &named,
+                                        "spill_test", budget);
     for (const dstd::Vector<trace::views::detail::FoldEvent>& evs :
          wide_slices(intern)) {
         auto slice = master.slice();
-        auto* pf = static_cast<plugins::PluginFold*>(slice.get());
+        auto* pf = static_cast<domains::plugins::PluginFold*>(slice.get());
         trace::views::detail::ScanUnit unit{};
         for (std::size_t at = 0; at < evs.size(); at += BATCH) {
             const std::size_t n = std::min<std::size_t>(BATCH, evs.size() - at);
-            pf->step(trace::views::detail::FoldBatch{
+            dftu_utils_test::ok(pf->step(trace::views::detail::FoldBatch{
                 dstd::Span<const trace::views::detail::FoldEvent>(
                     evs.data() + at, n),
                 unit,
-                {}});
+                {}}));
         }
-        master.merge(*pf);
+        dftu_utils_test::ok(master.merge(*pf));
     }
     *runs = master.agg_spill_runs(ACC_NAME);
     finalize_now(master);

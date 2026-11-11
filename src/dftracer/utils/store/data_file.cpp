@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/dstd/algorithm.h>
 #include <dftracer/utils/dstd/bits.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -24,9 +25,7 @@
 #include <unistd.h>
 
 #include <algorithm>
-#include <array>
 #include <chrono>
-#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <mutex>
@@ -453,10 +452,7 @@ dstd::String data_file_name(dstd::StringView host, std::uint32_t pid,
     const dstd::String pid_text = dstd::to_string(pid);
     out.append(pid_text.data(), pid_text.size());
     out.push_back('-');
-    std::array<char, 17> hex{};
-    std::snprintf(hex.data(), hex.size(), "%016llx",
-                  static_cast<unsigned long long>(random));
-    out.append(hex.data(), 16);
+    out += dstd::fmt<"{:016x}">(static_cast<std::uint64_t>(random));
     if (!label.empty()) {
         bool has_label = false;
         for (const char c : label) {
@@ -476,17 +472,14 @@ dstd::Expected<std::size_t, dstd::Error> move_data_files(dstd::StringView from,
                                                          dstd::StringView to) {
     const auto io_error = [](dstd::StringView what, dstd::StringView path,
                              dstd::StringView cause) {
-        dstd::String text(what);
-        text.append(path);
-        text.append(": ");
-        text.append(cause);
         return dstd::Unexpected<dstd::Error>(
-            dstd::Error(dstd::Condition::Io, text));
+            dstd::Error::from_format<"{}{}: {}">(dstd::Condition::Io, what,
+                                                 path, cause));
     };
     const dstd::PathView from_dir(from);
     const dstd::PathView to_dir(to);
     const auto made = dstd::fs::create_directories(to_dir);
-    if (!made) {
+    if (!made.has_value()) {
         return io_error("store: cannot create the directory ", to,
                         made.error().message());
     }
@@ -578,8 +571,9 @@ void append_summary(dstd::StringView data_path, std::uint64_t needed_bytes,
         {.access = dstd::Access::Append, .creation = dstd::Creation::IfNeeded});
     if (!file) return;
     // One write, so writers that close at once append whole entries.
-    (void)file->append(
-        {reinterpret_cast<const std::byte*>(entry.data()), entry.size()});
+    file->append(
+            {reinterpret_cast<const std::byte*>(entry.data()), entry.size()})
+        .discard();
 }
 
 }  // namespace
@@ -1319,7 +1313,7 @@ dstd::Expected<void, dstd::Error> DataFileWriter::close() {
     // No sync after the footer: a footer lost to a crash leaves a file that
     // reads as not closed, whose commits are checked whole.
     auto header = write_header();
-    (void)fd_.close();
+    fd_.close().discard();
     closed_.store(true, std::memory_order_release);
     if (!header) return header;
     // A failed append only leaves the file for readers to open as before.
@@ -1347,7 +1341,8 @@ dstd::Expected<DataFileReader, dstd::Error> DataFileReader::open(
     if (file_size < FILE_HEADER_BYTES) return parse_error();
 
     auto direct = direct_reads_wanted();
-    if (!direct) return dstd::Unexpected<dstd::Error>(direct.error());
+    if (!direct.has_value())
+        return dstd::Unexpected<dstd::Error>(direct.error());
 
     DataFileReader reader;
     reader.file_ = std::move(*opened);
@@ -1362,7 +1357,8 @@ dstd::Expected<DataFileReader, dstd::Error> DataFileReader::open(
     // One bounded read of the file end.
     if (footer == FooterItems::Directory) {
         auto light = reader.open_light(file_size);
-        if (!light) return dstd::Unexpected<dstd::Error>(light.error());
+        if (!light.has_value())
+            return dstd::Unexpected<dstd::Error>(light.error());
         if (*light) return reader;
     }
 
@@ -1609,7 +1605,8 @@ dstd::Expected<void, dstd::Error> DataFileReader::read_at(
     const dstd::File& file, std::uint64_t offset, std::size_t length,
     std::uint8_t* dest, BlockReads* reads) const {
     auto direct = read_direct(offset, length, dest, reads);
-    if (!direct) return dstd::Unexpected<dstd::Error>(direct.error());
+    if (!direct.has_value())
+        return dstd::Unexpected<dstd::Error>(direct.error());
     if (*direct) return {};
     std::size_t done = 0;
     while (done < length) {
@@ -1678,11 +1675,13 @@ dstd::Expected<DataFileReader, dstd::Error> DataFileReader::from_summary(
     reader.path_.assign(path.data(), path.size());
     reader.open_mutex_ = dstd::make_unique<std::mutex>();
     auto direct = direct_reads_wanted();
-    if (!direct) return dstd::Unexpected<dstd::Error>(direct.error());
+    if (!direct.has_value())
+        return dstd::Unexpected<dstd::Error>(direct.error());
     if (*direct) reader.direct_ = dstd::make_unique<DirectReads>();
     auto applied =
         reader.apply_footer(entry.footer, entry.sequence, entry.needed_bytes);
-    if (!applied) return dstd::Unexpected<dstd::Error>(applied.error());
+    if (!applied.has_value())
+        return dstd::Unexpected<dstd::Error>(applied.error());
     if (!*applied) return parse_error();
     return reader;
 }

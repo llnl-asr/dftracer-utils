@@ -5,9 +5,10 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/trace/index/indexer.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -38,12 +39,13 @@ dstd::String write_tagged(TestEnvironment& env, std::size_t path_budget) {
     const dstd::String gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
-    (void)dstd::fs::remove(plain);
-    dftracer::utils::index::IndexerOptions o;
+    dstd::fs::remove(plain).discard();
+    dftracer::utils::trace::index::IndexerOptions o;
     o.bloom->path_budget = path_budget;
-    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))},
-                                          o)
-        .build();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                                {dstd::String(dstd::StringView(gz))}, o))
+            .build());
     return gz;
 }
 
@@ -53,7 +55,9 @@ View view_of(const dstd::String& gz) {
         dstd::String(dstd::String(determine_index_path(gz, ""))));
 }
 
-std::size_t rows(const View& v) { return v.collect().get().num_rows(); }
+std::size_t rows(const View& v) {
+    return dftu_utils_test::ok(v.collect().get()).num_rows();
+}
 
 struct NullSink : ExportSink {
     void write(dstd::StringView) override {}
@@ -71,16 +75,19 @@ TEST_SUITE("AnyView") {
               RECORDS - 300);
         CHECK(rows(view_of(gz).duql("any(sizes) >= 2990")) == 10);
         NullSink sink;
-        const auto stats = view_of(gz).duql(q).sink_json(sink).get();
+        const auto stats =
+            dftu_utils_test::ok(view_of(gz).duql(q).sink_json(sink).get());
         CHECK(stats.events_matched == 300);
         CHECK(stats.chunks_skipped > 0);
 
-        auto ix = dftracer::utils::index::Indexer::open(
-            {dstd::String(dstd::StringView(gz))});
-        const auto e = ix.explain(q);
+        auto ix =
+            dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                {dstd::String(dstd::StringView(gz))}));
+        const auto e = dftu_utils_test::ok(ix.explain(q));
         REQUIRE(e.size() == 1);
         CHECK(e[0].read.size() < e[0].chunks);
-        CHECK(ix.explain(R"(any(tags) == "absent")")[0].read.empty());
+        CHECK(dftu_utils_test::ok(ix.explain(R"(any(tags) == "absent")"))[0]
+                  .read.empty());
     }
 
     TEST_CASE("an aggregate counts the rows a row scan returns") {
@@ -90,11 +97,12 @@ TEST_SUITE("AnyView") {
              {R"(any(tags) == "t3")", R"(any(tags) in ["t1", "t2"])",
               "any(sizes) < 1", R"(any(tags) != "t0")"}) {
             CAPTURE(q);
-            const auto df = view_of(gz)
-                                .duql(q)
-                                .agg({{AggOp::Count, "", "n"}})
-                                .collect()
-                                .get();
+            const auto df =
+                dftu_utils_test::ok(view_of(gz)
+                                        .duql(q)
+                                        .agg({{AggOp::Count, "", "n"}})
+                                        .collect()
+                                        .get());
             const auto& n = df.columns[df.column_index("n")];
             CHECK(static_cast<std::size_t>(n.values<std::int64_t>()[0]) ==
                   rows(view_of(gz).duql(q)));
@@ -121,12 +129,15 @@ TEST_SUITE("AnyView") {
             CHECK(rows(view_of(gz).duql("derive z = 1 | where " + cond)) ==
                   want);
             NullSink sink;
-            CHECK(view_of(gz).duql(cond).sink_json(sink).get().events_matched ==
-                  want);
+            CHECK(dftu_utils_test::ok(
+                      view_of(gz).duql(cond).sink_json(sink).get())
+                      .events_matched == want);
         }
-        auto ix = dftracer::utils::index::Indexer::open(
-            {dstd::String(dstd::StringView(gz))});
-        const auto e = ix.explain(R"(any(tags, . == "absent"))");
+        auto ix =
+            dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                {dstd::String(dstd::StringView(gz))}));
+        const auto e =
+            dftu_utils_test::ok(ix.explain(R"(any(tags, . == "absent"))"));
         REQUIRE(e.size() == 1);
         CHECK(e[0].read.size() == e[0].chunks);
     }
@@ -134,12 +145,12 @@ TEST_SUITE("AnyView") {
     TEST_CASE("expand reads an array of a path-decoded record") {
         TestEnvironment env(10);
         const auto gz = write_tagged(env, 1024);
-        const auto df = view_of(gz)
-                            .duql(
-                                "expand sizes with_index k | take 4"
-                                " | select sizes, k")
-                            .collect()
-                            .get();
+        const auto df =
+            dftu_utils_test::ok(view_of(gz)
+                                    .duql("expand sizes with_index k | take 4"
+                                          " | select sizes, k")
+                                    .collect()
+                                    .get());
         REQUIRE(df.num_rows() == 4);
         const auto& s = df.columns[df.column_index("sizes")];
         const auto& k = df.columns[df.column_index("k")];

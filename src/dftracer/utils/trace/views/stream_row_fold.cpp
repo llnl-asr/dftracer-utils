@@ -34,8 +34,8 @@ std::uint64_t morsel_bytes(const dataframe::Morsel& m) {
     return total;
 }
 
-void StreamRowFold::step(const FoldBatch& batch) {
-    if (dropped_ && dropped_->load(std::memory_order_relaxed)) return;
+dstd::Result<void> StreamRowFold::step(const FoldBatch& batch) {
+    if (dropped_ && dropped_->load(std::memory_order_relaxed)) return {};
     const RecordPhase target =
         branch_ ? agg_phase_target(*branch_) : RecordPhase::Unknown;
     const std::size_t total = batch.events.size();
@@ -50,7 +50,7 @@ void StreamRowFold::step(const FoldBatch& batch) {
                         pod_matches(*branch_->query, ev, *intern_, qmap_));
         if (k) kept_.push_back(static_cast<std::uint32_t>(i));
     }
-    if (kept_.empty()) return;
+    if (kept_.empty()) return {};
     const EventRows events = kept_.size() == total
                                  ? EventRows(batch.events)
                                  : EventRows(batch.events, kept_);
@@ -62,6 +62,7 @@ void StreamRowFold::step(const FoldBatch& batch) {
     const std::uint64_t bytes = morsel_bytes(m);
     pending_task_.emplace(send(std::move(m), bytes));
     pending_ = reinterpret_cast<::dftu_task*>(&*pending_task_);
+    return {};
 }
 
 void StreamRowFold::end_unit(const ScanUnit& unit) {

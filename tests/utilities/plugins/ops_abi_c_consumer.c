@@ -5,6 +5,7 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <stdint.h>
+#include <utilities/plugins/abi_c_consumers.h>
 
 /* Hash `data` with the host's dftu.hash.fnv1a op; 0 ok, -1 on failure. */
 int dftu_test_ops_fnv1a(const dftu_plugin_host* h, const char* data,

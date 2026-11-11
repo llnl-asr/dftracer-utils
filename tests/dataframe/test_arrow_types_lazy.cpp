@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dataframe/expr_ok.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 #include <cstring>
@@ -32,13 +34,10 @@ using namespace dftracer::utils::dataframe::test_types;
 
 namespace {
 
-DataFrame run(dftracer::utils::coro::CoroTask<DataFrame> t) {
-    return dftracer::utils::default_runtime().submit(std::move(t)).get();
-}
-
-dstd::Optional<Morsel> run(
-    dftracer::utils::coro::CoroTask<dstd::Optional<Morsel>> t) {
-    return dftracer::utils::default_runtime().submit(std::move(t)).get();
+template <class T>
+T run(dftracer::utils::coro::CoroTask<dstd::Result<T>> t) {
+    return dftu_utils_test::ok(
+        dftracer::utils::default_runtime().submit(std::move(t)).get());
 }
 
 dstd::Vector<const Series*> ptrs(const DataFrame& df) {
@@ -214,18 +213,19 @@ dstd::Optional<Morsel> spill_round_trip(const Series& col, spill::Dir& dir,
     dstd::Vector<Series> cols;
     cols.push_back(col.share());
     const dstd::String path = dir.run_path(id);
-    spill::Writer w(path);
-    w.write(cols, col.length());
-    w.close();
-    spill::Reader r(path);
-    return run(r.next(0));
+    auto w = dftu_utils_test::ok(spill::Writer::open(path));
+    dftu_utils_test::ok(w.write(cols, col.length()));
+    dftu_utils_test::ok(w.close());
+    auto r = dftu_utils_test::ok(spill::Reader::open(path));
+    return run(r->next(0));
 }
 
 }  // namespace
 
 TEST_SUITE("dataframe_arrow_types_lazy") {
     TEST_CASE("spill round-trips Float16, Decimal128/256 and FixedSizeBinary") {
-        spill::Dir dir;
+        const auto dir_owner = dftu_utils_test::ok(spill::Dir::create());
+        spill::Dir& dir = *dir_owner;
 
         {
             INFO("Float16");
@@ -251,8 +251,9 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
                               4 * 16) == 0);
             // The scale must actually be used downstream: min() reads the
             // scaled value, so it only matches if decimal_scale survived.
-            CHECK(scalar_value<double>(back.min()) ==
-                  doctest::Approx(scalar_value<double>(s.min())));
+            CHECK(scalar_value<double>(dftu_utils_test::ok(back.min())) ==
+                  doctest::Approx(
+                      scalar_value<double>(dftu_utils_test::ok(s.min()))));
         }
         {
             INFO("Decimal256");
@@ -283,7 +284,8 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
     TEST_CASE(
         "spill round-trips LargeString, LargeBinary and the temporal "
         "family") {
-        spill::Dir dir;
+        const auto dir_owner = dftu_utils_test::ok(spill::Dir::create());
+        spill::Dir& dir = *dir_owner;
         {
             INFO("LargeString");
             Series s = make_large_utf8({"hello", "", "world", "dftracer"});
@@ -369,7 +371,8 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
     }
 
     TEST_CASE("spill round-trips a LargeList") {
-        spill::Dir dir;
+        const auto dir_owner = dftu_utils_test::ok(spill::Dir::create());
+        spill::Dir& dir = *dir_owner;
         Series large_list = make_large_list_i64({{3}, {1, 2}, {}, {1}});
         auto m = spill_round_trip(large_list, dir, 0);
         REQUIRE(m.has_value());
@@ -382,7 +385,8 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
     }
 
     TEST_CASE("spill round-trips FixedSizeList and Map") {
-        spill::Dir dir;
+        const auto dir_owner = dftu_utils_test::ok(spill::Dir::create());
+        spill::Dir& dir = *dir_owner;
         Series fixed_list =
             make_fixed_size_list_i64({{3, 3}, {1, 1}, {2, 2}, {1, 1}});
         auto f = spill_round_trip(fixed_list, dir, 0);
@@ -421,7 +425,8 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
             {
                 LazyFrame lf = src.lazy().filter(col(0) > std::int64_t{2});
                 DataFrame lazy_r = run(lf.collect());
-                Series mask = eval(col(0) > std::int64_t{2}, ptrs(src));
+                Series mask = dftu_utils_test::eval_ok(col(0) > std::int64_t{2},
+                                                       ptrs(src));
                 DataFrame eager_r = src.filter(mask);
                 REQUIRE(lazy_r.num_rows() == eager_r.num_rows());
                 REQUIRE(lazy_r.num_rows() == 2);
@@ -431,7 +436,7 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
             {
                 LazyFrame lf = src.lazy().select({"v"});
                 DataFrame lazy_r = run(lf.collect());
-                DataFrame eager_r = src.select({"v"});
+                DataFrame eager_r = dftu_utils_test::ok(src.select({"v"}));
                 REQUIRE(lazy_r.columns.size() == 1);
                 check_v_equal(lazy_r.columns[0], eager_r.columns[0]);
             }
@@ -447,8 +452,8 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
             {
                 LazyFrame lf = src.lazy().with_column("v2", col(1));
                 DataFrame lazy_r = run(lf.collect());
-                DataFrame eager_r =
-                    src.with_column("v2", eval(col(1), ptrs(src)));
+                DataFrame eager_r = src.with_column(
+                    "v2", dftu_utils_test::eval_ok(col(1), ptrs(src)));
                 REQUIRE(lazy_r.columns.size() == 3);
                 check_v_equal(lazy_r.columns[2], eager_r.columns[2]);
             }
@@ -469,7 +474,7 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
             DataFrame src = keyed(v);
             LazyFrame lf = src.lazy().sort_by("v", false);
             DataFrame lazy_r = run(lf.collect());
-            DataFrame eager_r = src.sort_by("v", false);
+            DataFrame eager_r = dftu_utils_test::ok(src.sort_by("v", false));
             REQUIRE(lazy_r.num_rows() == eager_r.num_rows());
             check_v_equal(lazy_r.columns[1], eager_r.columns[1]);
             // sort_by must reorder `k` in lockstep with `v`.
@@ -490,7 +495,7 @@ TEST_SUITE("dataframe_arrow_types_lazy") {
 
         dstd::Vector<GroupAgg> aggs = {{Agg::Count, "v", "v_count"}};
         DataFrame lazy_r = run(df.lazy().group_by("k", aggs).collect(2));
-        DataFrame eager_r = df.group_by("k", aggs);
+        DataFrame eager_r = dftu_utils_test::ok(df.group_by("k", aggs));
         REQUIRE(lazy_r.num_rows() == eager_r.num_rows());
         REQUIRE(lazy_r.num_rows() == 2);
         const std::int64_t* lc = lazy_r.columns[1].data<std::int64_t>();

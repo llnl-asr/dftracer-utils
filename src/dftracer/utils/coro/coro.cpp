@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/intern_table.h>
 #include <dftracer/utils/coro/detail/coro.h>
+#include <dftracer/utils/coro/detail/resumption_helper.h>
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/hooks.h>
 
@@ -15,6 +16,18 @@ RunContext::~RunContext() {
 }
 
 std::coroutine_handle<> CoroPromise::FinalAwaiter::await_suspend(
+    std::coroutine_handle<CoroPromise> h) noexcept {
+    return finish(h);
+}
+
+void CoroPromise::finish_cancelled() noexcept {
+    auto h = std::coroutine_handle<CoroPromise>::from_promise(*this);
+    Executor* const home = executor;
+    std::coroutine_handle<> next = FinalAwaiter::finish(h);
+    if (next != std::noop_coroutine()) post_resumption(home, next);
+}
+
+std::coroutine_handle<> CoroPromise::FinalAwaiter::finish(
     std::coroutine_handle<CoroPromise> h) noexcept {
     report_finish(h.address());
     auto& p = h.promise();

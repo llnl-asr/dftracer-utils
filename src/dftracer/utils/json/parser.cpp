@@ -24,7 +24,7 @@ bool JsonParser::parse(dstd::StringView json_line) {
         valid_ = false;
         return false;
     }
-    doc_ = std::move(result.value());
+    doc_ = std::move(result.value_unsafe());
     active_ = simdjson::ondemand::document_reference(doc_);
     valid_ = true;
     return true;
@@ -41,14 +41,14 @@ dstd::Optional<std::int64_t> JsonParser::get_int64(dstd::StringView key) {
     if (!readable()) return dstd::nullopt;
     auto result = active_[key].get_int64();
     if (result.error()) return dstd::nullopt;
-    return result.value();
+    return result.value_unsafe();
 }
 
 dstd::Optional<std::uint64_t> JsonParser::get_uint64(dstd::StringView key) {
     if (!readable()) return dstd::nullopt;
     auto result = active_[key].get_uint64();
     if (result.error()) return dstd::nullopt;
-    return result.value();
+    return result.value_unsafe();
 }
 
 dstd::Optional<double> JsonParser::get_double(dstd::StringView key) {
@@ -63,7 +63,7 @@ dstd::Optional<bool> JsonParser::get_bool(dstd::StringView key) {
     if (!readable()) return dstd::nullopt;
     auto result = active_[key].get_bool();
     if (result.error()) return dstd::nullopt;
-    return result.value();
+    return result.value_unsafe();
 }
 
 dstd::Optional<dstd::StringView> JsonParser::get_string(dstd::StringView key) {
@@ -79,7 +79,7 @@ dstd::Optional<simdjson::ondemand::value> JsonParser::get_value(
     if (!readable()) return dstd::nullopt;
     auto result = active_[key];
     if (result.error()) return dstd::nullopt;
-    return result.value();
+    return result.value_unsafe();
 }
 
 }  // namespace dftracer::utils::json

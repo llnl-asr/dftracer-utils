@@ -6,6 +6,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -102,7 +103,7 @@ dstd::Vector<dstd::String> strings_for(const dstd::String& pattern,
         if (c != '%' && c != '_' && c != '\\' && c != '^' && c != '$')
             plain += c;
     out.push_back(plain);
-    out.push_back("x" + plain + "y");
+    out.push_back(dstd::fmt<"x{}y">(plain));
     for (int k = 0; k < 40; ++k) {
         dstd::String s;
         for (int n = rng() % 16; n > 0; --n) s += pool[rng() % pool.size()];
@@ -251,9 +252,9 @@ dstd::Vector<dstd::String> wide_strings(const dstd::String& pattern,
         }
         if (out.size() > 60) break;
     }
-    out.push_back(plain + "\xC3\xA9");
-    out.push_back("\xC3\xA9" + plain);
-    out.push_back(plain + "\xC3\x89" + plain);
+    out.push_back(dstd::fmt<"{}\xC3\xA9">(plain));
+    out.push_back(dstd::fmt<"\xC3\xA9{}">(plain));
+    out.push_back(dstd::fmt<"{}\xC3\x89{}">(plain, plain));
     return out;
 }
 
@@ -520,9 +521,9 @@ bool ref_valid(const dstd::String& s) {
 void check_utf8(const dstd::String& core) {
     for (const std::size_t pad : {0u, 5u, 8u}) {
         for (const bool tail : {false, true}) {
-            const dstd::String s =
-                dstd::String(pad, 'a') + core +
-                (tail ? dstd::String(9, 'b') : dstd::String());
+            const dstd::String s = dstd::fmt<"{}{}{}">(
+                dstd::String(pad, 'a'), core,
+                (tail ? dstd::String(9, 'b') : dstd::String()));
             CAPTURE(pad);
             CAPTURE(tail);
             CAPTURE(core);
@@ -540,8 +541,8 @@ TEST_CASE("valid_utf8 matches a reference decoder") {
              {"", "\xC3\xA9", "\x80", "\xE4\xB8", "\xF0\x9F\x98\x80"}) {
             const dstd::String tail(bad);
             for (std::size_t at = 0; at <= n; at += (n < 40 ? 1 : 7)) {
-                const dstd::String s =
-                    dstd::String(at, 'a') + tail + dstd::String(n - at, 'b');
+                const dstd::String s = dstd::fmt<"{}{}{}">(
+                    dstd::String(at, 'a'), tail, dstd::String(n - at, 'b'));
                 CAPTURE(n);
                 CAPTURE(at);
                 CHECK(duql::detail::valid_utf8(s) == ref_valid(s));
@@ -623,13 +624,13 @@ TEST_CASE("Vectorscan and PCRE2 agree on every code point") {
 
     dstd::Vector<dstd::String> patterns;
     for (char c = 'a'; c <= 'z'; ++c) {
-        patterns.push_back(dstd::String("(?i)") + c);
-        patterns.push_back(dstd::String("(?i)[") + c + "]");
+        patterns.push_back(dstd::fmt<"(?i){}">(c));
+        patterns.push_back(dstd::fmt<"(?i)[{}]">(c));
     }
     for (unsigned c = 0x80; c < 0x600; c += 3)
-        patterns.push_back("(?i)" + encode(c));
+        patterns.push_back(dstd::fmt<"(?i){}">(encode(c)));
     for (unsigned c = 0x1E00; c < 0x1F00; c += 5)
-        patterns.push_back("(?i)" + encode(c));
+        patterns.push_back(dstd::fmt<"(?i){}">(encode(c)));
     for (const char* p : {"(?i)[a-z]",
                           "(?i)[^a]",
                           "(?i)[^\xC3\xA9]",

@@ -3,6 +3,7 @@
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/run_loop.h>
 #include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/no_destructor.h>
 
 #include <chrono>
@@ -140,10 +141,9 @@ void drive_to_completion(std::coroutine_handle<> h,
             return false;
         };
         if (exec->drive_until(posted_done)) return;
-        throw common::DFTUtilsException(
-            common::ErrorCode::Pipeline,
-            "cannot block on a thread of an executor that cannot lend it; use "
-            "co_await or a thread outside the executor");
+        dstd::fatal(
+            "coro: cannot block on a thread of an executor that cannot lend "
+            "it; use co_await or a thread outside the executor");
     }
 
     // A thread with no executor hands the task to the process pool and waits:

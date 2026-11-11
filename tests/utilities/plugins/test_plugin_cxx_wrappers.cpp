@@ -6,9 +6,9 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/domains/plugins/fold_adapter.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/plugins/abi.h>
-#include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/runtime/runtime.h>
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
 // arrow_abi.
@@ -27,6 +27,7 @@
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 #include <cstring>
@@ -97,24 +98,26 @@ dftu_plugin make_wrappers_plugin() {
 void run_wrappers(dstd::StringIntern& intern,
                   plugins::NamedResultRegistry& named) {
     dftu_plugin p = make_wrappers_plugin();
-    plugins::PluginFold master(&p, intern, nullptr, &named);
+    domains::plugins::PluginFold master(&p, intern, nullptr, &named);
     const dstd::Vector<dstd::Vector<trace::views::detail::FoldEvent>> slices = {
         {evt(intern, 1, 10, "read"), evt(intern, 1, 20, "read")},
         {evt(intern, 1, 5, "write"), evt(intern, 2, 7, "write")}};
     for (const auto& evs : slices) {
         auto slice = master.slice();
-        auto* pf = static_cast<plugins::PluginFold*>(slice.get());
+        auto* pf = static_cast<domains::plugins::PluginFold*>(slice.get());
         trace::views::detail::ScanUnit unit;
-        pf->step(trace::views::detail::FoldBatch{
-            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}});
-        master.merge(*pf);
+        dftu_utils_test::ok(pf->step(trace::views::detail::FoldBatch{
+            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}}));
+        dftu_utils_test::ok(master.merge(*pf));
     }
     Runtime rt(1);
-    rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                  co_await master.finalize(trace::views::detail::CoverageSet{});
-              }),
-              "fin")
-        .wait();
+    dftu_utils_test::ok(
+        rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                      co_await master.finalize(
+                          trace::views::detail::CoverageSet{});
+                  }),
+                  "fin")
+            .wait());
     rt.shutdown();
 }
 
@@ -284,7 +287,7 @@ TEST_SUITE("PluginCxxWrappers") {
     TEST_CASE("Host::agg_result yields an empty frame for an unknown name") {
         dstd::StringIntern intern;
         dftu_plugin p = make_wrappers_plugin();
-        auto fold = dstd::make_unique<plugins::PluginFold>(&p, intern);
+        auto fold = dstd::make_unique<domains::plugins::PluginFold>(&p, intern);
         plugins::Host h{&fold->host()};
         const plugins::OwnedDataFrame miss =
             h.agg_result("no_such_accumulator");
@@ -396,10 +399,11 @@ struct PortConsumer {
 
 struct PortHolder {
     dftu_plugin* plugin;
-    dstd::UniquePtr<plugins::PluginFold> fold;
+    dstd::UniquePtr<domains::plugins::PluginFold> fold;
     PortHolder(dftu_plugin* p, dstd::StringIntern& intern,
                trace::views::detail::FoldPortBus* bus)
-        : plugin(p), fold(dstd::make_unique<plugins::PluginFold>(p, intern)) {
+        : plugin(p),
+          fold(dstd::make_unique<domains::plugins::PluginFold>(p, intern)) {
         fold->bind_port_bus(bus);
     }
     ~PortHolder() {
@@ -431,8 +435,8 @@ TEST_SUITE("PluginCxxPorts") {
         g_count = 0;
         g_sum = 0;
         bus.clear();
-        prod.fold->step(fb);
-        cons.fold->step(fb);
+        dftu_utils_test::ok(prod.fold->step(fb));
+        dftu_utils_test::ok(cons.fold->step(fb));
         CHECK(g_present);
         CHECK(g_count == 3);
         CHECK(g_sum == doctest::Approx(60.0));
@@ -440,7 +444,7 @@ TEST_SUITE("PluginCxxPorts") {
         // Consumer before producer sees nothing (the ordering rule).
         bus.clear();
         g_present = true;
-        cons.fold->step(fb);
+        dftu_utils_test::ok(cons.fold->step(fb));
         CHECK_FALSE(g_present);
     }
 }

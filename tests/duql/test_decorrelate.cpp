@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -16,16 +17,17 @@ namespace {
 dstd::Optional<Decorrelated> run(const dstd::String& text, bool scalar) {
     auto tree = syntax::parse(text);
     REQUIRE(tree.has_value());
-    return decorrelate(*tree->pipeline, scalar);
+    auto d = decorrelate(*tree->pipeline, scalar);
+    REQUIRE(d.has_value());
+    return std::move(*d);
 }
 
 dstd::String refusal(const dstd::String& text, bool scalar) {
-    try {
-        (void)run(text, scalar);
-    } catch (const Refusal& r) {
-        return r.message;
-    }
-    return {};
+    auto tree = syntax::parse(text);
+    REQUIRE(tree.has_value());
+    const auto d = decorrelate(*tree->pipeline, scalar);
+    if (d.has_value()) return {};
+    return d.error().message;
 }
 
 bool has(const dstd::String& text, std::initializer_list<const char*> parts) {
@@ -137,7 +139,8 @@ TEST_SUITE("duql decorrelate") {
 
     TEST_CASE("what a range sub-query gives") {
         auto read = [](const dstd::String& agg) {
-            return run("from data | where ts < ^.ts | agg { v = " + agg + " }",
+            return run(dstd::fmt<
+                           "from data | where ts < ^.ts | agg { v = {} }">(agg),
                        true)
                 ->read;
         };

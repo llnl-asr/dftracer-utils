@@ -38,14 +38,14 @@ ArrowExportResult | derives dstd::HeapObject
 MemoryViewBatchData | derives dstd::HeapObject
 PluginHostState | derives dstd::HeapObject
 ArrowStreamingIteratorState | derives dstd::HeapObject
-src/dftracer/utils/plugins/fold_adapter.cpp | SketchBox | derives dstd::HeapObject
+src/dftracer/utils/domains/plugins/fold_adapter.cpp | SketchBox | derives dstd::HeapObject
 ParkNode | derives dstd::HeapObject
 
 # The heap itself, and code that compiles in a plugin on the plugin's allocator.
 src/dftracer/utils/memory/* | the heap
 include/dftracer/utils/memory/* | the heap
 include/dftracer/utils/plugins/plugin/* | compiles in the plugin
-src/dftracer/utils/plugins/compose.h | compiles in the plugin
+src/dftracer/utils/domains/plugins/compose.h | compiles in the plugin
 include/dftracer/utils/dataframe/series.h | from_borrowed: new and delete both compile in the plugin
 include/dftracer/utils/dstd/vendor/* | vendored upstream text
 

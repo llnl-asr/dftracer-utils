@@ -137,6 +137,37 @@ static void test_null_arguments(void) {
     dftu_store_free(store);
 }
 
+static void test_huge_counts_are_invalid(void) {
+    dftu_store_t* store = open_store();
+    dftu_store_ns_t* ns =
+        make_ns(store, "dftu.test.huge", DFTU_STORE_FOLD_NONE);
+    const char* path = "a.pfw";
+    dftu_store_scope huge_scope = {DFTU_STORE_SCOPE_FILES, &path, UINT64_MAX};
+    dftu_store_batch_result nb =
+        dftu_store_batch(store, ns, &huge_scope, 0, NULL, 0);
+    TEST_ASSERT_FALSE(DFTU_RESULT_OK(nb));
+    TEST_ASSERT_EQUAL_INT(DFTU_COND_INVALID_ARGUMENT,
+                          DFTU_RESULT_ERROR(nb).condition);
+
+    dftu_store_source_stat stat = {0, 0, 0};
+    nb = dftu_store_batch(store, ns, &FILE_SCOPE, 0, &stat, UINT64_MAX);
+    TEST_ASSERT_FALSE(DFTU_RESULT_OK(nb));
+    TEST_ASSERT_EQUAL_INT(DFTU_COND_INVALID_ARGUMENT,
+                          DFTU_RESULT_ERROR(nb).condition);
+
+    dftu_store_snapshot_t* snap = take_snapshot(store);
+    dftu_store_bytes key = {(const uint8_t*)"k", 1};
+    dftu_store_value_list_result mr =
+        dftu_store_snapshot_multi_get(snap, ns, &FILE_SCOPE, &key, UINT64_MAX);
+    TEST_ASSERT_FALSE(DFTU_RESULT_OK(mr));
+    TEST_ASSERT_EQUAL_INT(DFTU_COND_INVALID_ARGUMENT,
+                          DFTU_RESULT_ERROR(mr).condition);
+
+    dftu_store_snapshot_free(snap);
+    dftu_store_ns_free(ns);
+    dftu_store_free(store);
+}
+
 static void test_put_commit_and_read_back(void) {
     dftu_store_t* store = open_store();
     dftu_store_ns_t* ns = make_ns(store, "dftu.test.rw", DFTU_STORE_FOLD_NONE);
@@ -435,6 +466,7 @@ int main(void) {
     UNITY_BEGIN();
     RUN_TEST(test_free_null);
     RUN_TEST(test_null_arguments);
+    RUN_TEST(test_huge_counts_are_invalid);
     RUN_TEST(test_put_commit_and_read_back);
     RUN_TEST(test_discarded_batch_writes_nothing);
     RUN_TEST(test_erase_hides_a_key);

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <checkpoint_indexer_helpers.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -7,21 +9,21 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/gzip/checkpoint_indexer.h>
-#include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
-#include <dftracer/utils/index/store/error.h>
-#include <dftracer/utils/utilities/reader/error.h>
-#include <dftracer/utils/utilities/reader/internal/reader.h>
-#include <dftracer/utils/utilities/reader/internal/reader_factory.h>
+#include <dftracer/utils/trace/index/gzip/checkpoint_indexer.h>
+#include <dftracer/utils/trace/index/gzip/checkpoint_indexer_factory.h>
+#include <dftracer/utils/trace/reader/error.h>
+#include <dftracer/utils/trace/reader/internal/reader.h>
+#include <dftracer/utils/trace/reader/internal/reader_factory.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <fstream>
 #include <random>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::index::gzip;
-using namespace dftracer::utils::utilities::reader::internal;
+using namespace dftracer::utils::trace::index::gzip;
+using namespace dftracer::utils::trace::reader::internal;
 using namespace dftu_utils_test;
 
 TEST_CASE("C++ Indexer - Basic functionality") {
@@ -35,18 +37,18 @@ TEST_CASE("C++ Indexer - Basic functionality") {
 
     SUBCASE("Build index") {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(1.0));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(1.0));
         REQUIRE(indexer != nullptr);
-        CHECK_NOTHROW(indexer->build());
+        CHECK_NOTHROW(dftu_utils_test::build_indexer(*indexer));
     }
 
     SUBCASE("Check rebuild needed") {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(1.0));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(1.0));
         REQUIRE(indexer != nullptr);
         CHECK(indexer->need_rebuild());  // Should need rebuild initially
 
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
         CHECK_FALSE(
             indexer->need_rebuild());  // Should not need rebuild after building
     }
@@ -54,7 +56,7 @@ TEST_CASE("C++ Indexer - Basic functionality") {
     SUBCASE("Getter methods") {
         std::size_t ckpt_size = mb_to_b(1.5);
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, ckpt_size);
+            dftu_utils_test::create_indexer(gz_file, idx_file, ckpt_size);
         REQUIRE(indexer != nullptr);
 
         // Test getter methods
@@ -62,15 +64,14 @@ TEST_CASE("C++ Indexer - Basic functionality") {
         CHECK(dstd::StringView(indexer->index_path()) == idx_file);
 
         // Build index first before accessing metadata
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
 
         // size will be adjusted
         CHECK(indexer->checkpoint_size() <= ckpt_size);
     }
 
     SUBCASE("Move semantics") {
-        auto indexer1 =
-            CheckpointIndexerFactory::create(gz_file, idx_file, 1.0);
+        auto indexer1 = dftu_utils_test::create_indexer(gz_file, idx_file, 1.0);
         REQUIRE(indexer1 != nullptr);
 
         // Move constructor
@@ -94,35 +95,39 @@ TEST_CASE("C++ Reader - Basic functionality") {
     // Build index first
     {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
     }
 
     SUBCASE("Constructor and destructor") {
         // Test automatic destruction
         {
-            auto reader = ReaderFactory::create(gz_file, idx_file);
+            auto reader =
+                dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
             REQUIRE(reader != nullptr);
             CHECK(reader->is_valid());
             CHECK(dstd::StringView(reader->archive_path()) == gz_file);
         }
 
         // Should be able to create another one
-        auto reader2 = ReaderFactory::create(gz_file, idx_file);
+        auto reader2 =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader2 != nullptr);
         CHECK(reader2->is_valid());
     }
 
     SUBCASE("Get max bytes") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
         std::size_t max_bytes = reader->max_bytes();
         CHECK(max_bytes > 0);
     }
 
     SUBCASE("Getter methods") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         // Test getter methods
@@ -131,7 +136,8 @@ TEST_CASE("C++ Reader - Basic functionality") {
     }
 
     SUBCASE("Read byte range using streaming API") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         // Read using streaming API
@@ -140,7 +146,8 @@ TEST_CASE("C++ Reader - Basic functionality") {
         dstd::String result;
 
         // Stream data until no more available
-        std::size_t bytes_read = reader->read(0, 50, buffer, buffer_size);
+        std::size_t bytes_read =
+            dftu_utils_test::ok(reader->read(0, 50, buffer, buffer_size));
         CHECK(bytes_read > 0);
 
         std::printf("Read %zu bytes\n", bytes_read);
@@ -151,7 +158,8 @@ TEST_CASE("C++ Reader - Basic functionality") {
     }
 
     SUBCASE("Move semantics") {
-        auto reader1 = ReaderFactory::create(gz_file, idx_file);
+        auto reader1 =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader1 != nullptr);
         CHECK(reader1->is_valid());
 
@@ -161,7 +169,8 @@ TEST_CASE("C++ Reader - Basic functionality") {
         CHECK(reader2->is_valid());
 
         // Move assignment
-        auto reader3 = ReaderFactory::create(gz_file, idx_file);
+        auto reader3 =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         CHECK(reader3 != nullptr);
         reader3 = std::move(reader2);
         CHECK(reader2 == nullptr);
@@ -171,16 +180,18 @@ TEST_CASE("C++ Reader - Basic functionality") {
 
 TEST_CASE("C++ API - Error handling") {
     SUBCASE("Invalid indexer creation") {
-        CHECK_THROWS_AS(CheckpointIndexerFactory::create(
-                            "/nonexistent/path.gz", "/nonexistent/path.idx",
-                            static_cast<std::uint64_t>(1.0)),
-                        index::store::IndexerError);
+        auto created = trace::index::gzip::CheckpointIndexerFactory::try_create(
+            "/nonexistent/path.gz", "/nonexistent/path.idx",
+            static_cast<std::uint64_t>(1.0));
+        REQUIRE_FALSE(created.has_value());
+        CHECK(created.error().is_code(common::ErrorCode::Indexer));
     }
 
     SUBCASE("Invalid reader creation") {
-        CHECK_THROWS_AS(ReaderFactory::create("/nonexistent/path.gz",
-                                              "/nonexistent/path.idx"),
-                        utilities::reader::ReaderError);
+        dftu_utils_test::expect_error(
+            ReaderFactory::create("/nonexistent/path.gz",
+                                  "/nonexistent/path.idx"),
+            dftracer::utils::common::ErrorCode::Reader);
     }
 }
 
@@ -196,13 +207,13 @@ TEST_CASE("C++ API - Data range reading") {
     // Build index first
     {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
     }
 
     // Create reader
-    auto reader = ReaderFactory::create(gz_file, idx_file);
+    auto reader = dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
     REQUIRE(reader != nullptr);
 
     SUBCASE("Read valid byte range") {
@@ -212,7 +223,8 @@ TEST_CASE("C++ API - Data range reading") {
         dstd::String content;
 
         // Stream data until no more available
-        std::size_t bytes_read = reader->read(0, 50, buffer, buffer_size);
+        std::size_t bytes_read =
+            dftu_utils_test::ok(reader->read(0, 50, buffer, buffer_size));
         CHECK(bytes_read > 0);
         content.append(buffer, bytes_read);
 
@@ -233,28 +245,34 @@ TEST_CASE("C++ API - Edge cases") {
     // Build index first
     {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
     }
 
     // Create reader
 
     SUBCASE("Invalid byte range (start >= end) should throw") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
         char buffer[1024];
-        CHECK_THROWS(reader->read(100, 50, buffer, sizeof(buffer)));
-        CHECK_THROWS(reader->read(50, 50, buffer,
-                                  sizeof(buffer)));  // Equal start and end
+        dftu_utils_test::expect_error(
+            reader->read(100, 50, buffer, sizeof(buffer)),
+            dftracer::utils::common::ErrorCode::Reader);
+        dftu_utils_test::expect_error(
+            reader->read(50, 50, buffer, sizeof(buffer)),
+            dftracer::utils::common::ErrorCode::Reader);  // Equal start and end
     }
 
     SUBCASE("Non-existent file should throw") {
         // Use cross-platform non-existent path
         dstd::Path non_existent =
             dstd::fs::temp_directory() / "nonexistent" / "file.gz";
-        CHECK_THROWS(ReaderFactory::create(dstd::String(non_existent.str()),
-                                           dstd::String(non_existent.str())));
+        dftu_utils_test::expect_error(
+            ReaderFactory::create(dstd::String(non_existent.str()),
+                                  dstd::String(non_existent.str())),
+            dftracer::utils::common::ErrorCode::Reader);
     }
 }
 
@@ -271,12 +289,13 @@ TEST_CASE("C++ API - Integration test") {
     {
         // Build index
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
 
         // Read data
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
         std::size_t max_bytes = reader->max_bytes();
         CHECK(max_bytes > 0);
@@ -290,8 +309,8 @@ TEST_CASE("C++ API - Integration test") {
         std::size_t offset1 = 0;
         std::size_t end1 = 100;
         while (offset1 < end1 &&
-               (bytes_read =
-                    reader->read(offset1, end1, buffer, sizeof(buffer))) > 0) {
+               (bytes_read = dftu_utils_test::ok(
+                    reader->read(offset1, end1, buffer, sizeof(buffer)))) > 0) {
             content1.append(buffer, bytes_read);
             offset1 += bytes_read;
         }
@@ -302,8 +321,8 @@ TEST_CASE("C++ API - Integration test") {
         std::size_t offset2 = 100;
         std::size_t end2 = 200;
         while (offset2 < end2 &&
-               (bytes_read =
-                    reader->read(offset2, end2, buffer, sizeof(buffer))) > 0) {
+               (bytes_read = dftu_utils_test::ok(
+                    reader->read(offset2, end2, buffer, sizeof(buffer)))) > 0) {
             content2.append(buffer, bytes_read);
             offset2 += bytes_read;
         }
@@ -330,13 +349,13 @@ TEST_CASE("C++ API - Memory safety stress test" * doctest::test_suite("vg")) {
     // Build index
     {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
     }
 
     // Multiple reads with streaming API
-    auto reader = ReaderFactory::create(gz_file, idx_file);
+    auto reader = dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
     REQUIRE(reader != nullptr);
     for (int i = 0; i < 3; ++i) {  // Reduced from 100 to 3 for easier debugging
         char buffer[1024];
@@ -346,8 +365,9 @@ TEST_CASE("C++ API - Memory safety stress test" * doctest::test_suite("vg")) {
         std::size_t end =
             std::min<std::size_t>(4 * 1024 * 1024, reader->max_bytes());
 
-        while (offset < end && (bytes_read = reader->read(
-                                    offset, end, buffer, sizeof(buffer))) > 0) {
+        while (offset < end &&
+               (bytes_read = dftu_utils_test::ok(
+                    reader->read(offset, end, buffer, sizeof(buffer)))) > 0) {
             total_bytes += bytes_read;
             offset += bytes_read;
         }
@@ -367,27 +387,30 @@ TEST_CASE("C++ API - Exception handling comprehensive tests") {
     dstd::String idx_file = env.get_index_path(gz_file);
 
     SUBCASE("Indexer with invalid chunk size should throw in constructor") {
-        CHECK_THROWS_AS(
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.0)),
-            index::store::IndexerError);
+        auto created = trace::index::gzip::CheckpointIndexerFactory::try_create(
+            gz_file, idx_file, mb_to_b(0.0));
+        REQUIRE_FALSE(created.has_value());
+        CHECK(created.error().is_code(common::ErrorCode::Indexer));
     }
 
     SUBCASE("Reader with invalid paths should throw in constructor") {
-        CHECK_THROWS_AS(ReaderFactory::create("/definitely/nonexistent/path.gz",
-                                              "/also/nonexistent/path.idx"),
-                        dftracer::utils::common::DFTUtilsException);
+        dftu_utils_test::expect_error(
+            ReaderFactory::create("/definitely/nonexistent/path.gz",
+                                  "/also/nonexistent/path.idx"),
+            dftracer::utils::common::ErrorCode::Reader);
     }
 
     SUBCASE("Reader operations on invalid reader should throw") {
         // Build a valid index first
         {
-            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                            mb_to_b(0.5));
+            auto indexer = dftu_utils_test::create_indexer(gz_file, idx_file,
+                                                           mb_to_b(0.5));
             REQUIRE(indexer != nullptr);
-            indexer->build();
+            dftu_utils_test::build_indexer(*indexer);
         }
 
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
         CHECK(reader->is_valid());
 
@@ -399,27 +422,31 @@ TEST_CASE("C++ API - Exception handling comprehensive tests") {
         // Operations on valid moved reader should work
         CHECK_NOTHROW(moved_reader->max_bytes());
         char buffer[1024];
-        CHECK_NOTHROW(moved_reader->read(0, 100, buffer, sizeof(buffer)));
+        CHECK_NOTHROW(dftu_utils_test::ok(
+            moved_reader->read(0, 100, buffer, sizeof(buffer))));
     }
 
     SUBCASE("Invalid read parameters should throw") {
         // Build a valid index first
         {
-            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                            mb_to_b(0.5));
+            auto indexer = dftu_utils_test::create_indexer(gz_file, idx_file,
+                                                           mb_to_b(0.5));
             REQUIRE(indexer != nullptr);
-            indexer->build();
+            dftu_utils_test::build_indexer(*indexer);
         }
 
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         // Invalid ranges should throw
         char buffer[1024];
-        CHECK_THROWS_AS(reader->read(100, 50, buffer, sizeof(buffer)),
-                        utilities::reader::ReaderError);  // start > end
-        CHECK_THROWS_AS(reader->read(50, 50, buffer, sizeof(buffer)),
-                        utilities::reader::ReaderError);  // start == end
+        dftu_utils_test::expect_error(
+            reader->read(100, 50, buffer, sizeof(buffer)),
+            dftracer::utils::common::ErrorCode::Reader);  // start > end
+        dftu_utils_test::expect_error(
+            reader->read(50, 50, buffer, sizeof(buffer)),
+            dftracer::utils::common::ErrorCode::Reader);  // start == end
     }
 }
 
@@ -434,13 +461,13 @@ TEST_CASE("C++ API - Advanced indexer functionality") {
 
     SUBCASE("Multiple indexer instances for same file") {
         auto indexer1 =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(1.0));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(1.0));
         auto indexer2 =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(1.0));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(1.0));
 
         // Both should work independently
-        CHECK_NOTHROW(indexer1->build());
-        CHECK_NOTHROW(indexer2->build());
+        CHECK_NOTHROW(dftu_utils_test::build_indexer(*indexer1));
+        CHECK_NOTHROW(dftu_utils_test::build_indexer(*indexer2));
 
         // After first build, rebuild should not be needed
         CHECK_FALSE(indexer1->need_rebuild());
@@ -448,31 +475,33 @@ TEST_CASE("C++ API - Advanced indexer functionality") {
     }
 
     SUBCASE("Different checkpoint sizes") {
-        auto indexer_small = CheckpointIndexerFactory::create(
+        auto indexer_small = dftu_utils_test::create_indexer(
             gz_file, idx_file + "_small", mb_to_b(0.1));
-        auto indexer_large = CheckpointIndexerFactory::create(
+        auto indexer_large = dftu_utils_test::create_indexer(
             gz_file, idx_file + "_large", mb_to_b(10.0));
 
-        CHECK_NOTHROW(indexer_small->build());
-        CHECK_NOTHROW(indexer_large->build());
+        CHECK_NOTHROW(dftu_utils_test::build_indexer(*indexer_small));
+        CHECK_NOTHROW(dftu_utils_test::build_indexer(*indexer_large));
 
         // Both should create valid indices
-        CHECK_NOTHROW(ReaderFactory::create(gz_file, idx_file + "_small"));
-        CHECK_NOTHROW(ReaderFactory::create(gz_file, idx_file + "_large"));
+        CHECK_NOTHROW(dftu_utils_test::ok(
+            ReaderFactory::create(gz_file, idx_file + "_small")));
+        CHECK_NOTHROW(dftu_utils_test::ok(
+            ReaderFactory::create(gz_file, idx_file + "_large")));
     }
 
     SUBCASE("Indexer state after operations") {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(1.0));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(1.0));
         REQUIRE(indexer != nullptr);
 
         CHECK(indexer->need_rebuild());
 
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
         CHECK_FALSE(indexer->need_rebuild());  // Should not need rebuild
 
         // Can build again
-        CHECK_NOTHROW(indexer->build());
+        CHECK_NOTHROW(dftu_utils_test::build_indexer(*indexer));
     }
 }
 
@@ -489,15 +518,17 @@ TEST_CASE("C++ API - Advanced reader functionality" *
     // Build index first
     {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
     }
 
     SUBCASE("Multiple readers for same file") {
-        auto reader1 = ReaderFactory::create(gz_file, idx_file);
+        auto reader1 =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader1 != nullptr);
-        auto reader2 = ReaderFactory::create(gz_file, idx_file);
+        auto reader2 =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader2 != nullptr);
 
         CHECK(reader1->is_valid());
@@ -512,8 +543,8 @@ TEST_CASE("C++ API - Advanced reader functionality" *
         std::size_t offset1 = 0;
         std::size_t end1 = 100;
         while (offset1 < end1 &&
-               (bytes_read1 = reader1->read(offset1, end1, buffer1,
-                                            sizeof(buffer1))) > 0) {
+               (bytes_read1 = dftu_utils_test::ok(reader1->read(
+                    offset1, end1, buffer1, sizeof(buffer1)))) > 0) {
             result1.append(buffer1, bytes_read1);
             offset1 += bytes_read1;
         }
@@ -523,8 +554,8 @@ TEST_CASE("C++ API - Advanced reader functionality" *
         std::size_t offset2 = 0;
         std::size_t end2 = 100;
         while (offset2 < end2 &&
-               (bytes_read2 = reader2->read(offset2, end2, buffer2,
-                                            sizeof(buffer2))) > 0) {
+               (bytes_read2 = dftu_utils_test::ok(reader2->read(
+                    offset2, end2, buffer2, sizeof(buffer2)))) > 0) {
             result2.append(buffer2, bytes_read2);
             offset2 += bytes_read2;
         }
@@ -538,7 +569,8 @@ TEST_CASE("C++ API - Advanced reader functionality" *
     }
 
     SUBCASE("Reader state consistency") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         CHECK(reader->is_valid());
@@ -554,7 +586,8 @@ TEST_CASE("C++ API - Advanced reader functionality" *
     }
 
     SUBCASE("Various read patterns") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
         std::size_t max_bytes = reader->max_bytes();
 
@@ -566,8 +599,9 @@ TEST_CASE("C++ API - Advanced reader functionality" *
         std::size_t bytes_read;
         std::size_t offset = 0;
         std::size_t end = 10;
-        while (offset < end && (bytes_read = reader->read_line_bytes(
-                                    offset, end, buffer, sizeof(buffer))) > 0) {
+        while (offset < end &&
+               (bytes_read = dftu_utils_test::ok(reader->read_line_bytes(
+                    offset, end, buffer, sizeof(buffer)))) > 0) {
             result.append(buffer, bytes_read);
             offset += bytes_read;
         }
@@ -580,8 +614,8 @@ TEST_CASE("C++ API - Advanced reader functionality" *
             offset = 100;
             end = 1000;
             while (offset < end &&
-                   (bytes_read = reader->read_line_bytes(offset, end, buffer,
-                                                         sizeof(buffer))) > 0) {
+                   (bytes_read = dftu_utils_test::ok(reader->read_line_bytes(
+                        offset, end, buffer, sizeof(buffer)))) > 0) {
                 result.append(buffer, bytes_read);
                 offset += bytes_read;
             }
@@ -594,8 +628,8 @@ TEST_CASE("C++ API - Advanced reader functionality" *
             offset = 1000;
             end = 10000;
             while (offset < end &&
-                   (bytes_read = reader->read_line_bytes(offset, end, buffer,
-                                                         sizeof(buffer))) > 0) {
+                   (bytes_read = dftu_utils_test::ok(reader->read_line_bytes(
+                        offset, end, buffer, sizeof(buffer)))) > 0) {
                 result.append(buffer, bytes_read);
                 offset += bytes_read;
             }
@@ -604,7 +638,8 @@ TEST_CASE("C++ API - Advanced reader functionality" *
     }
 
     SUBCASE("Boundary conditions") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
         std::size_t max_bytes = reader->max_bytes();
 
@@ -618,8 +653,8 @@ TEST_CASE("C++ API - Advanced reader functionality" *
             std::size_t offset = max_bytes - 50;
             std::size_t end = max_bytes;
             while (offset < end &&
-                   (bytes_read = reader->read(offset, end, buffer,
-                                              sizeof(buffer))) > 0) {
+                   (bytes_read = dftu_utils_test::ok(reader->read(
+                        offset, end, buffer, sizeof(buffer)))) > 0) {
                 result.append(buffer, bytes_read);
                 offset += bytes_read;
             }
@@ -630,8 +665,8 @@ TEST_CASE("C++ API - Advanced reader functionality" *
             offset = 0;
             end = 1;
             while (offset < end &&
-                   (bytes_read = reader->read(offset, end, buffer,
-                                              sizeof(buffer))) > 0) {
+                   (bytes_read = dftu_utils_test::ok(reader->read(
+                        offset, end, buffer, sizeof(buffer)))) > 0) {
                 result.append(buffer, bytes_read);
                 offset += bytes_read;
             }
@@ -640,9 +675,9 @@ TEST_CASE("C++ API - Advanced reader functionality" *
 
         // Read beyond file (should throw exception)
         result.clear();
-        CHECK_THROWS_AS(
+        dftu_utils_test::expect_error(
             reader->read(max_bytes, max_bytes + 1000, buffer, sizeof(buffer)),
-            utilities::reader::ReaderError);
+            dftracer::utils::common::ErrorCode::Reader);
     }
 }
 
@@ -658,13 +693,13 @@ TEST_CASE("C++ API - JSON boundary detection") {
     // Build index first
     {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
     }
 
     // Create reader
-    auto reader = ReaderFactory::create(gz_file, idx_file);
+    auto reader = dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
     REQUIRE(reader != nullptr);
 
     SUBCASE("Small range should provide minimum requested bytes") {
@@ -676,8 +711,9 @@ TEST_CASE("C++ API - JSON boundary detection") {
         std::size_t offset = 0;
         std::size_t end = 100;
 
-        while (offset < end && (bytes_read = reader->read_line_bytes(
-                                    offset, end, buffer, sizeof(buffer))) > 0) {
+        while (offset < end &&
+               (bytes_read = dftu_utils_test::ok(reader->read_line_bytes(
+                    offset, end, buffer, sizeof(buffer)))) > 0) {
             content.append(buffer, bytes_read);
             offset += bytes_read;
         }
@@ -704,8 +740,9 @@ TEST_CASE("C++ API - JSON boundary detection") {
         std::size_t offset = 0;
         std::size_t end = 500;
 
-        while (offset < end && (bytes_read = reader->read_line_bytes(
-                                    offset, end, buffer, sizeof(buffer))) > 0) {
+        while (offset < end &&
+               (bytes_read = dftu_utils_test::ok(reader->read_line_bytes(
+                    offset, end, buffer, sizeof(buffer)))) > 0) {
             content.append(buffer, bytes_read);
             offset += bytes_read;
         }
@@ -740,8 +777,8 @@ TEST_CASE("C++ API - JSON boundary detection") {
             std::size_t end = current_pos + segment_size;
 
             while (offset < end &&
-                   (bytes_read = reader->read_line_bytes(offset, end, buffer,
-                                                         sizeof(buffer))) > 0) {
+                   (bytes_read = dftu_utils_test::ok(reader->read_line_bytes(
+                        offset, end, buffer, sizeof(buffer)))) > 0) {
                 content.append(buffer, bytes_read);
                 offset += bytes_read;
             }
@@ -789,14 +826,15 @@ TEST_CASE("C++ API - Regression and stress tests") {
 
         // Build index
         {
-            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                            mb_to_b(1.0));
+            auto indexer = dftu_utils_test::create_indexer(gz_file, idx_file,
+                                                           mb_to_b(1.0));
             REQUIRE(indexer != nullptr);
-            CHECK_NOTHROW(indexer->build());
+            CHECK_NOTHROW(dftu_utils_test::build_indexer(*indexer));
         }
 
         // Test large reads
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
         std::size_t max_bytes = reader->max_bytes();
         CHECK(max_bytes > 10000);  // Should be a large file
@@ -810,8 +848,8 @@ TEST_CASE("C++ API - Regression and stress tests") {
             std::size_t offset = 1000;
             std::size_t end = 50000;
             while (offset < end &&
-                   (bytes_read = reader->read_line_bytes(offset, end, buffer,
-                                                         sizeof(buffer))) > 0) {
+                   (bytes_read = dftu_utils_test::ok(reader->read_line_bytes(
+                        offset, end, buffer, sizeof(buffer)))) > 0) {
                 content.append(buffer, bytes_read);
                 offset += bytes_read;
             }
@@ -863,17 +901,18 @@ TEST_CASE("C++ API - Regression and stress tests") {
         bool success =
             dftu_utils_test::compress_file_to_gzip(txt_file, gz_file);
         REQUIRE(success);
-        (void)dstd::fs::remove(txt_file);
+        dstd::fs::remove(txt_file).discard();
 
         // Build index
         {
-            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                            mb_to_b(32.0));
-            indexer->build();
+            auto indexer = dftu_utils_test::create_indexer(gz_file, idx_file,
+                                                           mb_to_b(32.0));
+            dftu_utils_test::build_indexer(*indexer);
         }
 
         // Create reader
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         SUBCASE("Original failing case: 0 to 10000 bytes") {
@@ -884,8 +923,8 @@ TEST_CASE("C++ API - Regression and stress tests") {
             std::size_t offset = 0;
             std::size_t end = 10000;
             while (offset < end &&
-                   (bytes_read = reader->read_line_bytes(offset, end, buffer,
-                                                         sizeof(buffer))) > 0) {
+                   (bytes_read = dftu_utils_test::ok(reader->read_line_bytes(
+                        offset, end, buffer, sizeof(buffer)))) > 0) {
                 content.append(buffer, bytes_read);
                 offset += bytes_read;
             }
@@ -914,8 +953,8 @@ TEST_CASE("C++ API - Regression and stress tests") {
             std::size_t offset = 0;
             std::size_t end = 100;
             while (offset < end &&
-                   (bytes_read = reader->read_line_bytes(offset, end, buffer,
-                                                         sizeof(buffer))) > 0) {
+                   (bytes_read = dftu_utils_test::ok(reader->read_line_bytes(
+                        offset, end, buffer, sizeof(buffer)))) > 0) {
                 content.append(buffer, bytes_read);
                 offset += bytes_read;
             }
@@ -946,13 +985,14 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
     // Build index first
     {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.5));
         REQUIRE(indexer != nullptr);
-        indexer->build();
+        dftu_utils_test::build_indexer(*indexer);
     }
 
     SUBCASE("Basic raw read functionality") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         // Read using raw API
@@ -964,8 +1004,8 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
         std::size_t bytes_read;
         std::size_t offset = 0;
         std::size_t end = 50;
-        while (offset < end && (bytes_read = reader->read(offset, end, buffer,
-                                                          buffer_size)) > 0) {
+        while (offset < end && (bytes_read = dftu_utils_test::ok(reader->read(
+                                    offset, end, buffer, buffer_size))) > 0) {
             raw_result.append(buffer, bytes_read);
             offset += bytes_read;
         }
@@ -980,9 +1020,11 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
     }
 
     SUBCASE("Compare raw vs regular read") {
-        auto reader1 = ReaderFactory::create(gz_file, idx_file);
+        auto reader1 =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader1 != nullptr);
-        auto reader2 = ReaderFactory::create(gz_file, idx_file);
+        auto reader2 =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader2 != nullptr);
 
         const std::size_t buffer_size = 1024;
@@ -994,8 +1036,8 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
         std::size_t offset1 = 0;
         std::size_t end1 = 100;
         while (offset1 < end1 &&
-               (bytes_read1 =
-                    reader1->read(offset1, end1, buffer1, buffer_size)) > 0) {
+               (bytes_read1 = dftu_utils_test::ok(
+                    reader1->read(offset1, end1, buffer1, buffer_size))) > 0) {
             raw_result.append(buffer1, bytes_read1);
             offset1 += bytes_read1;
         }
@@ -1005,8 +1047,8 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
         std::size_t offset2 = 0;
         std::size_t end2 = 100;
         while (offset2 < end2 &&
-               (bytes_read2 = reader2->read_line_bytes(offset2, end2, buffer2,
-                                                       buffer_size)) > 0) {
+               (bytes_read2 = dftu_utils_test::ok(reader2->read_line_bytes(
+                    offset2, end2, buffer2, buffer_size))) > 0) {
             regular_result.append(buffer2, bytes_read2);
             offset2 += bytes_read2;
         }
@@ -1032,7 +1074,8 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
     }
 
     SUBCASE("Raw read with different overloads") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         const std::size_t buffer_size = 512;
@@ -1044,8 +1087,8 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
         std::size_t offset1 = 0;
         std::size_t end1 = 75;
         while (offset1 < end1 &&
-               (bytes_read1 =
-                    reader->read(offset1, end1, buffer1, buffer_size)) > 0) {
+               (bytes_read1 = dftu_utils_test::ok(
+                    reader->read(offset1, end1, buffer1, buffer_size))) > 0) {
             result1.append(buffer1, bytes_read1);
             offset1 += bytes_read1;
         }
@@ -1057,8 +1100,8 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
         std::size_t offset2 = 0;
         std::size_t end2 = 75;
         while (offset2 < end2 &&
-               (bytes_read2 =
-                    reader->read(offset2, end2, buffer2, buffer_size)) > 0) {
+               (bytes_read2 = dftu_utils_test::ok(
+                    reader->read(offset2, end2, buffer2, buffer_size))) > 0) {
             result2.append(buffer2, bytes_read2);
             offset2 += bytes_read2;
         }
@@ -1070,7 +1113,8 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
     }
 
     SUBCASE("Raw read edge cases") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
         std::size_t max_bytes = reader->max_bytes();
 
@@ -1082,8 +1126,9 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
         std::size_t bytes_read;
         std::size_t offset = 0;
         std::size_t end = 1;
-        while (offset < end && (bytes_read = reader->read(
-                                    offset, end, buffer, sizeof(buffer))) > 0) {
+        while (offset < end &&
+               (bytes_read = dftu_utils_test::ok(
+                    reader->read(offset, end, buffer, sizeof(buffer)))) > 0) {
             result.append(buffer, bytes_read);
             offset += bytes_read;
         }
@@ -1095,8 +1140,8 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
             offset = max_bytes - 10;
             end = max_bytes - 1;
             while (offset < end &&
-                   (bytes_read = reader->read(offset, end, buffer,
-                                              sizeof(buffer))) > 0) {
+                   (bytes_read = dftu_utils_test::ok(reader->read(
+                        offset, end, buffer, sizeof(buffer)))) > 0) {
                 result.append(buffer, bytes_read);
                 offset += bytes_read;
             }
@@ -1104,12 +1149,17 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
         }
 
         // Invalid ranges should still throw
-        CHECK_THROWS(reader->read(100, 50, buffer, sizeof(buffer)));
-        CHECK_THROWS(reader->read(50, 50, buffer, sizeof(buffer)));
+        dftu_utils_test::expect_error(
+            reader->read(100, 50, buffer, sizeof(buffer)),
+            dftracer::utils::common::ErrorCode::Reader);
+        dftu_utils_test::expect_error(
+            reader->read(50, 50, buffer, sizeof(buffer)),
+            dftracer::utils::common::ErrorCode::Reader);
     }
 
     SUBCASE("Raw read with small buffer") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         // Use very small buffer to test streaming behavior
@@ -1122,8 +1172,8 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
         std::size_t offset = 0;
         std::size_t end = 200;
         while (offset < end &&
-               (bytes_read = reader->read(offset, end, small_buffer,
-                                          small_buffer_size)) > 0) {
+               (bytes_read = dftu_utils_test::ok(reader->read(
+                    offset, end, small_buffer, small_buffer_size))) > 0) {
             result.append(small_buffer, bytes_read);
             offset += bytes_read;
             total_calls++;
@@ -1137,7 +1187,8 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
     }
 
     SUBCASE("Raw read multiple ranges") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
         std::size_t max_bytes = reader->max_bytes();
 
@@ -1155,8 +1206,8 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
                 std::size_t offset = range.first;
                 std::size_t end = range.second;
                 while (offset < end &&
-                       (bytes_read = reader->read(offset, end, buffer,
-                                                  sizeof(buffer))) > 0) {
+                       (bytes_read = dftu_utils_test::ok(reader->read(
+                            offset, end, buffer, sizeof(buffer)))) > 0) {
                     segment.append(buffer, bytes_read);
                     offset += bytes_read;
                 }
@@ -1173,9 +1224,11 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
     }
 
     SUBCASE("Full file read comparison: raw vs JSON-boundary aware") {
-        auto reader1 = ReaderFactory::create(gz_file, idx_file);
+        auto reader1 =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader1 != nullptr);
-        auto reader2 = ReaderFactory::create(gz_file, idx_file);
+        auto reader2 =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader2 != nullptr);
 
         std::size_t max_bytes = reader1->max_bytes();
@@ -1186,8 +1239,8 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
         std::size_t bytes_read1;
         std::size_t offset1 = 0;
         while (offset1 < max_bytes &&
-               (bytes_read1 = reader1->read(offset1, max_bytes, buffer,
-                                            sizeof(buffer))) > 0) {
+               (bytes_read1 = dftu_utils_test::ok(reader1->read(
+                    offset1, max_bytes, buffer, sizeof(buffer)))) > 0) {
             raw_content.append(buffer, bytes_read1);
             offset1 += bytes_read1;
         }
@@ -1197,8 +1250,8 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
         std::size_t bytes_read2;
         std::size_t offset2 = 0;
         while (offset2 < max_bytes &&
-               (bytes_read2 = reader2->read_line_bytes(
-                    offset2, max_bytes, buffer, sizeof(buffer))) > 0) {
+               (bytes_read2 = dftu_utils_test::ok(reader2->read_line_bytes(
+                    offset2, max_bytes, buffer, sizeof(buffer)))) > 0) {
             json_content.append(buffer, bytes_read2);
             offset2 += bytes_read2;
         }
@@ -1257,8 +1310,8 @@ TEST_CASE("C++ Reader - Line reading functionality" *
     // Build index first with smaller chunk size to force checkpoint creation
     {
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.1));
-        indexer->build();
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.1));
+        dftu_utils_test::build_indexer(*indexer);
 
         // Verify the indexer has line counts and members
         std::size_t total_lines = indexer->line_count();
@@ -1278,11 +1331,12 @@ TEST_CASE("C++ Reader - Line reading functionality" *
     }
 
     SUBCASE("Basic line reading functionality") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         // Read first 5 lines
-        dstd::String result = reader->read_lines(1, 5);
+        dstd::String result = dftu_utils_test::ok(reader->read_lines(1, 5));
         CHECK(!result.empty());
 
         // Count newlines to verify we got the right number of lines
@@ -1297,13 +1351,15 @@ TEST_CASE("C++ Reader - Line reading functionality" *
     }
 
     SUBCASE("Line reading accuracy - specific line numbers") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         // Test specific line numbers that should contain predictable content
         for (std::size_t line_num :
              dstd::Vector<std::size_t>({1, 10, 50, 100})) {
-            dstd::String result = reader->read_lines(line_num, line_num);
+            dstd::String result =
+                dftu_utils_test::ok(reader->read_lines(line_num, line_num));
             CHECK(!result.empty());
 
             // Should contain id: N where N = line_num
@@ -1321,11 +1377,12 @@ TEST_CASE("C++ Reader - Line reading functionality" *
     }
 
     SUBCASE("Line range reading") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         // Read line range 10-15 (6 lines total)
-        dstd::String result = reader->read_lines(10, 15);
+        dstd::String result = dftu_utils_test::ok(reader->read_lines(10, 15));
         CHECK(!result.empty());
 
         // Count lines
@@ -1346,45 +1403,52 @@ TEST_CASE("C++ Reader - Line reading functionality" *
     }
 
     SUBCASE("Line reading consistency with sed behavior") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         // Test that our line numbering matches sed's 1-based numbering
         // Line 1 should contain id: 1, line 2 should contain id: 2, etc.
         for (std::size_t i = 1; i <= 5; ++i) {
-            dstd::String result = reader->read_lines(i, i);
+            dstd::String result = dftu_utils_test::ok(reader->read_lines(i, i));
             dstd::String expected_id = "\"id\": " + dstd::to_string(i);
             CHECK(result.find(expected_id) != dstd::String::npos);
         }
     }
 
     SUBCASE("Error handling for invalid line numbers") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         // 0-based line numbers should throw (we use 1-based)
-        CHECK_THROWS_AS(reader->read_lines(0, 5),
-                        dftracer::utils::common::DFTUtilsException);
-        CHECK_THROWS_AS(reader->read_lines(1, 0),
-                        dftracer::utils::common::DFTUtilsException);
+        dftu_utils_test::expect_error(
+            reader->read_lines(0, 5),
+            dftracer::utils::common::ErrorCode::Reader);
+        dftu_utils_test::expect_error(
+            reader->read_lines(1, 0),
+            dftracer::utils::common::ErrorCode::Reader);
 
         // start > end should throw
-        CHECK_THROWS_AS(reader->read_lines(10, 5),
-                        dftracer::utils::common::DFTUtilsException);
+        dftu_utils_test::expect_error(
+            reader->read_lines(10, 5),
+            dftracer::utils::common::ErrorCode::Reader);
     }
 
     SUBCASE("Large line ranges") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         // Get number of lines from indexer
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.1));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.1));
         std::size_t total_line_count = indexer->line_count();
 
         if (total_line_count > 100) {
             // Read a large range
-            dstd::String result = reader->read_lines(1, 100);
+            dstd::String result =
+                dftu_utils_test::ok(reader->read_lines(1, 100));
             CHECK(!result.empty());
 
             // Count lines
@@ -1401,18 +1465,20 @@ TEST_CASE("C++ Reader - Line reading functionality" *
     }
 
     SUBCASE("Line reading near file boundaries") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         // Get number of lines from indexer
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.1));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.1));
         std::size_t total_lines = indexer->line_count();
 
         if (total_lines > 10) {
             // Read last few lines
             std::size_t start_line = total_lines - 5;
-            dstd::String result = reader->read_lines(start_line, total_lines);
+            dstd::String result = dftu_utils_test::ok(
+                reader->read_lines(start_line, total_lines));
             CHECK(!result.empty());
 
             // Should have exactly 6 lines (start_line through total_lines
@@ -1426,12 +1492,13 @@ TEST_CASE("C++ Reader - Line reading functionality" *
     }
 
     SUBCASE("Single line reads at various positions") {
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
 
         // Get number of lines from indexer
         auto indexer =
-            CheckpointIndexerFactory::create(gz_file, idx_file, mb_to_b(0.1));
+            dftu_utils_test::create_indexer(gz_file, idx_file, mb_to_b(0.1));
         std::size_t total_lines = indexer->line_count();
 
         // Test single line reads at different positions
@@ -1440,7 +1507,8 @@ TEST_CASE("C++ Reader - Line reading functionality" *
 
         for (std::size_t line_num : test_lines) {
             if (line_num <= total_lines) {
-                dstd::String result = reader->read_lines(line_num, line_num);
+                dstd::String result =
+                    dftu_utils_test::ok(reader->read_lines(line_num, line_num));
                 CHECK(!result.empty());
 
                 // Should have exactly one line
@@ -1471,23 +1539,25 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
     SUBCASE("Indexer with various checkpoint sizes") {
         for (double ckpt_size_mb : {0.1, 0.5, 1.0, 2.0, 5.0}) {
             std::size_t ckpt_size = mb_to_b(ckpt_size_mb);
-            auto indexer = CheckpointIndexerFactory::create(
+            auto indexer = dftu_utils_test::create_indexer(
                 gz_file, idx_file + dstd::to_string(ckpt_size_mb), ckpt_size);
-            CHECK_NOTHROW(indexer->build());
+            CHECK_NOTHROW(dftu_utils_test::build_indexer(*indexer));
             CHECK(indexer->checkpoint_size() <= ckpt_size);
-            (void)dstd::fs::remove(idx_file + dstd::to_string(ckpt_size_mb));
+            dstd::fs::remove(idx_file + dstd::to_string(ckpt_size_mb))
+                .discard();
         }
     }
 
     SUBCASE("Reader with different range sizes to trigger various code paths") {
         // Build index first
         {
-            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                            mb_to_b(0.1));
-            indexer->build();
+            auto indexer = dftu_utils_test::create_indexer(gz_file, idx_file,
+                                                           mb_to_b(0.1));
+            dftu_utils_test::build_indexer(*indexer);
         }
 
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
         std::size_t max_bytes = reader->max_bytes();
 
@@ -1511,8 +1581,8 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
                 std::size_t bytes_read;
                 std::size_t offset = start;
                 while (offset < end &&
-                       (bytes_read = reader->read(offset, end, buffer,
-                                                  sizeof(buffer))) > 0) {
+                       (bytes_read = dftu_utils_test::ok(reader->read(
+                            offset, end, buffer, sizeof(buffer)))) > 0) {
                     result.append(buffer, bytes_read);
                     offset += bytes_read;
                 }
@@ -1524,16 +1594,17 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
 
     SUBCASE("Force rebuild scenarios") {
         // Test force rebuild functionality
-        auto indexer1 = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                         mb_to_b(1.0), false);
-        indexer1->build();
+        auto indexer1 = dftu_utils_test::create_indexer(gz_file, idx_file,
+                                                        mb_to_b(1.0), false);
+        dftu_utils_test::build_indexer(*indexer1);
         CHECK_FALSE(indexer1->need_rebuild());
 
         // Force rebuild should rebuild even if not needed
-        auto indexer2 = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                         mb_to_b(1.0), true);
+        auto indexer2 = dftu_utils_test::create_indexer(gz_file, idx_file,
+                                                        mb_to_b(1.0), true);
         // Force rebuild affects behavior during construction/build
-        CHECK_NOTHROW(indexer2->build());  // Should succeed even if forced
+        CHECK_NOTHROW(dftu_utils_test::build_indexer(
+            *indexer2));  // Should succeed even if forced
         // Note: force_rebuild flag behavior needs further investigation
         CHECK_FALSE(
             indexer2
@@ -1543,16 +1614,17 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
     SUBCASE("Multiple readers on same index") {
         // Build index once
         {
-            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                            mb_to_b(1.0));
+            auto indexer = dftu_utils_test::create_indexer(gz_file, idx_file,
+                                                           mb_to_b(1.0));
             REQUIRE(indexer != nullptr);
-            indexer->build();
+            dftu_utils_test::build_indexer(*indexer);
         }
 
         // Create multiple readers
         dstd::Vector<dstd::SharedPtr<Reader>> readers;
         for (int i = 0; i < 5; ++i) {
-            readers.push_back(ReaderFactory::create(gz_file, idx_file));
+            readers.push_back(
+                dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file)));
             CHECK(readers.back()->is_valid());
         }
 
@@ -1565,8 +1637,8 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
             std::size_t offset = 0;
             std::size_t end = 50;
             while (offset < end &&
-                   (bytes_read = reader->read(offset, end, buffer,
-                                              sizeof(buffer))) > 0) {
+                   (bytes_read = dftu_utils_test::ok(reader->read(
+                        offset, end, buffer, sizeof(buffer)))) > 0) {
                 result.append(buffer, bytes_read);
                 offset += bytes_read;
             }
@@ -1578,13 +1650,14 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
     SUBCASE("Edge case: Reading near file boundaries") {
         // Build index
         {
-            auto indexer = CheckpointIndexerFactory::create(gz_file, idx_file,
-                                                            mb_to_b(0.5));
+            auto indexer = dftu_utils_test::create_indexer(gz_file, idx_file,
+                                                           mb_to_b(0.5));
             REQUIRE(indexer != nullptr);
-            indexer->build();
+            dftu_utils_test::build_indexer(*indexer);
         }
 
-        auto reader = ReaderFactory::create(gz_file, idx_file);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(gz_file, idx_file));
         REQUIRE(reader != nullptr);
         std::size_t max_bytes = reader->max_bytes();
 
@@ -1598,8 +1671,8 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
             std::size_t offset = max_bytes - 100;
             std::size_t end = max_bytes - 1;
             while (offset < end &&
-                   (bytes_read = reader->read(offset, end, buffer,
-                                              sizeof(buffer))) > 0) {
+                   (bytes_read = dftu_utils_test::ok(reader->read(
+                        offset, end, buffer, sizeof(buffer)))) > 0) {
                 result.append(buffer, bytes_read);
                 offset += bytes_read;
             }
@@ -1611,8 +1684,8 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
                 offset = max_bytes - 1;
                 end = max_bytes;
                 while (offset < end &&
-                       (bytes_read = reader->read(offset, end, buffer,
-                                                  sizeof(buffer))) > 0) {
+                       (bytes_read = dftu_utils_test::ok(reader->read(
+                            offset, end, buffer, sizeof(buffer)))) > 0) {
                     result.append(buffer, bytes_read);
                     offset += bytes_read;
                 }
@@ -1629,12 +1702,13 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
 
         // Build index with small chunks to force more complex compression
         {
-            auto indexer = CheckpointIndexerFactory::create(large_gz, large_idx,
-                                                            mb_to_b(0.1));
-            indexer->build();
+            auto indexer = dftu_utils_test::create_indexer(large_gz, large_idx,
+                                                           mb_to_b(0.1));
+            dftu_utils_test::build_indexer(*indexer);
         }
 
-        auto reader = ReaderFactory::create(large_gz, large_idx);
+        auto reader =
+            dftu_utils_test::ok(ReaderFactory::create(large_gz, large_idx));
         std::size_t max_bytes = reader->max_bytes();
 
         // Read various large ranges
@@ -1648,8 +1722,8 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
             std::size_t offset = 0;
             std::size_t end = 1000;
             while (offset < end &&
-                   (bytes_read = reader->read(offset, end, buffer,
-                                              sizeof(buffer))) > 0) {
+                   (bytes_read = dftu_utils_test::ok(reader->read(
+                        offset, end, buffer, sizeof(buffer)))) > 0) {
                 result.append(buffer, bytes_read);
                 offset += bytes_read;
             }
@@ -1660,8 +1734,8 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
             offset = 500;
             end = 1500;
             while (offset < end &&
-                   (bytes_read = reader->read(offset, end, buffer,
-                                              sizeof(buffer))) > 0) {
+                   (bytes_read = dftu_utils_test::ok(reader->read(
+                        offset, end, buffer, sizeof(buffer)))) > 0) {
                 result.append(buffer, bytes_read);
                 offset += bytes_read;
             }

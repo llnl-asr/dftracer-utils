@@ -139,10 +139,10 @@ class Col:
     def _rbin(self, op: str, other: object) -> "Col":
         return _wrap(f"{_value_text(other)} {op} {self._text}")
 
-    def __eq__(self, other: object) -> "Col":  # type: ignore[override]  # ty: ignore[invalid-method-override]
+    def __eq__(self, other: object) -> "Col":  # type: ignore[override]  # ty: ignore[incompatible-method-override]
         return self._bin("==", other)
 
-    def __ne__(self, other: object) -> "Col":  # type: ignore[override]  # ty: ignore[invalid-method-override]
+    def __ne__(self, other: object) -> "Col":  # type: ignore[override]  # ty: ignore[incompatible-method-override]
         return self._bin("!=", other)
 
     def __lt__(self, other: object) -> "Col":

@@ -5,11 +5,11 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/build/batch_builder.h>
-#include <dftracer/utils/index/build/index_fold_driver.h>
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/open_extent.h>
+#include <dftracer/utils/trace/index/build/batch_builder.h>
+#include <dftracer/utils/trace/index/build/index_fold_driver.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
 #include <testing_utilities.h>
@@ -71,12 +71,12 @@ dstd::String write_big_trace(const dstd::String& dir, int n) {
 // time a worker finishes parsing a piece, while `run` goes.
 template <class Fn>
 std::size_t peak_live(Fn&& run) {
-    index::build::g_parse_peak_live.store(0);
-    index::build::g_probe_parse.store(true);
+    trace::index::build::g_parse_peak_live.store(0);
+    trace::index::build::g_probe_parse.store(true);
     const auto base = memory::detail::Manager::get().stats().live;
     run();
-    index::build::g_probe_parse.store(false);
-    const auto top = index::build::g_parse_peak_live.load();
+    trace::index::build::g_probe_parse.store(false);
+    const auto top = trace::index::build::g_parse_peak_live.load();
     return top > base ? top - base : 0;
 }
 
@@ -120,7 +120,8 @@ TEST_SUITE("BootstrapPeak") {
         for (int i = 0; i < PEAK_FILES; ++i)
             files.push_back(write_big_trace(env.dir(), i));
 
-        const auto limit = index::build::g_max_sink_bytes.exchange(SINK_LIMIT);
+        const auto limit =
+            trace::index::build::g_max_sink_bytes.exchange(SINK_LIMIT);
         dataframe::DataFrame few_df, many_df;
         configure_default_runtime({.threads = FEW_WORKERS, .eager = true});
         const auto few_peak = peak_live([&] {
@@ -132,7 +133,7 @@ TEST_SUITE("BootstrapPeak") {
             many_df =
                 bootstrap_test::count_by_name(files, env.dir() + "/idx_many");
         });
-        index::build::g_max_sink_bytes.store(limit);
+        trace::index::build::g_max_sink_bytes.store(limit);
         MESSAGE("peak live bytes: " << FEW_WORKERS << " workers " << few_peak
                                     << ", " << PEAK_WORKERS << " workers "
                                     << many_peak);
@@ -156,7 +157,7 @@ TEST_SUITE("BootstrapPeak") {
         dstd::Vector<dstd::String> files;
         for (int i = 0; i < *n; ++i)
             files.push_back(write_big_trace(env.dir(), i));
-        index::build::g_max_sink_bytes.store(SINK_LIMIT);
+        trace::index::build::g_max_sink_bytes.store(SINK_LIMIT);
         dftracer::utils::store::engine::g_dict_sample_bytes.store(
             DICT_SAMPLE_LIMIT);
         configure_default_runtime({.threads = PEAK_WORKERS, .eager = true});

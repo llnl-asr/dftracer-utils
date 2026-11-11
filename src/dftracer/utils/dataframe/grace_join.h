@@ -11,6 +11,7 @@
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -21,9 +22,12 @@
 
 namespace dftracer::utils::dataframe {
 
+/// A frame, or nothing at the end, or an error.
+using FrameResult = dstd::Result<dstd::Optional<DataFrame>>;
+
 /// `parts` as one frame: vertically when they share names and types, else
 /// diagonally.
-DataFrame merge_morsels(dstd::Vector<DataFrame>& parts);
+dstd::Result<DataFrame> merge_morsels(dstd::Vector<DataFrame>& parts);
 
 /// The right-side rows a cross join has spooled since the process started. For
 /// tests: a cross join whose right side is over a quarter of its budget
@@ -49,12 +53,12 @@ std::uint64_t grace_join_blocks();
 /// emitted once at the end. A Lookup join reads such a partition's right side
 /// in blocks too, and keeps per key only its first right row and the first
 /// value column in which a later row differs (the conflict), then probes the
-/// left partition once against those first rows, so it throws what the
-/// in-memory join throws. That state is held in memory: it is one row and the
-/// key text per distinct key of the partition, and a partition that no split
-/// could cut holds few keys. A Nest join reads the right side once to total
-/// the bytes of each key, packs the keys into groups of about a block, and
-/// joins one group per pass over the right side: a left row whose key is in
+/// left partition once against those first rows, so it gives the error
+/// the in-memory join gives. That state is held in memory: it is one row and
+/// the key text per distinct key of the partition, and a partition that no
+/// split could cut holds few keys. A Nest join reads the right side once to
+/// total the bytes of each key, packs the keys into groups of about a block,
+/// and joins one group per pass over the right side: a left row whose key is in
 /// the group leaves with its list, the others at the end with an empty list.
 /// A list holds the key's right rows in their right order, as in memory. One
 /// key whose rows pass the budget makes one list that passes it, since a
@@ -63,26 +67,40 @@ std::uint64_t grace_join_blocks();
 ///
 /// Call add_right() for every right morsel, add_left() for every left
 /// morsel, start(), then next() until it gives nothing. Not thread-safe.
-/// Not for a cross join, which has no key. Throws std::invalid_argument for a
-/// morsel whose column names differ from the first right morsel's.
+/// Not for a cross join, which has no key. add_right() gives an
+/// @ref ErrorCode::InvalidArgument error for a morsel whose column names
+/// differ from the first right morsel's.
 class GraceJoin {
    public:
+    /// Gives an @ref ErrorCode::InvalidArgument error for an uneven or empty
+    /// key list and an @ref ErrorCode::NotFound error for a key column that
+    /// a side lacks.
+    static dstd::Result<dstd::UniquePtr<GraceJoin>> make(
+        dstd::Vector<dstd::String> left_names,
+        dstd::Vector<dstd::String> right_names,
+        dstd::Vector<dstd::String> left_on, dstd::Vector<dstd::String> right_on,
+        JoinHow how, dstd::String suffix, std::uint64_t budget,
+        bool nulls_equal = false);
+
+    /// Use @ref make; the key positions are those it resolved.
     GraceJoin(dstd::Vector<dstd::String> left_names,
               dstd::Vector<dstd::String> right_names,
               dstd::Vector<dstd::String> left_on,
               dstd::Vector<dstd::String> right_on, JoinHow how,
-              dstd::String suffix, std::uint64_t budget,
-              bool nulls_equal = false);
+              dstd::String suffix, std::uint64_t budget, bool nulls_equal,
+              dstd::SharedPtr<spill::Dir> dir,
+              dstd::Vector<std::size_t> left_key,
+              dstd::Vector<std::size_t> right_key);
 
-    void add_right(const DataFrame& right);
+    dstd::Result<void> add_right(const DataFrame& right);
 
-    void add_left(const DataFrame& left);
+    dstd::Result<void> add_left(const DataFrame& left);
 
     /// `left_templates` gives one column per left name, read for its type,
     /// for the unmatched right rows of a right or outer join.
     void start(dstd::Vector<Series> left_templates);
 
-    coro::CoroTask<dstd::Optional<DataFrame>> next(std::int64_t max_rows);
+    coro::CoroTask<FrameResult> next(std::int64_t max_rows);
 
    private:
     struct Part {
@@ -121,21 +139,22 @@ class GraceJoin {
     using Parts = dstd::Vector<dstd::UniquePtr<Part>>;
 
     Parts make_parts(std::size_t n) const;
-    void split(const DataFrame& rows, bool right_side, int level, Parts& into);
-    coro::CoroTask<void> split_part(Work work, std::int64_t max_rows);
-    coro::CoroTask<DataFrame> right_rows(Part& part, std::int64_t max_rows);
+    dstd::Result<void> split(const DataFrame& rows, bool right_side, int level,
+                             Parts& into);
+    coro::CoroTask<dstd::Result<void>> split_part(Work work,
+                                                  std::int64_t max_rows);
+    coro::CoroTask<dstd::Result<DataFrame>> right_rows(Part& part,
+                                                       std::int64_t max_rows);
     DataFrame empty_right() const;
-    coro::CoroTask<dstd::Optional<DataFrame>> right_block(
-        std::int64_t max_rows);
-    coro::CoroTask<DataFrame> lookup_heads(
+    coro::CoroTask<FrameResult> right_block(std::int64_t max_rows);
+    coro::CoroTask<dstd::Result<DataFrame>> lookup_heads(
         dstd::Vector<std::int64_t>& conflicts, std::int64_t max_rows);
-    coro::CoroTask<void> assign_groups(std::int64_t max_rows);
-    coro::CoroTask<dstd::Optional<DataFrame>> next_group(std::int64_t max_rows);
-    coro::CoroTask<bool> next_block(std::int64_t max_rows);
-    void start_deferred();
-    coro::CoroTask<dstd::Optional<DataFrame>> probe_left(std::int64_t max_rows);
-    coro::CoroTask<dstd::Optional<DataFrame>> deferred_left(
-        std::int64_t max_rows);
+    coro::CoroTask<dstd::Result<void>> assign_groups(std::int64_t max_rows);
+    coro::CoroTask<FrameResult> next_group(std::int64_t max_rows);
+    coro::CoroTask<dstd::Result<bool>> next_block(std::int64_t max_rows);
+    dstd::Result<void> start_deferred();
+    coro::CoroTask<FrameResult> probe_left(std::int64_t max_rows);
+    coro::CoroTask<FrameResult> deferred_left(std::int64_t max_rows);
 
     dstd::Vector<dstd::String> left_names_;
     dstd::Vector<dstd::String> right_names_;

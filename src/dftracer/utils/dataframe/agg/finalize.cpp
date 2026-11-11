@@ -3,6 +3,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/float16.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
@@ -343,7 +344,7 @@ static DataFrame finalize_impl(const AggState& st_in,
             : (st.nkeys > key_names.size() ? st.nkeys : key_names.size());
     for (std::size_t k = 0; k < nk; ++k) {
         out.names.push_back(k < key_names.size() ? key_names[k]
-                                                 : "key" + dstd::to_string(k));
+                                                 : dstd::fmt<"key{}">(k));
         if (k >= st.nkeys) {
             out.columns.push_back(Series::strings(
                 dstd::Vector<dstd::String>(static_cast<std::size_t>(ng))));

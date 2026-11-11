@@ -8,7 +8,9 @@
 //   duql_eval_bench [records] [rounds]
 
 #include <dftracer/utils/dataframe/expr.h>
+#include <dftracer/utils/dataframe/kernels/string_match.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_arena.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -39,16 +41,12 @@ constexpr const char* NAMES[] = {
 constexpr const char* CATS[] = {"POSIX", "STDIO", "MPI"};
 
 dftracer::utils::dstd::String record(std::uint32_t i) {
-    dftracer::utils::dstd::String r =
-        R"({"name":")" + dftracer::utils::dstd::String(NAMES[i % 12]) +
-        R"(","cat":")" + CATS[i % 3] + R"(","pid":)" +
-        dftracer::utils::dstd::to_string(i % 7) + R"(,"dur":)" +
-        dftracer::utils::dstd::to_string((i * 37) % 200) +
-        R"(,"args":{"size":)" +
-        dftracer::utils::dstd::to_string((i * 131) % 4096);
-    if (i % 5 == 0)
-        r += R"(,"retry":)" + dftracer::utils::dstd::to_string(i % 3);
-    return r + "}}";
+    dftracer::utils::dstd::String r = dftracer::utils::dstd::fmt<
+        R"({"name":"{}","cat":"{}","pid":{},"dur":{},"args":{"size":{})">(
+        NAMES[i % 12], CATS[i % 3], i % 7, (i * 37) % 200, (i * 131) % 4096);
+    if (i % 5 == 0) r += dftracer::utils::dstd::fmt<R"(,"retry":{})">(i % 3);
+    r += "}}";
+    return r;
 }
 
 // The fields of `q` from `v`, as the indexed reader stores them.
@@ -58,7 +56,7 @@ duql::ValueMap map_of(const duql::Query& q, JsonValue v) {
         JsonValue x = v.at(dftracer::utils::dstd::String(f));
         if (!x.exists() &&
             !dftracer::utils::dstd::StringView(f).starts_with("args."))
-            x = v.at("args." + dftracer::utils::dstd::String(f));
+            x = v.at(dstd::fmt<"args.{}">(f));
         if (!x.exists()) continue;
         if (x.is_string())
             m[dftracer::utils::dstd::String(f)] = dftracer::utils::dstd::String(
@@ -91,7 +89,7 @@ double ns_per_record(std::size_t n, int rounds, F&& body) {
 // A path of `len` bytes holding "/scratch/"; every fifth ends in ".h5".
 dftracer::utils::dstd::String long_path(std::uint32_t i, std::size_t len) {
     dftracer::utils::dstd::String s =
-        "/p/lustre/scratch/run" + dftracer::utils::dstd::to_string(i % 97);
+        dstd::fmt<"/p/lustre/scratch/run{}">(i % 97);
     std::uint32_t x = i * 2654435761u + 1;
     while (s.size() + 3 < len) {
         s += '/';
@@ -114,6 +112,12 @@ int main(int argc, char** argv) {
               : (argc > 1 ? static_cast<std::size_t>(std::atoll(argv[1]))
                           : 200000);
     const int rounds = smoke ? 1 : (argc > 2 ? std::atoi(argv[2]) : 7);
+    std::printf("string kernel: %s\n",
+                &dataframe::kernels::string_match() ==
+                        dataframe::kernels::string_match_variant(
+                            dftracer::utils::common::JccKernels::Jcc)
+                    ? "jcc"
+                    : "plain");
 
     simdjson::dom::parser parser;
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> texts;
@@ -284,26 +288,31 @@ int main(int argc, char** argv) {
         const dataframe::Expr lit_e =
             dataframe::expr_str_pred(op, dataframe::expr_col(0), lit);
         const double lit_ns = ns_per_record(n, rounds, [&] {
-            if (!dataframe::eval(lit_e, in0).handle()) std::abort();
+            auto out = dataframe::eval(lit_e, in0);
+            if (!out || !out->handle()) std::abort();
         });
         std::printf("%-12s %-31s %10.1f\n", label, "literal needle", lit_ns);
         std::fill(same_needles.begin(), same_needles.end(), lit);
         const dataframe::Series same = dataframe::Series::strings(same_needles);
         const dataframe::Series varied =
             dataframe::Series::strings(varied_needles);
-        const dataframe::Expr col_e = dataframe::expr_str_pred_col(
-            op, dataframe::expr_col(0), dataframe::expr_col(1));
+        auto col_pred = dataframe::expr_str_pred_col(op, dataframe::expr_col(0),
+                                                     dataframe::expr_col(1));
+        if (!col_pred) std::abort();
+        const dataframe::Expr col_e = *col_pred;
         const dftracer::utils::dstd::Vector<const dataframe::Series*> in_same{
             &col, &same};
         const dftracer::utils::dstd::Vector<const dataframe::Series*> in_varied{
             &col, &varied};
         const double same_ns = ns_per_record(n, rounds, [&] {
-            if (!dataframe::eval(col_e, in_same).handle()) std::abort();
+            auto out = dataframe::eval(col_e, in_same);
+            if (!out || !out->handle()) std::abort();
         });
         std::printf("%-12s %-31s %10.1f\n", label, "column needle, same",
                     same_ns);
         const double var_ns = ns_per_record(n, rounds, [&] {
-            if (!dataframe::eval(col_e, in_varied).handle()) std::abort();
+            auto out = dataframe::eval(col_e, in_varied);
+            if (!out || !out->handle()) std::abort();
         });
         std::printf("%-12s %-31s %10.1f\n", label, "column needle, varied",
                     var_ns);

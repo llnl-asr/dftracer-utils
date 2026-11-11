@@ -21,8 +21,8 @@
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 
 #include <atomic>
 #include <chrono>
@@ -36,6 +36,14 @@ using namespace dftracer::utils;
 using Bytes = dstd::SharedPtr<const dstd::Vector<std::uint8_t>>;
 
 namespace {
+
+template <class T>
+void require_ok(const dstd::Expected<T, dstd::Error>& result,
+                const char* what) {
+    if (result.has_value()) return;
+    std::fprintf(stderr, "%s failed: %s\n", what, result.error().c_str());
+    std::exit(1);
+}
 
 std::atomic<std::uint64_t> g_decodes{0};
 
@@ -53,7 +61,7 @@ Blob make_blob(std::size_t uncompressed_bytes) {
         x = x * 1664525u + 1013904223u;
         raw[i] = static_cast<std::uint8_t>((x >> 24) & 0x3F);
     }
-    utilities::fileio::compress::GzipMemberCompressor comp(6);
+    fileio::compress::GzipMemberCompressor comp(6);
     auto member = comp.compress_member(raw.data(), raw.size());
     if (!member) {
         std::fprintf(stderr, "compress failed\n");
@@ -65,7 +73,7 @@ Blob make_blob(std::size_t uncompressed_bytes) {
 // The actual work: a real libdeflate decode of the shared blob.
 coro::CoroTask<Bytes> decode(const Blob* blob) {
     g_decodes.fetch_add(1, std::memory_order_relaxed);
-    utilities::fileio::compress::GzipMemberDecompressor dec;
+    fileio::compress::GzipMemberDecompressor dec;
     auto out = dec.decompress_member(
         blob->compressed.data(), blob->compressed.size(), blob->uncompressed);
     if (!out) {
@@ -151,7 +159,7 @@ double run_round(Runtime& rt, Strategy& strat, const Blob& blob, int members,
         co_await coro::when_all(std::move(tasks));
         co_return;
     });
-    rt.submit(std::move(task), "bench").wait();
+    require_ok(rt.submit(std::move(task), "bench").wait(), "task");
 
     auto t1 = std::chrono::steady_clock::now();
     return std::chrono::duration<double, std::milli>(t1 - t0).count();
@@ -196,7 +204,7 @@ double bench_mutex_wake(Runtime& rt, int rounds, int waiters) {
             }
             co_return;
         });
-    rt.submit(std::move(task), "bench").wait();
+    require_ok(rt.submit(std::move(task), "bench").wait(), "task");
     auto t1 = std::chrono::steady_clock::now();
     return std::chrono::duration<double, std::milli>(t1 - t0).count();
 }
@@ -219,7 +227,7 @@ double bench_once_wake(Runtime& rt, int rounds, int waiters) {
             }
             co_return;
         });
-    rt.submit(std::move(task), "bench").wait();
+    require_ok(rt.submit(std::move(task), "bench").wait(), "task");
     auto t1 = std::chrono::steady_clock::now();
     return std::chrono::duration<double, std::milli>(t1 - t0).count();
 }

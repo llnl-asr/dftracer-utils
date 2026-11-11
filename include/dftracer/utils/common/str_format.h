@@ -3,14 +3,13 @@
 #define DFTRACER_UTILS_COMMON_STR_FORMAT_H
 
 #include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 
-#include <cstdarg>
 #include <cstdint>
-#include <cstdio>
 #include <cstdlib>
 #include <type_traits>
 #include <utility>
@@ -67,33 +66,6 @@ dstd::String str_cat(const Args&... args) {
     return out;
 }
 
-/// printf-style formatting into a dstd::String. Portable (plain vsnprintf, no
-/// std::format / availability gates); use for cold, mixed-content messages. For
-/// literal '%' in the text, escape as "%%" (or use str_cat, which has no format
-/// string). vstring_format is the va_list core; string_format is the variadic
-/// front-end.
-DFTRACER_UTILS_PRINTF_FORMAT(1, 0)
-inline dstd::String vstring_format(const char* fmt, va_list ap) {
-    va_list ap2;
-    va_copy(ap2, ap);
-    int n = std::vsnprintf(nullptr, 0, fmt, ap2);
-    va_end(ap2);
-    if (n <= 0) return {};
-    dstd::String s(static_cast<std::size_t>(n) + 1, '\0');
-    std::vsnprintf(s.data(), s.size(), fmt, ap);
-    s.resize(static_cast<std::size_t>(n));
-    return s;
-}
-
-DFTRACER_UTILS_PRINTF_FORMAT(1, 2)
-inline dstd::String string_format(const char* fmt, ...) {
-    va_list ap;
-    va_start(ap, fmt);
-    dstd::String s = vstring_format(fmt, ap);
-    va_end(ap);
-    return s;
-}
-
 /// Human-readable byte count, e.g. "1.5 MB" or "3.0 MB/s". `per_suffix` appends
 /// a rate unit (e.g. "/s"); `precision` sets the fractional digits.
 inline dstd::String human_bytes(double value, const char* per_suffix = "",
@@ -105,9 +77,10 @@ inline dstd::String human_bytes(double value, const char* per_suffix = "",
         ++i;
     }
     char buf[64];
-    std::snprintf(buf, sizeof(buf), "%.*f %s%s", precision, value, UNITS[i],
-                  per_suffix);
-    return buf;
+    char* end = dstd::to_chars_fixed(buf, buf + sizeof(buf), value, precision);
+    const dstd::StringView number(
+        buf, end ? static_cast<std::size_t>(end - buf) : 0);
+    return dstd::fmt<"{} {}{}">(number, UNITS[i], per_suffix);
 }
 
 namespace detail {

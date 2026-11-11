@@ -9,13 +9,14 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/trace/agg_query.h>
+#include <dftracer/utils/trace/index/indexer.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -55,7 +56,7 @@ struct Fixture {
     TestEnvironment env{200};
     dstd::Vector<dstd::String> gz;
     dstd::String index_path;
-    index::schemas::dft::agg::AggregationConfig aggregation;
+    trace::index::schemas::dft::agg::AggregationConfig aggregation;
 
     // `extras` keeps the string args epoch and step as extra group keys and
     // writes them on the events and counters. `mixed` adds counters named
@@ -110,11 +111,14 @@ struct Fixture {
         }
         aggregation.compute_percentiles = true;
         if (extras) aggregation.extra_group_keys = {"epoch", "step"};
-        index::IndexerOptions o;
+        trace::index::IndexerOptions o;
         o.index_dir = env.dir() + "/idx";
         o.checkpoint_size = MEMBER_BYTES;
         o.aggregation = aggregation;
-        index::Indexer::open(dftu_utils_test::dstd_paths(gz), o).build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(
+                trace::index::Indexer::open(dftu_utils_test::dstd_paths(gz), o))
+                .build());
         index_path =
             dstd::String(determine_index_path(gz.front(), o.index_dir));
     }
@@ -143,13 +147,16 @@ dstd::Vector<AggSpec> specs() {
 dataframe::DataFrame scan_only(const views::detail::scan::ScanPlan& p) {
     Runtime rt;
     dataframe::DataFrame out;
-    rt.block_on(coro::named(
-        "scan-only",
-        coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-            auto st = co_await views::detail::build_engine_agg_state(*p);
-            out = views::detail::finalize_engine_result(*st, *p);
-        })));
-    return views::detail::apply_agg_post_ops(std::move(out), *p);
+    dftu_utils_test::ok(rt.block_on(
+        coro::named("scan-only",
+                    coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                        auto st = dftu_utils_test::ok(
+                            co_await views::detail::build_engine_agg_state(*p));
+                        out = dftu_utils_test::ok(
+                            views::detail::finalize_engine_result(*st, *p));
+                    }))));
+    return dftu_utils_test::ok(
+        views::detail::apply_agg_post_ops(std::move(out), *p));
 }
 
 using Rows = dstd::Map<dstd::String, dstd::Map<dstd::String, double>>;
@@ -224,14 +231,14 @@ TEST_SUITE("ViewPartials") {
         for (std::size_t i = 0; i < groupings.size(); ++i) {
             // A scan answers over the events only. The profile counters of
             // the traces are a kind of their own in the partials.
-            const dataframe::DataFrame got =
+            const dataframe::DataFrame got = dftu_utils_test::ok(
                 fx.view()
                     .filter(Query::from_string(R"(cat in ["POSIX", "STDIO"])")
                                 .value())
                     .group_by(groupings[i])
                     .agg(specs())
                     .collect()
-                    .get();
+                    .get());
             same_rows(got, expected[i], columns[i]);
         }
     }
@@ -255,14 +262,14 @@ TEST_SUITE("ViewPartials") {
             scan_only(views::detail::scan::agg(p, stats_specs));
 
         fx.delete_traces();
-        const dataframe::DataFrame got =
+        const dataframe::DataFrame got = dftu_utils_test::ok(
             fx.view()
                 .filter(
                     Query::from_string(R"(cat in ["POSIX", "STDIO"])").value())
                 .group_by(keys)
                 .agg(stats_specs)
                 .collect()
-                .get();
+                .get());
         same_rows(got, expected, {"cat", "pid", "tid"});
     }
 
@@ -287,14 +294,14 @@ TEST_SUITE("ViewPartials") {
         const View rollup =
             View::from_files(one).group_by(keys).agg(stats_specs);
         Runtime rt;
-        rt.block_on(coro::named(
+        dftu_utils_test::ok(rt.block_on(coro::named(
             "materialize",
             coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                co_await rollup.materialize();
-            })));
-        REQUIRE(rollup.reconstruct_if_cached().has_value());
-        const Rows got =
-            rows_of(*rollup.reconstruct_if_cached(), {"cat", "pid", "tid"});
+                dftu_utils_test::ok(co_await rollup.materialize());
+            }))));
+        const auto cached = dftu_utils_test::ok(rollup.reconstruct_if_cached());
+        REQUIRE(cached.has_value());
+        const Rows got = rows_of(*cached, {"cat", "pid", "tid"});
         const Rows want = rows_of(expected, {"cat", "pid", "tid"});
         REQUIRE(got.size() == want.size());
         for (const auto& [key, cells] : want) {
@@ -334,7 +341,8 @@ TEST_SUITE("ViewPartials") {
             scan_events(fx, {GroupKey::name(), GroupKey::pid()}, WINDOW_US);
 
         fx.delete_traces();
-        const TypedResult typed = typed_view().collect_typed().get();
+        const TypedResult typed =
+            dftu_utils_test::ok(typed_view().collect_typed().get());
 
         auto strip = [](const dataframe::DataFrame& f) {
             // the engine columns the typed frames share with the scan
@@ -386,7 +394,9 @@ TEST_SUITE("ViewPartials") {
             q.by_host = by_host;
             q.names.emplace_back("read");
             for (const char* h : hosts) q.hosts.emplace_back(h);
-            auto r = run(trace::run_agg_query(q));
+            auto r = dftracer::utils::default_runtime()
+                         .submit(trace::run_agg_query(q))
+                         .get();
             REQUIRE_MESSAGE(r.has_value(), r.error().format());
             return std::move(*r);
         };
@@ -429,7 +439,9 @@ TEST_SUITE("ViewPartials") {
         q.config.compute_percentiles = true;
         q.reread = false;
         q.by_file = true;  // the partials hold no file
-        auto r = run(trace::run_agg_query(q));
+        auto r = dftracer::utils::default_runtime()
+                     .submit(trace::run_agg_query(q))
+                     .get();
         REQUIRE_MESSAGE(r.has_value(), r.error().format());
         CHECK(r->stats.chunks_reread == 0);
         CHECK(r->stats.unanswered > 0);
@@ -446,16 +458,19 @@ TEST_SUITE("ViewPartials") {
                 .get();
         };
         auto events_by = [&](const char* arg) {
-            return fx.view()
-                .filter(
-                    Query::from_string(R"(cat in ["POSIX", "STDIO"])").value())
-                .group_by({GroupKey::name(), GroupKey::of_arg(arg)})
-                .agg(specs())
-                .collect()
-                .get();
+            return dftu_utils_test::ok(
+                fx.view()
+                    .filter(Query::from_string(R"(cat in ["POSIX", "STDIO"])")
+                                .value())
+                    .group_by({GroupKey::name(), GroupKey::of_arg(arg)})
+                    .agg(specs())
+                    .collect()
+                    .get());
         };
-        const TypedResult before_epoch = profiles_by("epoch");
-        const TypedResult before_step = profiles_by("step");
+        const TypedResult before_epoch =
+            dftu_utils_test::ok(profiles_by("epoch"));
+        const TypedResult before_step =
+            dftu_utils_test::ok(profiles_by("step"));
         dstd::Vector<dataframe::DataFrame> expected;
         for (const char* arg : {"epoch", "step"}) {
             auto p = views::detail::scan::from_files(fx.files());
@@ -470,13 +485,15 @@ TEST_SUITE("ViewPartials") {
 
         // Three counters of each epoch, two of each step, in each file.
         const Rows by_epoch =
-            rows_of(profiles_by("epoch").aggregated, {"name", "epoch"});
+            rows_of(dftu_utils_test::ok(profiles_by("epoch")).aggregated,
+                    {"name", "epoch"});
         REQUIRE(by_epoch.size() == 2);
         CHECK(by_epoch.at("train|0|").at("n") == 3 * FILES);
         CHECK(by_epoch.at("train|1|").at("n") == 3 * FILES);
         CHECK(by_epoch.at("train|0|").at("total") == 15.0 * FILES);
         const Rows by_step =
-            rows_of(profiles_by("step").aggregated, {"name", "step"});
+            rows_of(dftu_utils_test::ok(profiles_by("step")).aggregated,
+                    {"name", "step"});
         REQUIRE(by_step.size() == 3);
         for (const char* s : {"train|0|", "train|1|", "train|2|"})
             CHECK(by_step.at(s).at("n") == 2 * FILES);
@@ -503,7 +520,9 @@ TEST_SUITE("ViewPartials") {
         q.config.compute_percentiles = true;
         q.by_kind = true;
         q.names.emplace_back("read");
-        auto r = run(trace::run_agg_query(q));
+        auto r = dftracer::utils::default_runtime()
+                     .submit(trace::run_agg_query(q))
+                     .get();
         REQUIRE_MESSAGE(r.has_value(), r.error().format());
         CHECK(r->stats.chunks_reread == 0);
         dstd::Map<int, std::uint64_t> counts;
@@ -514,11 +533,12 @@ TEST_SUITE("ViewPartials") {
                   {static_cast<int>(trace::AggKind::Event), FILES * READS},
                   {static_cast<int>(trace::AggKind::Profile), FILES * MIXED}});
 
-        const TypedResult typed = fx.view()
-                                      .group_by({GroupKey::name()})
-                                      .agg({{AggOp::Count, "", "n"}})
-                                      .collect_typed()
-                                      .get();
+        const TypedResult typed =
+            dftu_utils_test::ok(fx.view()
+                                    .group_by({GroupKey::name()})
+                                    .agg({{AggOp::Count, "", "n"}})
+                                    .collect_typed()
+                                    .get());
         CHECK(rows_of(typed.regular, {"name"}).at("read|").at("n") ==
               FILES * READS);
         CHECK(rows_of(typed.aggregated, {"name"}).at("read|").at("n") ==

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/domains/analysis/comparator/comparison_result.h>
+#include <dftracer/utils/domains/analysis/comparator/tree_table_formatter.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/trace/comparator/comparison_result.h>
-#include <dftracer/utils/trace/comparator/tree_table_formatter.h>
 #include <doctest/doctest.h>
 
 #include <cstdio>
@@ -11,7 +11,7 @@
 
 using namespace dftracer::utils;
 
-using namespace dftracer::utils::trace::comparator;
+using namespace dftracer::utils::domains::analysis::comparator;
 
 // ---------------------------------------------------------------------------
 // Helpers

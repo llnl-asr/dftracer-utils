@@ -5,6 +5,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/exception_helpers.h>
 #include <dftracer/utils/coro/detail/frame.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/optional.h>
 
 #include <coroutine>
@@ -147,9 +148,7 @@ class Generator {
          */
         reference operator*() const {
             if (!handle_ || !handle_.promise().current_value) {
-                throw common::DFTUtilsException(
-                    common::ErrorCode::InvalidArgument,
-                    "Generator iterator: no value available");
+                dstd::fatal("coro: a generator iterator has no value");
             }
             return *handle_.promise().current_value;
         }

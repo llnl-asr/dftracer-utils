@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/domains/workload/replay/replay.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/utilities/replay/replay.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
@@ -42,7 +42,7 @@ class GzTraceWriter {
 };
 }  // namespace
 
-using namespace dftracer::utils::utilities::replay;
+using namespace dftracer::utils::domains::workload::replay;
 
 TEST_CASE("DFTracer Replay - Basic functionality") {
     dftracer::utils::common::logger::init();
@@ -283,7 +283,7 @@ TEST_CASE("DFTracer Replay - Basic functionality") {
     }
 
     // Cleanup
-    (void)dstd::fs::remove_all(temp_dir);
+    dstd::fs::remove_all(temp_dir).discard();
 }
 
 TEST_CASE("DFTracer Replay - Trace structure") {
@@ -371,6 +371,18 @@ TEST_CASE("DFTracer Replay - Real trace files") {
         std::cout << "Executed: " << result.executed_events
                   << ", Failed: " << result.failed_events << std::endl;
     }
+}
+
+TEST_CASE("DFTracer Replay - unreadable trace directory is an error") {
+    ReplayConfig config;
+    config.no_sleep = true;
+    config.use_call_tree = true;
+    ReplayEngine engine(std::move(config));
+    ReplayResult result =
+        engine.replay_with_call_tree("/nonexistent/dftracer_replay_dir");
+    REQUIRE(result.error_messages.size() == 1);
+    CHECK(result.error_messages[0].find("Cannot list trace directory") !=
+          dstd::String::npos);
 }
 
 TEST_CASE("DFTracer Replay - Call tree integration") {

@@ -100,8 +100,8 @@ def _keys(keys: Keys) -> List[str]:
 
 
 def _s(frame: DataFrame, name: str) -> Series:
-    """One column of ``frame`` as a ``Series`` (``frame[name]`` is typed ``Series | DataFrame``)."""
-    return cast(Series, frame[name])
+    """One column of ``frame`` as a ``Series``."""
+    return frame[name]
 
 
 def _concat(frames: Sequence[DataFrame]) -> DataFrame:

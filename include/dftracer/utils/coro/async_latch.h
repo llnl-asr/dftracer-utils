@@ -24,8 +24,7 @@ class AsyncLatch {
 
     bool try_wait() const noexcept { return reached_zero_.is_set(); }
 
-    /// co_await throws a cancelled error (see coro::is_cancelled) when the
-    /// executor shuts down while it waits.
+    /// The awaiting task stops when the executor shuts down while it waits.
     [[nodiscard]] AsyncEvent::WaitAwaitable wait() noexcept {
         return reached_zero_.wait();
     }

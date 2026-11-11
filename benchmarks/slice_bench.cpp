@@ -42,10 +42,13 @@
 //                               the expected shape)
 //   slice_bench --case NAME    (one case in this process; prints RESULT)
 
+#include <bench_ok.h>
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -183,8 +186,7 @@ Series string_column(std::int64_t rows) {
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> values(
         static_cast<std::size_t>(rows));
     for (auto& v : values) {
-        v = "row-" + dftracer::utils::dstd::to_string(rng() % 1000000) + "-" +
-            dftracer::utils::dstd::to_string(rng() % 100);
+        v = dstd::fmt<"row-{}-{}">(rng() % 1000000, rng() % 100);
     }
     return Series::strings(values);
 }
@@ -397,7 +399,7 @@ double repeat_op(std::size_t reps, Op op) {
 double sort_by(const Scale& s) {
     DataFrame frame = key_frame(s.op_rows, 1000);
     return repeat_op(s.sort_reps, [&] {
-        DataFrame out = frame.sort_by("k");
+        DataFrame out = dftu::bench::ok(frame.sort_by("k"));
         check(out.num_rows() == s.op_rows, "sort rows");
     });
 }
@@ -407,7 +409,7 @@ double group_by_sum(const Scale& s) {
     dftracer::utils::dstd::Vector<dataframe::GroupAgg> aggs{
         {dataframe::Agg::Sum, "v", "sum_v"}};
     return repeat_op(s.group_reps, [&] {
-        DataFrame out = frame.group_by("g", aggs);
+        DataFrame out = dftu::bench::ok(frame.group_by("g", aggs));
         check(out.num_rows() > 0 && out.num_rows() <= 10000, "group rows");
     });
 }
@@ -415,7 +417,7 @@ double group_by_sum(const Scale& s) {
 double unique_rows(const Scale& s) {
     DataFrame frame = key_frame(s.op_rows, s.op_rows / 4);
     return repeat_op(s.unique_reps, [&] {
-        DataFrame out = frame.unique({"g"});
+        DataFrame out = dftu::bench::ok(frame.unique({"g"}));
         check(out.num_rows() > 0 && out.num_rows() <= s.op_rows / 4,
               "unique rows");
     });
@@ -440,9 +442,9 @@ double join_inner(const Scale& s) {
     right.columns.push_back(Series::flat_i64(right_keys.data(), s.op_rows));
     right.columns.push_back(Series::flat_f64(rv.data(), s.op_rows));
     return repeat_op(s.join_reps, [&] {
-        DataFrame out = left.join(
+        DataFrame out = dftu::bench::ok(left.join(
             right,
-            dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{"k"});
+            dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{"k"}));
         check(out.num_rows() == s.op_rows, "join rows");
     });
 }

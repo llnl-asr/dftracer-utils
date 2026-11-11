@@ -9,7 +9,6 @@
 #include <unistd.h>
 
 #include <chrono>
-#include <cstdarg>
 #include <cstring>
 #include <ctime>
 
@@ -20,6 +19,8 @@ std::atomic<int> g_level{static_cast<int>(Level::Info)};
 }  // namespace detail
 
 namespace {
+
+constexpr std::size_t LINE_CAP = 2048;
 
 std::FILE* g_sink = stderr;
 std::atomic<bool> g_use_color{false};
@@ -83,7 +84,7 @@ const char* base_name(const char* path) {
     return slash ? slash + 1 : path;
 }
 
-void make_timestamp(char* out, std::size_t n) {
+dstd::StringView make_timestamp(char* out, std::size_t n) {
     auto now = std::chrono::system_clock::now();
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                   now.time_since_epoch())
@@ -92,9 +93,11 @@ void make_timestamp(char* out, std::size_t n) {
     std::time_t t = std::chrono::system_clock::to_time_t(now);
     std::tm tm;
     localtime_r(&t, &tm);
-    std::snprintf(out, n, "%04d-%02d-%02d %02d:%02d:%02d.%03d",
-                  tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour,
-                  tm.tm_min, tm.tm_sec, static_cast<int>(ms));
+    const dstd::FmtResult r =
+        dstd::fmt_to<"{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03}">(
+            out, n, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour,
+            tm.tm_min, tm.tm_sec, static_cast<int>(ms));
+    return dstd::StringView(out, r.size);
 }
 
 // Per-scope state, heap-allocated so it follows a coroutine across threads.
@@ -171,54 +174,45 @@ const char* level_name(Level level) {
 
 namespace detail {
 
-void write(Level lvl, const char* file, int line, const char* fmt, ...) {
-    char msg[1536];
-    va_list ap;
-    va_start(ap, fmt);
-    std::vsnprintf(msg, sizeof(msg), fmt, ap);
-    va_end(ap);
-
+void emit(Level lvl, const char* file, int line, dstd::StringView msg) {
     char ts[64];
-    make_timestamp(ts, sizeof(ts));
+    const dstd::StringView stamp = make_timestamp(ts, sizeof(ts));
 
     const LevelStyle style = level_style(lvl);
     const bool color = g_use_color.load(std::memory_order_relaxed);
 
     // No source location for coroutine traces (file == nullptr).
     const bool loc = g_show_location && file != nullptr;
-    char out[2048];
-    int n;
+    // The last byte is kept for the newline.
+    char out[LINE_CAP];
+    dstd::FmtResult r;
     if (color) {
         if (loc) {
-            n = std::snprintf(out, sizeof(out),
-                              "\x1b[2m[%s]\x1b[0m %s%s\x1b[0m %s "
-                              "\x1b[2m(%s:%d)\x1b[0m\n",
-                              ts, style.color, style.name, msg, base_name(file),
-                              line);
+            r = dstd::fmt_to<
+                "\x1b[2m[{}]\x1b[0m {}{}\x1b[0m {} \x1b[2m({}:{})\x1b[0m">(
+                out, sizeof(out) - 1, stamp, style.color, style.name, msg,
+                base_name(file), line);
         } else {
-            n = std::snprintf(out, sizeof(out),
-                              "\x1b[2m[%s]\x1b[0m %s%s\x1b[0m %s\n", ts,
-                              style.color, style.name, msg);
+            r = dstd::fmt_to<"\x1b[2m[{}]\x1b[0m {}{}\x1b[0m {}">(
+                out, sizeof(out) - 1, stamp, style.color, style.name, msg);
         }
     } else {
         if (loc) {
-            n = std::snprintf(out, sizeof(out), "[%s] %s %s (%s:%d)\n", ts,
-                              style.name, msg, base_name(file), line);
+            r = dstd::fmt_to<"[{}] {} {} ({}:{})">(out, sizeof(out) - 1, stamp,
+                                                   style.name, msg,
+                                                   base_name(file), line);
         } else {
-            n = std::snprintf(out, sizeof(out), "[%s] %s %s\n", ts, style.name,
-                              msg);
+            r = dstd::fmt_to<"[{}] {} {}">(out, sizeof(out) - 1, stamp,
+                                           style.name, msg);
         }
     }
-    if (n < 0) return;
-    std::size_t len = (static_cast<std::size_t>(n) < sizeof(out))
-                          ? static_cast<std::size_t>(n)
-                          : sizeof(out) - 1;
-    std::fwrite(out, 1, len, g_sink);
+    out[r.size] = '\n';
+    std::fwrite(out, 1, r.size + 1, g_sink);
     if (lvl == Level::Error) std::fflush(g_sink);  // survive a crash
 }
 
-void* scope_open(const char* file, int line, const char* label) {
-    write(Level::Trace, file, line, "-> %s", label);
+void* scope_open(const char* file, int line, dstd::StringView label) {
+    write<"-> {}">(Level::Trace, file, line, label);
     return new ScopeFrame{{}, dstd::String(label), file, line, steady_now_ns()};
 }
 
@@ -226,8 +220,8 @@ void scope_close(void* handle) {
     auto* frame = static_cast<ScopeFrame*>(handle);
     const double ms =
         static_cast<double>(steady_now_ns() - frame->start_ns) / 1e6;
-    write(Level::Trace, frame->file, frame->line, "<- %s [%.2f ms]",
-          frame->label.c_str(), ms);
+    write<"<- {} [{:.2f} ms]">(Level::Trace, frame->file, frame->line,
+                               frame->label, ms);
     delete frame;
 }
 
@@ -249,7 +243,7 @@ void* coro_trace_enter(const void* handle, const char* file, int line) {
     if (!enabled(Level::Trace) || handle == nullptr) return nullptr;
     // The resume-function pointer sits at frame offset 0 (coroutine ABI).
     const void* resume_fn = *reinterpret_cast<const void* const*>(handle);
-    return scope_open(file, line, ct_name(resume_fn).c_str());
+    return scope_open(file, line, ct_name(resume_fn));
 }
 
 void coro_trace_leave(void* handle) {

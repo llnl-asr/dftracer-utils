@@ -573,7 +573,9 @@ static dftu_series* rechunk(const dftu_series& v) {
         owned.emplace_back(dftu_series_share(c.series.get()));
         parts.push_back(&owned.back());
     }
-    return dftracer::utils::dataframe::concat_columns(parts).release();
+    dftracer::utils::dstd::Result<dftracer::utils::dataframe::Series> joined =
+        dftracer::utils::dataframe::concat_columns(parts);
+    return joined ? joined->release() : nullptr;
 }
 
 // Non-decreasing indices over a CHUNKED column: each chunk gathers its own run

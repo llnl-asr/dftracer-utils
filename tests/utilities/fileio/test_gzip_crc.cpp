@@ -1,20 +1,22 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/file.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/gzip/gzip_indexer.h>
-#include <dftracer/utils/index/record_schema.h>
+#include <dftracer/utils/fileio/compress/gzip_rechunker.h>
+#include <dftracer/utils/fileio/compress/gzip_stream_inflater.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/memory/detail/manager.h>
-#include <dftracer/utils/utilities/fileio/compress/gzip_rechunker.h>
-#include <dftracer/utils/utilities/fileio/compress/gzip_stream_inflater.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
-#include <dftracer/utils/utilities/reader/internal/inflater.h>
+#include <dftracer/utils/trace/index/gzip/gzip_indexer.h>
+#include <dftracer/utils/trace/index/record_schema.h>
+#include <dftracer/utils/trace/reader/internal/inflater.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
+#include <task_result.h>
 #include <testing_runtime.h>
 #include <unistd.h>
 #include <zlib.h>
@@ -25,7 +27,6 @@
 #include <random>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities;
 
 namespace {
 // Streams opened in a mode where zlib-ng verifies the checksum, counted while
@@ -112,13 +113,13 @@ struct TempFile {
         char tmpl[] = "/tmp/dftu_gzcrc_XXXXXX";
         REQUIRE(::mkdtemp(tmpl) != nullptr);
         dir = tmpl;
-        path = dir + "/t.gz";
+        path = dstd::fmt<"{}/t.gz">(dir);
         std::FILE* f = std::fopen(path.c_str(), "wb");
         REQUIRE(f != nullptr);
         REQUIRE(std::fwrite(bytes.data(), 1, bytes.size(), f) == bytes.size());
         std::fclose(f);
     }
-    ~TempFile() { (void)dstd::fs::remove_all(dir); }
+    ~TempFile() { dstd::fs::remove_all(dir).discard(); }
 };
 
 // Whole-file reference decode with the system zlib.
@@ -158,17 +159,17 @@ dstd::String zlib_decode_all(const dstd::String& path) {
 using PathResult = dstd::Optional<dstd::String>;
 
 PathResult read_with_inflater(const dstd::String& path,
-                              index::gzip::GzipRecordKind kind) {
+                              trace::index::gzip::GzipRecordKind kind) {
     auto fd_file = dstd::File::open(path, {});
     REQUIRE(fd_file);
     const int fd = fd_file->native_handle();
     dstd::String out;
     bool ok = false;
     dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
-        reader::internal::ReaderInflater inflater;
+        trace::reader::internal::ReaderInflater inflater;
         CrcWindow window;
         off_t offset = 0;
-        index::gzip::GzipMemberRecord rec;
+        trace::index::gzip::GzipMemberRecord rec;
         rec.kind = kind;
         ok = co_await inflater.seek_to_member(fd, offset, rec, dstd::String());
         dstd::Vector<unsigned char> buf(1u << 20);
@@ -185,20 +186,21 @@ PathResult read_with_inflater(const dstd::String& path,
 }
 
 PathResult reader_head_stream(const dstd::String& path) {
-    return read_with_inflater(path, index::gzip::GzipRecordKind::Head);
+    return read_with_inflater(path, trace::index::gzip::GzipRecordKind::Head);
 }
 
 PathResult reader_whole_member(const dstd::String& path) {
-    return read_with_inflater(path, index::gzip::GzipRecordKind::Member);
+    return read_with_inflater(path, trace::index::gzip::GzipRecordKind::Member);
 }
 
 PathResult indexer_stream(const dstd::String& path) {
-    dstd::Optional<index::gzip::GzipBuildArtifacts> art;
+    dstd::Optional<trace::index::gzip::GzipBuildArtifacts> art;
     dftu_utils_test::run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
         CrcWindow window;
-        art = co_await index::gzip::build_gzip_index_artifacts(
+        auto built = co_await trace::index::gzip::build_gzip_index_artifacts(
             dstd::String(path), CKPT,
-            index::gzip::CheckpointIndexer::VisitorList{}, &scope);
+            trace::index::gzip::CheckpointIndexer::VisitorList{}, &scope);
+        if (built) art = std::move(*built);
     });
     // A corrupt member ends the build at that member, short of the full text.
     if (!art || art->total_uc_size != FULL_TEXT_SIZE) return dstd::nullopt;
@@ -226,16 +228,13 @@ PathResult truncated_decoder(const dstd::String& path) {
 }
 
 PathResult rechunker(const dstd::String& path) {
-    const dstd::String out_path = path + ".rechunked.gz";
+    const dstd::String out_path = dstd::fmt<"{}.rechunked.gz">(path);
     bool ok = true;
     dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         CrcWindow window;
-        try {
-            co_await fileio::compress::gzip_rechunk_to_members(path, out_path,
-                                                               1u << 20, 1);
-        } catch (...) {
-            ok = false;
-        }
+        auto rechunked = co_await fileio::compress::gzip_rechunk_to_members(
+            path, out_path, 1u << 20, 1);
+        ok = rechunked.has_value();
     });
     if (!ok) return dstd::nullopt;
     auto decoded = zlib_decode_all(out_path);
@@ -273,7 +272,8 @@ TEST_CASE("the control: a stream that verifies the gzip checksum is counted") {
     Sample s;
     TempFile f(s.bytes);
     const auto before = fileio::compress::zlib_checksum_streams_opened();
-    index::detect_file_schema(dstd::String(f.path));
+    dftu_utils_test::ok_ref(
+        trace::index::detect_file_schema(dstd::String(f.path)));
     CHECK(fileio::compress::zlib_checksum_streams_opened() > before);
 }
 

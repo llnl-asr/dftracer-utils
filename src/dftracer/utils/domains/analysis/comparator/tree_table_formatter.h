@@ -1,0 +1,94 @@
+// SPDX-License-Identifier: MIT
+#ifndef DFTRACER_UTILS_DOMAINS_ANALYSIS_COMPARATOR_TREE_TABLE_FORMATTER_H
+#define DFTRACER_UTILS_DOMAINS_ANALYSIS_COMPARATOR_TREE_TABLE_FORMATTER_H
+
+#include <dftracer/utils/domains/analysis/comparator/comparison_result.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+
+#include <cstdio>
+
+namespace dftracer::utils::domains::analysis::comparator {
+
+/// Options controlling the visual appearance of rendered output.
+struct FormatterOptions {
+    /// Enable ANSI color escape codes in table output.
+    bool use_color = true;
+    /// Use Unicode box-drawing characters for tree branches.
+    bool use_unicode = true;
+    /// Collapse nodes where all metrics are negligible to a single "(no
+    /// change)" line.
+    bool compact = false;
+    /// Show top N regressions footer after the tree (0 = disabled).
+    int top_regressions = 5;
+};
+
+/// Dynamically computed column widths for aligned table output.
+struct ColumnWidths {
+    int left = 6;      ///< Left column (metric/node name).
+    int baseline = 8;  ///< Baseline value column.
+    int variant = 7;   ///< Variant value column.
+    int delta = 5;     ///< Delta column.
+    int change = 6;    ///< Percentage change column.
+};
+
+/// Renders @ref ComparisonOutput as an ASCII tree table or JSON.
+///
+/// The tree table uses dynamic column alignment with UTF-8 display
+/// width awareness. Nodes are rendered hierarchically with tree
+/// branch characters, and metrics are shown as leaves under each
+/// node.
+class TreeTableFormatter {
+   public:
+    /// Construct a formatter with the given display options.
+    explicit TreeTableFormatter(FormatterOptions options = {});
+
+    /// Render the comparison output as a tree table to a FILE stream.
+    void render(std::FILE* out, const ComparisonOutput& output) const;
+
+    /// Render the comparison output as a JSON string.
+    dstd::String render_json(const ComparisonOutput& output) const;
+
+   private:
+    FormatterOptions options_;
+
+    const char* branch_mid() const;
+    const char* branch_last() const;
+    const char* branch_cont() const;
+    const char* branch_none() const;
+
+    const char* color_red() const;
+    const char* color_green() const;
+    const char* color_yellow() const;
+    const char* color_bold() const;
+    const char* color_dim() const;
+    const char* color_reset() const;
+
+    dstd::String format_value(double value, const dstd::String& metric) const;
+    dstd::String format_delta(double delta, const dstd::String& metric) const;
+    dstd::String format_pct(double pct) const;
+    dstd::String format_significance(Significance sig) const;
+    dstd::String format_val_str(const MetricComparison& mc, bool is_base) const;
+
+    void measure_metrics_tree(const dstd::Vector<MetricComparison>& metrics,
+                              const dstd::String& prefix,
+                              ColumnWidths& cw) const;
+    void measure_node(const NodeResult& node, const dstd::String& prefix,
+                      bool is_last, bool is_top_level, ColumnWidths& cw) const;
+
+    void render_leaf(std::FILE* out, const MetricComparison& mc,
+                     const dstd::String& leaf_prefix,
+                     const dstd::String& leaf_name,
+                     const ColumnWidths& cw) const;
+    void render_metrics_tree(std::FILE* out,
+                             const dstd::Vector<MetricComparison>& metrics,
+                             const dstd::String& prefix, bool is_last_section,
+                             const ColumnWidths& cw) const;
+    void render_node(std::FILE* out, const NodeResult& node,
+                     const dstd::String& prefix, bool is_last,
+                     bool is_top_level, const ColumnWidths& cw) const;
+};
+
+}  // namespace dftracer::utils::domains::analysis::comparator
+
+#endif

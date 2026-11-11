@@ -7,9 +7,10 @@
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
-#include <dftracer/utils/utilities/reader/internal/member_decode_cache.h>
-#include <dftracer/utils/utilities/reader/trace_reader.h>
+#include <dftracer/utils/trace/reader/internal/member_decode_cache.h>
+#include <dftracer/utils/trace/reader/trace_reader.h>
 #include <doctest/doctest.h>
+#include <generator_ok.h>
 #include <memory/fresh_process.h>
 #include <sys/wait.h>
 #include <testing_runtime.h>
@@ -19,7 +20,6 @@
 #include <cstdlib>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities;
 
 namespace {
 
@@ -50,21 +50,23 @@ TEST_CASE("member cache: fills from a read then returns" * doctest::skip()) {
     const dstd::String gz = root + "/trace.pfw.gz";
     const dstd::String index_dir = root + "/idx";
     {
-        (void)dstd::fs::write_file(dstd::PathView(plain), trace_text(4000));
+        dstd::fs::write_file(dstd::PathView(plain), trace_text(4000)).discard();
     }
     REQUIRE(
         dftu_utils_test::compress_file_to_gzip_multimember(plain, gz, 4096));
     REQUIRE(dftu_utils_test::build_index(gz, index_dir));
 
-    reader::internal::configure_global_member_decode_cache(64ull * 1024 * 1024);
-    auto* cache = reader::internal::global_member_decode_cache();
+    trace::reader::internal::configure_global_member_decode_cache(64ull * 1024 *
+                                                                  1024);
+    auto* cache = trace::reader::internal::global_member_decode_cache();
     REQUIRE(cache != nullptr);
 
     std::int64_t lines = 0;
     dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
-        reader::TraceReader reader(reader::TraceReaderConfig{
+        trace::reader::TraceReader reader(trace::reader::TraceReaderConfig{
             dstd::String(gz), dstd::String(index_dir)});
-        auto gen = reader.read_lines(reader::ReadConfig{});
+        auto gen = dftu_utils_test::ok_items(
+            reader.read_lines(trace::reader::ReadConfig{}));
         while (co_await gen.next()) ++lines;
         co_return;
     });

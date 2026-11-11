@@ -1,12 +1,9 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/index/build/batch_builder.h>
-#include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
-#include <dftracer/utils/index/index.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
-#include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/fileio/file_helpers.h>
 #include <dftracer/utils/python/indexer.h>
 #include <dftracer/utils/python/py_errors.h>
 #include <dftracer/utils/python/py_method.h>
@@ -15,6 +12,10 @@
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/build/batch_builder.h>
+#include <dftracer/utils/trace/index/gzip/checkpoint_indexer_factory.h>
+#include <dftracer/utils/trace/index/index.h>
+#include <dftracer/utils/trace/index/tables.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <structmember.h>
 
@@ -23,7 +24,8 @@
 static void CheckpointIndexer_dealloc(CheckpointIndexerObject *self) {
     if (self->handle) {
         dftracer::utils::dstd::UniquePtr<dftracer::utils::dstd::SharedPtr<
-            dftracer::utils::index::gzip::CheckpointIndexer>>(self->handle)
+            dftracer::utils::trace::index::gzip::CheckpointIndexer>>(
+            self->handle)
             .reset();
         self->handle = NULL;
     }
@@ -37,7 +39,8 @@ static void CheckpointIndexer_release_handle(CheckpointIndexerObject *self) {
     if (self->handle) {
         // Releasing the handle drops this wrapper's native indexer state only.
         dftracer::utils::dstd::UniquePtr<dftracer::utils::dstd::SharedPtr<
-            dftracer::utils::index::gzip::CheckpointIndexer>>(self->handle)
+            dftracer::utils::trace::index::gzip::CheckpointIndexer>>(
+            self->handle)
             .reset();
         self->handle = NULL;
     }
@@ -125,23 +128,23 @@ static int CheckpointIndexer_init(CheckpointIndexerObject *self, PyObject *args,
         return -1;
     }
 
-    try {
-        auto indexer =
-            dftracer::utils::index::gzip::CheckpointIndexerFactory::create(
-                gz_path, index_path_str, checkpoint_size, force_rebuild != 0);
-        if (!indexer) {
-            PyErr_SetString(PyExc_RuntimeError, "Unsupported archive format");
-            return -1;
-        }
-        self->handle =
-            dftracer::utils::dstd::make_unique<dftracer::utils::dstd::SharedPtr<
-                dftracer::utils::index::gzip::CheckpointIndexer>>(
-                std::move(indexer))
-                .release();
-    } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+    auto created = dftracer::utils::trace::index::gzip::
+        CheckpointIndexerFactory::try_create(
+            gz_path, index_path_str, checkpoint_size, force_rebuild != 0);
+    if (!created) {
+        PyErr_SetString(PyExc_RuntimeError, created.error().c_str());
         return -1;
     }
+    auto indexer = std::move(*created);
+    if (!indexer) {
+        PyErr_SetString(PyExc_RuntimeError, "Unsupported archive format");
+        return -1;
+    }
+    self->handle =
+        dftracer::utils::dstd::make_unique<dftracer::utils::dstd::SharedPtr<
+            dftracer::utils::trace::index::gzip::CheckpointIndexer>>(
+            std::move(indexer))
+            .release();
 
     return 0;
 }
@@ -165,7 +168,7 @@ static PyObject *CheckpointIndexer_build(CheckpointIndexerObject *self,
     // only.
     if (self->build_bloom) {
         using namespace dftracer::utils;
-        using namespace dftracer::utils::index::build;
+        using namespace dftracer::utils::trace::index::build;
 
         const char *gz = as_utf8(self->gz_path);
         const char *idx = as_utf8(self->index_path);
@@ -189,13 +192,15 @@ static PyObject *CheckpointIndexer_build(CheckpointIndexerObject *self,
         IndexBuildBatchResult batch_result;
 
         if (!run_blocking([&] {
-                rt->submit(coro::with_scope(
-                               [cfg = batch_config, out = &batch_result](
-                                   coro::Scope &) -> coro::CoroTask<void> {
-                                   *out = co_await BatchBuilder::process(cfg);
-                               }),
-                           "indexer-build")
-                    .get();
+                dftracer::utils::python::py_unwrap(
+                    rt->submit(coro::with_scope(
+                                   [cfg = batch_config, out = &batch_result](
+                                       coro::Scope &) -> coro::CoroTask<void> {
+                                       *out =
+                                           co_await BatchBuilder::process(cfg);
+                                   }),
+                               "indexer-build")
+                        .get());
             })) {
             return NULL;
         }
@@ -211,11 +216,8 @@ static PyObject *CheckpointIndexer_build(CheckpointIndexerObject *self,
     } else {
         // Simple checkpoint-only build
         dftracer::utils::dstd::String error;
-        Py_BEGIN_ALLOW_THREADS try {
-            (*self->handle)->build();
-        } catch (const std::exception &e) {
-            error = e.what();
-        }
+        Py_BEGIN_ALLOW_THREADS auto built = (*self->handle)->try_build();
+        if (!built) error = built.error().c_str();
         Py_END_ALLOW_THREADS if (!error.empty()) {
             PyErr_SetString(PyExc_RuntimeError, error.c_str());
             return NULL;
@@ -263,6 +265,7 @@ static PyObject *CheckpointIndexer_get_max_bytes(CheckpointIndexerObject *self,
     }
 
     try {
+        dftracer::utils::python::py_unwrap((*self->handle)->load());
         return PyLong_FromUnsignedLongLong((*self->handle)->max_bytes());
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_RuntimeError, e.what());
@@ -278,6 +281,7 @@ static PyObject *CheckpointIndexer_get_num_lines(CheckpointIndexerObject *self,
     }
 
     try {
+        dftracer::utils::python::py_unwrap((*self->handle)->load());
         return PyLong_FromUnsignedLongLong((*self->handle)->line_count());
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_RuntimeError, e.what());
@@ -293,18 +297,17 @@ static PyObject *CheckpointIndexer_has_bloom(CheckpointIndexerObject *self,
         Py_RETURN_FALSE;
     }
     try {
-        auto opened = dftracer::utils::index::Index::open(idx);
+        auto opened = dftracer::utils::trace::index::Index::open(idx);
         if (opened) {
             auto snapshot = opened->snapshot();
             if (snapshot) {
                 const dftracer::utils::dstd::String logical =
-                    dftracer::utils::index::store::internal::get_logical_path(
-                        gz);
+                    dftracer::utils::fileio::get_logical_path(gz);
                 const auto file = snapshot->file(logical);
-                if (file &&
-                    dftracer::utils::index::extension_current(
-                        *snapshot, *file,
-                        dftracer::utils::index::store::IndexExtension::Stats)) {
+                if (file && dftracer::utils::trace::index::extension_current(
+                                *snapshot, *file,
+                                dftracer::utils::trace::index::store::
+                                    IndexExtension::Stats)) {
                     Py_RETURN_TRUE;
                 }
             }
@@ -369,7 +372,7 @@ static PyMethodDef CheckpointIndexer_methods[] = {
      "Enter the runtime context for the with statement."},
     {"__exit__", DFTU_PYCFUNCTION(CheckpointIndexer_exit), METH_VARARGS,
      "Release this Python wrapper on context exit."},
-    {NULL} /* Sentinel */
+    {NULL, NULL, 0, NULL} /* Sentinel */
 };
 
 static PyGetSetDef CheckpointIndexer_getsetters[] = {
@@ -381,66 +384,39 @@ static PyGetSetDef CheckpointIndexer_getsetters[] = {
      "Checkpoint size in bytes", NULL},
     {"has_bloom", (getter)CheckpointIndexer_has_bloom, NULL,
      "Whether bloom data exists in index", NULL},
-    {NULL} /* Sentinel */
+    {NULL, NULL, NULL, NULL, NULL} /* Sentinel */
 };
 
 PyTypeObject CheckpointIndexerType = {
-    PyVarObject_HEAD_INIT(
-        NULL, 0) "dftracer_utils_ext.CheckpointIndexer", /* tp_name */
-    sizeof(CheckpointIndexerObject),                     /* tp_basicsize */
-    0,                                                   /* tp_itemsize */
-    (destructor)CheckpointIndexer_dealloc,               /* tp_dealloc */
-    0,                                        /* tp_vectorcall_offset */
-    0,                                        /* tp_getattr */
-    0,                                        /* tp_setattr */
-    0,                                        /* tp_as_async */
-    0,                                        /* tp_repr */
-    0,                                        /* tp_as_number */
-    0,                                        /* tp_as_sequence */
-    0,                                        /* tp_as_mapping */
-    0,                                        /* tp_hash */
-    0,                                        /* tp_call */
-    0,                                        /* tp_str */
-    0,                                        /* tp_getattro */
-    0,                                        /* tp_setattro */
-    0,                                        /* tp_as_buffer */
-    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE, /* tp_flags */
-    "CheckpointIndexer(gz_path, index_path=None, checkpoint_size=33554432, "
-    "force_rebuild=False, build_bloom=False, runtime=None)\n"
-    "--\n"
-    "\n"
-    "Checkpoint indexer for single-file checkpoint-level operations on a "
-    "gzip trace.\n"
-    "\n"
-    "Args:\n"
-    "    gz_path (str): Path to the gzip trace file.\n"
-    "    index_path (str or None): Path to the .dftindex store. If None,\n"
-    "        uses the root-local \".dftindex\" next to gz_path.\n"
-    "    checkpoint_size (int): Checkpoint size in bytes for index\n"
-    "        building (default 1 MB).\n"
-    "    force_rebuild (bool): If True, rebuild the index even if it\n"
-    "        exists.\n"
-    "    build_bloom (bool): If True, build bloom filter data in the\n"
-    "        index.\n"
-    "    runtime (Runtime or None): Runtime instance for thread pool\n"
-    "        control. If None, uses the default global Runtime.\n", /* tp_doc */
-    0,                                /* tp_traverse */
-    0,                                /* tp_clear */
-    0,                                /* tp_richcompare */
-    0,                                /* tp_weaklistoffset */
-    0,                                /* tp_iter */
-    0,                                /* tp_iternext */
-    CheckpointIndexer_methods,        /* tp_methods */
-    0,                                /* tp_members */
-    CheckpointIndexer_getsetters,     /* tp_getset */
-    0,                                /* tp_base */
-    0,                                /* tp_dict */
-    0,                                /* tp_descr_get */
-    0,                                /* tp_descr_set */
-    0,                                /* tp_dictoffset */
-    (initproc)CheckpointIndexer_init, /* tp_init */
-    0,                                /* tp_alloc */
-    CheckpointIndexer_new,            /* tp_new */
+    .ob_base = PyVarObject_HEAD_INIT(NULL, 0).tp_name =
+        "dftracer_utils_ext.CheckpointIndexer",
+    .tp_basicsize = sizeof(CheckpointIndexerObject),
+    .tp_dealloc = (destructor)CheckpointIndexer_dealloc,
+    .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
+    .tp_doc =
+        "CheckpointIndexer(gz_path, index_path=None, checkpoint_size=33554432, "
+        "force_rebuild=False, build_bloom=False, runtime=None)\n"
+        "--\n"
+        "\n"
+        "Checkpoint indexer for single-file checkpoint-level operations on a "
+        "gzip trace.\n"
+        "\n"
+        "Args:\n"
+        "    gz_path (str): Path to the gzip trace file.\n"
+        "    index_path (str or None): Path to the .dftindex store. If None,\n"
+        "        uses the root-local \".dftindex\" next to gz_path.\n"
+        "    checkpoint_size (int): Checkpoint size in bytes for index\n"
+        "        building (default 1 MB).\n"
+        "    force_rebuild (bool): If True, rebuild the index even if it\n"
+        "        exists.\n"
+        "    build_bloom (bool): If True, build bloom filter data in the\n"
+        "        index.\n"
+        "    runtime (Runtime or None): Runtime instance for thread pool\n"
+        "        control. If None, uses the default global Runtime.\n",
+    .tp_methods = CheckpointIndexer_methods,
+    .tp_getset = CheckpointIndexer_getsetters,
+    .tp_init = (initproc)CheckpointIndexer_init,
+    .tp_new = CheckpointIndexer_new,
 };
 
 int dftracer::utils::python::init_checkpoint_indexer(PyObject *m) {

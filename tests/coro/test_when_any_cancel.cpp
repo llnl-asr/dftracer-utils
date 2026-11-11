@@ -10,6 +10,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <array>
 #include <atomic>
@@ -146,7 +147,7 @@ TEST_CASE("when_any - no loser runs after when_any returns") {
     };
 
     auto feeder = feed_winner_later(race, 1);
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     feeder.join();
 
     CHECK(winner_index.load() == 1);
@@ -179,7 +180,7 @@ TEST_CASE("when_any - no loser runs after when_any returns (heterogeneous)") {
     };
 
     auto feeder = feed_winner_later(race, 2);
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     feeder.join();
 
     CHECK(winner_index.load() == 2);
@@ -238,7 +239,7 @@ TEST_CASE("when_any - a spawned loser stops when cancelled") {
         co_return;
     };
 
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
 
     CHECK(loser_saw_cancel.load());
     CHECK(loser_finished_before_return.load());
@@ -270,7 +271,7 @@ TEST_CASE("when_any - a winner that throws after it won delivers its error") {
     };
 
     auto feeder = feed_winner_later(race, 1);
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     feeder.join();
 
     CHECK(returned.load());
@@ -302,7 +303,7 @@ TEST_CASE("when_any - a loser with no token and no cancel() runs to its end") {
         co_return;
     };
 
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
 
     CHECK(ended_before_return.load());
 }
@@ -329,7 +330,7 @@ TEST_CASE("when_any with a timeout loser returns when the winner does") {
         co_return;
     };
 
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
 
     CHECK(winner_index.load() == 0);
     CHECK(elapsed_ms.load() >= 0);
@@ -402,7 +403,7 @@ TEST_CASE("when_any - a cancelled CoroTask loser stops without throwing") {
             winner_index.store(result.index);
             co_return;
         };
-        rt.block_on(body());
+        dftu_utils_test::ok(rt.block_on(body()));
     };
 
     SUBCASE("the loser waits itself") { run(spins_at_a_wait); }
@@ -439,7 +440,7 @@ TEST_CASE("when_any - a CoroTask loser that never started is dropped") {
         co_return;
     };
 
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
 
     CHECK(winner_index.load() == 0);
     CHECK_FALSE(loser_ran.load());

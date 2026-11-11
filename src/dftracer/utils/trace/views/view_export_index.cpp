@@ -8,17 +8,18 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/build/batch_builder.h>
-#include <dftracer/utils/index/build/chunk_indexer.h>
-#include <dftracer/utils/index/extensions/bloom_fold.h>
-#include <dftracer/utils/index/gzip/gzip_member_record.h>
-#include <dftracer/utils/index/index.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
-#include <dftracer/utils/index/store/root_layout.h>
-#include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/fileio/file_helpers.h>
+#include <dftracer/utils/fileio/gzip_line_writer.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/json/value.h>
 #include <dftracer/utils/json/value_access.h>
+#include <dftracer/utils/trace/index/build/batch_builder.h>
+#include <dftracer/utils/trace/index/build/chunk_indexer.h>
+#include <dftracer/utils/trace/index/extensions/bloom_fold.h>
+#include <dftracer/utils/trace/index/gzip/gzip_member_record.h>
+#include <dftracer/utils/trace/index/index.h>
+#include <dftracer/utils/trace/index/store/root_layout.h>
+#include <dftracer/utils/trace/index/tables.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/coverage.h>
 #include <dftracer/utils/trace/views/fold.h>
@@ -27,7 +28,6 @@
 #include <dftracer/utils/trace/views/view_executor.h>
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <dftracer/utils/trace/views/view_scanner_utility.h>
-#include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 #include <simdjson.h>
 
 #include <algorithm>
@@ -50,14 +50,14 @@ namespace {
 // end, all under one index_path.
 struct PartData {
     dstd::String path;
-    dstd::Vector<dftracer::utils::index::gzip::GzipMemberRecord> members;
+    dstd::Vector<dftracer::utils::trace::index::gzip::GzipMemberRecord> members;
     std::uint64_t total_uc = 0;
     std::uint64_t total_lines = 0;
 };
 
 }  // namespace
 
-coro::CoroTask<ExportStats> run_export_trace_indexed(
+coro::CoroTask<dstd::Result<ExportStats>> run_export_trace_indexed(
     const ViewPlan& plan, const TraceWriteOptions& opts,
     const ProgressFn* progress) {
     // Member size defaults to the checkpoint granularity (a member == a chunk).
@@ -65,9 +65,13 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
         common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
     constexpr std::size_t MAX_PRODUCERS = 16;
 
-    ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
+    auto made = make_vdef(plan, /*for_aggregation=*/false);
+    if (!made) co_return made.error();
+    ViewDefinition vdef = std::move(*made);
     std::uint64_t skipped = 0;
-    auto units = co_await gather_units(plan, vdef, skipped);
+    auto gathered = co_await gather_units(plan, vdef, skipped);
+    if (!gathered) co_return gathered.error();
+    auto units = std::move(*gathered);
 
     const std::size_t member_size =
         opts.member_size ? opts.member_size : DEFAULT_FLUSH_BYTES;
@@ -84,8 +88,8 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
         opts.output_path, opts.index_path);
     const auto& schema = plan_record_schema(plan);
     dftracer::utils::dstd::StringIntern intern;
-    dftracer::utils::index::extensions::BloomFold bloom(
-        intern, dftracer::utils::index::build::for_schema({}, schema));
+    dftracer::utils::trace::index::extensions::BloomFold bloom(
+        intern, dftracer::utils::trace::index::build::for_schema({}, schema));
     std::array<Fold*, 1> folds{&bloom};
 
     dstd::Vector<PartData> parts;
@@ -94,6 +98,9 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
     bool ok = true;
     // Set when the consumer fails, so producers stop scanning.
     std::atomic<bool> failed{false};
+    // The first error of the producers, which a scan error also stops.
+    std::mutex scan_error_mu;
+    dstd::Optional<dstd::Error> scan_error;
 
     // Each fold call takes a slice (parser, scratch and BloomFold slice), so
     // workers share no state; all slices merge into `bloom` after the writer
@@ -111,8 +118,8 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
     std::mutex pool_mu;
     dstd::Vector<dstd::UniquePtr<FoldSlice>> pool;
 
-    auto fold_member = [&](const utilities::fileio::MemberRef& ref,
-                           dstd::StringView data) {
+    auto fold_member_body = [&](const fileio::MemberRef& ref,
+                                dstd::StringView data) -> dstd::Result<void> {
         dstd::UniquePtr<FoldSlice> sl;
         {
             std::lock_guard<std::mutex> lk(pool_mu);
@@ -165,15 +172,17 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
                 sl->events.discard_last();
         }
         ScanUnit unit;
-        unit.file_path = utilities::fileio::gzip_part_path(
+        unit.file_path = fileio::gzip_part_path(
             opts.output_path, static_cast<int>(ref.part), multi);
         unit.index_path = index_path;
         unit.checkpoint_idx = ref.part_index;
         FoldBatch fb{sl->events.events(), unit};
-        sl->bloom->step(fb);
+        auto stepped = sl->bloom->step(fb);
+        if (!stepped) return stepped.error();
         sl->bloom->seal_unit(unit);
         std::lock_guard<std::mutex> lk(pool_mu);
         pool.push_back(std::move(sl));
+        return {};
     };
 
     auto part_at = [&](std::size_t p) -> PartData& {
@@ -181,18 +190,18 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
         return parts[p];
     };
 
-    utilities::fileio::GzipWriterOptions wopts;
+    fileio::GzipWriterOptions wopts;
     wopts.member_size = member_size;
     wopts.level = opts.level;
     wopts.workers = opts.worker_count;
     wopts.part_size = part_size;
     wopts.compress = opts.compress;
     wopts.part_name = [&](std::size_t i) {
-        return utilities::fileio::gzip_part_path(opts.output_path,
-                                                 static_cast<int>(i), multi);
+        return fileio::gzip_part_path(opts.output_path, static_cast<int>(i),
+                                      multi);
     };
-    wopts.on_member = [&](const utilities::fileio::MemberInfo& m) {
-        dftracer::utils::index::gzip::GzipMemberRecord rec;
+    wopts.on_member = [&](const fileio::MemberInfo& m) {
+        dftracer::utils::trace::index::gzip::GzipMemberRecord rec;
         auto& pd = part_at(m.part);
         rec.member_idx = pd.members.size();
         rec.c_offset = m.c_offset;
@@ -210,13 +219,15 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
         pd.total_uc = uc_bytes;
         pd.total_lines = lines;
     };
-    wopts.fold = fold_member;
-    auto opened = co_await utilities::fileio::GzipLineWriter::open(
+    wopts.fold = [&](const fileio::MemberRef& ref,
+                     dstd::StringView data) -> dstd::Result<void> {
+        return fold_member_body(ref, data);
+    };
+    auto opened = co_await fileio::GzipLineWriter::open(
         dstd::String(opts.output_path), std::move(wopts));
     if (!opened) {
-        throw common::DFTUtilsException(
-            common::ErrorCode::Io,
-            "export_trace failed writing " + opts.output_path);
+        co_return common::make_error<"export_trace failed writing {}">(
+            common::ErrorCode::Io, opts.output_path);
     }
     auto writer = std::move(*opened);
 
@@ -265,8 +276,20 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
                             ViewScannerUtility scanner;
                             auto gen = scanner(sin);
                             for (;;) {
-                                auto b = co_await gen.next();
-                                if (!b) break;
+                                auto next = co_await gen.next();
+                                if (!next) break;
+                                if (!*next) {
+                                    {
+                                        std::lock_guard<std::mutex> lk(
+                                            scan_error_mu);
+                                        if (!scan_error)
+                                            scan_error = next->error();
+                                    }
+                                    failed.store(true,
+                                                 std::memory_order_relaxed);
+                                    co_return;
+                                }
+                                auto& b = *next;
                                 if (is_cancelled(plan) ||
                                     failed.load(std::memory_order_relaxed))
                                     co_return;
@@ -306,68 +329,58 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
         const auto closed = co_await writer.close();
         if (!closed) ok = false;
     }
+    if (scan_error) co_return *scan_error;
     if (!ok || parts.empty()) {
-        throw common::DFTUtilsException(
-            common::ErrorCode::Io,
-            "export_trace failed writing " + opts.output_path);
+        co_return common::make_error<"export_trace failed writing {}">(
+            common::ErrorCode::Io, opts.output_path);
     }
 
-    for (auto& sl : pool) bloom.merge(*sl->bloom);
+    for (auto& sl : pool)
+        if (auto merged = bloom.merge(*sl->bloom); !merged)
+            co_return merged.error();
 
     // Persist the index of every part, one commit each. Registering each with
     // its exact mtime/size makes the resolver accept it as fresh; any later
     // edit trips the stale check and rebuilds.
     {
-        using index::store::IndexExtension;
+        using trace::index::store::IndexExtension;
         dstd::String failure;
-        try {
-            auto index =
-                index::Index::open(index::normalize_index_root(index_path));
-            if (!index) failure = dstd::String(index.error().message());
-            // BloomFold::finalize below writes the dft.index data; until then
-            // the parts have members but no bloom tier, which a later scan
-            // fills.
-            for (const auto& part : parts) {
-                if (!failure.empty()) break;
-                auto logical =
-                    index::store::internal::get_logical_path(part.path);
-                const auto hash =
-                    index::store::internal::calculate_file_hash(part.path);
-                const auto mtime = static_cast<std::uint64_t>(
-                    index::store::internal::get_file_modification_time(
-                        part.path));
-                const auto bytes =
-                    index::store::internal::file_size_bytes(part.path);
-                auto build = index->build(
-                    logical, index::SourceStat{mtime, bytes, hash});
-                if (!build) {
-                    failure = dstd::String(build.error().message());
-                    break;
-                }
-                for (auto ext :
-                     {IndexExtension::Zonemap, IndexExtension::Bloom,
-                      IndexExtension::Counts, IndexExtension::Postings,
-                      IndexExtension::Stats})
-                    build->clear(ext);
-                for (const auto& m : part.members)
-                    index::put_gzip_member(*build, m);
-                index::put_file_metadata(*build, member_size, part.total_lines,
-                                         part.total_uc, false);
-                build->finish(IndexExtension::Members, 0);
-                index::put_profile(*build, schema.id);
-                build->finish(IndexExtension::Profile, schema.params_hash());
-                auto committed = co_await build->commit();
-                if (!committed)
-                    failure = dstd::String(committed.error().message());
+        auto index = trace::index::Index::open(
+            trace::index::normalize_index_root(index_path));
+        if (!index) failure = dstd::String(index.error().message());
+        // BloomFold::finalize below writes the dft.index data; until then
+        // the parts have members but no bloom tier, which a later scan
+        // fills.
+        for (const auto& part : parts) {
+            if (!failure.empty()) break;
+            auto logical = fileio::get_logical_path(part.path);
+            const auto hash = fileio::calculate_file_hash(part.path);
+            const auto mtime = static_cast<std::uint64_t>(
+                fileio::get_file_modification_time(part.path));
+            const auto bytes = fileio::file_size_bytes(part.path);
+            auto build = index->build(
+                logical, trace::index::SourceStat{mtime, bytes, hash});
+            if (!build) {
+                failure = dstd::String(build.error().message());
+                break;
             }
-        } catch (const std::exception& e) {
-            failure = e.what();
+            for (auto ext : {IndexExtension::Zonemap, IndexExtension::Bloom,
+                             IndexExtension::Counts, IndexExtension::Postings,
+                             IndexExtension::Stats})
+                build->clear(ext);
+            for (const auto& m : part.members)
+                trace::index::put_gzip_member(*build, m);
+            trace::index::put_file_metadata(
+                *build, member_size, part.total_lines, part.total_uc, false);
+            build->finish(IndexExtension::Members, 0);
+            trace::index::put_profile(*build, schema.id);
+            build->finish(IndexExtension::Profile, schema.params_hash());
+            auto committed = co_await build->commit();
+            if (!committed) failure = dstd::String(committed.error().message());
         }
         if (!failure.empty()) {
-            throw common::DFTUtilsException(
-                common::ErrorCode::Io,
-                dstd::String("fused index build failed for ") +
-                    opts.output_path + ": " + failure);
+            co_return common::make_error<"fused index build failed for {}: {}">(
+                common::ErrorCode::Io, opts.output_path, failure);
         }
     }
 

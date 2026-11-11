@@ -3,14 +3,14 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/expr.h>
+#include <dftracer/utils/dataframe/query/vectorize.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/duql/fields.h>
 #include <dftracer/utils/duql/pattern.h>
-#include <dftracer/utils/duql/vectorize.h>
-#include <dftracer/utils/index/cache/lookup_store.h>
-#include <dftracer/utils/index/plan/condition.h>
+#include <dftracer/utils/trace/index/cache/lookup_store.h>
+#include <dftracer/utils/trace/index/plan/condition.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
 #include <dftracer/utils/trace/views/view_duql_internal.h>
@@ -19,7 +19,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <cstdio>
 #include <utility>
 
 namespace dftracer::utils::trace::views::duql_detail {
@@ -54,9 +53,9 @@ duql::PluginCatalog registry_plugins() {
     return out;
 }
 
-[[noreturn]] void refuse(dstd::StringView why) {
-    throw common::DFTUtilsException::cat(common::ErrorCode::InvalidArgument,
-                                         "View::duql ", why);
+dstd::Unexpected<dstd::Error> refuse(dstd::StringView why) {
+    return common::make_error<"View::duql {}">(
+        common::ErrorCode::InvalidArgument, why);
 }
 
 dstd::Vector<dstd::String> std_strs(const dstd::Vector<dstd::String>& v) {
@@ -499,8 +498,8 @@ dstd::String number_text(double v) {
     if (std::trunc(v) == v && std::abs(v) < 9.0e15)
         return dstd::to_string(static_cast<std::int64_t>(v));
     char buf[32];
-    std::snprintf(buf, sizeof buf, "%.17g", v);
-    return buf;
+    return dstd::String(buf,
+                        dstd::to_chars_general(buf, buf + sizeof(buf), v, 17));
 }
 
 bool is_count(duql::AggFn fn) {
@@ -508,13 +507,14 @@ bool is_count(duql::AggFn fn) {
            fn == duql::AggFn::CountDistinct;
 }
 
-void reject_resolved(const duql::Program& p) {
-    auto check = [](dstd::StringView path) {
-        if (!path.starts_with("resolved.")) return;
-        refuse("'" + dstd::String(path) +
-               "': 'resolved.' columns are removed; write an arrow into a "
-               "row set of the source, such as 'fhash -> files.path', "
-               "'hhash -> hosts.name' or 'run -> runs.app'");
+Status reject_resolved(const duql::Program& p) {
+    Status result;
+    auto check = [&result](dstd::StringView path) {
+        if (!result || !path.starts_with("resolved.")) return;
+        result = refuse<
+            "'{}': 'resolved.' columns are removed; write an arrow into a "
+            "row set of the source, such as 'fhash -> files.path', "
+            "'hhash -> hosts.name' or 'run -> runs.app'">(path);
     };
     dstd::Function<void(const duql::detail::QueryNode&)> node =
         [&](const duql::detail::QueryNode& n) {
@@ -540,13 +540,16 @@ void reject_resolved(const duql::Program& p) {
         };
     auto pipeline = [&](const duql::Pipeline& pl) {
         if (pl.filter) node(*pl.filter);
+        dstd::Vector<dstd::StringView> bases;
         duql::for_each_pipeline_term(pl, [&](const duql::Term& t) {
             if (const auto* f = std::get_if<duql::TField>(&t.node))
-                check(f->base);
+                bases.push_back(f->base);
         });
+        for (const dstd::StringView base : bases) check(base);
     };
     pipeline(p.main);
     for (const auto& s : p.sides) pipeline(s.pipeline);
+    return result;
 }
 
 dstd::String input_text(const duql::Input& in, const duql::Program& program) {
@@ -558,7 +561,7 @@ dstd::String input_text(const duql::Input& in, const duql::Program& program) {
         case duql::InputKind::Data:
             return "data";
         case duql::InputKind::File:
-            return dstd::String("\"" + in.path + "\"");
+            return dstd::fmt<"\"{}\"">(in.path);
     }
     return {};
 }
@@ -702,11 +705,13 @@ dstd::Optional<duql::Query> pushed(const Pushdown& p,
     return duql::detail::QueryAccess::from_node(std::move(root));
 }
 
-Pushdown key_sets(const duql::Pipeline& p) {
+dstd::Result<Pushdown> key_sets(const duql::Pipeline& p) {
     Pushdown out;
     duql::detail::QueryNodePtr extra;
+    dstd::Optional<dstd::Error> failure;
     each_pushed(p, [&](const duql::Term& leaf, const duql::TField& f,
                        const duql::TLookup& l, const duql::Term* cond) {
+        if (failure) return;
         const duql::LookupTable& t = *l.slot->table;
         const dataframe::Series& keys = t.frame->columns[t.key_columns.front()];
         dstd::Optional<dataframe::Series> pass;
@@ -722,9 +727,15 @@ Pushdown key_sets(const duql::Pipeline& p) {
             });
         if (cond && !record && t.value) {
             const dataframe::Series& values = t.frame->columns[*t.value];
-            if (auto e = duql::vectorize_condition(
-                    *cond, {{".", values.data_type()}}, false))
-                pass = dataframe::eval(*e, {&values}).materialize();
+            if (auto e = dataframe::query::vectorize_condition(
+                    *cond, {{".", values.data_type()}}, false)) {
+                auto evaluated = dataframe::eval(*e, {&values});
+                if (!evaluated) {
+                    failure = evaluated.error();
+                    return;
+                }
+                pass = evaluated->materialize();
+            }
         }
         auto passes = [&](std::int64_t r) {
             if (!pass) return !cond || !t.value || record;
@@ -741,7 +752,7 @@ Pushdown key_sets(const duql::Pipeline& p) {
                 }
         // Past the cap the list prunes nothing, and the lookup term filters
         // the same rows without a per-record scan of the list.
-        if (arr.elements.size() > index::plan::SEMI_JOIN_CAP) return;
+        if (arr.elements.size() > trace::index::plan::SEMI_JOIN_CAP) return;
         arr.set = duql::make_in_set(arr);
         auto node = duql::detail::make_node(duql::detail::InNode{
             duql::detail::FieldNode{f.base}, std::move(arr)});
@@ -756,6 +767,7 @@ Pushdown key_sets(const duql::Pipeline& p) {
                             std::move(extra), std::move(node)})
                       : std::move(node);
     });
+    if (failure) return *failure;
     if (extra)
         out.extra = duql::detail::QueryAccess::from_node(std::move(extra));
     return out;
@@ -769,22 +781,21 @@ dstd::Optional<CacheKey> cache_key(const detail::ViewPlan& given,
     for (auto& f : plan.files)
         if (f.index_path.empty())
             f.index_path = internal::determine_index_path(f.file_path, "");
-    const dstd::String path = index::cache::lookup_cache_path(plan);
+    const dstd::String path = trace::index::cache::lookup_cache_path(plan);
     if (path.empty()) return dstd::nullopt;
     detail::plan_record_schema(plan);
     // A `data` side reads the View as given: its filters are part of it.
     dstd::String key(text);
     if (input == duql::InputKind::Data) {
-        key +=
-            "\n" +
-            (plan.query ? dstd::String(plan.query->source()) : dstd::String()) +
-            "\n" + dstd::to_string(static_cast<int>(plan.phase)) +
-            dstd::to_string(static_cast<int>(plan.all_records));
+        const dstd::String source =
+            plan.query ? dstd::String(plan.query->source()) : dstd::String();
+        key += dstd::fmt<"\n{}\n{}{}">(source, static_cast<int>(plan.phase),
+                                       static_cast<int>(plan.all_records));
         if (plan.time_range)
-            key += "\n" + number_text(plan.time_range->first) + ".." +
-                   number_text(plan.time_range->second);
+            key += dstd::fmt<"\n{}..{}">(number_text(plan.time_range->first),
+                                         number_text(plan.time_range->second));
     }
-    const auto sig = index::cache::lookup_signature(plan, key);
+    const auto sig = trace::index::cache::lookup_signature(plan, key);
     if (!sig) return dstd::nullopt;
     return CacheKey{dstd::String(path.data(), path.size()), *sig};
 }

@@ -1,22 +1,37 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <checkpoint_indexer_helpers.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
-#include <dftracer/utils/utilities/fileio/lines/sources/async_indexed_file_line_generator.h>
-#include <dftracer/utils/utilities/reader/internal/reader_factory.h>
+#include <dftracer/utils/trace/index/gzip/checkpoint_indexer_factory.h>
+#include <dftracer/utils/trace/reader/async_indexed_file_line_generator.h>
+#include <dftracer/utils/trace/reader/internal/reader_factory.h>
 #include <doctest/doctest.h>
+#include <generator_ok.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
-using namespace dftracer::utils::utilities::fileio::lines::sources;
-using namespace dftracer::utils::utilities::fileio::lines;
+using namespace dftracer::utils::trace::reader;
+using namespace dftracer::utils::fileio::lines;
 using namespace dftracer::utils;
 using namespace dftracer::utils::coro;
-using namespace dftracer::utils::index::gzip;
-using namespace dftracer::utils::utilities::reader::internal;
+using namespace dftracer::utils::trace::index::gzip;
+using namespace dftracer::utils::trace::reader::internal;
 using namespace dftu_utils_test;
+
+// The first item of a generator of Results.
+static CoroTask<dstd::Result<Line>> first_item(
+    AsyncGenerator<dstd::Result<Line>> gen) {
+    auto item = co_await gen.next();
+    if (!item) {
+        co_return common::make_error(common::ErrorCode::Unknown,
+                                     "the generator ended without an item");
+    }
+    co_return std::move(*item);
+}
 
 // Helper: consume an AsyncGenerator<Line> into a vector of strings
 static CoroTask<dstd::Vector<dstd::String>> collect_lines(
@@ -51,17 +66,19 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
-                CheckpointIndexerFactory::create(gz_path, "", 1024, true);
+                dftu_utils_test::create_indexer(gz_path, "", 1024, true);
             REQUIRE(indexer != nullptr);
-            indexer->build();
+            dftu_utils_test::build_indexer(*indexer);
 
-            auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, gz_path + ".idx")
-                              .with_line_range(1, 10);
+            auto config =
+                dftracer::utils::trace::reader::IndexedFileLineIteratorConfig()
+                    .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
+                    .with_line_range(1, 10);
 
-            auto gen = async_indexed_file_lines(config);
+            auto gen =
+                dftu_utils_test::ok_items(async_indexed_file_lines(config));
             auto task = collect_lines(std::move(gen));
-            auto lines = task.get();
+            auto lines = dftu_utils_test::ok(task.get());
 
             REQUIRE(lines.size() == 10);
             CHECK(lines[0] == "{\"id\": 1, \"message\": \"Test message 1\"}");
@@ -73,17 +90,19 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
-                CheckpointIndexerFactory::create(gz_path, "", 1024, true);
+                dftu_utils_test::create_indexer(gz_path, "", 1024, true);
             REQUIRE(indexer != nullptr);
-            indexer->build();
+            dftu_utils_test::build_indexer(*indexer);
 
-            auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, gz_path + ".idx")
-                              .with_line_range(5, 10);
+            auto config =
+                dftracer::utils::trace::reader::IndexedFileLineIteratorConfig()
+                    .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
+                    .with_line_range(5, 10);
 
-            auto gen = async_indexed_file_lines(config);
+            auto gen =
+                dftu_utils_test::ok_items(async_indexed_file_lines(config));
             auto task = collect_lines(std::move(gen));
-            auto lines = task.get();
+            auto lines = dftu_utils_test::ok(task.get());
 
             REQUIRE(lines.size() == 6);
             CHECK(lines[0] == "{\"id\": 5, \"message\": \"Test message 5\"}");
@@ -95,17 +114,19 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
-                CheckpointIndexerFactory::create(gz_path, "", 1024, true);
+                dftu_utils_test::create_indexer(gz_path, "", 1024, true);
             REQUIRE(indexer != nullptr);
-            indexer->build();
+            dftu_utils_test::build_indexer(*indexer);
 
-            auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, gz_path + ".idx")
-                              .with_line_range(7, 7);
+            auto config =
+                dftracer::utils::trace::reader::IndexedFileLineIteratorConfig()
+                    .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
+                    .with_line_range(7, 7);
 
-            auto gen = async_indexed_file_lines(config);
+            auto gen =
+                dftu_utils_test::ok_items(async_indexed_file_lines(config));
             auto task = collect_line_copies(std::move(gen));
-            auto lines = task.get();
+            auto lines = dftu_utils_test::ok(task.get());
 
             REQUIRE(lines.size() == 1);
             CHECK(lines[0].content ==
@@ -118,18 +139,20 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
-                CheckpointIndexerFactory::create(gz_path, "", 1024, true);
+                dftu_utils_test::create_indexer(gz_path, "", 1024, true);
             REQUIRE(indexer != nullptr);
-            indexer->build();
+            dftu_utils_test::build_indexer(*indexer);
 
             // end=0 should auto-detect total lines
-            auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, gz_path + ".idx")
-                              .with_line_range(10, 0);
+            auto config =
+                dftracer::utils::trace::reader::IndexedFileLineIteratorConfig()
+                    .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
+                    .with_line_range(10, 0);
 
-            auto gen = async_indexed_file_lines(config);
+            auto gen =
+                dftu_utils_test::ok_items(async_indexed_file_lines(config));
             auto task = collect_lines(std::move(gen));
-            auto lines = task.get();
+            auto lines = dftu_utils_test::ok(task.get());
 
             REQUIRE(lines.size() == 6);  // Lines 10-15
             CHECK(lines[0] == "{\"id\": 10, \"message\": \"Test message 10\"}");
@@ -143,21 +166,24 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
-                CheckpointIndexerFactory::create(gz_path, "", 1024, true);
+                dftu_utils_test::create_indexer(gz_path, "", 1024, true);
             REQUIRE(indexer != nullptr);
-            indexer->build();
+            dftu_utils_test::build_indexer(*indexer);
 
-            auto reader = ReaderFactory::create(gz_path, gz_path + ".idx");
+            auto reader = dftu_utils_test::ok(
+                ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
-            auto config = IndexedFileLineIteratorConfig()
-                              .with_reader(reader)
-                              .with_line_range(2, 4)
-                              .with_buffer_size(4096);
+            auto config =
+                dftracer::utils::trace::reader::IndexedFileLineIteratorConfig()
+                    .with_reader(reader)
+                    .with_line_range(2, 4)
+                    .with_buffer_size(4096);
 
-            auto gen = async_indexed_file_lines(config);
+            auto gen =
+                dftu_utils_test::ok_items(async_indexed_file_lines(config));
             auto task = collect_lines(std::move(gen));
-            auto lines = task.get();
+            auto lines = dftu_utils_test::ok(task.get());
 
             REQUIRE(lines.size() == 3);  // Lines 2, 3, 4
             CHECK(lines[0] == "{\"id\": 2, \"message\": \"Test message 2\"}");
@@ -171,17 +197,19 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
-                CheckpointIndexerFactory::create(gz_path, "", 1024, true);
+                dftu_utils_test::create_indexer(gz_path, "", 1024, true);
             REQUIRE(indexer != nullptr);
-            indexer->build();
+            dftu_utils_test::build_indexer(*indexer);
 
-            auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, gz_path + ".idx")
-                              .with_byte_range(0, 200);
+            auto config =
+                dftracer::utils::trace::reader::IndexedFileLineIteratorConfig()
+                    .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
+                    .with_byte_range(0, 200);
 
-            auto gen = async_indexed_file_lines(config);
+            auto gen =
+                dftu_utils_test::ok_items(async_indexed_file_lines(config));
             auto task = collect_lines(std::move(gen));
-            auto lines = task.get();
+            auto lines = dftu_utils_test::ok(task.get());
 
             CHECK(lines.size() > 0);
         }
@@ -193,17 +221,19 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
-                CheckpointIndexerFactory::create(gz_path, "", 1024, true);
+                dftu_utils_test::create_indexer(gz_path, "", 1024, true);
             REQUIRE(indexer != nullptr);
-            indexer->build();
+            dftu_utils_test::build_indexer(*indexer);
 
-            auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, gz_path + ".idx")
-                              .with_line_range(3, 7);
+            auto config =
+                dftracer::utils::trace::reader::IndexedFileLineIteratorConfig()
+                    .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
+                    .with_line_range(3, 7);
 
-            auto gen = async_indexed_file_lines(config);
+            auto gen =
+                dftu_utils_test::ok_items(async_indexed_file_lines(config));
             auto task = collect_line_copies(std::move(gen));
-            auto lines = task.get();
+            auto lines = dftu_utils_test::ok(task.get());
 
             REQUIRE(lines.size() == 5);
             CHECK(lines[0].line_number == 3);
@@ -215,35 +245,29 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
     }
 
     TEST_CASE("Error Handling") {
-        SUBCASE("Null reader throws on first next()") {
+        SUBCASE("Null reader is an error item") {
             auto config =
-                IndexedFileLineIteratorConfig().with_line_range(1, 10);
+                dftracer::utils::trace::reader::IndexedFileLineIteratorConfig()
+                    .with_line_range(1, 10);
 
-            auto gen = async_indexed_file_lines(config);
+            auto task = first_item(async_indexed_file_lines(config));
 
-            // Exception is thrown inside the coroutine body,
-            // which executes on the first co_await gen.next()
-            auto task = [](AsyncGenerator<Line> g) -> CoroTask<void> {
-                co_await g.next();
-                co_return;
-            }(std::move(gen));
-
-            CHECK_THROWS_AS(task.get(), common::DFTUtilsException);
+            dftu_utils_test::expect_error(task.get(),
+                                          common::ErrorCode::InvalidArgument,
+                                          "Reader cannot be null");
         }
 
-        SUBCASE("Non-existent file throws") {
-            bool exception_thrown = false;
-            try {
-                auto config = IndexedFileLineIteratorConfig().with_file(
-                    "non_existent.gz", "non_existent.gz.idx");
-                auto gen = async_indexed_file_lines(config);
-                // Consume to trigger the coroutine body
-                auto task = collect_lines(std::move(gen));
-                task.get();
-            } catch (const std::exception&) {
-                exception_thrown = true;
-            }
-            CHECK(exception_thrown);
+        SUBCASE("Non-existent file is an error item") {
+            auto config =
+                dftracer::utils::trace::reader::IndexedFileLineIteratorConfig()
+                    .with_file("non_existent.gz", "non_existent.gz.idx");
+            REQUIRE(config.error().has_value());
+
+            auto task = first_item(async_indexed_file_lines(config));
+            auto first = task.get();
+            REQUIRE(!first.has_value());
+            CHECK(dstd::StringView(first.error().c_str())
+                      .find("does not exist") != dstd::StringView::npos);
         }
     }
 
@@ -253,18 +277,20 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
-                CheckpointIndexerFactory::create(gz_path, "", 4096, true);
+                dftu_utils_test::create_indexer(gz_path, "", 4096, true);
             REQUIRE(indexer != nullptr);
-            indexer->build();
+            dftu_utils_test::build_indexer(*indexer);
 
-            auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, gz_path + ".idx")
-                              .with_line_range(100, 200)
-                              .with_buffer_size(16384);
+            auto config =
+                dftracer::utils::trace::reader::IndexedFileLineIteratorConfig()
+                    .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
+                    .with_line_range(100, 200)
+                    .with_buffer_size(16384);
 
-            auto gen = async_indexed_file_lines(config);
+            auto gen =
+                dftu_utils_test::ok_items(async_indexed_file_lines(config));
             auto task = collect_lines(std::move(gen));
-            auto lines = task.get();
+            auto lines = dftu_utils_test::ok(task.get());
 
             REQUIRE(lines.size() == 101);  // Lines 100-200 inclusive
             CHECK(lines[0] ==
@@ -274,55 +300,23 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
         }
     }
 
-    TEST_CASE("Consistency with Sync Iterator") {
-        SUBCASE("Async and sync produce same results") {
-            TestEnvironment env(20);
-            dstd::String gz_path = env.create_test_gzip_file();
-
-            auto indexer =
-                CheckpointIndexerFactory::create(gz_path, "", 1024, true);
-            REQUIRE(indexer != nullptr);
-            indexer->build();
-
-            auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, gz_path + ".idx")
-                              .with_line_range(5, 15);
-
-            // Sync path
-            IndexedFileLineIterator sync_iter(config);
-            dstd::Vector<dstd::String> sync_lines;
-            while (sync_iter.has_next()) {
-                Line line = sync_iter.next();
-                sync_lines.push_back(dstd::String(line.content));
-            }
-
-            // Async path
-            auto gen = async_indexed_file_lines(config);
-            auto task = collect_lines(std::move(gen));
-            auto async_lines = task.get();
-
-            REQUIRE(sync_lines.size() == async_lines.size());
-            for (std::size_t i = 0; i < sync_lines.size(); ++i) {
-                CHECK(sync_lines[i] == async_lines[i]);
-            }
-        }
-    }
-
     TEST_CASE("Generator Lifecycle" * doctest::test_suite("vg")) {
         SUBCASE("Generator done() after exhaustion") {
             TestEnvironment env(3);
             dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
-                CheckpointIndexerFactory::create(gz_path, "", 1024, true);
+                dftu_utils_test::create_indexer(gz_path, "", 1024, true);
             REQUIRE(indexer != nullptr);
-            indexer->build();
+            dftu_utils_test::build_indexer(*indexer);
 
-            auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, gz_path + ".idx")
-                              .with_line_range(1, 3);
+            auto config =
+                dftracer::utils::trace::reader::IndexedFileLineIteratorConfig()
+                    .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
+                    .with_line_range(1, 3);
 
-            auto gen = async_indexed_file_lines(config);
+            auto gen =
+                dftu_utils_test::ok_items(async_indexed_file_lines(config));
 
             auto task = [](AsyncGenerator<Line> g) -> CoroTask<void> {
                 // Consume all lines
@@ -343,7 +337,7 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
                 co_return;
             }(std::move(gen));
 
-            task.get();
+            dftu_utils_test::ok(task.get());
         }
 
         SUBCASE("Move semantics") {
@@ -351,19 +345,21 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             dstd::String gz_path = env.create_test_gzip_file();
 
             auto indexer =
-                CheckpointIndexerFactory::create(gz_path, "", 1024, true);
+                dftu_utils_test::create_indexer(gz_path, "", 1024, true);
             REQUIRE(indexer != nullptr);
-            indexer->build();
+            dftu_utils_test::build_indexer(*indexer);
 
-            auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, gz_path + ".idx")
-                              .with_line_range(1, 5);
+            auto config =
+                dftracer::utils::trace::reader::IndexedFileLineIteratorConfig()
+                    .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
+                    .with_line_range(1, 5);
 
-            auto gen1 = async_indexed_file_lines(config);
+            auto gen1 =
+                dftu_utils_test::ok_items(async_indexed_file_lines(config));
             auto gen2 = std::move(gen1);  // Move construct
 
             auto task = collect_lines(std::move(gen2));
-            auto lines = task.get();
+            auto lines = dftu_utils_test::ok(task.get());
 
             REQUIRE(lines.size() == 5);
         }

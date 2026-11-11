@@ -128,49 +128,23 @@ static PyObject* ArrowStreamingIterator_cancel(
 static PyMethodDef ArrowStreamingIterator_methods[] = {
     {"cancel", DFTU_PYCFUNCTION(ArrowStreamingIterator_cancel), METH_NOARGS,
      "Cancel the streaming iterator."},
-    {NULL}};
+    {NULL, NULL, 0, NULL}};
 
 PyTypeObject ArrowStreamingIteratorType = {
-    PyVarObject_HEAD_INIT(NULL, 0) "dftracer_utils_ext._ArrowStreamingIterator",
-    sizeof(ArrowStreamingIteratorObject),       /* tp_basicsize */
-    0,                                          /* tp_itemsize */
-    (destructor)ArrowStreamingIterator_dealloc, /* tp_dealloc */
-    0,                                          /* tp_vectorcall_offset */
-    0,                                          /* tp_getattr */
-    0,                                          /* tp_setattr */
-    0,                                          /* tp_as_async */
-    0,                                          /* tp_repr */
-    0,                                          /* tp_as_number */
-    0,                                          /* tp_as_sequence */
-    0,                                          /* tp_as_mapping */
-    0,                                          /* tp_hash */
-    0,                                          /* tp_call */
-    0,                                          /* tp_str */
-    0,                                          /* tp_getattro */
-    0,                                          /* tp_setattro */
-    0,                                          /* tp_as_buffer */
-    Py_TPFLAGS_DEFAULT,                         /* tp_flags */
-    "Streaming Arrow batch iterator.\n\n"
-    "Yields ArrowBatch objects as they become available from the C++ "
-    "pipeline.\n"
-    "Call cancel() to stop the stream early.", /* tp_doc */
-    0,                                         /* tp_traverse */
-    0,                                         /* tp_clear */
-    0,                                         /* tp_richcompare */
-    0,                                         /* tp_weaklistoffset */
-    ArrowStreamingIterator_iter,               /* tp_iter */
-    (iternextfunc)ArrowStreamingIterator_next, /* tp_iternext */
-    ArrowStreamingIterator_methods,            /* tp_methods */
-    0,                                         /* tp_members */
-    0,                                         /* tp_getset */
-    0,                                         /* tp_base */
-    0,                                         /* tp_dict */
-    0,                                         /* tp_descr_get */
-    0,                                         /* tp_descr_set */
-    0,                                         /* tp_dictoffset */
-    0,                                         /* tp_init */
-    0,                                         /* tp_alloc */
-    ArrowStreamingIterator_new,                /* tp_new */
+    .ob_base = PyVarObject_HEAD_INIT(NULL, 0).tp_name =
+        "dftracer_utils_ext._ArrowStreamingIterator",
+    .tp_basicsize = sizeof(ArrowStreamingIteratorObject),
+    .tp_dealloc = (destructor)ArrowStreamingIterator_dealloc,
+    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_doc =
+        "Streaming Arrow batch iterator.\n\n"
+        "Yields ArrowBatch objects as they become available from the C++ "
+        "pipeline.\n"
+        "Call cancel() to stop the stream early.",
+    .tp_iter = ArrowStreamingIterator_iter,
+    .tp_iternext = (iternextfunc)ArrowStreamingIterator_next,
+    .tp_methods = ArrowStreamingIterator_methods,
+    .tp_new = ArrowStreamingIterator_new,
 };
 
 int init_arrow_streaming_iterator(PyObject* m) {

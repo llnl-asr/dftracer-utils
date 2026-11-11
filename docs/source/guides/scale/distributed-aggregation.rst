@@ -13,7 +13,7 @@ Combine aggregations across ranks
 
 This is the fan-out/fan-in pattern behind ``dftracer_view``'s distributed
 ``--group-by``/``--agg``/``--counters`` modes (see
-``src/dftracer/utils/binaries/dftracer_view.cpp``). ``View`` carries no MPI (or
+``src/dftracer/utils/cli/dftracer_view.cpp``). ``View`` carries no MPI (or
 any transport) dependency itself - moving the partial bytes between ranks is
 the caller's job.
 

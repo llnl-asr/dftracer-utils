@@ -75,7 +75,7 @@ struct RangeIndex {
 };
 
 /// Lays out `leaves` (one per position of `index`) as each key's tree.
-void build_range_tree(RangeIndex& index, RangeRead read,
+void build_range_tree(RangeIndex& index, duql::RangeRead read,
                       const dstd::Vector<RangeIndex::Node>& leaves);
 
 /// A collected row set with its rows by key. Its columns are FLAT.
@@ -89,7 +89,7 @@ struct LookupTable {
     dstd::Optional<std::size_t> value;
     /// The cells of `value` (SCALAR: of the only column) for the row
     /// evaluator; empty for a list or object cell, which it cannot read.
-    dstd::Vector<dstd::Optional<Cell>> cells;
+    dstd::Vector<dstd::Optional<duql::Cell>> cells;
     /// A range lookup's rows by key and range value; `rows` is then empty.
     dstd::SharedPtr<const RangeIndex> range;
     const dstd::Vector<std::int64_t>* find(dstd::StringView key) const;
@@ -101,27 +101,34 @@ struct LookupTable {
 /// when it is null.
 struct RangeAnswer {
     std::int64_t rows = 0;
-    dstd::Optional<Number> number;
+    dstd::Optional<duql::Number> number;
     std::int64_t row = -1;
 };
 
 /// The rows of `table` with `key` between the bounds `low` and `high` of the
 /// range lookup `l`, a bound being nullopt when its value has no order (null,
-/// NaN, a container). Throws the query error naming the sub-query when an
-/// integer SUM passes int64.
-RangeAnswer range_answer(const TLookup& l, const LookupTable& table,
+/// NaN, a container). Records the query error in `l.slot->failure` when a
+/// scalar sub-query has several rows in range or an integer SUM passes int64;
+/// the answer is then not to be used.
+RangeAnswer range_answer(const duql::TLookup& l, const LookupTable& table,
                          dstd::StringView key,
                          const dstd::Optional<Ordered>& low,
                          const dstd::Optional<Ordered>& high);
 
-/// Throws the query error for rows of `table` whose `column` differ at `key`.
-[[noreturn]] void conflict(const LookupTable& table, dstd::StringView column,
-                           dstd::StringView key);
+/// The query error for rows of `table` whose `column` differ at `key`.
+duql::DuqlError conflict_error(const LookupTable& table,
+                               dstd::StringView column, dstd::StringView key);
 
-/// Throws the query error for the sub-query `name` that gives `rows` rows at
-/// `key`.
-[[noreturn]] void scalar_conflict(dstd::StringView name, dstd::StringView key,
-                                  std::size_t rows);
+/// The query error for the sub-query `name` that gives `rows` rows at `key`.
+duql::DuqlError scalar_conflict_error(dstd::StringView name,
+                                      dstd::StringView key, std::size_t rows);
+
+/// A query error that reading a lookup's rows raised, with only a message.
+duql::DuqlError lookup_error(dstd::String message);
+
+/// The first error a lookup under `node` recorded while rows were evaluated,
+/// nullopt for none. The caller of a row evaluation reads it after the scan.
+dstd::Optional<duql::DuqlError> lookup_failure(const detail::QueryNode& node);
 
 }  // namespace dftracer::utils::duql
 

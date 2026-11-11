@@ -5,10 +5,11 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/fileio/file_helpers.h>
+#include <dftracer/utils/trace/index/indexer.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -35,7 +36,7 @@ dstd::String gzip_of(TestEnvironment& env, const dstd::String& stem,
     const dstd::String gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
-    (void)dstd::fs::remove(plain);
+    dstd::fs::remove(plain).discard();
     return gz;
 }
 
@@ -83,16 +84,30 @@ View query_indexed(const dstd::String& gz, const dstd::String& schema) {
 }
 
 View full_index(const dstd::String& gz, const dstd::String& schema) {
-    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
-        .build();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                                {dstd::String(dstd::StringView(gz))}))
+            .build());
     return View::from_file(
                dstd::String(gz),
                dstd::String(dstd::String(determine_index_path(gz, ""))))
         .record_schema(dstd::String(schema));
 }
 
+// The query's rows, or its error: from building the view, which throws, or
+// from running it.
+dstd::Result<dataframe::DataFrame> frame_result(const View& v,
+                                                const dstd::String& q) {
+    try {
+        return v.duql(q).collect().get();
+    } catch (const std::exception&) {
+        return dftracer::utils::common::error_of_exception(
+            std::current_exception());
+    }
+}
+
 dataframe::DataFrame frame(const View& v, const dstd::String& q) {
-    return v.duql(q).collect().get();
+    return dftu_utils_test::ok(frame_result(v, q));
 }
 
 bool has(const dataframe::DataFrame& f, const dstd::String& n) {
@@ -101,8 +116,8 @@ bool has(const dataframe::DataFrame& f, const dstd::String& n) {
 
 // Reads the catalog as it is: schema_tree() would build a missing one.
 bool declares(const View& v, const dstd::String& path) {
-    for (const auto& leaf :
-         dftracer::utils::trace::views::detail::catalog_leaves(v))
+    for (const auto& leaf : dftu_utils_test::ok(
+             dftracer::utils::trace::views::detail::catalog_leaves(v)))
         if (dstd::String(leaf.path) == path) return true;
     return false;
 }
@@ -134,9 +149,9 @@ bool has_catalog(const dstd::String& gz) {
         const auto snapshot = dftu_utils_test::index_snapshot(
             dstd::String(determine_index_path(gz, "")));
         const auto file = dftu_utils_test::find_indexed_file(snapshot, gz);
-        return file &&
-               dftracer::utils::index::extension_current(
-                   snapshot, *file, index::store::IndexExtension::Catalog);
+        return file && dftracer::utils::trace::index::extension_current(
+                           snapshot, *file,
+                           trace::index::store::IndexExtension::Catalog);
     } catch (...) {
         return false;
     }
@@ -169,14 +184,18 @@ void same_as_full(Gen gen, const dstd::String& schema, const dstd::String& q) {
     const Fresh p = fresh(gen, schema);
     dstd::String want_error;
     dataframe::DataFrame want;
-    try {
-        want = frame(f, q);
-    } catch (const std::exception& e) {
-        want_error = e.what();
+    {
+        auto result = frame_result(f, q);
+        if (result.has_value())
+            want = std::move(*result);
+        else
+            want_error = result.error().c_str();
     }
     if (!want_error.empty()) {
         INFO(q);
-        CHECK_THROWS_WITH(frame(p.view, q), want_error.c_str());
+        const auto got = frame_result(p.view, q);
+        REQUIRE_FALSE(got.has_value());
+        CHECK(dstd::String(got.error().c_str()) == want_error);
         return;
     }
     const auto got = frame(p.view, q);
@@ -312,17 +331,25 @@ TEST_SUITE("DropRenameViews") {
             "ts | sort ts";
         TestEnvironment full_env(10);
         const View f = full_index(genesis_trace(full_env), "genesis");
-        CHECK_THROWS_WITH(frame(f, g), doctest::Contains("lookup fills"));
+        const auto full = frame_result(f, g);
+        REQUIRE_FALSE(full.has_value());
+        CHECK(dstd::String(full.error().c_str()).find("lookup fills") !=
+              dstd::String::npos);
         const Fresh p = fresh(genesis_trace, "genesis");
-        CHECK_THROWS_WITH(frame(p.view, g), doctest::Contains("lookup fills"));
+        const auto fresh_result = frame_result(p.view, g);
+        REQUIRE_FALSE(fresh_result.has_value());
+        CHECK(dstd::String(fresh_result.error().c_str()).find("lookup fills") !=
+              dstd::String::npos);
     }
 
     TEST_CASE("fill_null keeps the undeclared columns") {
         TestEnvironment full_env(10);
         const View f = full_index(genesis_trace(full_env), "genesis");
-        const auto want = f.lazy().fill_null(0).collect().get();
+        const auto want =
+            dftu_utils_test::ok(f.lazy().fill_null(0).collect().get());
         const Fresh p = fresh(genesis_trace, "genesis");
-        const auto got = p.view.lazy().fill_null(0).collect().get();
+        const auto got =
+            dftu_utils_test::ok(p.view.lazy().fill_null(0).collect().get());
         REQUIRE(sorted(got.names) == sorted(want.names));
         CHECK(has(got, "v.p50"));
         same_rows(got, want);

@@ -72,7 +72,7 @@ class RawBuffer {
     const T* end() const noexcept { return data_ + size_; }
 
     /// Make room for @p n elements without changing the size. The capacity is
-    /// exact. Throws std::bad_alloc and keeps the buffer on failure.
+    /// exact. Ends the process when the memory is not available.
     void reserve(std::size_t n) {
         if (n > capacity_) set_capacity(n);
     }
@@ -119,7 +119,7 @@ class RawBuffer {
     }
 
     void set_capacity(std::size_t n) {
-        if (n > max_size()) throw std::bad_alloc();
+        if (n > max_size()) memory::detail::size_overflow();
         data_ = static_cast<T*>(memory::detail::reallocate(
             data_, capacity_ * sizeof(T), n * sizeof(T), ALIGN));
         capacity_ = n;

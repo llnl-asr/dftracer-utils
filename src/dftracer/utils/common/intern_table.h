@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_COMMON_INTERN_TABLE_H
 #define DFTRACER_UTILS_COMMON_INTERN_TABLE_H
 
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/memory/pool.h>
@@ -44,8 +45,8 @@ class InternTable {
     InternTable(const InternTable&) = delete;
     InternTable& operator=(const InternTable&) = delete;
 
-    /// Throws @ref DFTUtilsException when the pool table is full.
-    static InternRef create();
+    /// Fails with MemoryBudgetExceeded when the pool table is full.
+    static dstd::Result<InternRef> create();
 
     dstd::StringIntern& strings() noexcept { return strings_; }
     const dstd::StringIntern& strings() const noexcept { return strings_; }

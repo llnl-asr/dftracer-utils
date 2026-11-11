@@ -3,10 +3,11 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/record_schema.h>
+#include <dftracer/utils/trace/index/indexer.h>
+#include <dftracer/utils/trace/index/record_schema.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -54,14 +55,16 @@ dstd::String write_log(TestEnvironment& env) {
     const dstd::String gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
-    (void)dstd::fs::remove(plain);
-    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
-        .build();
+    dstd::fs::remove(plain).discard();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                                {dstd::String(dstd::StringView(gz))}))
+            .build());
     return gz;
 }
 
 void register_log_schema() {
-    dftracer::utils::index::register_schema(
+    dftu_utils_test::ok_ref(dftracer::utils::trace::index::register_schema(
         "id: sv_log\n"
         "fields:\n"
         "  op: {type: string}\n"
@@ -71,7 +74,7 @@ void register_log_schema() {
         "  status: {type: int, optional: true}\n"
         "  tags: {type: json, optional: true}\n"
         "  host: {type: string, path: meta.host, optional: true}\n",
-        "test_schema_view");
+        "test_schema_view"));
 }
 
 View view_of(const dstd::String& gz) {
@@ -80,7 +83,9 @@ View view_of(const dstd::String& gz) {
         dstd::String(dstd::String(determine_index_path(gz, ""))));
 }
 
-std::size_t rows(const View& v) { return v.collect().get().num_rows(); }
+std::size_t rows(const View& v) {
+    return dftu_utils_test::ok(v.collect().get()).num_rows();
+}
 
 }  // namespace
 
@@ -90,13 +95,14 @@ TEST_SUITE("SchemaView") {
         TestEnvironment env(10);
         const auto gz = write_log(env);
         dstd::Map<dstd::String, dstd::String> types;
-        for (const auto& c : view_of(gz).column_info())
+        for (const auto& c : dftu_utils_test::ok(view_of(gz).column_info()))
             types[dstd::String(c.name)] = dstd::String(c.type);
         CHECK(types["status"] == "int64");
         CHECK(types["took"] == "float64");
         CHECK(types["tags"] == "json");
 
-        const auto df = view_of(gz).select({"status"}).collect().get();
+        const auto df =
+            dftu_utils_test::ok(view_of(gz).select({"status"}).collect().get());
         REQUIRE(df.num_rows() == RECORDS);
         CHECK(df.columns[0].type() == dataframe::TypeId::Int64);
         CHECK(df.columns[0].null_count() == (RECORDS + 10) / 11);
@@ -106,7 +112,8 @@ TEST_SUITE("SchemaView") {
         register_log_schema();
         TestEnvironment env(10);
         const auto gz = write_log(env);
-        const auto df = view_of(gz).select({"tags"}).collect().get();
+        const auto df =
+            dftu_utils_test::ok(view_of(gz).select({"tags"}).collect().get());
         REQUIRE(df.num_rows() == RECORDS);
         dstd::Set<dstd::String> texts;
         for (std::int64_t i = 0; i < 4; ++i)
@@ -138,16 +145,17 @@ TEST_SUITE("SchemaView") {
         struct Null : ExportSink {
             void write(dstd::StringView) override {}
         } sink;
-        const auto stats =
-            view_of(gz).time_range(2000000, 2500000).sink_json(sink).get();
+        const auto stats = dftu_utils_test::ok(
+            view_of(gz).time_range(2000000, 2500000).sink_json(sink).get());
         CHECK(stats.events_matched == in_range);
         CHECK(stats.chunks_skipped > 0);
 
-        const auto buckets = view_of(gz)
-                                 .time_bucket(1000000)
-                                 .agg({{AggOp::Count, "", "n"}})
-                                 .collect()
-                                 .get();
+        const auto buckets =
+            dftu_utils_test::ok(view_of(gz)
+                                    .time_bucket(1000000)
+                                    .agg({{AggOp::Count, "", "n"}})
+                                    .collect()
+                                    .get());
         // ts_ms 1000..3999 falls in the 1 s buckets starting at 1, 2 and 3 s.
         dstd::Map<std::int64_t, std::int64_t> per_bucket;
         const auto& b = buckets.columns[buckets.column_index("time_bucket")];
@@ -169,8 +177,8 @@ TEST_SUITE("SchemaView") {
             busy += e - std::max(t, end);
             end = e;
         }
-        const auto occ =
-            view_of(gz).agg({{AggOp::Busy, "", "busy"}}).collect().get();
+        const auto occ = dftu_utils_test::ok(
+            view_of(gz).agg({{AggOp::Busy, "", "busy"}}).collect().get());
         const auto& bc = occ.columns[occ.column_index("busy")];
         CHECK(bc.values<double>()[0] ==
               doctest::Approx(static_cast<double>(busy)));
@@ -196,7 +204,7 @@ TEST_SUITE("SchemaView") {
         TestEnvironment env(10);
         const auto gz = write_log(env);
         dstd::Map<dstd::String, SchemaLeaf> tree;
-        for (auto& leaf : view_of(gz).schema_tree())
+        for (auto& leaf : dftu_utils_test::ok(view_of(gz).schema_tree()))
             tree[dstd::String(leaf.path)] = std::move(leaf);
         REQUIRE(tree.count("status"));
         CHECK(tree["status"].type == "mixed");

@@ -1,21 +1,24 @@
 // SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_TESTS_VIEW_COMMON_H
 #define DFTRACER_UTILS_TESTS_VIEW_COMMON_H
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/internal/cell_ops.h>
+#include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
-#include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
-#include <dftracer/utils/index/store/root_layout.h>
+#include <dftracer/utils/fileio/file_helpers.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/schemas/dft/chunk_statistics.h>
+#include <dftracer/utils/trace/index/store/root_layout.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <algorithm>
@@ -28,7 +31,50 @@ namespace test_view_common {
 
 template <class T>
 T run(dftracer::utils::coro::CoroTask<T> task) {
-    return dftracer::utils::default_runtime().submit(std::move(task)).get();
+    return dftu_utils_test::ok(
+        dftracer::utils::default_runtime().submit(std::move(task)).get());
+}
+
+template <class T>
+T run(dftracer::utils::coro::CoroTask<dftracer::utils::dstd::Result<T>> task) {
+    return dftu_utils_test::ok(
+        dftracer::utils::default_runtime().submit(std::move(task)).get());
+}
+
+// The error a View, a plan or a result kept, as a Result<void>: success when
+// it holds none.
+inline dftracer::utils::dstd::Result<void> status_of(
+    const dftracer::utils::trace::views::View& v) {
+    return v.status();
+}
+inline dftracer::utils::dstd::Result<void> status_of(
+    const dftracer::utils::dataframe::LazyFrame& lf) {
+    return lf.status();
+}
+template <class T>
+dftracer::utils::dstd::Result<void> status_of(
+    const dftracer::utils::dataframe::LazyResult<T>& result) {
+    return result.plans().front().status();
+}
+template <class T>
+dftracer::utils::dstd::Result<void> status_of(
+    const dftracer::utils::dstd::Result<T>& result) {
+    if (result.has_value()) return {};
+    return result.error();
+}
+
+// Checks that `what` kept or returned an error of `code` whose message holds
+// `text`.
+template <class T>
+void expect_refused(const T& what, const char* text,
+                    dftracer::utils::common::ErrorCode code =
+                        dftracer::utils::common::ErrorCode::InvalidArgument) {
+    const auto status = status_of(what);
+    REQUIRE_MESSAGE(!status.has_value(), "expected an error");
+    const dftracer::utils::dstd::String message(status.error().message());
+    CAPTURE(message);
+    CHECK(dftracer::utils::common::errorcode_of(status.error()) == code);
+    CHECK(message.find(text) != dftracer::utils::dstd::String::npos);
 }
 
 // A trace mixing POSIX and STDIO events so filters have something to cut.
@@ -49,7 +95,7 @@ inline dftracer::utils::dstd::String create_mixed_trace(
     ofs.close();
     dftracer::utils::dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    (void)dftracer::utils::dstd::fs::remove(pfw);
+    dftracer::utils::dstd::fs::remove(pfw).discard();
     return gz;
 }
 
@@ -69,7 +115,7 @@ inline dftracer::utils::dstd::String create_multimember_trace(
     ofs.close();
     dftracer::utils::dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, member_bytes);
-    (void)dftracer::utils::dstd::fs::remove(pfw);
+    dftracer::utils::dstd::fs::remove(pfw).discard();
     return gz;
 }
 
@@ -89,7 +135,7 @@ inline dftracer::utils::dstd::String create_trace_with_counters(
     ofs.close();
     dftracer::utils::dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    (void)dftracer::utils::dstd::fs::remove(pfw);
+    dftracer::utils::dstd::fs::remove(pfw).discard();
     return gz;
 }
 
@@ -108,7 +154,7 @@ inline dftracer::utils::dstd::String create_bulk_counters(
     ofs.close();
     dftracer::utils::dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    (void)dftracer::utils::dstd::fs::remove(pfw);
+    dftracer::utils::dstd::fs::remove(pfw).discard();
     return gz;
 }
 
@@ -133,7 +179,7 @@ inline dftracer::utils::dstd::String create_counter_file(
     ofs.close();
     dftracer::utils::dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    (void)dftracer::utils::dstd::fs::remove(pfw);
+    dftracer::utils::dstd::fs::remove(pfw).discard();
     return gz;
 }
 
@@ -260,11 +306,11 @@ struct SharedIndexedTrace {
         gz = create_mixed_trace(env, 30, 20);
         idx = dftracer::utils::trace::internal::determine_index_path(gz, "");
         StringSink sink;
-        dftracer::utils::trace::views::View::from_file(
-            dftracer::utils::dstd::String(gz),
-            dftracer::utils::dstd::String(idx))
-            .sink_json(sink)
-            .get();
+        dftu_utils_test::ok(dftracer::utils::trace::views::View::from_file(
+                                dftracer::utils::dstd::String(gz),
+                                dftracer::utils::dstd::String(idx))
+                                .sink_json(sink)
+                                .get());
     }
 };
 

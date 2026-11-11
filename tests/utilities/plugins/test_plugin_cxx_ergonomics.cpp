@@ -5,9 +5,9 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/domains/plugins/fold_adapter.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/plugins/abi.h>
-#include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/runtime/runtime.h>
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
 // arrow_abi.
@@ -27,6 +27,7 @@
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <cstdint>
@@ -49,8 +50,8 @@ struct HostFixture {
     dstd::StringIntern intern;
     dftu_plugin* plugin =
         dftracer::utils::plugins::make_plugin<TrivialSlice>(nullptr);
-    dstd::UniquePtr<plugins::PluginFold> fold =
-        dstd::make_unique<plugins::PluginFold>(plugin, intern);
+    dstd::UniquePtr<domains::plugins::PluginFold> fold =
+        dstd::make_unique<domains::plugins::PluginFold>(plugin, intern);
     dftu_plugin_host& host() { return fold->host(); }
     dftu_str intern_str(const char* s) {
         return host().intern(host().h, s,
@@ -65,14 +66,15 @@ struct HostFixture {
 template <class MakeTask>
 void drive_task(dftu_plugin_host& host, int workers, MakeTask make) {
     Runtime rt(workers);
-    rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                  dftu_task* driver =
-                      dftracer::utils::plugins::detail::drive_coro<int>(&host,
-                                                                        make());
-                  co_await *reinterpret_cast<coro::CoroTask<void>*>(driver);
-              }),
-              "caller")
-        .wait();
+    dftu_utils_test::ok(
+        rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                      dftu_task* driver =
+                          dftracer::utils::plugins::detail::drive_coro<int>(
+                              &host, make());
+                      co_await *reinterpret_cast<coro::CoroTask<void>*>(driver);
+                  }),
+                  "caller")
+            .wait());
     rt.shutdown();
 }
 
@@ -126,7 +128,7 @@ TEST_CASE("plugin cxx: Io ops are co_await-able directly") {
     dstd::String path = env.dir() + "/probe.txt";
     const dstd::String body = "alpha\nbeta\ngamma\n";
     {
-        (void)dstd::fs::write_file(dstd::PathView(path), body);
+        dstd::fs::write_file(dstd::PathView(path), body).discard();
     }
 
     HostFixture fx;
@@ -264,7 +266,7 @@ TEST_CASE("plugin cxx: Batch view iterates typed Events") {
         // fold must be destroyed (it calls plugin_->destroy_slice) before
         // p->destroy frees the plugin's own storage, which the vtable pointed
         // to by `p` lives inside of.
-        plugins::PluginFold fold(p, intern);
+        domains::plugins::PluginFold fold(p, intern);
 
         const std::uint32_t N = 3;
         dstd::Vector<trace::views::detail::FoldEvent> evs(N);
@@ -280,8 +282,8 @@ TEST_CASE("plugin cxx: Batch view iterates typed Events") {
             evs[i].has_dur = true;
         }
         trace::views::detail::ScanUnit unit{};
-        fold.step(trace::views::detail::FoldBatch{
-            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}});
+        dftu_utils_test::ok(fold.step(trace::views::detail::FoldBatch{
+            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}}));
     }
 
     if (p->destroy) p->destroy(p->self);
@@ -315,7 +317,7 @@ TEST_CASE("plugin cxx: Event args expose typed values and dotted lookup") {
         // fold must be destroyed (it calls plugin_->destroy_slice) before
         // p->destroy frees the plugin's own storage, which the vtable pointed
         // to by `p` lives inside of.
-        plugins::PluginFold fold(p, intern);
+        domains::plugins::PluginFold fold(p, intern);
 
         trace::views::detail::FoldEvent fe;
         fe.pid = 7;
@@ -326,8 +328,8 @@ TEST_CASE("plugin cxx: Event args expose typed values and dotted lookup") {
                              intern.get_or_insert("/tmp/a"));
         dstd::Vector<trace::views::detail::FoldEvent> evs = {fe};
         trace::views::detail::ScanUnit unit{};
-        fold.step(trace::views::detail::FoldBatch{
-            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}});
+        dftu_utils_test::ok(fold.step(trace::views::detail::FoldBatch{
+            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}}));
     }
 
     if (p->destroy) p->destroy(p->self);
@@ -472,7 +474,7 @@ TEST_CASE("plugin cxx: Host::agg merges a count and an argmax across slices") {
     dstd::StringIntern intern;
     dftu_plugin p = make_agg_facade_plugin();
     plugins::NamedResultRegistry named;
-    plugins::PluginFold master(&p, intern, nullptr, &named);
+    domains::plugins::PluginFold master(&p, intern, nullptr, &named);
 
     // Merged counts: pid 1 -> 3, pid 2 -> 2. Argmax tid by duration: pid 1 at
     // dur 30 -> tid 300; pid 2 at dur 50 -> tid 500.
@@ -481,18 +483,20 @@ TEST_CASE("plugin cxx: Host::agg merges a count and an argmax across slices") {
         {evt(1, 20, 200), evt(2, 50, 500)}};
     for (const auto& evs : slices) {
         auto slice = master.slice();
-        auto* pf = static_cast<plugins::PluginFold*>(slice.get());
+        auto* pf = static_cast<domains::plugins::PluginFold*>(slice.get());
         trace::views::detail::ScanUnit unit;
-        pf->step(trace::views::detail::FoldBatch{
-            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}});
-        master.merge(*pf);
+        dftu_utils_test::ok(pf->step(trace::views::detail::FoldBatch{
+            dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}}));
+        dftu_utils_test::ok(master.merge(*pf));
     }
     Runtime rt(1);
-    rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                  co_await master.finalize(trace::views::detail::CoverageSet{});
-              }),
-              "fin")
-        .wait();
+    dftu_utils_test::ok(
+        rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                      co_await master.finalize(
+                          trace::views::detail::CoverageSet{});
+                  }),
+                  "fin")
+            .wait());
     rt.shutdown();
 
     auto it = named.results().find("by_pid");

@@ -6,13 +6,13 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/schemas/dft/agg/agg_partial.h>
-#include <dftracer/utils/index/schemas/dft/agg/agg_partial_update.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_core.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
 #include <dftracer/utils/memory/detail/heap.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/agg_partial.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/agg_partial_update.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_config.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_core.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_fold.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_intern.h>
 #include <doctest/doctest.h>
 #include <mmix_lcg.h>
 #include <trace/aggregators/aggregation_oracle.h>
@@ -26,7 +26,7 @@
 
 using namespace dftracer::utils;
 
-using namespace dftracer::utils::index::schemas::dft::agg;
+using namespace dftracer::utils::trace::index::schemas::dft::agg;
 
 namespace {
 

@@ -19,23 +19,25 @@
 // prints them as "over" and does not count them.
 
 #define DFTRACER_UTILS_MEMORY_PROBE_DEFINE_NEW
+#include <bench_ok.h>
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/domains/workload/genesis/genesis.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
+#include <dftracer/utils/fileio/lines/sources/async_streaming_gz_line_generator.h>
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/trace/genesis/genesis.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
-#include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
+#include <dftracer/utils/trace/index/indexer.h>
 #include <memory_probe.h>
 #include <memory_workloads.h>
 #include <simdjson.h>
@@ -229,12 +231,15 @@ class Sampler {
 };
 
 void run_plan(const dataframe::LazyFrame& plan, std::uint64_t budget) {
-    default_runtime().submit(drain_count(plan.memory_budget(budget))).get();
+    require_ok(
+        default_runtime().submit(drain_count(plan.memory_budget(budget))).get(),
+        "task");
 }
 
 template <class Fn>
 void run_scoped(Fn fn) {
-    default_runtime().submit(coro::with_scope(std::move(fn))).wait();
+    require_ok(default_runtime().submit(coro::with_scope(std::move(fn))).wait(),
+               "task");
 }
 
 void group_by(const Sizes& s) {
@@ -262,23 +267,23 @@ void spill_cycle(const Sizes& s) {
 
 void index_build(const Paths& p) {
     require_ok(dstd::fs::create_directories(p.index_dir), "create_directories");
-    index::IndexerOptions options;
+    trace::index::IndexerOptions options;
     options.index_dir = p.index_dir;
     options.bloom->required = false;
-    auto indexer = index::Indexer::open(
-        {dstd::String(p.trace.data(), p.trace.size())}, options);
+    auto indexer = dftu::bench::ok(trace::index::Indexer::open(
+        {dstd::String(p.trace.data(), p.trace.size())}, options));
     run_scoped([&](coro::Scope& scope) -> coro::CoroTask<void> {
-        co_await indexer.rebuild(scope);
+        dftu::bench::ok(co_await indexer.rebuild(scope));
     });
 }
 
 coro::CoroTask<void> read_lines(dstd::String file) {
     simdjson::dom::parser parser;
-    auto gen =
-        utilities::fileio::lines::sources::async_streaming_gz_lines(file);
+    auto gen = fileio::lines::sources::async_streaming_gz_lines(file);
     std::uint64_t parsed = 0;
-    while (auto line = co_await gen.next()) {
-        dstd::StringView l = line->content;
+    while (auto next = co_await gen.next()) {
+        if (!*next) dftu::bench::fail(next->error());
+        dstd::StringView l = (*next)->content;
         simdjson::dom::object o;
         if (!l.empty() && l.front() == '{' &&
             parser.parse(l.data(), l.size()).get(o) == simdjson::SUCCESS)
@@ -291,7 +296,7 @@ coro::CoroTask<void> read_lines(dstd::String file) {
 }
 
 void json_read(const Paths& p) {
-    default_runtime().submit(read_lines(p.trace)).get();
+    require_ok(default_runtime().submit(read_lines(p.trace)).get(), "task");
 }
 
 void genesis(const Paths& p) {
@@ -315,7 +320,7 @@ dstd::String trace_text(std::int64_t lines) {
 }
 
 Paths prepare(const dstd::String& dir, const Sizes& s) {
-    (void)dstd::fs::remove_all(dir);
+    dstd::fs::remove_all(dir).discard();
     Paths p;
     p.trace = dir + "/trace/smoke.pfw.gz";
     write_gz(p.trace, trace_text(s.trace_lines));

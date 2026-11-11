@@ -24,13 +24,15 @@ set(RANK_cache 4)
 # Modules below the index; the trace format headers move into the dftracer
 # decoder in stage 5. plugins/abi/ is the plugin C ABI: declarations only.
 set(BASE_PREFIXES
-    memory/ dstd/ common/ coro/ runtime/ json/ dataframe/ plugins/abi/ duql/ utilities/arrow/ utilities/serialization/ utilities/fileio/
-    utilities/hash/ trace/args_map.h trace/event.h
+    memory/ dstd/ common/ coro/ runtime/ json/ dataframe/ plugins/abi/ duql/ trace/arrow/ fileio/
+    trace/args_map.h trace/event.h
     trace/internal/ trace/parse_inflated.h trace/schema.h)
 
 set(ALLOWED
   # lower layers reach up, and index folds use the View fold interface
-  "index/build/chunk_indexer.cpp|utilities/reader/internal/stream_config.h"
+  "index/build/chunk_indexer.cpp|trace/reader/internal/stream_config.h"
+  "index/build/chunk_indexer.cpp|trace/reader/file_process_types.h"
+  "index/build/chunk_indexer.cpp|trace/reader/indexed_file_reader_utility.h"
   "index/build/index_fold_driver.h|trace/views/fold.h"
   "index/build/index_fold_driver.h|trace/views/fold_event.h"
   "index/extensions/bloom_fold.h|index/schemas/dft/bloom_core.h"
@@ -78,14 +80,14 @@ function(layer_of rel out)
 endfunction()
 
 file(GLOB_RECURSE index_files
-     "${SOURCE_DIR}/include/dftracer/utils/index/*"
-     "${SOURCE_DIR}/src/dftracer/utils/index/*")
+     "${SOURCE_DIR}/include/dftracer/utils/trace/index/*"
+     "${SOURCE_DIR}/src/dftracer/utils/trace/index/*")
 list(SORT index_files)
 
 set(errors "")
 set(seen "")
 foreach(path ${index_files})
-  string(REGEX REPLACE "^.*/dftracer/utils/" "" rel "${path}")
+  string(REGEX REPLACE "^.*/dftracer/utils/(trace/)?" "" rel "${path}")
   layer_of("${rel}" src_layer)
   if(src_layer STREQUAL "root")
     continue()
@@ -93,6 +95,7 @@ foreach(path ${index_files})
   file(STRINGS "${path}" includes REGEX "^[ \t]*#[ \t]*include[ \t]*<dftracer/utils/")
   foreach(line ${includes})
     string(REGEX REPLACE "^.*<dftracer/utils/([^>]+)>.*$" "\\1" inc "${line}")
+    string(REGEX REPLACE "^trace/index/" "index/" inc "${inc}")
     layer_of("${inc}" dst_layer)
     set(bad FALSE)
     if(dst_layer STREQUAL "")

@@ -6,6 +6,7 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/domains/workload/genesis/genesis.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -14,8 +15,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/trace/genesis/genesis.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -45,7 +45,7 @@ inline void require_ok(const dftracer::utils::dstd::Expected<
     std::exit(1);
 }
 
-constexpr std::int64_t MORSEL_ROWS = 8192;
+constexpr std::int64_t BATCH_SIZE = 8192;
 constexpr std::uint64_t PLAN_BUDGET = 1ULL << 36;
 constexpr std::uint64_t GENESIS_SHARE = 256ULL * 1024 * 1024;
 constexpr std::int64_t RANKS = 4;
@@ -59,11 +59,12 @@ class GenCursor : public dftracer::utils::dataframe::Cursor {
     GenCursor(std::int64_t rows, std::int64_t keys, std::uint64_t seed)
         : rows_(rows), keys_(keys), seed_(seed) {}
 
-    dftracer::utils::coro::CoroTask<
-        dftracer::utils::dstd::Optional<dftracer::utils::dataframe::Morsel>>
+    dftracer::utils::coro::CoroTask<dftracer::utils::dataframe::MorselResult>
     next(std::int64_t) override {
-        if (at_ >= rows_) co_return dftracer::utils::dstd::nullopt;
-        const std::int64_t n = std::min(MORSEL_ROWS, rows_ - at_);
+        if (at_ >= rows_)
+            co_return dftracer::utils::dataframe::MorselResult(
+                dftracer::utils::dstd::nullopt);
+        const std::int64_t n = std::min(BATCH_SIZE, rows_ - at_);
         dftracer::utils::dstd::Vector<std::int64_t> k(
             static_cast<std::size_t>(n));
         dftracer::utils::dstd::Vector<std::int64_t> t(
@@ -88,7 +89,7 @@ class GenCursor : public dftracer::utils::dataframe::Cursor {
             dftracer::utils::dataframe::Series::flat_i64(t.data(), n));
         m.columns.push_back(
             dftracer::utils::dataframe::Series::flat_i64(v.data(), n));
-        co_return m;
+        co_return dftracer::utils::dataframe::MorselResult(std::move(m));
     }
 
    private:
@@ -114,7 +115,7 @@ class GenSource : public dftracer::utils::dataframe::Source {
         return out;
     }
 
-    dftracer::utils::dataframe::ScanResult scan(
+    dftracer::utils::dstd::Result<dftracer::utils::dataframe::ScanResult> scan(
         const dftracer::utils::dataframe::ScanRequest& req) const override {
         dftracer::utils::dataframe::ScanResult r;
         r.cursor =
@@ -140,8 +141,14 @@ inline dftracer::utils::dataframe::LazyFrame gen(std::int64_t rows,
 inline dftracer::utils::coro::CoroTask<std::int64_t> drain_count(
     dftracer::utils::dataframe::LazyFrame lf) {
     std::int64_t n = 0;
-    auto g = lf.stream(MORSEL_ROWS);
-    while (auto frame = co_await g.next()) n += frame->num_rows();
+    auto g = lf.stream(BATCH_SIZE);
+    while (auto frame = co_await g.next()) {
+        if (!*frame) {
+            std::fprintf(stderr, "drain_count: %s\n", frame->error().c_str());
+            std::exit(1);
+        }
+        n += (*frame)->num_rows();
+    }
     co_return n;
 }
 
@@ -149,15 +156,16 @@ inline dftracer::utils::coro::CoroTask<void> genesis_run(
     dftracer::utils::coro::Scope& ctx, dftracer::utils::dstd::String root) {
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> roots{
         std::move(root)};
-    auto discovery = co_await dftracer::utils::trace::genesis::discover(
+    auto found = co_await dftracer::utils::domains::workload::genesis::discover(
         ctx, std::move(roots));
-    if (discovery.groups.empty()) {
+    if (!found || found->groups.empty()) {
         std::fprintf(stderr, "genesis found no run group\n");
         std::exit(1);
     }
-    for (auto& group : discovery.groups) {
-        auto result = co_await dftracer::utils::trace::genesis::process_group(
-            ctx, std::move(group), GENESIS_SHARE);
+    for (auto& group : found->groups) {
+        auto result =
+            co_await dftracer::utils::domains::workload::genesis::process_group(
+                ctx, std::move(group), GENESIS_SHARE);
         std::size_t lines = 0;
         for (auto& run : result.runs) lines += run.lines().size();
         if (!result.skips.empty() || lines == 0) {
@@ -172,7 +180,7 @@ inline void write_gz(const dftracer::utils::dstd::String& path,
     require_ok(dftracer::utils::dstd::fs::create_directories(
                    dftracer::utils::dstd::PathView(path).parent()),
                "create_directories");
-    dftracer::utils::utilities::fileio::compress::GzipMemberCompressor comp(1);
+    dftracer::utils::fileio::compress::GzipMemberCompressor comp(1);
     auto member = comp.compress_member(
         reinterpret_cast<const std::uint8_t*>(content.data()), content.size());
     if (!member) {

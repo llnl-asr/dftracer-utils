@@ -5,7 +5,6 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/exception_helpers.h>
 #include <dftracer/utils/coro/async_generator.h>
-#include <dftracer/utils/coro/cancelled.h>
 #include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/coro/detail/coro.h>
 #include <dftracer/utils/coro/executor.h>
@@ -14,6 +13,7 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/expected.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -30,8 +30,6 @@ namespace dftracer::utils::coro {
 
 namespace detail {
 
-dstd::Error error_from_exception(const std::exception_ptr& error) noexcept;
-
 /// The items claim their index one at a time, so a worker frame exists only for
 /// a job that can run.
 std::size_t parallel_worker_count(std::size_t requested, std::size_t items,
@@ -41,18 +39,17 @@ template <typename T>
 struct FirstSuccessOutcome {
     dstd::Optional<T> value;
     std::exception_ptr error;
+    bool stopped{false};
 };
 
 template <typename T>
 CoroTask<void> first_success_child(CoroTask<T> task,
                                    Channel<FirstSuccessOutcome<T>>& outcomes) {
+    auto settled = co_await settle(std::move(task));
     FirstSuccessOutcome<T> outcome;
-    try {
-        T value = co_await std::move(task);
-        outcome.value.emplace(std::move(value));
-    } catch (...) {
-        outcome.error = std::current_exception();
-    }
+    outcome.value = std::move(settled.value);
+    outcome.error = std::move(settled.exception);
+    outcome.stopped = settled.stopped;
     // The channel has one slot per child, so this send cannot be refused.
     outcomes.try_send(std::move(outcome));
 }
@@ -68,7 +65,7 @@ CoroTask<void> first_success_collect(Channel<FirstSuccessOutcome<T>>& outcomes,
         auto outcome = co_await outcomes.receive();
         if (outcome->value) {
             winner = std::move(outcome->value);
-        } else {
+        } else if (outcome->error) {
             last_error = std::move(outcome->error);
         }
     }
@@ -79,20 +76,17 @@ CoroTask<void> settled_collect(
     dstd::Vector<SpawnFuture<T>>& futures,
     dstd::Vector<dstd::Expected<T, dstd::Error>>& outcomes) {
     for (auto& future : futures) {
-        std::exception_ptr error;
-        try {
-            if constexpr (std::is_void_v<T>) {
-                co_await future;
-                outcomes.emplace_back();
-            } else {
-                T value = co_await future;
-                outcomes.emplace_back(std::move(value));
-            }
-        } catch (...) {
-            error = std::current_exception();
-        }
-        if (error) {
-            outcomes.push_back(dstd::Unexpected(error_from_exception(error)));
+        auto settled = co_await settle_in_place(future);
+        if (settled.exception) {
+            outcomes.push_back(dstd::Unexpected(
+                common::error_of_exception(settled.exception)));
+        } else if (settled.stopped) {
+            outcomes.push_back(dstd::Unexpected(dstd::Error{
+                dstd::Condition::Cancelled, "a task was cancelled"}));
+        } else if constexpr (std::is_void_v<T>) {
+            outcomes.emplace_back();
+        } else {
+            outcomes.emplace_back(std::move(*settled.value));
         }
     }
 }
@@ -149,6 +143,8 @@ struct UnorderedMessage {
 
     dstd::Optional<R> value;
     std::exception_ptr error;
+    /// The job stopped.
+    bool stopped{false};
 };
 
 template <typename T, typename Fn, typename R>
@@ -163,30 +159,25 @@ struct UnorderedState {
 };
 
 // Owns its state, because the generator can be dropped while this runs. It ends
-// at its next send once the generator closes the channel.
+// at its next send once the generator closes the channel, and a wait cancelled
+// at shutdown ends it, which the generator sees as the end of the channel.
 template <typename T, typename Fn, typename R>
 Coro unordered_worker(dstd::SharedPtr<UnorderedState<T, Fn, R>> state,
                       ChannelProducer<UnorderedMessage<R>> producer) {
     auto guard = producer.guard();
-    try {
-        for (;;) {
-            const std::size_t index =
-                state->next.fetch_add(1, std::memory_order_relaxed);
-            if (index >= state->items.size()) co_return;
-            UnorderedMessage<R> message;
-            try {
-                R value = co_await std::invoke(state->fn,
-                                               std::move(state->items[index]));
-                message.value.emplace(std::move(value));
-            } catch (...) {
-                message.error = std::current_exception();
-            }
-            const bool failed = message.error != nullptr;
-            const bool sent = co_await state->channel.send(std::move(message));
-            if (failed || !sent) co_return;
-        }
-    } catch (...) {
-        // A wait cancelled at shutdown. The generator sees the channel end.
+    for (;;) {
+        const std::size_t index =
+            state->next.fetch_add(1, std::memory_order_relaxed);
+        if (index >= state->items.size()) co_return;
+        auto settled = co_await settle(
+            std::invoke(state->fn, std::move(state->items[index])));
+        UnorderedMessage<R> message;
+        message.value = std::move(settled.value);
+        message.error = std::move(settled.exception);
+        message.stopped = settled.stopped;
+        const bool failed = message.error != nullptr || message.stopped;
+        const bool sent = co_await state->channel.send(std::move(message));
+        if (failed || !sent) co_return;
     }
 }
 
@@ -196,7 +187,8 @@ Coro unordered_worker(dstd::SharedPtr<UnorderedState<T, Fn, R>> state,
  * @brief Waits for every task and gives each outcome, with errors as values.
  *
  * Tasks run at once on the current executor. A failed task does not stop the
- * others.
+ * others, and a task that stopped gives a dstd::Condition::Cancelled error.
+ * When the task of this call is cancelled, it stops after the tasks end.
  */
 template <typename T>
 CoroTask<dstd::Vector<dstd::Expected<T, dstd::Error>>> when_all_settled(
@@ -211,19 +203,15 @@ CoroTask<dstd::Vector<dstd::Expected<T, dstd::Error>>> when_all_settled(
     }
     dstd::Vector<dstd::Expected<T, dstd::Error>> outcomes;
     outcomes.reserve(futures.size());
-    std::exception_ptr cancelled;
-    try {
-        co_await detail::settled_collect(futures, outcomes);
-    } catch (...) {
-        cancelled = std::current_exception();
-    }
+    co_await detail::settled_collect(futures, outcomes);
+    const bool cancelled = co_await this_coro::stop_requested;
     if (cancelled) {
         for (auto& future : futures) future.cancel();
     }
     co_await scope.join();
     if (cancelled) {
         for (const auto& outcome : outcomes) outcome.discard();
-        common::rethrow_and_clear(cancelled);
+        co_await stop_here();
     }
     co_return outcomes;
 }
@@ -232,16 +220,14 @@ CoroTask<dstd::Vector<dstd::Expected<T, dstd::Error>>> when_all_settled(
  * @brief Gives the value of the first task that succeeds, cancels the others at
  * their next wait and waits for them to end.
  *
- * Raises the last error when all fail, and an invalid-argument error when
- * @p tasks is empty.
+ * Raises the last error when all fail. When every task stopped, or this task
+ * is cancelled, it stops. An empty @p tasks is misuse and ends the process.
  */
 template <typename T>
     requires(!std::is_void_v<T>)
 CoroTask<T> first_success(dstd::Vector<CoroTask<T>> tasks) {
     if (tasks.empty()) {
-        throw common::DFTUtilsException(
-            dstd::Error{dstd::Condition::InvalidArgument,
-                        "first_success needs at least one task"});
+        dstd::fatal("coro: first_success needs at least one task");
     }
     const PromiseBase* owner = co_await detail::OWNS_SCOPE;
     Executor* executor = co_await this_coro::executor;
@@ -256,19 +242,14 @@ CoroTask<T> first_success(dstd::Vector<CoroTask<T>> tasks) {
     }
     dstd::Optional<T> winner;
     std::exception_ptr last_error;
-    std::exception_ptr cancelled;
-    try {
-        co_await detail::first_success_collect(outcomes, total, winner,
-                                               last_error);
-    } catch (...) {
-        cancelled = std::current_exception();
-    }
-    if (winner || cancelled) {
+    auto collected = co_await settle(
+        detail::first_success_collect(outcomes, total, winner, last_error));
+    if (winner || collected.stopped) {
         for (auto& future : futures) future.cancel();
     }
     co_await scope.join();
-    if (cancelled) common::rethrow_and_clear(cancelled);
     if (winner) co_return std::move(*winner);
+    if (collected.stopped || !last_error) co_await stop_here();
     common::rethrow_and_clear(last_error);
 }
 
@@ -289,7 +270,8 @@ using ParallelMapResult =
  * gives the results in item order.
  *
  * Fails fast: the first error ends running jobs as cancelled at their next
- * wait, and that error is raised. Jobs that do not start are never called.
+ * wait, and that error is raised. Jobs that do not start are never called. A
+ * stop from outside stops this task after the running jobs end.
  */
 template <typename T, typename Fn, typename R = ParallelMapValue<T, Fn>>
 CoroTask<ParallelMapResult<R>> parallel_map(dstd::Vector<T> items, Fn fn,
@@ -305,8 +287,9 @@ CoroTask<ParallelMapResult<R>> parallel_map(dstd::Vector<T> items, Fn fn,
     }
     co_await scope.join();
     // A worker stops without an error on a stop from outside.
-    if (state.next.load(std::memory_order_relaxed) < state.items.size()) {
-        throw_cancelled("parallel_map stopped");
+    if (scope.child_stopped() ||
+        state.next.load(std::memory_order_relaxed) < state.items.size()) {
+        co_await stop_here();
     }
     if constexpr (!std::is_void_v<R>) {
         dstd::Vector<R> results;
@@ -323,10 +306,10 @@ CoroTask<ParallelMapResult<R>> parallel_map(dstd::Vector<T> items, Fn fn,
  * yields each result as it finishes.
  *
  * Fails fast: the first error is raised from the next read and later jobs do
- * not start. Dropping the generator stops new jobs. A running job ends in the
- * background and owns @p fn and the items until then, so @p fn must capture by
- * value. Jobs finished but not read wait in a channel of `max_in_flight` slots,
- * which holds back the next ones.
+ * not start. A job that stops stops the reader. Dropping the generator stops
+ * new jobs. A running job ends in the background and owns @p fn and the items
+ * until then, so @p fn must capture by value. Jobs finished but not read wait
+ * in a channel of `max_in_flight` slots, which holds back the next ones.
  */
 template <typename T, typename Fn, typename R = ParallelMapValue<T, Fn>>
     requires(!std::is_void_v<R>)
@@ -334,9 +317,7 @@ AsyncGenerator<R> parallel_map_unordered(dstd::Vector<T> items, Fn fn,
                                          ParallelOptions options = {}) {
     Executor* executor = co_await this_coro::executor;
     if (executor == nullptr) {
-        throw common::DFTUtilsException(
-            dstd::Error{dstd::Condition::InvalidArgument,
-                        "parallel_map_unordered needs a running executor"});
+        dstd::fatal("coro: parallel_map_unordered needs a running executor");
     }
     const std::size_t workers = detail::parallel_worker_count(
         options.max_in_flight, items.size(), executor);
@@ -349,6 +330,7 @@ AsyncGenerator<R> parallel_map_unordered(dstd::Vector<T> items, Fn fn,
         detail::Coro worker = detail::unordered_worker<T, Fn, R>(
             state, state->channel.producer());
         worker.handle().promise().executor = executor;
+        worker.handle().promise().stoppable = true;
         executor->post(worker.release());
     }
     struct Closer {
@@ -358,9 +340,10 @@ AsyncGenerator<R> parallel_map_unordered(dstd::Vector<T> items, Fn fn,
     for (;;) {
         auto message = co_await state->channel.receive();
         if (!message) break;
-        if (message->error) {
+        if (message->error || message->stopped) {
             state->next.store(state->items.size(), std::memory_order_relaxed);
-            common::rethrow_and_clear(message->error);
+            if (message->error) common::rethrow_and_clear(message->error);
+            co_await stop_here();
         }
         co_yield std::move(*message->value);
     }

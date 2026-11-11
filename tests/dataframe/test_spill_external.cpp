@@ -8,6 +8,7 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
@@ -22,6 +23,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <stdlib.h>
+#include <task_result.h>
 #include <testing_runtime.h>
 #include <unistd.h>
 
@@ -78,7 +80,7 @@ class Hooked : public Source {
         return out;
     }
 
-    ScanResult scan(const ScanRequest& req) const override {
+    dstd::Result<ScanResult> scan(const ScanRequest& req) const override {
         ScanResult r;
         r.cursor = dstd::make_unique<Rows>(morsels_, rows_, hook_);
         r.filters.assign(req.filters.size(), Pushed::No);
@@ -91,8 +93,8 @@ class Hooked : public Source {
         Rows(std::int64_t morsels, std::int64_t rows,
              dstd::SharedPtr<Hook> hook)
             : morsels_(morsels), rows_(rows), hook_(std::move(hook)) {}
-        coro::CoroTask<dstd::Optional<Morsel>> next(std::int64_t) override {
-            if (at_ >= morsels_) co_return dstd::nullopt;
+        coro::CoroTask<MorselResult> next(std::int64_t) override {
+            if (at_ >= morsels_) co_return MorselResult(dstd::nullopt);
             if (*hook_) (*hook_)(at_);
             dstd::Vector<std::int64_t> k(static_cast<std::size_t>(rows_)),
                 v(static_cast<std::size_t>(rows_));
@@ -108,7 +110,7 @@ class Hooked : public Source {
             m.rows = rows_;
             m.columns.push_back(Series::flat_i64(k.data(), rows_));
             m.columns.push_back(Series::flat_i64(v.data(), rows_));
-            co_return m;
+            co_return MorselResult(std::move(m));
         }
 
        private:
@@ -136,14 +138,14 @@ struct SpillDirVar {
     dstd::Path dir;
     SpillDirVar() {
         dir = dstd::fs::current_path().value() /
-              ("spill_external_" + dstd::to_string(::getpid()));
+              (dstd::fmt<"spill_external_{}">(::getpid()));
         REQUIRE(dstd::fs::remove_all(dir).has_value());
         REQUIRE(dstd::fs::create_directories(dir).has_value());
         ::setenv("DFTRACER_UTILS_SPILL_DIR", dir.c_str(), 1);
     }
     ~SpillDirVar() {
         ::unsetenv("DFTRACER_UTILS_SPILL_DIR");
-        (void)dstd::fs::remove_all(dir);
+        dstd::fs::remove_all(dir).discard();
     }
 };
 
@@ -172,11 +174,11 @@ TEST_CASE("spill bytes show as external") {
         reserved = pool->try_reserve(free_budget / 2).status();
     });
     {
-        const DataFrame out =
+        const DataFrame out = dftu_utils_test::ok(
             dftu_utils_test::run_here(LazyFrame::scan(source)
                                           .sort_by("k")
                                           .memory_budget(SORT_BUDGET)
-                                          .collect());
+                                          .collect()));
         CHECK(out.num_rows() == MORSELS * ROWS);
     }
 
@@ -202,12 +204,13 @@ TEST_CASE("merged sort runs leave the spill slot before the query ends") {
     });
     // The small budget cuts about 64 runs and merges them four at a time, so
     // two merge passes run before the first row comes out.
-    dstd::UniquePtr<Cursor> cursor = LazyFrame::scan(source)
-                                         .sort_by("k")
-                                         .memory_budget(SMALL_SORT_BUDGET)
-                                         .open_cursor();
-    dstd::Optional<Morsel> first =
-        dftracer::utils::default_runtime().submit(cursor->next(ROWS)).get();
+    dstd::UniquePtr<Cursor> cursor =
+        dftu_utils_test::ok(LazyFrame::scan(source)
+                                .sort_by("k")
+                                .memory_budget(SMALL_SORT_BUDGET)
+                                .open_cursor());
+    dstd::Optional<Morsel> first = dftu_utils_test::ok(
+        dftracer::utils::default_runtime().submit(cursor->next(ROWS)).get());
     REQUIRE(first.has_value());
     const std::size_t after_merge = spill_slot_bytes();
     REQUIRE(before_merge > 0);

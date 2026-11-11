@@ -60,7 +60,9 @@ SystemCache* new_cache() {
     auto bytes = static_cast<std::size_t>(::sysconf(_SC_PAGESIZE));
     void* raw = os_mmap(nullptr, bytes, PROT_READ | PROT_WRITE,
                         MAP_PRIVATE | MAP_ANON, -1, 0);
-    if (raw == MAP_FAILED) throw std::bad_alloc();
+    if (raw == MAP_FAILED) {
+        abort_with("dftracer-utils memory: cannot map a thread cache\n");
+    }
     auto* c = new (raw) SystemCache{};
     attrib_register(c->attrib);
     SystemCache* head = g_system_caches.load(std::memory_order_relaxed);
@@ -107,7 +109,8 @@ void system_attrib_after_fork() noexcept {
 
 // posix_memalign, not aligned_alloc: aligned_alloc rounds the size up to the
 // alignment, and the slack would hide an overrun from ASan.
-void* system_allocate(std::size_t size, std::size_t align) {
+template <bool Fatal>
+void* system_allocate_in(std::size_t size, std::size_t align) {
     if (align == 0 || (align & (align - 1)) != 0) {
         abort_with("dftracer-utils memory: alignment is not a power of two\n");
     }
@@ -115,7 +118,8 @@ void* system_allocate(std::size_t size, std::size_t align) {
         align > SYSTEM_HEADER_SIZE ? align : SYSTEM_HEADER_SIZE;
     if (offset > std::numeric_limits<std::uint32_t>::max() ||
         size > std::numeric_limits<std::size_t>::max() - offset) {
-        throw std::bad_alloc();
+        if constexpr (Fatal) size_overflow();
+        return nullptr;
     }
     if (size > static_cast<std::size_t>(ATTRIB_FLUSH_BYTES)) {
         std::size_t cap = hard_cap();
@@ -123,12 +127,14 @@ void* system_allocate(std::size_t size, std::size_t align) {
                             std::max<std::ptrdiff_t>(attrib_live_total(), 0)) +
                                 size >
                             cap) {
-            throw std::bad_alloc();
+            if constexpr (Fatal) out_of_memory(size);
+            return nullptr;
         }
     }
     void* base = nullptr;
     if (::posix_memalign(&base, offset, offset + size) != 0) {
-        throw std::bad_alloc();
+        if constexpr (Fatal) out_of_memory(size);
+        return nullptr;
     }
     void* p = static_cast<char*>(base) + offset;
     AttribCache& attrib = system_attrib();
@@ -138,6 +144,14 @@ void* system_allocate(std::size_t size, std::size_t align) {
                      static_cast<std::uint32_t>(offset), pool, 0};
     attrib_charge_any(attrib, size);
     return p;
+}
+
+void* system_allocate(std::size_t size, std::size_t align) {
+    return system_allocate_in<true>(size, align);
+}
+
+void* system_try_allocate(std::size_t size, std::size_t align) {
+    return system_allocate_in<false>(size, align);
 }
 
 void system_deallocate(void* p) noexcept {

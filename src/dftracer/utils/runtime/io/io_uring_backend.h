@@ -62,8 +62,8 @@ class IoUringBackend : public ThreadPoolFileOps {
     /// Whether a kernel thread takes the requests. Set by @ref start.
     bool is_sq_polled() const noexcept { return is_sq_polled_; }
 
-    /// Throws when the kernel refuses a ring, because no operation could end.
-    void start() override;
+    /// Fails when the kernel refuses a ring, because no operation could end.
+    dstd::Result<void> start() override;
     void stop() override;
     void submit(IoOp& op) override;
     int flush() override;

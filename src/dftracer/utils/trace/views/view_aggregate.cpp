@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dstd/hash_map.h>
@@ -6,7 +7,7 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/plan/view_resolver.h>
+#include <dftracer/utils/trace/index/plan/view_resolver.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_scan.h>
@@ -83,7 +84,7 @@ constexpr dstd::StringView RANK = "rank";
 
 }  // namespace
 
-dstd::Optional<dftracer::utils::index::plan::GroupResolver::Column>
+dstd::Optional<dftracer::utils::trace::index::plan::GroupResolver::Column>
 resolver_column(GroupKey::Kind kind) {
     switch (kind) {
         case GroupKey::Kind::FilePath:
@@ -98,14 +99,15 @@ resolver_column(GroupKey::Kind kind) {
     }
 }
 
-const dftracer::utils::index::plan::GroupResolver* ensure_resolver(
+const dftracer::utils::trace::index::plan::GroupResolver* ensure_resolver(
     const ViewPlan& plan) {
     if (plan.resolver) return plan.resolver.get();
-    dstd::Vector<dftracer::utils::index::plan::GroupResolver::Column> columns;
+    dstd::Vector<dftracer::utils::trace::index::plan::GroupResolver::Column>
+        columns;
     for (const auto& gk : plan.group_by)
         if (auto c = resolver_column(gk.kind)) columns.push_back(std::move(*c));
     if (columns.empty()) return nullptr;
-    dstd::Vector<dftracer::utils::index::plan::RowSetFile> files;
+    dstd::Vector<dftracer::utils::trace::index::plan::RowSetFile> files;
     for (const auto& f : plan.files) {
         dstd::String index{dstd::StringView(f.index_path)};
         if (index.empty())
@@ -114,14 +116,14 @@ const dftracer::utils::index::plan::GroupResolver* ensure_resolver(
             {dstd::String(dstd::StringView(f.file_path)), std::move(index)});
     }
     plan.resolver =
-        dstd::make_shared<dftracer::utils::index::plan::GroupResolver>(files,
-                                                                       columns);
+        dstd::make_shared<dftracer::utils::trace::index::plan::GroupResolver>(
+            files, columns);
     return plan.resolver.get();
 }
 
 dstd::String resolve_group_value(
-    const dftracer::utils::index::plan::GroupResolver& r, const GroupKey& gk,
-    const dstd::String& hash) {
+    const dftracer::utils::trace::index::plan::GroupResolver& r,
+    const GroupKey& gk, const dstd::String& hash) {
     const GroupKey::Kind kind = gk.kind;
     auto text = [](const dstd::String& v) {
         return dstd::String(v.data(), v.size());
@@ -293,13 +295,20 @@ void project_columns(dftracer::utils::dataframe::DataFrame& batch,
     batch.columns = std::move(columns);
 }
 
-dataframe::DataFrame apply_agg_post_ops(dataframe::DataFrame batch,
-                                        const ViewPlan& plan) {
-    if (!plan.sort_col.empty())
-        batch = batch.sort_by(dstd::String(plan.sort_col), plan.sort_desc);
-    if (!plan.topk_col.empty())
-        batch = batch.topk(dstd::String(plan.topk_col), plan.topk_k,
-                           plan.topk_largest);
+dstd::Result<dataframe::DataFrame> apply_agg_post_ops(
+    dataframe::DataFrame batch, const ViewPlan& plan) {
+    if (!plan.sort_col.empty()) {
+        auto sorted =
+            batch.sort_by(dstd::String(plan.sort_col), plan.sort_desc);
+        if (!sorted) return sorted.error();
+        batch = std::move(*sorted);
+    }
+    if (!plan.topk_col.empty()) {
+        auto top = batch.topk(dstd::String(plan.topk_col), plan.topk_k,
+                              plan.topk_largest);
+        if (!top) return top.error();
+        batch = std::move(*top);
+    }
     if (plan.offset || plan.limit) {
         const std::int64_t off = static_cast<std::int64_t>(plan.offset);
         const std::int64_t len = plan.limit

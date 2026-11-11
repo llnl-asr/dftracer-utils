@@ -7,7 +7,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
-#include <dftracer/utils/index/record_schema.h>
+#include <dftracer/utils/trace/index/record_schema.h>
 
 #include <utility>
 
@@ -42,10 +42,10 @@ struct ViewDefinition {
     dstd::Vector<dstd::String> paths;
     /// With `by_path`, the files' record schema (registered, so it lives for
     /// the process); decoding converts its fields and binds its roles.
-    const dftracer::utils::index::RecordSchema* record_schema = nullptr;
+    const dftracer::utils::trace::index::RecordSchema* record_schema = nullptr;
     /// With `record_schema`, the declared field at each of `paths` (null when
     /// undeclared), aligned with `paths`.
-    dstd::Vector<const dftracer::utils::index::FieldSpec*> path_fields;
+    dstd::Vector<const dftracer::utils::trace::index::FieldSpec*> path_fields;
     /// The fields `window` reads, and microseconds per unit of each; empty
     /// reads "ts" and "dur" in microseconds.
     dstd::String time_path;
@@ -56,7 +56,7 @@ struct ViewDefinition {
     /// (the record schema's `args_fallback`).
     bool args_fallback = true;
     /// Drop lines that lack the query's byte needles before parsing them
-    /// (index::plan::Prefilter). Results are the same either way.
+    /// (trace::index::plan::Prefilter). Results are the same either way.
     bool prefilter = true;
 
     ViewDefinition& with_name(const dstd::String& n);

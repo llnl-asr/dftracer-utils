@@ -8,11 +8,12 @@
 //
 //   prefilter_bench [lines] [rounds]
 
+#include <bench_ok.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
-#include <dftracer/utils/index/plan/prefilter.h>
+#include <dftracer/utils/trace/index/plan/prefilter.h>
 
 #include <algorithm>
 #include <chrono>
@@ -23,7 +24,7 @@
 
 using namespace dftracer::utils;
 
-using dftracer::utils::index::plan::Prefilter;
+using dftracer::utils::trace::index::plan::Prefilter;
 
 namespace {
 
@@ -62,7 +63,9 @@ void run(
     const char* label, const dftracer::utils::dstd::String& query,
     const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& lines,
     int rounds) {
-    const Prefilter p(duql::parse_or_throw(query));
+    auto parsed = duql::Query::from_string(query);
+    if (!parsed) dftu::bench::fail(parsed.error());
+    const Prefilter p(std::move(*parsed));
     std::size_t needles = 0;
     for (const auto& c : p.clauses()) needles += c.size();
     const bool per_needle = std::getenv("PREFILTER_PER_NEEDLE") != nullptr;

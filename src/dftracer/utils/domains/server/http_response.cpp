@@ -1,0 +1,122 @@
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/domains/server/http_response.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/duql/errc.h>
+
+#include <algorithm>
+
+namespace dftracer::utils::domains::server {
+
+namespace {
+
+bool icase_equal(dstd::StringView a, dstd::StringView b) {
+    return ::dftracer::utils::common::detail::iequals(a, b);
+}
+
+bool has_content_length(
+    const dstd::Vector<dstd::Pair<dstd::String, dstd::String>> &headers) {
+    return std::any_of(headers.begin(), headers.end(), [](const auto &h) {
+        return icase_equal(h.first, "Content-Length");
+    });
+}
+
+}  // namespace
+
+dstd::String HttpResponse::serialize_headers() const {
+    dstd::String out;
+    out.reserve(256);
+
+    out += "HTTP/1.1 ";
+    out += dstd::to_string(status_code);
+    out += ' ';
+    out += status_text;
+    out += "\r\n";
+
+    // Loopback-bound (and optionally token-gated), so allow any origin: this
+    // lets the VS Code webview, hosted at a vscode-webview:// origin, read the
+    // API cross-origin.
+    out += "Access-Control-Allow-Origin: *\r\n";
+
+    for (const auto &[name, value] : headers) {
+        out += name;
+        out += ": ";
+        out += value;
+        out += "\r\n";
+    }
+
+    if (!body.empty() && !has_content_length(headers)) {
+        out += "Content-Length: ";
+        out += dstd::to_string(body.size());
+        out += "\r\n";
+    }
+
+    out += "\r\n";
+    return out;
+}
+
+dstd::String HttpResponse::serialize() const {
+    auto out = serialize_headers();
+    out += body;
+    return out;
+}
+
+HttpResponse HttpResponse::ok() {
+    return HttpResponse{
+        .status_code = 200, .status_text = "OK", .headers = {}, .body = {}};
+}
+
+HttpResponse HttpResponse::ok(dstd::String body,
+                              const dstd::String &content_type) {
+    return HttpResponse{.status_code = 200,
+                        .status_text = "OK",
+                        .headers = {{"Content-Type", content_type}},
+                        .body = std::move(body)};
+}
+
+HttpResponse HttpResponse::not_found() {
+    return HttpResponse{.status_code = 404,
+                        .status_text = "Not Found",
+                        .headers = {{"Content-Type", "text/plain"}},
+                        .body = "Not Found"};
+}
+
+HttpResponse HttpResponse::bad_request(const dstd::String &msg) {
+    return HttpResponse{.status_code = 400,
+                        .status_text = "Bad Request",
+                        .headers = {{"Content-Type", "text/plain"}},
+                        .body = msg};
+}
+
+HttpResponse HttpResponse::internal_error(const dstd::String &msg) {
+    return HttpResponse{.status_code = 500,
+                        .status_text = "Internal Server Error",
+                        .headers = {{"Content-Type", "text/plain"}},
+                        .body = msg};
+}
+
+HttpResponse HttpResponse::from_error(const dstd::Error &error) {
+    const dstd::String message(error.message());
+    if (common::errorcode_of(error) == common::ErrorCode::InvalidArgument ||
+        error.is_code(duql::DuqlErrc::Parse))
+        return bad_request(message);
+    return internal_error(message);
+}
+
+HttpResponse HttpResponse::streaming(dstd::UniquePtr<StreamGenerator> gen,
+                                     const dstd::String &content_type) {
+    HttpResponse resp;
+    resp.status_code = 200;
+    resp.status_text = "OK";
+    resp.headers = {{"Content-Type", content_type},
+                    {"Transfer-Encoding", "chunked"}};
+    resp.stream = std::move(gen);
+    return resp;
+}
+
+}  // namespace dftracer::utils::domains::server

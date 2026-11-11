@@ -3,6 +3,7 @@
 // same condition in expression form, gives the same result on each record.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -66,7 +67,7 @@ const duql::detail::FieldNode& field_of(const duql::detail::QueryNode& leaf) {
 dstd::String expression_form(const duql::detail::QueryNode& leaf) {
     const dstd::String text = duql::detail::to_string(leaf);
     const dstd::String& path = field_of(leaf).path;
-    const dstd::String wrapped = "if(true, " + path + ", null)";
+    const dstd::String wrapped = dstd::fmt<"if(true, {}, null)">(path);
     const auto at = text.find(path);
     REQUIRE(at == 0);
     return wrapped + text.substr(path.size());
@@ -79,7 +80,7 @@ dstd::String json_literal(const duql::LiteralValue& v) {
             if constexpr (std::is_same_v<T, dstd::String>) {
                 dstd::String out = "\"";
                 dftracer::utils::json::append_json_escaped(out, x);
-                return out + "\"";
+                return dstd::fmt<"{}\"">(out);
             } else if constexpr (std::is_same_v<T, bool>) {
                 return x ? "true" : "false";
             } else if constexpr (std::is_same_v<T, double>) {
@@ -101,12 +102,12 @@ dstd::Vector<dstd::String> values_for(const duql::detail::QueryNode& leaf) {
         out.push_back(json_literal(v));
         if (const auto* i = std::get_if<std::int64_t>(&v)) {
             out.push_back(dstd::int_text(*i + 1));
-            out.push_back(dstd::int_text(*i) + ".5");
+            out.push_back(dstd::fmt<"{}.5">(*i));
         } else if (const auto* u = std::get_if<std::uint64_t>(&v)) {
             out.push_back(dstd::int_text(*u + 1));
-            out.push_back(dstd::int_text(*u) + ".0");
+            out.push_back(dstd::fmt<"{}.0">(*u));
         } else if (const auto* s = std::get_if<dstd::String>(&v)) {
-            out.push_back(json_literal(*s + "x"));
+            out.push_back(json_literal(dstd::fmt<"{}x">(*s)));
         }
     };
     std::visit(
@@ -134,7 +135,7 @@ dstd::String record_at(const dstd::String& path, const dstd::String& value) {
         dstd::String key = "\"";
         dftracer::utils::json::append_json_escaped(
             key, path.substr(start, dot - start));
-        out += "{" + key + "\":";
+        out += dstd::fmt<"{{}\":">(key);
         ++depth;
         if (dot == dstd::String::npos) break;
         start = dot + 1;
@@ -149,7 +150,7 @@ duql::ValueMap map_of(const dstd::String& path, simdjson::dom::element record) {
     duql::ValueMap m;
     json::JsonValue v = json::JsonValue(record).at(path);
     if (!v.exists() && !path.starts_with("args."))
-        v = json::JsonValue(record).at("args." + path);
+        v = json::JsonValue(record).at(dstd::fmt<"args.{}">(path));
     if (!v.exists()) return m;
     const auto el = v.element();
     using T = simdjson::dom::element_type;
@@ -217,7 +218,7 @@ TEST_CASE("literal leaves and their expression form agree") {
                 std::holds_alternative<duql::detail::ExprLeaf>((*expr)->data));
             dstd::Vector<dstd::String> placed = {path};
             if (path.find('.') == dstd::String::npos)
-                placed.push_back("args." + path);
+                placed.push_back(dstd::fmt<"args.{}">(path));
             for (const auto& at : placed)
                 for (const auto& value : values_for(*leaf)) {
                     const dstd::String text = record_at(at, value);

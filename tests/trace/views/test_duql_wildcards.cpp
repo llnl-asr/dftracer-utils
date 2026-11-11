@@ -5,9 +5,10 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/trace/index/indexer.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -46,11 +47,12 @@ dstd::String write_counters(TestEnvironment& env, const dstd::String& dir = "",
     const dstd::String gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
-    (void)dstd::fs::remove(plain);
+    dstd::fs::remove(plain).discard();
     if (build)
-        dftracer::utils::index::Indexer::open(
-            {dstd::String(dstd::StringView(gz))})
-            .build();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                                    {dstd::String(dstd::StringView(gz))}))
+                .build());
     return gz;
 }
 
@@ -60,7 +62,9 @@ View view_of(const dstd::String& gz) {
         dstd::String(dstd::String(determine_index_path(gz, ""))));
 }
 
-dataframe::DataFrame frame(const View& v) { return v.collect().get(); }
+dataframe::DataFrame frame(const View& v) {
+    return dftu_utils_test::ok(v.collect().get());
+}
 
 dstd::Vector<dstd::String> names(const dataframe::DataFrame& f) {
     return f.names;
@@ -78,12 +82,8 @@ void same(const View& v, const dstd::String& wild,
 }
 
 dstd::String error_of(const View& v, const dstd::String& q) {
-    try {
-        (void)v.duql(q);
-    } catch (const std::exception& e) {
-        return e.what();
-    }
-    return {};
+    const auto status = v.duql(q).status();
+    return status ? dstd::String() : dstd::String(status.error().message());
 }
 
 struct NullSink : ExportSink {
@@ -162,6 +162,17 @@ TEST_SUITE("DuqlWildcards") {
         }
     }
 
+    TEST_CASE("a wildcard on a missing trace file reports the failed scan") {
+        TestEnvironment env(10);
+        const dstd::String gz = env.dir() + "/absent.ndjson.gz";
+        const auto v = View::from_file(
+            dstd::String(gz),
+            dstd::String(dstd::String(determine_index_path(gz, ""))));
+        const dstd::String e = error_of(v, "select args.counters.*.p50");
+        CHECK(e.find("metadata read failed for " + gz) != dstd::String::npos);
+        CHECK(e.find("cannot stat") != dstd::String::npos);
+    }
+
     TEST_CASE("the expanded comparisons prune chunks") {
         TestEnvironment env(10);
         const auto gz = write_counters(env);
@@ -169,14 +180,17 @@ TEST_SUITE("DuqlWildcards") {
         const dstd::String spelled =
             "args.counters.a.p50 > 92 or args.counters.b.p50 > 92 or "
             "args.counters.c.p50 > 92";
-        const dstd::String plan = view_of(gz).explain_duql(wild);
+        const dstd::String plan =
+            dftu_utils_test::ok(view_of(gz).explain_duql(wild));
         CHECK(plan.find("args.counters.a.p50") != dstd::String::npos);
         CHECK(plan.find("args.counters.c.p50") != dstd::String::npos);
         CHECK(plan.find("*") == dstd::String::npos);
         NullSink a;
         NullSink b;
-        const auto sw = view_of(gz).duql(wild).sink_json(a).get();
-        const auto ss = view_of(gz).duql(spelled).sink_json(b).get();
+        const auto sw =
+            dftu_utils_test::ok(view_of(gz).duql(wild).sink_json(a).get());
+        const auto ss =
+            dftu_utils_test::ok(view_of(gz).duql(spelled).sink_json(b).get());
         CHECK(sw.events_matched == ss.events_matched);
         CHECK(sw.events_matched == 210);
         CHECK(sw.events_scanned < RECORDS);
@@ -255,11 +269,13 @@ TEST_SUITE("DuqlWildcards") {
             const dstd::String gz = plain + ".gz";
             REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
                 plain, gz, 2048));
-            (void)dstd::fs::remove(plain);
+            dstd::fs::remove(plain).discard();
             if (build)
-                dftracer::utils::index::Indexer::open(
-                    {dstd::String(dstd::StringView(gz))})
-                    .build();
+                dftu_utils_test::ok(
+                    dftu_utils_test::ok(
+                        dftracer::utils::trace::index::Indexer::open(
+                            {dstd::String(dstd::StringView(gz))}))
+                        .build());
             return view_of(gz);
         };
         const auto full = mk("full", true);

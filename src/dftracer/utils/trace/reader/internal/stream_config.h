@@ -1,0 +1,165 @@
+// SPDX-License-Identifier: MIT
+#ifndef DFTRACER_UTILS_TRACE_READER_INTERNAL_STREAM_CONFIG_H
+#define DFTRACER_UTILS_TRACE_READER_INTERNAL_STREAM_CONFIG_H
+
+#include <dftracer/utils/trace/reader/internal/stream_type.h>
+#include <stddef.h>
+
+#include <cstddef>
+
+namespace dftracer::utils::trace::reader::internal {
+
+/**
+ * @brief Stream configuration (C++ API).
+ *
+ * Plain struct containing stream parameters. Can be constructed directly
+ * or using StreamConfigManager for fluent API.
+ *
+ * Example (C++):
+ * @code
+ * // Fluent API (recommended)
+ * auto stream = reader->stream(
+ *     StreamConfig()
+ *         .lines(1, 1000)
+ *         .huge_buffer()  // 512MB
+ * );
+ *
+ * // Or chain basic methods
+ * auto stream = reader->stream(
+ *     StreamConfig()
+ *         .type(StreamType::LINE)
+ *         .range(RangeType::LINE_RANGE)
+ *         .from(1)
+ *         .to(1000)
+ *         .buffer(512 * 1024 * 1024)
+ * );
+ *
+ * // Or direct initialization (C++20)
+ * StreamConfig config{
+ *     .stream_type = StreamType::LINE,
+ *     .range_type = RangeType::LINE_RANGE,
+ *     .start = 1,
+ *     .end = 1000,
+ *     .buffer_size = 512 * 1024 * 1024
+ * };
+ * auto stream = reader->stream(config);
+ * @endcode
+ */
+class StreamConfig {
+   public:
+    StreamConfig() = default;
+    StreamConfig(StreamType stream_type, RangeType range_type,
+                 std::size_t start, std::size_t end, std::size_t buffer_size)
+        : stream_type_(stream_type),
+          range_type_(range_type),
+          start_(start),
+          end_(end),
+          buffer_size_(buffer_size) {}
+
+    bool extend_to_line_boundary() const { return extend_to_line_boundary_; }
+    StreamConfig& extend_to_line_boundary(bool v) {
+        extend_to_line_boundary_ = v;
+        return *this;
+    }
+
+    static constexpr std::size_t DEFAULT_BUFFER_SIZE = 4 * 1024 * 1024;  // 4MB
+    // ========================================================================
+    // Fluent API - Basic Setters
+    // ========================================================================
+
+    /**
+     * @brief Get stream type.
+     */
+    StreamType stream_type() const { return stream_type_; }
+
+    /**
+     * @brief Set stream type.
+     */
+    StreamConfig& stream_type(StreamType t) {
+        stream_type_ = t;
+        return *this;
+    }
+
+    /**
+     * @brief Get range type.
+     */
+    RangeType range_type() const { return range_type_; }
+
+    /**
+     * @brief Set range type.
+     */
+    StreamConfig& range_type(RangeType t) {
+        range_type_ = t;
+        return *this;
+    }
+
+    /**
+     * @brief Get start position.
+     */
+    std::size_t start() const { return start_; }
+
+    /**
+     * @brief Set start position.
+     */
+    StreamConfig& from(std::size_t s) {
+        start_ = s;
+        return *this;
+    }
+
+    /**
+     * @brief Get end position.
+     */
+    std::size_t end() const { return end_; }
+
+    /**
+     * @brief Set end position.
+     */
+    StreamConfig& to(std::size_t e) {
+        end_ = e;
+        return *this;
+    }
+
+    /**
+     * @brief Get buffer size in bytes.
+     */
+    std::size_t buffer_size() const { return buffer_size_; }
+
+    /**
+     * @brief Set buffer size in bytes.
+     */
+    StreamConfig& buffer_size(std::size_t size = 0) {
+        if (size == 0) {
+            // Reset to default 4MB
+            buffer_size_ = DEFAULT_BUFFER_SIZE;
+            return *this;
+        }
+        buffer_size_ = size;
+        return *this;
+    }
+
+   private:
+    /** Type of stream (BYTES, LINE, MULTI_LINES, etc.) */
+    StreamType stream_type_ = StreamType::Line;
+
+    /** How to interpret start/end (BYTE_RANGE or LINE_RANGE) */
+    RangeType range_type_ = RangeType::ByteRange;
+
+    /** Start of range (byte offset or line number based on range_type) */
+    std::size_t start_ = 0;
+
+    /** End of range (byte offset or line number based on range_type) */
+    std::size_t end_ = 0;
+
+    /**
+     * Internal buffer size in bytes (0 = use default).
+     *
+     * Larger buffers improve I/O performance but use more memory.
+     */
+    std::size_t buffer_size_ = 4 * 1024 * 1024;  // 4MB default
+
+    bool extend_to_line_boundary_ = false;
+};
+
+}  // namespace dftracer::utils::trace::reader::internal
+
+#endif  // DFTRACER_UTILS_TRACE_READER_INTERNAL_STREAM_CONFIG_H

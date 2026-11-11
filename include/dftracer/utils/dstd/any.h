@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_DSTD_ANY_H
 #define DFTRACER_UTILS_DSTD_ANY_H
 
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/memory/detail/heap.h>
 
 #include <any>
@@ -18,8 +19,8 @@ namespace dftracer::utils::dstd {
  *
  * A nothrow move constructible value that fits the buffer stays inline. Any
  * other is placed by memory::detail::allocate. The value must be copy
- * constructible. A moved-from Any is empty. A failed any_cast throws
- * std::bad_any_cast.
+ * constructible. A moved-from Any is empty. A failed any_cast of a
+ * reference or value ends the process, and the pointer form returns null.
  */
 class Any {
    public:
@@ -78,12 +79,16 @@ class Any {
         } else {
             void* raw = memory::detail::allocate(sizeof(U), alignof(U));
             U* p;
+#if defined(__cpp_exceptions)
             try {
                 p = ::new (raw) U(std::forward<Args>(args)...);
             } catch (...) {
                 memory::detail::deallocate(raw, sizeof(U));
                 throw;
             }
+#else
+            p = ::new (raw) U(std::forward<Args>(args)...);
+#endif
             ::new (static_cast<void*>(buffer_)) void*(raw);
             ops_ = &HEAP_OPS<U>;
             return *p;
@@ -161,12 +166,16 @@ class Any {
         [](void* dst, const void* src) {
             const T& from = *static_cast<const T*>(heap_slot(src));
             void* raw = memory::detail::allocate(sizeof(T), alignof(T));
+#if defined(__cpp_exceptions)
             try {
                 ::new (raw) T(from);
             } catch (...) {
                 memory::detail::deallocate(raw, sizeof(T));
                 throw;
             }
+#else
+            ::new (raw) T(from);
+#endif
             ::new (dst) void*(raw);
         },
         [](void* dst, void* src) noexcept {
@@ -238,7 +247,9 @@ T any_cast(const Any& any) {
     using U = std::remove_cvref_t<T>;
     static_assert(std::is_constructible_v<T, const U&>);
     const U* p = any_cast<U>(&any);
-    if (p == nullptr) throw std::bad_any_cast();
+    if (p == nullptr) {
+        fatal("any_cast: the Any is empty or holds another type");
+    }
     return static_cast<T>(*p);
 }
 
@@ -247,7 +258,9 @@ T any_cast(Any& any) {
     using U = std::remove_cvref_t<T>;
     static_assert(std::is_constructible_v<T, U&>);
     U* p = any_cast<U>(&any);
-    if (p == nullptr) throw std::bad_any_cast();
+    if (p == nullptr) {
+        fatal("any_cast: the Any is empty or holds another type");
+    }
     return static_cast<T>(*p);
 }
 
@@ -256,7 +269,9 @@ T any_cast(Any&& any) {
     using U = std::remove_cvref_t<T>;
     static_assert(std::is_constructible_v<T, U>);
     U* p = any_cast<U>(&any);
-    if (p == nullptr) throw std::bad_any_cast();
+    if (p == nullptr) {
+        fatal("any_cast: the Any is empty or holds another type");
+    }
     return static_cast<T>(std::move(*p));
 }
 

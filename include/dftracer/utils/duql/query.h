@@ -89,9 +89,6 @@ Query conjoin(const Query& a, const Query& b);
 
 inline auto Expr::build() const { return Query::from_string(to_string()); }
 
-/// Parse a query string, throwing @ref DuqlParseError on failure.
-Query parse_or_throw(dstd::StringView input);
-
 /// Parse a query string into dstd::Optional (nullopt on failure).
 dstd::Optional<Query> try_parse(dstd::StringView input);
 

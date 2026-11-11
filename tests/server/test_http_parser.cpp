@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/domains/server/http_parser.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/server/http_parser.h>
 #include <doctest/doctest.h>
 
 #include <cstring>
 
 using namespace dftracer::utils;
 
-using namespace dftracer::utils::server::parser;
+using namespace dftracer::utils::domains::server::parser;
 
 // ============================================================================
 // Valid GET requests

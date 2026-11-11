@@ -9,15 +9,19 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/utilities/arrow/arrow.h>
+#include <dftracer/utils/trace/arrow/column_builder.h>
+#include <dftracer/utils/trace/arrow/ipc_reader.h>
+#include <dftracer/utils/trace/arrow/ipc_writer.h>
+#include <dftracer/utils/trace/arrow/parallel_reader.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <cstdio>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::coro;
-using namespace dftracer::utils::utilities::arrow;
+using namespace dftracer::utils::trace::arrow;
 
 static dstd::String tmp_path(const char* name) {
     return dftu_utils_test::make_unique_test_path(name).str();
@@ -48,7 +52,7 @@ static void write_test_file(const dstd::String& path, int batch_count,
                 builder.append_double(2, row_id * 1.5);
                 builder.end_row();
             }
-            auto batch = builder.finish();
+            auto batch = dftu_utils_test::ok(builder.finish());
             co_await writer.write_batch(batch);
             builder.reset(true);
         }
@@ -84,7 +88,7 @@ TEST_CASE("IpcReader - basic read single batch") {
     reader.close();
     CHECK_FALSE(reader.is_open());
 
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 TEST_CASE("IpcReader - read multiple batches") {
@@ -107,7 +111,7 @@ TEST_CASE("IpcReader - read multiple batches") {
     CHECK(total_rows == 100);
 
     reader.close();
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 TEST_CASE("IpcReader - read_all") {
@@ -130,7 +134,7 @@ TEST_CASE("IpcReader - read_all") {
     CHECK(total_rows == 45);
 
     reader.close();
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 TEST_CASE("IpcReader - for_each_batch") {
@@ -156,7 +160,7 @@ TEST_CASE("IpcReader - for_each_batch") {
     CHECK(total_rows == 100);
 
     reader.close();
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 TEST_CASE("IpcReader - open fails on non-existent file") {
@@ -179,7 +183,7 @@ TEST_CASE("IpcReader - open fails on invalid file") {
     CHECK(reader.open(path) != 0);
     CHECK_FALSE(reader.is_open());
 
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 TEST_CASE("IpcReader - move semantics") {
@@ -202,7 +206,7 @@ TEST_CASE("IpcReader - move semantics") {
     CHECK(batch.valid());
 
     r2.close();
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 TEST_CASE("IpcReader - read batch out of range") {
@@ -224,7 +228,7 @@ TEST_CASE("IpcReader - read batch out of range") {
     CHECK_FALSE(reader.read_batch(100).valid());
 
     reader.close();
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 TEST_CASE("IpcReader - read ZSTD compressed file") {
@@ -248,7 +252,7 @@ TEST_CASE("IpcReader - read ZSTD compressed file") {
     CHECK(total_rows == 150);
 
     reader.close();
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 TEST_CASE("IpcReader - roundtrip with all column types") {
@@ -279,7 +283,7 @@ TEST_CASE("IpcReader - roundtrip with all column types") {
                 builder.append_bool(4, i % 2 == 0);
                 builder.end_row();
             }
-            auto batch = builder.finish();
+            auto batch = dftu_utils_test::ok(builder.finish());
             co_await writer.write_batch(batch);
             co_await writer.close();
         };
@@ -302,7 +306,7 @@ TEST_CASE("IpcReader - roundtrip with all column types") {
         reader.close();
     }
 
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 // ---------------------------------------------------------------------------
@@ -336,7 +340,7 @@ TEST_CASE("read_arrow_files_parallel - single file") {
     CHECK(result.file_results[0].batches->size() == 2);
 
     runtime.shutdown();
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 TEST_CASE("read_arrow_files_parallel - multiple files") {
@@ -368,7 +372,7 @@ TEST_CASE("read_arrow_files_parallel - multiple files") {
     }
 
     runtime.shutdown();
-    (void)dstd::fs::remove_all(dir);
+    dstd::fs::remove_all(dir).discard();
 }
 
 TEST_CASE("read_arrow_files_parallel - handles non-existent files") {
@@ -387,7 +391,7 @@ TEST_CASE("read_arrow_files_parallel - handles non-existent files") {
     CHECK(result.total_rows == 10);
 
     runtime.shutdown();
-    (void)dstd::fs::remove(path);
+    dstd::fs::remove(path).discard();
 }
 
 TEST_CASE("read_arrow_files_parallel - empty list") {
@@ -403,90 +407,6 @@ TEST_CASE("read_arrow_files_parallel - empty list") {
     CHECK(result.file_results.empty());
 
     runtime.shutdown();
-}
-
-TEST_CASE("read_arrow_files_streaming - completion order callback") {
-    dstd::String dir = tmp_path("test_streaming");
-    REQUIRE(dstd::fs::remove_all(dir).has_value());
-    REQUIRE(dstd::fs::create_directories(dir).has_value());
-
-    dstd::Vector<dstd::String> paths;
-    for (int i = 0; i < 4; ++i) {
-        dstd::String path = dir + "/file_" + dstd::to_string(i) + ".arrow";
-        write_test_file(path, 1, 25);
-        paths.push_back(path);
-    }
-
-    Runtime runtime(4);
-
-    dstd::Vector<dstd::String> received_paths;
-    std::int64_t total_rows = 0;
-    ParallelReadResult result;
-
-    auto task = coro::with_scope(
-        [&result, &received_paths, &total_rows](
-            coro::Scope& scope,
-            dstd::Vector<dstd::String> file_paths) -> CoroTask<void> {
-            result = co_await read_arrow_files_streaming(
-                scope, std::move(file_paths), [&](ArrowFileReadResult&& fr) {
-                    if (fr.success) {
-                        received_paths.push_back(fr.path);
-                        total_rows += fr.total_rows;
-                    }
-                    return true;  // continue
-                });
-        },
-        paths);
-
-    runtime.submit(std::move(task), "test_streaming").get();
-
-    CHECK(result.files_read == 4);
-    CHECK(result.files_failed == 0);
-    CHECK(result.total_rows == 100);
-    CHECK(received_paths.size() == 4);
-    CHECK(total_rows == 100);
-
-    runtime.shutdown();
-    (void)dstd::fs::remove_all(dir);
-}
-
-TEST_CASE("read_arrow_files_streaming - early cancel") {
-    dstd::String dir = tmp_path("test_streaming_cancel");
-    REQUIRE(dstd::fs::remove_all(dir).has_value());
-    REQUIRE(dstd::fs::create_directories(dir).has_value());
-
-    dstd::Vector<dstd::String> paths;
-    for (int i = 0; i < 4; ++i) {
-        dstd::String path = dir + "/file_" + dstd::to_string(i) + ".arrow";
-        write_test_file(path, 1, 25);
-        paths.push_back(path);
-    }
-
-    Runtime runtime(4);
-
-    int callback_count = 0;
-    ParallelReadResult result;
-
-    auto task = coro::with_scope(
-        [&result, &callback_count](
-            coro::Scope& scope,
-            dstd::Vector<dstd::String> file_paths) -> CoroTask<void> {
-            result = co_await read_arrow_files_streaming(
-                scope, std::move(file_paths), [&](ArrowFileReadResult&&) {
-                    callback_count++;
-                    return callback_count < 2;  // cancel after 2
-                });
-        },
-        paths);
-
-    runtime.submit(std::move(task), "test_streaming_cancel").get();
-
-    // All files still processed (for stats), but callback cancelled early
-    CHECK(result.files_read == 4);
-    CHECK(callback_count == 2);  // Only 2 callbacks before cancel
-
-    runtime.shutdown();
-    (void)dstd::fs::remove_all(dir);
 }
 
 TEST_CASE("read_arrow_files_parallel - mixed compression") {
@@ -511,7 +431,7 @@ TEST_CASE("read_arrow_files_parallel - mixed compression") {
     CHECK(result.total_batches == 4);
 
     runtime.shutdown();
-    (void)dstd::fs::remove_all(dir);
+    dstd::fs::remove_all(dir).discard();
 }
 
 #else

@@ -57,8 +57,8 @@ REQUIRED_PATTERNS = (
     "dftracer/include/dftracer/utils/coro/abi.h",
     "dftracer/include/dftracer/utils/dataframe/abi.h",
     "dftracer/include/dftracer/utils/duql/abi.h",
-    "dftracer/include/dftracer/utils/index/indexer.h",
-    "dftracer/include/dftracer/utils/index/abi.h",
+    "dftracer/include/dftracer/utils/trace/index/indexer.h",
+    "dftracer/include/dftracer/utils/trace/index/abi.h",
 )
 
 # Index build internals stay private; Indexer (index/indexer.h) replaces them.

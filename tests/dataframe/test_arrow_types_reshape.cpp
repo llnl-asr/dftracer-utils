@@ -4,6 +4,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 #include <stdexcept>
@@ -194,11 +195,13 @@ TEST_SUITE("dataframe_arrow_types_reshape") {
             df.columns.push_back(Series::flat_i64(ids.data(), 4));
 
             if (row.ops[OpSortMulti] == Support::Refuses) {
-                CHECK_THROWS_AS(df.sort_by_multi({"k"}, false),
-                                std::invalid_argument);
+                dftu_utils_test::expect_error(
+                    df.sort_by_multi({"k"}, false),
+                    dftracer::utils::common::ErrorCode::InvalidArgument);
                 continue;
             }
-            DataFrame sorted = df.sort_by_multi({"k"}, false);
+            DataFrame sorted =
+                dftu_utils_test::ok(df.sort_by_multi({"k"}, false));
             REQUIRE(sorted.num_rows() == 4);
             Series id_col = sorted.column("id");
             const std::int64_t* p = id_col.data<std::int64_t>();
@@ -215,10 +218,12 @@ TEST_SUITE("dataframe_arrow_types_reshape") {
             INFO(dstd::String(type_name(row.id)));
             DataFrame df = frame_of("k", row.build());
             if (row.ops[OpUnique] == Support::Refuses) {
-                CHECK_THROWS_AS(df.unique(), std::invalid_argument);
+                dftu_utils_test::expect_error(
+                    df.unique(),
+                    dftracer::utils::common::ErrorCode::InvalidArgument);
                 continue;
             }
-            DataFrame u = df.unique();
+            DataFrame u = dftu_utils_test::ok(df.unique());
             REQUIRE(u.num_rows() == 3);
             Series mask = u.column("k").is_in(row.build_needle());
             REQUIRE(mask.valid());
@@ -236,10 +241,12 @@ TEST_SUITE("dataframe_arrow_types_reshape") {
             INFO(dstd::String(type_name(row.id)));
             DataFrame df = frame_of("k", row.build());
             if (row.ops[OpToDummies] == Support::Refuses) {
-                CHECK_THROWS_AS(df.to_dummies("k"), std::invalid_argument);
+                dftu_utils_test::expect_error(
+                    df.to_dummies("k"),
+                    dftracer::utils::common::ErrorCode::InvalidArgument);
                 continue;
             }
-            DataFrame d = df.to_dummies("k");
+            DataFrame d = dftu_utils_test::ok(df.to_dummies("k"));
             REQUIRE(d.num_columns() == 3);
             CHECK(d.names[0] != d.names[1]);
             CHECK(d.names[1] != d.names[2]);
@@ -268,11 +275,13 @@ TEST_SUITE("dataframe_arrow_types_reshape") {
             df.columns.push_back(Series::flat_i64(val.data(), 4));
 
             if (row.ops[OpPivot] == Support::Refuses) {
-                CHECK_THROWS_AS(df.pivot("idx", "on", "val", "first"),
-                                std::invalid_argument);
+                dftu_utils_test::expect_error(
+                    df.pivot("idx", "on", "val", "first"),
+                    dftracer::utils::common::ErrorCode::InvalidArgument);
                 continue;
             }
-            DataFrame p = df.pivot("idx", "on", "val", "first");
+            DataFrame p =
+                dftu_utils_test::ok(df.pivot("idx", "on", "val", "first"));
             REQUIRE(p.num_rows() == 3);
             REQUIRE(p.num_columns() == 3);
             Series col0 = p.column("0");
@@ -306,11 +315,12 @@ TEST_SUITE("dataframe_arrow_types_reshape") {
             df.columns.push_back(row.build().share());
 
             if (row.ops[OpUnpivotConcat] == Support::Refuses) {
-                CHECK_THROWS_AS(df.unpivot({"id"}, {"v1", "v2"}),
-                                std::invalid_argument);
+                dftu_utils_test::expect_error(
+                    df.unpivot({"id"}, {"v1", "v2"}),
+                    dftracer::utils::common::ErrorCode::InvalidArgument);
                 continue;
             }
-            DataFrame m = df.unpivot({"id"}, {"v1", "v2"});
+            DataFrame m = dftu_utils_test::ok(df.unpivot({"id"}, {"v1", "v2"}));
             REQUIRE(m.num_rows() == 8);
             Series value = m.column("value");
             REQUIRE(value.valid());
@@ -329,7 +339,7 @@ TEST_SUITE("dataframe_arrow_types_reshape") {
                     CHECK(value.string_at(i) == want[i]);
                 continue;
             }
-            CHECK(scalar_value<double>(value.sum()) ==
+            CHECK(scalar_value<double>(dftu_utils_test::ok(value.sum())) ==
                   doctest::Approx(2.0 * row.expect_sum));
         }
     }
@@ -338,8 +348,12 @@ TEST_SUITE("dataframe_arrow_types_reshape") {
         for (const TypeRow& row : TYPE_ROWS) {
             INFO(dstd::String(type_name(row.id)));
             DataFrame df = frame_of("k", row.build());
-            CHECK_THROWS_AS(df.explode("k"), std::invalid_argument);
-            CHECK_THROWS_AS(df.unnest("k"), std::invalid_argument);
+            dftu_utils_test::expect_error(
+                df.explode("k"),
+                dftracer::utils::common::ErrorCode::InvalidArgument);
+            dftu_utils_test::expect_error(
+                df.unnest("k"),
+                dftracer::utils::common::ErrorCode::InvalidArgument);
         }
     }
 
@@ -357,7 +371,7 @@ TEST_SUITE("dataframe_arrow_types_reshape") {
         df.columns.push_back(Series::flat_i64(ids, 3));
         df.columns.push_back(Series::list({0, 2, 2, 3}, std::move(elems)));
 
-        DataFrame dropped = df.unnest("tk");
+        DataFrame dropped = dftu_utils_test::ok(df.unnest("tk"));
         CHECK(dropped.names ==
               dstd::Vector<dstd::String>{"pid", "value", "count"});
         REQUIRE(dropped.num_rows() == 3);
@@ -368,7 +382,7 @@ TEST_SUITE("dataframe_arrow_types_reshape") {
               7);
         CHECK(dropped.column("value").materialize().string_at(2) == "open");
 
-        DataFrame kept = df.unnest("tk", true);
+        DataFrame kept = dftu_utils_test::ok(df.unnest("tk", true));
         REQUIRE(kept.num_rows() == 4);
         Series pid = kept.column("pid").materialize();
         CHECK(pid.data<std::int64_t>()[2] == 2);
@@ -377,10 +391,11 @@ TEST_SUITE("dataframe_arrow_types_reshape") {
         CHECK(count.is_null(2));
         CHECK(count.data<std::int64_t>()[3] == 9);
 
-        DataFrame plain = df.explode("tk");
+        DataFrame plain = dftu_utils_test::ok(df.explode("tk"));
         CHECK(plain.names == dstd::Vector<dstd::String>{"pid", "tk"});
         CHECK(plain.num_rows() == 4);
-        CHECK_THROWS_AS(df.unnest("nope"), std::out_of_range);
+        dftu_utils_test::expect_error(
+            df.unnest("nope"), dftracer::utils::common::ErrorCode::NotFound);
     }
 }
 #else

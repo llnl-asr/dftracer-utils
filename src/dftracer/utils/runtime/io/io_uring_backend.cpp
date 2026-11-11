@@ -5,6 +5,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/runtime/io/io_uring_backend.h>
 #include <fcntl.h>
 #include <sched.h>
@@ -979,7 +980,7 @@ bool IoUringBackend::has_opcode(IoOpKind kind) const noexcept {
     return false;
 }
 
-void IoUringBackend::start() {
+dstd::Result<void> IoUringBackend::start() {
     cancelling_.store(false, std::memory_order_release);
     cancel_requested_.store(false, std::memory_order_release);
     stopping_.store(false, std::memory_order_release);
@@ -992,7 +993,7 @@ void IoUringBackend::start() {
             0;
     if (sq_poll_idle_ms_ != 0 && !is_sq_polled_) {
         ring_.destroy();
-        DFTRACER_UTILS_LOG_INFO("%s",
+        DFTRACER_UTILS_LOG_INFO("{}",
                                 "io_uring: this kernel refuses SQPOLL, "
                                 "running without it");
     }
@@ -1005,9 +1006,8 @@ void IoUringBackend::start() {
                    IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_DEFER_TASKRUN |
                        IORING_SETUP_TASKRUN_FLAG | IORING_SETUP_R_DISABLED);
     if (!is_sq_polled_ && !should_enable_ring_ && !ring_.init(RING_ENTRIES)) {
-        throw common::DFTUtilsException(
-            common::ErrorCode::Internal,
-            common::str_cat("io_uring setup failed: ", std::strerror(errno)));
+        return common::make_error<"io_uring setup failed: {}">(
+            common::ErrorCode::Internal, std::strerror(errno));
     }
     timed_enter_ =
         (ring_.features() & ~masked_features_ & IORING_FEAT_EXT_ARG) != 0;
@@ -1026,25 +1026,26 @@ void IoUringBackend::start() {
     if (!wake_fd_.valid()) {
         const int error = errno;
         ring_.destroy();
-        throw common::DFTUtilsException(
-            common::ErrorCode::Internal,
-            common::str_cat("eventfd failed: ", std::strerror(error)));
+        return common::make_error<"eventfd failed: {}">(
+            common::ErrorCode::Internal, std::strerror(error));
     }
-    pool_.start();
+    if (auto started = pool_.start(); !started) {
+        stop();
+        return started;
+    }
     enable_result_.store(0, std::memory_order_relaxed);
     thread_ = dstd::Thread([this] { ring_loop(); });
-    if (!should_enable_ring_) return;
+    if (!should_enable_ring_) return {};
     int enabled = 0;
     while ((enabled = enable_result_.load(std::memory_order_acquire)) == 0) {
         std::this_thread::yield();
     }
     if (enabled < 0) {
         stop();
-        throw common::DFTUtilsException(
-            common::ErrorCode::Internal,
-            common::str_cat("io_uring enable failed: ",
-                            std::strerror(-enabled)));
+        return common::make_error<"io_uring enable failed: {}">(
+            common::ErrorCode::Internal, std::strerror(-enabled));
     }
+    return {};
 }
 
 void IoUringBackend::stop() {
@@ -1184,7 +1185,7 @@ void IoUringBackend::flush_worker(WorkerRing& worker) noexcept {
         // What it did not take stays pending for the next flush or the park.
         if (entered < 0 && entered != -EAGAIN && entered != -EBUSY &&
             entered != -EINTR) {
-            DFTRACER_UTILS_LOG_ERROR("io_uring_enter failed: %s",
+            DFTRACER_UTILS_LOG_ERROR("io_uring_enter failed: {}",
                                      std::strerror(-entered));
         }
     }
@@ -1506,7 +1507,7 @@ void IoUringBackend::cancel_waiting() noexcept {
 
 void IoUringBackend::ring_loop() noexcept {
     if (should_enable_ring_) {
-        // Past a failure start() joins this thread and throws.
+        // Past a failure start() joins this thread and reports it.
         const bool enabled = ring_.enable();
         const int error = errno;
         enable_result_.store(enabled ? 1 : -error, std::memory_order_release);
@@ -1543,7 +1544,7 @@ void IoUringBackend::ring_loop() noexcept {
             // for that, so this retries.
             std::this_thread::yield();
         } else if (entered < 0 && entered != -EINTR) {
-            DFTRACER_UTILS_LOG_ERROR("io_uring_enter failed: %s",
+            DFTRACER_UTILS_LOG_ERROR("io_uring_enter failed: {}",
                                      std::strerror(-entered));
             std::this_thread::yield();
         }

@@ -8,6 +8,7 @@
 #include <dftracer/utils/memory/detail/pool_access.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <atomic>
 #include <chrono>
@@ -179,7 +180,7 @@ TEST_CASE(
 
     CoroTask<void> task =
         under(*pool, [&] { return allocate_across_workers(&blocks, &hops); });
-    rt.submit(std::move(task)).get();
+    dftu_utils_test::ok(rt.submit(std::move(task)).get());
     hops.join();
 
     REQUIRE(blocks.moved);
@@ -207,8 +208,8 @@ TEST_CASE("two tasks with different pools on one worker do not mix") {
     });
     TaskHandle ha = rt.submit(std::move(a));
     TaskHandle hb = rt.submit(std::move(b));
-    ha.get();
-    hb.get();
+    dftu_utils_test::ok(ha.get());
+    dftu_utils_test::ok(hb.get());
 
     CHECK(seen.size() == 1);
     CHECK(pool_a->blocks() == ROUNDS);
@@ -233,7 +234,7 @@ TEST_CASE("a task made without a scope charges the general pool") {
     CoroTask<void> task = hop_then_allocate(&blocks, &hops);
     {
         memory::detail::Scope scope{*submitter};
-        rt.submit(std::move(task)).get();
+        dftu_utils_test::ok(rt.submit(std::move(task)).get());
     }
     hops.join();
 
@@ -258,7 +259,7 @@ TEST_CASE("children awaited or spawned inside a task take its pool") {
     CoroTask<void> task = under(*pool, [&] {
         return parent_with_children(&direct, &spawned, &hops, rt.executor());
     });
-    rt.submit(std::move(task)).get();
+    dftu_utils_test::ok(rt.submit(std::move(task)).get());
     hops.join();
 
     REQUIRE(direct.held.size() == 1);
@@ -279,7 +280,7 @@ TEST_CASE("get() charges the task's pool and keeps the caller's scope") {
         CoroTask<void> task =
             under(*pool, [&] { return allocate_and_yield_once(&blocks); });
         memory::detail::Scope scope{*caller};
-        task.get();
+        dftu_utils_test::ok(task.get());
         CHECK(memory::detail::PoolAccess::id(memory::detail::current_pool()) ==
               memory::detail::PoolAccess::id(*caller));
     }
@@ -302,7 +303,7 @@ TEST_CASE("a task whose pool closed before it ran charges the general pool") {
         under(*pool, [&] { return allocate_and_yield_once(&blocks); });
     pool.close();
     const std::size_t before = general.live();
-    task.get();
+    dftu_utils_test::ok(task.get());
 
     const std::size_t added = general.live() - before;
     CHECK(added >= 2 * BIG_BLOCK);

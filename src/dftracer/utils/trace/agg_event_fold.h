@@ -6,10 +6,10 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/schemas/dft/agg/agg_partial.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_core.h>
 #include <dftracer/utils/trace/agg_query.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/agg_partial.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_config.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_core.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 
 #include <algorithm>
@@ -60,7 +60,8 @@ class AggEventRules {
                   dstd::StringIntern& strings);
 
     std::uint64_t bucket(std::uint64_t ts) const {
-        return index::schemas::dft::agg::compute_time_bucket(ts, window_cfg);
+        return trace::index::schemas::dft::agg::compute_time_bucket(ts,
+                                                                    window_cfg);
     }
 
     const AggQuery& q;
@@ -71,9 +72,9 @@ class AggEventRules {
     dstd::StringIntern& strings;
     dstd::StringIntern& read;
     /// The ids of the fixed metric args in `read`.
-    index::schemas::dft::agg::MetricArgIds read_metric_ids;
-    index::schemas::dft::agg::AggregationConfig window_cfg;
-    index::schemas::dft::agg::AggregationConfig read_cfg;
+    trace::index::schemas::dft::agg::MetricArgIds read_metric_ids;
+    trace::index::schemas::dft::agg::AggregationConfig window_cfg;
+    trace::index::schemas::dft::agg::AggregationConfig read_cfg;
     dstd::HashSet<dstd::String> categories;
     dstd::HashSet<dstd::String> names;
     dstd::HashSet<dstd::String> hosts;

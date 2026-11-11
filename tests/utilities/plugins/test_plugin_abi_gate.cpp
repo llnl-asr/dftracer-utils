@@ -6,9 +6,9 @@
 // version by tests/utilities/plugins/bad_abi_version_plugin.c.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/domains/plugins/plugins.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/plugins/abi.h>
-#include <dftracer/utils/plugins/plugins.h>
 #include <doctest/doctest.h>
 
 using namespace dftracer::utils;
@@ -18,8 +18,9 @@ using namespace dftracer::utils;
 #endif
 
 TEST_CASE("a plugin stamped with a mismatched ABI version is refused") {
-    auto set =
-        plugins::Plugins::builder().add(BAD_ABI_VERSION_PLUGIN_PATH).build();
+    auto set = domains::plugins::Plugins::builder()
+                   .add(BAD_ABI_VERSION_PLUGIN_PATH)
+                   .build();
 
     REQUIRE_FALSE(set.has_value());
     CHECK(set.error().message().find("ABI version") != dstd::String::npos);

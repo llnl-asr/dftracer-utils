@@ -10,6 +10,7 @@
 //   hash_bench                (all cases, 7 reps, median)
 //   hash_bench --reps R       (R reps per case)
 
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/hash/xxh3.h>
 #include <dftracer/utils/dstd/string.h>
@@ -61,7 +62,7 @@ struct KeySet {
 
 KeySet fixed_size(std::size_t len) {
     KeySet set;
-    set.label = "len " + dstd::to_string(len);
+    set.label = dstd::fmt<"len {}">(len);
     std::uint64_t x = 0x9E3779B97F4A7C15ULL ^ len;
     for (std::size_t i = 0; i < POOL; ++i) {
         dstd::String key(len, '\0');
@@ -105,8 +106,8 @@ KeySet realistic() {
     };
     for (const char* b : base) set.keys.push_back(b);
     for (std::size_t i = 0; i < 41; ++i) {
-        set.keys.push_back("/p/lustre1/user/run/rank_" +
-                           dstd::to_string(i * 37) + "/data.bin");
+        set.keys.push_back(
+            dstd::fmt<"/p/lustre1/user/run/rank_{}/data.bin">(i * 37));
     }
     double total = 0;
     for (const auto& k : set.keys) total += static_cast<double>(k.size());

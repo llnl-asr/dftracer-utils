@@ -13,6 +13,7 @@
 #include <stdexcept>
 #endif
 
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/arrow.h>
 #include <dftracer/utils/dataframe/arrow_bridge.h>
 #include <dftracer/utils/dataframe/internal/ipc.h>
@@ -87,7 +88,7 @@ dstd::Optional<DataFrame> frame_from_ipc(dstd::StringView bytes) {
 #endif
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
-dstd::Vector<std::uint8_t> DataFrame::to_ipc() const {
+dstd::Result<dstd::Vector<std::uint8_t>> DataFrame::to_ipc() const {
     // Export the frame as one struct (record batch) - schema + array.
     dstd::Vector<dstd::String> field_names = names;
     dstd::Vector<Series> field_columns;
@@ -106,7 +107,8 @@ dstd::Vector<std::uint8_t> DataFrame::to_ipc() const {
     if (ArrowBasicArrayStreamInit(&stream, &schema, 1) != NANOARROW_OK) {
         if (schema.release) schema.release(&schema);
         if (array.release) array.release(&array);
-        throw std::runtime_error("to_ipc: array stream init failed");
+        return common::make_error<"to_ipc: array stream init failed">(
+            common::ErrorCode::Internal);
     }
     ArrowBasicArrayStreamSetArray(&stream, 0, &array);
 
@@ -117,14 +119,16 @@ dstd::Vector<std::uint8_t> DataFrame::to_ipc() const {
     if (ArrowIpcOutputStreamInitBuffer(&out, &buf) != NANOARROW_OK) {
         ArrowBufferReset(&buf);
         stream.release(&stream);
-        throw std::runtime_error("to_ipc: output stream init failed");
+        return common::make_error<"to_ipc: output stream init failed">(
+            common::ErrorCode::Internal);
     }
     ArrowIpcWriter writer;
     if (ArrowIpcWriterInit(&writer, &out) != NANOARROW_OK) {  // adopts `out`
         out.release(&out);
         ArrowBufferReset(&buf);
         stream.release(&stream);
-        throw std::runtime_error("to_ipc: writer init failed");
+        return common::make_error<"to_ipc: writer init failed">(
+            common::ErrorCode::Internal);
     }
     ArrowError err;
     err.message[0] = '\0';
@@ -135,8 +139,8 @@ dstd::Vector<std::uint8_t> DataFrame::to_ipc() const {
     ArrowBufferReset(&buf);
     stream.release(&stream);       // releases schema + array
     if (code != NANOARROW_OK)
-        throw std::runtime_error(
-            (dstd::String("to_ipc: ") + err.message).c_str());
+        return common::make_error<"to_ipc: {}">(common::ErrorCode::Internal,
+                                                err.message);
     return bytes;
 }
 #endif  // DFTRACER_UTILS_ENABLE_ARROW_IPC

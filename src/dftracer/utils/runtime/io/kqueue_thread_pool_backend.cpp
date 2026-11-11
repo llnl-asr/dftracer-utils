@@ -22,27 +22,28 @@ KqueueThreadPoolBackend::KqueueThreadPoolBackend(std::size_t pool_size,
 
 KqueueThreadPoolBackend::~KqueueThreadPoolBackend() = default;
 
-void KqueueThreadPoolBackend::start() {
-    pool_.start();
+dstd::Result<void> KqueueThreadPoolBackend::start() {
+    if (auto started = pool_.start(); !started) return started;
 
     kqueue_fd_.reset(::kqueue());
     if (!kqueue_fd_.valid()) {
-        DFTRACER_UTILS_LOG_ERROR("kqueue() failed: %s", std::strerror(errno));
-        return;
+        DFTRACER_UTILS_LOG_ERROR("kqueue() failed: {}", std::strerror(errno));
+        return {};
     }
 
     // Register a user event (EVFILT_USER) for shutdown signaling.
     struct kevent ev{};
     EV_SET(&ev, SHUTDOWN_IDENT, EVFILT_USER, EV_ADD | EV_CLEAR, 0, 0, nullptr);
     if (::kevent(kqueue_fd_.get(), &ev, 1, nullptr, 0, nullptr) < 0) {
-        DFTRACER_UTILS_LOG_ERROR("kevent(register EVFILT_USER) failed: %s",
+        DFTRACER_UTILS_LOG_ERROR("kevent(register EVFILT_USER) failed: {}",
                                  std::strerror(errno));
     }
 
-    DFTRACER_UTILS_LOG_DEBUG("kqueue+threadpool backend started (kqueue_fd=%d)",
+    DFTRACER_UTILS_LOG_DEBUG("kqueue+threadpool backend started (kqueue_fd={})",
                              kqueue_fd_.get());
 
     completion_thread_.start([this] { kqueue_loop(); });
+    return {};
 }
 
 void KqueueThreadPoolBackend::stop() {

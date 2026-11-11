@@ -10,7 +10,6 @@ set(TRACE_TEST_SOURCES
     test_chunk_verifier.cpp
     test_trace_config.cpp
     test_chunk_extractor.cpp
-    test_event_collector.cpp
     test_index_builder.cpp
     test_metadata_collector.cpp
     test_time_metric.cpp
@@ -61,6 +60,7 @@ set(TRACE_TEST_SOURCES
     views/test_fold_shapes.cpp
     views/test_fold_ondemand.cpp
     views/test_pipeline_plan.cpp
+    views/test_view_fatal.cpp
     views/test_stream_early_out.cpp
     views/test_agg_transform_memory.cpp
     views/test_vectorized_fold.cpp

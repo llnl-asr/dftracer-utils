@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <atomic>
 #include <chrono>
@@ -31,7 +32,7 @@ TEST_CASE("Yield - Executor::current() is set inside worker task") {
         co_return;
     };
 
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     CHECK(observed.load() == rt.executor());
 }
 
@@ -52,7 +53,7 @@ TEST_CASE("Yield - maybe_yield() does not hang with executor") {
         co_return;
     };
 
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     CHECK(counter.load() == 100);
 }
 
@@ -73,7 +74,7 @@ TEST_CASE("Yield - yield() does not hang with executor") {
         co_return;
     };
 
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     CHECK(counter.load() == 10);
 }
 
@@ -106,7 +107,7 @@ TEST_CASE("Yield - Multiple coroutines yielding concurrently") {
     constexpr int ITERS_PER_TASK = 50;
     std::atomic<int> total{0};
 
-    rt.block_on(
+    dftu_utils_test::ok(rt.block_on(
         coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
             for (int t = 0; t < NUM_TASKS; ++t) {
                 scope.spawn([&total]() -> coro::CoroTask<void> {
@@ -118,7 +119,7 @@ TEST_CASE("Yield - Multiple coroutines yielding concurrently") {
                 });
             }
             co_return;
-        }));
+        })));
     CHECK(total.load() == NUM_TASKS * ITERS_PER_TASK);
 }
 
@@ -131,7 +132,7 @@ TEST_CASE("Yield - Forced yield re-enqueues on executor") {
     std::atomic<int> a_count{0};
     std::atomic<int> b_count{0};
 
-    rt.block_on(
+    dftu_utils_test::ok(rt.block_on(
         coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
             scope.spawn([&a_count]() -> coro::CoroTask<void> {
                 for (int i = 0; i < ITERS; ++i) {
@@ -148,7 +149,7 @@ TEST_CASE("Yield - Forced yield re-enqueues on executor") {
                 co_return;
             });
             co_return;
-        }));
+        })));
     CHECK(a_count.load() == ITERS);
     CHECK(b_count.load() == ITERS);
 }
@@ -172,12 +173,13 @@ TEST_CASE("CoroTask::get on a pool worker sees the finished task's result") {
         co_return all;
     };
     auto outer = [inner]() -> coro::CoroTask<long long> {
-        dstd::Vector<int> v = inner().get();
+        dstd::Vector<int> v = dftu_utils_test::ok(inner().get());
         long long sum = 0;
         for (int x : v) sum += x;
         co_return sum;
     };
     for (int round = 0; round < 64; ++round)
-        CHECK(dftracer::utils::default_runtime().submit(outer()).get() ==
+        CHECK(dftu_utils_test::ok(
+                  dftracer::utils::default_runtime().submit(outer()).get()) ==
               4096LL * 4095 / 2);
 }

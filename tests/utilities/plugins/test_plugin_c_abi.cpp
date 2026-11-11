@@ -6,51 +6,23 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/domains/plugins/fold_adapter.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/runtime/runtime.h>
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
 // arrow_abi.
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
+#include <utilities/plugins/abi_c_consumers.h>
 
 #include <cstdint>
 
 using namespace dftracer::utils;
-
-extern "C" {
-::dftu_task* dftu_test_compose_pipe(const ::dftu_plugin_host*,
-                                    const std::int64_t*, std::int64_t*, int*);
-::dftu_task* dftu_test_compose_all(const ::dftu_plugin_host*,
-                                   const std::int64_t*, std::int64_t*, int*);
-int dftu_test_compose_typecheck(const ::dftu_plugin_host*);
-int dftu_test_query_match(const ::dftu_plugin_host*, const char*, std::uint32_t,
-                          const ::dftu_dataframe*, std::int64_t);
-int dftu_test_query_null_is_safe(const ::dftu_plugin_host*,
-                                 const ::dftu_dataframe*, std::int64_t);
-int dftu_test_sketch(const ::dftu_plugin_host*, double*, std::uint64_t*);
-int dftu_test_sketch_merge(const ::dftu_plugin_host*, std::uint64_t*);
-int dftu_test_ops_fnv1a(const ::dftu_plugin_host*, const char*, std::uint32_t,
-                        std::uint64_t*);
-int dftu_test_ops_find(const ::dftu_plugin_host*);
-int dftu_test_trace_roundtrip(const ::dftu_plugin_host*, const char*,
-                              const ::dftu_dataframe*, int*);
-::dftu_task* dftu_test_io_open(const ::dftu_plugin_host*, const char*, int*);
-::dftu_task* dftu_test_io_write(const ::dftu_plugin_host*, int, const void*,
-                                std::uint64_t, std::int64_t*);
-::dftu_task* dftu_test_io_pread(const ::dftu_plugin_host*, int, void*,
-                                std::uint64_t, std::uint64_t, std::int64_t*);
-::dftu_task* dftu_test_io_close(const ::dftu_plugin_host*, int, int*);
-::dftu_writer* dftu_test_writer_create(const ::dftu_plugin_host*, const char*);
-::dftu_task* dftu_test_writer_open(const ::dftu_plugin_host*, ::dftu_writer*);
-::dftu_task* dftu_test_writer_chunk(const ::dftu_plugin_host*, ::dftu_writer*,
-                                    const void*, std::uint64_t);
-::dftu_task* dftu_test_writer_close(const ::dftu_plugin_host*, ::dftu_writer*);
-}
 
 namespace {
 
@@ -128,10 +100,11 @@ TestFrame trace_test_frame(std::uint32_t n) {
 struct HostFixture {
     dstd::StringIntern intern;
     dftu_plugin* plugin;
-    dstd::UniquePtr<plugins::PluginFold> fold;
+    dstd::UniquePtr<domains::plugins::PluginFold> fold;
     HostFixture()
         : plugin(dftracer::utils::plugins::make_plugin<TrivialSlice>(nullptr)),
-          fold(dstd::make_unique<plugins::PluginFold>(plugin, intern)) {}
+          fold(dstd::make_unique<domains::plugins::PluginFold>(plugin,
+                                                               intern)) {}
     ~HostFixture() {
         fold.reset();
         if (plugin && plugin->destroy) plugin->destroy(plugin->self);
@@ -145,11 +118,12 @@ coro::CoroTask<void>* as_coro(::dftu_task* t) {
 
 void drive(::dftu_task* t) {
     Runtime rt(1);
-    rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                  co_await *as_coro(t);
-              }),
-              "c-abi")
-        .wait();
+    dftu_utils_test::ok(
+        rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                      co_await *as_coro(t);
+                  }),
+                  "c-abi")
+            .wait());
     rt.shutdown();
 }
 
@@ -265,21 +239,23 @@ TEST_CASE("C ABI: dftu_io write/read round-trips from C") {
     // C has no coroutines, so the harness sequences the C-created tasks: the fd
     // from open flows into write/pread/close.
     Runtime rt(1);
-    rt.submit(
-          coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-              co_await *as_coro(dftu_test_io_open(&host, path.c_str(), &fd));
-              if (fd >= 0) {
-                  co_await *as_coro(dftu_test_io_write(
-                      &host, fd, data.data(),
-                      static_cast<std::uint64_t>(data.size()), &wn));
-                  co_await *as_coro(dftu_test_io_pread(
-                      &host, fd, buf, static_cast<std::uint64_t>(data.size()),
-                      0, &rn));
-                  co_await *as_coro(dftu_test_io_close(&host, fd, &crc));
-              }
-          }),
-          "io")
-        .wait();
+    dftu_utils_test::ok(
+        rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                      co_await *as_coro(
+                          dftu_test_io_open(&host, path.c_str(), &fd));
+                      if (fd >= 0) {
+                          co_await *as_coro(dftu_test_io_write(
+                              &host, fd, data.data(),
+                              static_cast<std::uint64_t>(data.size()), &wn));
+                          co_await *as_coro(dftu_test_io_pread(
+                              &host, fd, buf,
+                              static_cast<std::uint64_t>(data.size()), 0, &rn));
+                          co_await *as_coro(
+                              dftu_test_io_close(&host, fd, &crc));
+                      }
+                  }),
+                  "io")
+            .wait());
     rt.shutdown();
 
     REQUIRE(fd >= 0);
@@ -299,15 +275,16 @@ TEST_CASE("C ABI: dftu_svc_writer create/open/chunk/close from C") {
     ::dftu_writer* w = dftu_test_writer_create(&host, path.c_str());
     REQUIRE(w != nullptr);
     Runtime rt(1);
-    rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                  co_await *as_coro(dftu_test_writer_open(&host, w));
-                  co_await *as_coro(dftu_test_writer_chunk(
-                      &host, w, data.data(),
-                      static_cast<std::uint64_t>(data.size())));
-                  co_await *as_coro(dftu_test_writer_close(&host, w));
-              }),
-              "writer")
-        .wait();
+    dftu_utils_test::ok(
+        rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                      co_await *as_coro(dftu_test_writer_open(&host, w));
+                      co_await *as_coro(dftu_test_writer_chunk(
+                          &host, w, data.data(),
+                          static_cast<std::uint64_t>(data.size())));
+                      co_await *as_coro(dftu_test_writer_close(&host, w));
+                  }),
+                  "writer")
+            .wait());
     rt.shutdown();
 
     // The sharded writer emits one file per worker: `<path>.shard_0`.

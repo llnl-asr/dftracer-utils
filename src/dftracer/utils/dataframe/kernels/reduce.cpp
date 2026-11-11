@@ -10,6 +10,7 @@
 #include <dftracer/utils/dataframe/internal/type_promotion.h>
 #include <dftracer/utils/dataframe/kernels/reduce.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -20,19 +21,21 @@
 
 namespace dftracer::utils::dataframe {
 
-dftu_scalar sum(const Series& v) {
-    return raise_if_error(dftu_series_reduce(v.handle(), DFTU_REDUCE_SUM));
+dstd::Result<dftu_scalar> sum(const Series& v) {
+    return reduction_result(dftu_series_reduce(v.handle(), DFTU_REDUCE_SUM));
 }
-dftu_scalar min(const Series& v) {
-    return raise_if_error(dftu_series_reduce(v.handle(), DFTU_REDUCE_MIN));
+dstd::Result<dftu_scalar> min(const Series& v) {
+    return reduction_result(dftu_series_reduce(v.handle(), DFTU_REDUCE_MIN));
 }
-dftu_scalar max(const Series& v) {
-    return raise_if_error(dftu_series_reduce(v.handle(), DFTU_REDUCE_MAX));
+dstd::Result<dftu_scalar> max(const Series& v) {
+    return reduction_result(dftu_series_reduce(v.handle(), DFTU_REDUCE_MAX));
 }
 std::int64_t count(const Series& v) { return dftu_series_count(v.handle()); }
 
-double mean(const Series& v) {
-    const double total = scalar_value<double>(sum(v));
+dstd::Result<double> mean(const Series& v) {
+    const dstd::Result<dftu_scalar> total_sum = sum(v);
+    if (!total_sum) return total_sum.error();
+    const double total = scalar_value<double>(*total_sum);
     const std::int64_t n = count(v);
     return n == 0 ? 0.0 : total / static_cast<double>(n);
 }
@@ -286,9 +289,9 @@ dftu_scalar refuse(const dftracer::utils::dstd::String& message) {
 }
 
 dftu_scalar refuse_type(std::int32_t op, dftracer::utils::dataframe::TypeId t) {
-    return refuse(dftracer::utils::dstd::String("reduce: ") +
-                  reduce_op_name(op) + " is not defined for type '" +
-                  dftracer::utils::dataframe::type_name(t) + "'");
+    return refuse(
+        dftracer::utils::dstd::fmt<"reduce: {} is not defined for type '{}'">(
+            reduce_op_name(op), dftracer::utils::dataframe::type_name(t)));
 }
 
 // Smallest (MIN) or largest (MAX) valid value of a String or LargeString
@@ -343,9 +346,10 @@ dftu_scalar dftu_series_reduce(const dftu_series* v, dftu_reduce_op op) {
     // any other code is not an operation. The numeric kernel below treats every
     // code that is not SUM or MIN as MAX, so refuse them here.
     if (op != DFTU_REDUCE_SUM && op != DFTU_REDUCE_MIN && op != DFTU_REDUCE_MAX)
-        return refuse(dftracer::utils::dstd::String("reduce: ") +
-                      reduce_op_name(static_cast<std::int32_t>(op)) +
-                      " is not a single-column reduction (sum, min or max)");
+        return refuse(
+            dftracer::utils::dstd::fmt<
+                "reduce: {} is not a single-column reduction (sum, min "
+                "or max)">(reduce_op_name(static_cast<std::int32_t>(op))));
     if (v->encoding != dftracer::utils::dataframe::Encoding::Flat)
         return refuse("reduce: the column is not flat");
 
@@ -415,12 +419,12 @@ dftu_scalar dftu_series_product(const dftu_series* v) {
     out.kind = DFTU_SCALAR_TAG_I64;
     if (v->encoding != dftracer::utils::dataframe::Encoding::Flat) return out;
     if (is_temporal_type(v->type)) {
-        DFTRACER_UTILS_LOG_ERROR("product: not defined for temporal type '%s'",
+        DFTRACER_UTILS_LOG_ERROR("product: not defined for temporal type '{}'",
                                  type_name(v->type));
         return out;
     }
     if (!is_arithmetic_type(v->type)) {
-        DFTRACER_UTILS_LOG_ERROR("product: no meaning for type '%s'",
+        DFTRACER_UTILS_LOG_ERROR("product: no meaning for type '{}'",
                                  type_name(v->type));
         return out;
     }
@@ -471,7 +475,7 @@ int64_t dftu_series_arg_min(const dftu_series* v) {
         return idx;
     }
     if (!is_arithmetic_type(v->type)) {
-        DFTRACER_UTILS_LOG_ERROR("arg_min: no meaning for type '%s'",
+        DFTRACER_UTILS_LOG_ERROR("arg_min: no meaning for type '{}'",
                                  type_name(v->type));
         return -1;
     }
@@ -500,7 +504,7 @@ int64_t dftu_series_arg_max(const dftu_series* v) {
         return idx;
     }
     if (!is_arithmetic_type(v->type)) {
-        DFTRACER_UTILS_LOG_ERROR("arg_max: no meaning for type '%s'",
+        DFTRACER_UTILS_LOG_ERROR("arg_max: no meaning for type '{}'",
                                  type_name(v->type));
         return -1;
     }
@@ -530,7 +534,7 @@ dftu_scalar dftu_series_mode(const dftu_series* v) {
         return out;
     }
     if (!is_arithmetic_type(v->type)) {
-        DFTRACER_UTILS_LOG_ERROR("mode: no meaning for type '%s'",
+        DFTRACER_UTILS_LOG_ERROR("mode: no meaning for type '{}'",
                                  type_name(v->type));
         return out;
     }

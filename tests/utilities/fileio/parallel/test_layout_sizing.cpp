@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/utilities/fileio/parallel/layout.h>
+#include <dftracer/utils/fileio/parallel/layout.h>
 #include <doctest/doctest.h>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities;
 
 namespace {
 constexpr std::size_t MB = 1024 * 1024;

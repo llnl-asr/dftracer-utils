@@ -6,10 +6,12 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/utilities/reader/trace_reader.h>
+#include <dftracer/utils/trace/index/indexer.h>
+#include <dftracer/utils/trace/reader/trace_reader.h>
 #include <doctest/doctest.h>
+#include <generator_ok.h>
 #include <simdjson.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -94,9 +96,11 @@ dstd::String write_trace(TestEnvironment& env) {
     }
     const dstd::String gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, gz));
-    (void)dstd::fs::remove(plain);
-    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))})
-        .build();
+    dstd::fs::remove(plain).discard();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                                {dstd::String(dstd::StringView(gz))}))
+            .build());
     return gz;
 }
 
@@ -125,14 +129,14 @@ View view_of(const dstd::String& gz, const char* filter) {
 }
 
 coro::CoroTask<Names> reader_lines(
-    coro::AsyncGenerator<utilities::fileio::lines::Line> gen) {
+    coro::AsyncGenerator<fileio::lines::Line> gen) {
     Names out;
     while (auto line = co_await gen.next()) out.insert(name_of(line->content));
     co_return out;
 }
 
 coro::CoroTask<Names> reader_json(
-    coro::AsyncGenerator<utilities::reader::JsonLine> gen) {
+    coro::AsyncGenerator<trace::reader::JsonLine> gen) {
     Names out;
     while (auto opt = co_await gen.next())
         if (auto v = opt->parser->get_string("name")) out.emplace(*v);
@@ -176,9 +180,8 @@ TEST_SUITE("duql paths") {
     TEST_CASE("every path selects the records the three-valued rule keeps") {
         TestEnvironment env(10);
         const dstd::String gz = write_trace(env);
-        utilities::reader::TraceReader tr(
-            {.file_path = dstd::String(gz),
-             .index_dir = dstd::String(env.dir())});
+        trace::reader::TraceReader tr({.file_path = dstd::String(gz),
+                                       .index_dir = dstd::String(env.dir())});
         REQUIRE(tr.has_index());
 
         for (const auto& c : cases()) {
@@ -205,15 +208,18 @@ TEST_SUITE("duql paths") {
             for (const auto& line : sink.lines()) sunk.insert(name_of(line));
             CHECK(sunk == c.expected);
 
-            utilities::reader::ReadConfig rc;
+            trace::reader::ReadConfig rc;
             rc.query = c.filter;
-            CHECK(run(reader_lines(tr.read_lines(rc))) == c.expected);
-            CHECK(run(reader_json(tr.read_json(rc))) == c.expected);
+            CHECK(run(reader_lines(dftu_utils_test::ok_items(
+                      tr.read_lines(rc)))) == c.expected);
+            CHECK(run(reader_json(dftu_utils_test::ok_items(
+                      tr.read_json(rc)))) == c.expected);
 
             const dataframe::DataFrame df = frame_of(c.numeric_x);
             const auto q = duql::Query::from_string(c.filter);
             REQUIRE(q.has_value());
-            CHECK(names_of(df.filter(df.mask(*q))) == c.expected);
+            CHECK(names_of(df.filter(dftu_utils_test::ok(df.mask(*q)))) ==
+                  c.expected);
         }
     }
 
@@ -273,13 +279,13 @@ TEST_SUITE("duql paths") {
         }
         const dstd::String gz = plain + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, gz));
-        (void)dstd::fs::remove(plain);
-        dftracer::utils::index::Indexer::open(
-            {dstd::String(dstd::StringView(gz))})
-            .build();
-        utilities::reader::TraceReader tr(
-            {.file_path = dstd::String(gz),
-             .index_dir = dstd::String(env.dir())});
+        dstd::fs::remove(plain).discard();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                                    {dstd::String(dstd::StringView(gz))}))
+                .build());
+        trace::reader::TraceReader tr({.file_path = dstd::String(gz),
+                                       .index_dir = dstd::String(env.dir())});
         REQUIRE(tr.has_index());
 
         dataframe::DataFrame frame;
@@ -305,14 +311,17 @@ TEST_SUITE("duql paths") {
             Names sunk;
             for (const auto& line : sink.lines()) sunk.insert(name_of(line));
             CHECK(sunk == c.expected);
-            utilities::reader::ReadConfig rc;
+            trace::reader::ReadConfig rc;
             rc.query = c.filter;
-            CHECK(run(reader_lines(tr.read_lines(rc))) == c.expected);
-            CHECK(run(reader_json(tr.read_json(rc))) == c.expected);
+            CHECK(run(reader_lines(dftu_utils_test::ok_items(
+                      tr.read_lines(rc)))) == c.expected);
+            CHECK(run(reader_json(dftu_utils_test::ok_items(
+                      tr.read_json(rc)))) == c.expected);
             if (c.frame) {
                 const auto q = duql::Query::from_string(c.filter);
                 REQUIRE(q.has_value());
-                CHECK(names_of(frame.filter(frame.mask(*q))) == c.expected);
+                CHECK(names_of(frame.filter(
+                          dftu_utils_test::ok(frame.mask(*q)))) == c.expected);
             }
         }
     }
@@ -327,10 +336,11 @@ TEST_SUITE("duql paths") {
         }
         const dstd::String gz = plain + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, gz));
-        (void)dstd::fs::remove(plain);
-        dftracer::utils::index::Indexer::open(
-            {dstd::String(dstd::StringView(gz))})
-            .build();
+        dstd::fs::remove(plain).discard();
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                                    {dstd::String(dstd::StringView(gz))}))
+                .build());
         CHECK(names_of(run(view_of(gz, "exists(tags)").collect())) ==
               Names{"e"});
         CHECK(run(view_of(gz, "exists(nothing_here)").collect()).num_rows() ==
@@ -347,7 +357,7 @@ TEST_SUITE("duql paths") {
         auto kept = [&](const char* filter) {
             const auto q = duql::Query::from_string(filter);
             REQUIRE(q.has_value());
-            return names_of(df.filter(df.mask(*q)));
+            return names_of(df.filter(dftu_utils_test::ok(df.mask(*q))));
         };
         CHECK(kept("x == 1").empty());
         CHECK(kept("not (x == 1)").empty());

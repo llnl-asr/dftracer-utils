@@ -18,7 +18,7 @@ foreach(name test_duql_syntax test_duql_golden test_parser test_evaluator
              test_query test_builder test_subsumption test_differential
              test_patterns test_pattern_corpus test_vectorize test_lookup
              test_overlap test_decorrelate test_group_fold
-             test_evaluator_ondemand)
+             test_evaluator_ondemand test_literal_set)
   set(target duql_${name})
   add_executable(${target} ${name}.cpp)
   target_include_directories(${target} PRIVATE ${CMAKE_SOURCE_DIR}/src

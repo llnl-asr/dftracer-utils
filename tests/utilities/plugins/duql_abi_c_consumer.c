@@ -6,6 +6,7 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <stdint.h>
+#include <utilities/plugins/abi_c_consumers.h>
 
 /* Compile `src` and match row `row` of `df`: 1 match, 0 no-match, -1 on compile
  * failure. */

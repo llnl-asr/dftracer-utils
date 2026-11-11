@@ -15,8 +15,8 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
-#include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
+#include <dftracer/utils/fileio/gzip_line_writer.h>
 
 #include <algorithm>
 #include <chrono>
@@ -72,12 +72,11 @@ std::uint64_t run_writer(
         appends,
     const dftracer::utils::dstd::String& path, std::size_t member, int level,
     bool comp) {
-    utilities::fileio::GzipWriterOptions o;
+    fileio::GzipWriterOptions o;
     o.member_size = member;
     o.level = level;
     o.compress = comp;
-    auto w =
-        utilities::fileio::GzipLineWriterBlocking::open(path, std::move(o));
+    auto w = fileio::GzipLineWriterBlocking::open(path, std::move(o));
     if (!w) {
         std::fprintf(stderr, "open failed\n");
         std::exit(1);
@@ -108,7 +107,7 @@ std::uint64_t run_pgzip(const dftracer::utils::dstd::String& data,
     std::uint64_t out_bytes = 0;
 
     auto worker = [&] {
-        utilities::fileio::compress::GzipMemberCompressor c(6);
+        fileio::compress::GzipMemberCompressor c(6);
         dftracer::utils::dstd::Vector<std::uint8_t> scratch;
         for (;;) {
             std::size_t i;
@@ -187,7 +186,7 @@ double run_case(const char* name, std::size_t in_bytes,
         ms.push_back(
             std::chrono::duration<double, std::milli>(Clock::now() - t0)
                 .count());
-        (void)dftracer::utils::dstd::fs::remove(path);
+        dftracer::utils::dstd::fs::remove(path).discard();
     }
     std::sort(ms.begin(), ms.end());
     double med = ms[ms.size() / 2];
@@ -247,6 +246,6 @@ int main(int argc, char** argv) {
     std::printf("%-28s %9.1f ms %9.1f MB/s (append copy into a 4MiB member)\n",
                 "memcpy only", cp[1],
                 static_cast<double>(data.size()) / 1e6 / (cp[1] / 1e3));
-    (void)dftracer::utils::dstd::fs::remove_all(dir);
+    dftracer::utils::dstd::fs::remove_all(dir).discard();
     return 0;
 }

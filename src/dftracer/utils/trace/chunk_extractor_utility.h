@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-#ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFTRACER_CHUNK_EXTRACTOR_UTILITY_H
-#define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFTRACER_CHUNK_EXTRACTOR_UTILITY_H
+#ifndef DFTRACER_UTILS_TRACE_CHUNK_EXTRACTOR_UTILITY_H
+#define DFTRACER_UTILS_TRACE_CHUNK_EXTRACTOR_UTILITY_H
 
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/coro/async_semaphore.h>
@@ -9,7 +9,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/utilities/fileio/chunk_writer.h>
+#include <dftracer/utils/fileio/chunk_writer.h>
 
 #include <atomic>
 #include <cstddef>
@@ -97,8 +97,8 @@ struct ChunkExtractorUtilityInput {
  */
 struct ChunkExtractorUtilityOutput {
     int chunk_index = 0;
-    dstd::Vector<utilities::fileio::ChunkInfo> chunks;  ///< Files written
-    std::size_t events = 0;                             ///< JSON events written
+    dstd::Vector<fileio::ChunkInfo> chunks;  ///< Files written
+    std::size_t events = 0;                  ///< JSON events written
     std::size_t event_hash = 0;
     std::uint64_t peak_bytes = 0;  ///< Most bytes the chunk writer reserved
     bool success = false;
@@ -184,4 +184,4 @@ class ChunkExtractorUtility {
 
 }  // namespace dftracer::utils::trace
 
-#endif  // DFTRACER_UTILS_UTILITIES_COMPOSITES_DFTRACER_CHUNK_EXTRACTOR_UTILITY_H
+#endif  // DFTRACER_UTILS_TRACE_CHUNK_EXTRACTOR_UTILITY_H

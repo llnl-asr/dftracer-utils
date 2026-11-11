@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/scratch.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
@@ -8,13 +9,6 @@
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/build/batch_builder.h>
-#include <dftracer/utils/index/build/file_partition.h>
-#include <dftracer/utils/index/index.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
-#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/python/distribution.h>
 #include <dftracer/utils/python/py_agg_config.h>
 #include <dftracer/utils/python/py_errors.h>
@@ -26,6 +20,13 @@
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/build/batch_builder.h>
+#include <dftracer/utils/trace/index/build/file_partition.h>
+#include <dftracer/utils/trace/index/index.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_config.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_fold.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_intern.h>
+#include <dftracer/utils/trace/index/store/root_layout.h>
 #include <dftracer/utils/trace/views/sharded_view.h>
 
 #include <algorithm>
@@ -33,12 +34,12 @@
 #include <new>
 
 using dftracer::utils::Runtime;
-using dftracer::utils::index::build::BatchBuilder;
-using dftracer::utils::index::build::IndexBuildBatchConfig;
-using dftracer::utils::index::build::IndexBuildBatchResult;
-using dftracer::utils::index::build::plan_lpt_partition;
 using dftracer::utils::python::parse_string_seq;
 using dftracer::utils::runtime::fs::FoundFile;
+using dftracer::utils::trace::index::build::BatchBuilder;
+using dftracer::utils::trace::index::build::IndexBuildBatchConfig;
+using dftracer::utils::trace::index::build::IndexBuildBatchResult;
+using dftracer::utils::trace::index::build::plan_lpt_partition;
 
 // ---------------------------------------------------------------------------
 // scan_files: parallel directory scan with size info
@@ -109,7 +110,7 @@ static PyObject *scan_files_fn(PyObject * /*self*/, PyObject *args,
                       "scan-files")
                     .get();
             if (!found)
-                throw dftracer::utils::common::DFTUtilsException(found.error());
+                throw dftracer::utils::python::PyErrorException(found.error());
             entries = std::move(*found);
         })) {
         return NULL;
@@ -255,29 +256,29 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
     // The aggregation tier is built by every batch, the dataclass only
     // customizes it.
     dftracer::utils::dstd::SharedPtr<
-        dftracer::utils::index::schemas::dft::agg::AggregationConfig>
+        dftracer::utils::trace::index::schemas::dft::agg::AggregationConfig>
         agg_config_ptr;
     if (aggregation_config_obj && aggregation_config_obj != Py_None)
         agg_config_ptr = dftracer::utils::dstd::make_shared<
-            dftracer::utils::index::schemas::dft::agg::AggregationConfig>(
-            dftracer::utils::python::agg_config_from_py(
-                aggregation_config_obj));
+            dftracer::utils::trace::index::schemas::dft::agg::
+                AggregationConfig>(dftracer::utils::python::agg_config_from_py(
+            aggregation_config_obj));
     else
         agg_config_ptr = dftracer::utils::dstd::make_shared<
-            dftracer::utils::index::schemas::dft::agg::AggregationConfig>(
-            dftracer::utils::index::schemas::dft::agg::
-                standard_aggregation_config());
+            dftracer::utils::trace::index::schemas::dft::agg::
+                AggregationConfig>(dftracer::utils::trace::index::schemas::dft::
+                                       agg::standard_aggregation_config());
 
     // A fresh build of the whole root stages on node-local scratch when the
     // destination is a slow filesystem, then publishes the store across.
     const dftracer::utils::dstd::String final_root =
-        dftracer::utils::index::normalize_index_root(index_dir);
+        dftracer::utils::trace::index::normalize_index_root(index_dir);
     dftracer::utils::dstd::Optional<dftracer::utils::common::ScratchSession>
         scratch;
     dftracer::utils::dstd::String build_dir = index_dir;
-    if (!dftracer::utils::common::unwrap(
+    if (!dftracer::utils::python::py_unwrap(
             dftracer::utils::dstd::fs::exists(dftracer::utils::dstd::PathView(
-                dftracer::utils::index::store_dir(final_root)))) &&
+                dftracer::utils::trace::index::store_dir(final_root)))) &&
         dftracer::utils::common::should_stage(final_root)) {
         auto staged = dftracer::utils::common::staged_build_scratch(files);
         if (staged) {
@@ -325,29 +326,31 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
 
     {
         auto agg_intern =
-            dftracer::utils::index::schemas::dft::agg::intern_for_index(
+            dftracer::utils::trace::index::schemas::dft::agg::intern_for_index(
                 index_dir);
         batch_config->agg_fold_factory =
             [agg_config_ptr,
              agg_intern](dftracer::utils::dstd::StringIntern &build_intern)
             -> dftracer::utils::dstd::UniquePtr<
-                dftracer::utils::index::schemas::dft::agg::AggregationFold> {
+                dftracer::utils::trace::index::schemas::dft::agg::
+                    AggregationFold> {
             return dftracer::utils::dstd::make_unique<
-                dftracer::utils::index::schemas::dft::agg::AggregationFold>(
-                build_intern, agg_intern, *agg_config_ptr);
+                dftracer::utils::trace::index::schemas::dft::agg::
+                    AggregationFold>(build_intern, agg_intern, *agg_config_ptr);
         };
     }
 
     IndexBuildBatchResult result;
     if (!run_blocking([&] {
-            rt->submit(dftracer::utils::coro::with_scope(
-                           [cfg = batch_config,
-                            out = &result](dftracer::utils::coro::Scope &)
-                               -> dftracer::utils::coro::CoroTask<void> {
-                               *out = co_await BatchBuilder::process(cfg);
-                           }),
-                       "build-index-batch")
-                .get();
+            dftracer::utils::python::py_unwrap(
+                rt->submit(dftracer::utils::coro::with_scope(
+                               [cfg = batch_config,
+                                out = &result](dftracer::utils::coro::Scope &)
+                                   -> dftracer::utils::coro::CoroTask<void> {
+                                   *out = co_await BatchBuilder::process(cfg);
+                               }),
+                           "build-index-batch")
+                    .get());
         })) {
         return NULL;
     }
@@ -365,14 +368,21 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
     // Publish once every handle to the staged store is closed, so a later open
     // reads the destination.
     if (scratch) {
-        dftracer::utils::index::release_root(
-            dftracer::utils::index::normalize_index_root(build_dir));
-        dftracer::utils::index::release_root(final_root);
-        dftracer::utils::common::publish_path(
-            dftracer::utils::dstd::PathView(dftracer::utils::index::store_dir(
-                dftracer::utils::index::normalize_index_root(build_dir))),
+        dftracer::utils::trace::index::release_root(
+            dftracer::utils::trace::index::normalize_index_root(build_dir));
+        dftracer::utils::trace::index::release_root(final_root);
+        const auto published = dftracer::utils::common::publish_path(
             dftracer::utils::dstd::PathView(
-                dftracer::utils::index::store_dir(final_root)));
+                dftracer::utils::trace::index::store_dir(
+                    dftracer::utils::trace::index::normalize_index_root(
+                        build_dir))),
+            dftracer::utils::dstd::PathView(
+                dftracer::utils::trace::index::store_dir(final_root)));
+        if (!published) {
+            dftracer::utils::python::set_typed_py_error(
+                dftracer::utils::python::PyErrorException(published.error()));
+            return NULL;
+        }
     }
 
     Py_RETURN_NONE;
@@ -388,13 +398,14 @@ static PyObject *write_shard_set_fn(PyObject * /*self*/, PyObject *args) {
         return NULL;
     try {
         const auto normalized_root =
-            dftracer::utils::index::normalize_index_root(root);
+            dftracer::utils::trace::index::normalize_index_root(root);
         dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> dirs;
         dirs.reserve(shard_dirs.size());
         for (const auto &d : shard_dirs)
             dirs.emplace_back(dftracer::utils::dstd::StringView(d));
-        dftracer::utils::trace::views::write_shard_set(
-            dftracer::utils::dstd::String(normalized_root), dirs);
+        dftracer::utils::python::py_unwrap(
+            dftracer::utils::trace::views::write_shard_set(
+                dftracer::utils::dstd::String(normalized_root), dirs));
     } catch (const std::exception &e) {
         dftracer::utils::python::set_typed_py_error(e);
         return NULL;
@@ -408,9 +419,10 @@ static PyObject *consolidate_shard_set_fn(PyObject * /*self*/, PyObject *args) {
     std::size_t files = 0;
     try {
         const auto normalized_root =
-            dftracer::utils::index::normalize_index_root(root);
-        files = dftracer::utils::trace::views::consolidate_shard_set(
-            dftracer::utils::dstd::String(normalized_root));
+            dftracer::utils::trace::index::normalize_index_root(root);
+        files = dftracer::utils::python::py_unwrap(
+            dftracer::utils::trace::views::consolidate_shard_set(
+                dftracer::utils::dstd::String(normalized_root)));
     } catch (const std::exception &e) {
         dftracer::utils::python::set_typed_py_error(e);
         return NULL;
@@ -420,7 +432,7 @@ static PyObject *consolidate_shard_set_fn(PyObject * /*self*/, PyObject *args) {
 
 static PyObject *enable_aggregation_deterministic_ids_fn(PyObject * /*self*/,
                                                          PyObject * /*args*/) {
-    dftracer::utils::index::schemas::dft::agg::
+    dftracer::utils::trace::index::schemas::dft::agg::
         enable_deterministic_intern_ids();
     Py_RETURN_NONE;
 }

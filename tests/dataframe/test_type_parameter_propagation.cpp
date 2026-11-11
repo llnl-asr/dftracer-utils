@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/config.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 #include <cstring>
@@ -287,8 +288,9 @@ TEST_SUITE("dataframe_type_parameter_propagation") {
         df.columns.push_back(Series::flat_i64(
             dstd::Vector<std::int64_t>{10, 20, 30, 40}.data(), 4));
 
-        DataFrame g = df.group_by("k", {GroupAgg{Agg::Sum, "v", "total"},
-                                        GroupAgg{Agg::Count, "", "n"}});
+        DataFrame g = dftu_utils_test::ok(df.group_by(
+            "k",
+            {GroupAgg{Agg::Sum, "v", "total"}, GroupAgg{Agg::Count, "", "n"}}));
         REQUIRE(g.num_rows() == 2);
 
         Series key = g.column("k");

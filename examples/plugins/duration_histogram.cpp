@@ -5,9 +5,9 @@
 // This is the self-contained shape - a plugin that computes and emits its own
 // summary; for the host-owned mergeable shape see the process_* accumulator
 // examples.
-// Build: c++ -std=c++20 -shared -fPIC -I<repo>/include \
-//            -o duration_histogram.so duration_histogram.cpp
-// Run:   dftracer_run ./traces --plugin ./duration_histogram.so
+// Build: c++ -std=c++20 -shared -fPIC -I<repo>/include -o duration_histogram.so
+// duration_histogram.cpp Run:   dftracer_run ./traces --plugin
+// ./duration_histogram.so
 
 #include <dftracer/utils/plugins/plugin.h>
 

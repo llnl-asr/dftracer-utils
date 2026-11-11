@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/agg/detail.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/hash/partition.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/hasher.h>
@@ -145,8 +146,7 @@ std::size_t agg_approx_bytes(const AggState& st) {
 dstd::Vector<dstd::Vector<std::int64_t>> agg_split_groups(const AggState& st,
                                                           std::size_t parts,
                                                           int salt) {
-    if (parts == 0)
-        throw std::invalid_argument("agg_split_groups: parts must be > 0");
+    if (parts == 0) dstd::fatal("agg_split_groups: parts must be > 0");
     dstd::Vector<dstd::Vector<std::int64_t>> out(parts);
     const std::int64_t groups = agg_group_count(st);
     for (std::int64_t g = 0; g < groups; ++g) {

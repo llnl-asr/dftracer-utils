@@ -6,12 +6,13 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/tuple.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
-#include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/fileio/file_helpers.h>
+#include <dftracer/utils/trace/index/indexer.h>
+#include <dftracer/utils/trace/index/record_schema.h>
+#include <dftracer/utils/trace/index/tables.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -40,7 +41,7 @@ dstd::String write_gz(TestEnvironment& env, const dstd::String& dir,
     const dstd::String gz = plain + ".gz";
     REQUIRE(
         dftu_utils_test::compress_file_to_gzip_multimember(plain, gz, 2048));
-    (void)dstd::fs::remove(plain);
+    dstd::fs::remove(plain).discard();
     return gz;
 }
 
@@ -88,22 +89,23 @@ dstd::Vector<dstd::String> genesis_lines() {
 }
 
 void register_log_schema() {
-    index::register_schema(
+    dftu_utils_test::ok_ref(trace::index::register_schema(
         "id: cf_log\n"
         "fields:\n"
         "  op: {type: string}\n"
         "  took: {type: float, role: duration, unit: s}\n"
         "  worker: {type: string, role: entity}\n"
         "  status: {type: json, optional: true}\n",
-        "test_catalog_fold");
+        "test_catalog_fold"));
 }
 
 bool has_catalog(const dstd::String& gz) {
     const auto snapshot = dftu_utils_test::index_snapshot(
         dstd::String(determine_index_path(gz, "")));
     const auto file = dftu_utils_test::find_indexed_file(snapshot, gz);
-    return file && index::extension_current(
-                       snapshot, *file, index::store::IndexExtension::Catalog);
+    return file &&
+           trace::index::extension_current(
+               snapshot, *file, trace::index::store::IndexExtension::Catalog);
 }
 
 Catalog catalog_of(const dstd::String& gz) {
@@ -112,7 +114,7 @@ Catalog catalog_of(const dstd::String& gz) {
     const auto file = dftu_utils_test::require_indexed_file(snapshot, gz);
     Catalog out;
     for (const auto& [path, stat] :
-         dftu_utils_test::index_take(index::catalog(snapshot, file)))
+         dftu_utils_test::index_take(trace::index::catalog(snapshot, file)))
         out[dstd::String(path.data(), path.size())] = {
             static_cast<int>(stat.type), stat.seen, stat.count};
     return out;
@@ -126,10 +128,13 @@ View view_of(const dstd::String& gz, const dstd::String& schema = "") {
 }
 
 void build_full(const dstd::String& gz, const dstd::String& schema = "") {
-    index::IndexerOptions o;
+    trace::index::IndexerOptions o;
     o.checkpoint_size = 2048;
     o.schema = schema;
-    index::Indexer::open({dstd::String(dstd::StringView(gz))}, o).build();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(trace::index::Indexer::open(
+                                {dstd::String(dstd::StringView(gz))}, o))
+            .build());
 }
 
 void expect_scan_catalog_equals_build(const dstd::Vector<dstd::String>& lines,
@@ -153,15 +158,17 @@ void plant_sentinel(const dstd::String& gz) {
         dstd::String(determine_index_path(gz, "")));
     const auto snapshot = dftu_utils_test::index_take(index.snapshot());
     const auto file = dftu_utils_test::require_indexed_file(snapshot, gz);
-    const auto state = index::extension_state(
-        snapshot, file, index::store::IndexExtension::Catalog);
+    const auto state = trace::index::extension_state(
+        snapshot, file, trace::index::store::IndexExtension::Catalog);
     REQUIRE(state.has_value());
     auto build = dftu_utils_test::rebuild_test_file(index, gz);
     for (const auto& [path, stat] :
-         dftu_utils_test::index_take(index::catalog(snapshot, file)))
-        index::put_catalog_path(build, path, stat);
-    index::put_catalog_path(build, "zz.sentinel", index::store::PathStat{});
-    build.finish(index::store::IndexExtension::Catalog, state->params_hash);
+         dftu_utils_test::index_take(trace::index::catalog(snapshot, file)))
+        trace::index::put_catalog_path(build, path, stat);
+    trace::index::put_catalog_path(build, "zz.sentinel",
+                                   trace::index::store::PathStat{});
+    build.finish(trace::index::store::IndexExtension::Catalog,
+                 state->params_hash);
     dftu_utils_test::commit_test_build(build);
 }
 
@@ -231,16 +238,17 @@ TEST_SUITE("CatalogFold") {
             (void)view_of(gz).duql(R"(name == "read")").collect().get();
             REQUIRE_FALSE(has_catalog(gz));
         }
-        const auto cols = view_of(gz).columns();
+        const auto cols = dftu_utils_test::ok(view_of(gz).columns());
         REQUIRE(has_catalog(gz));
         const dstd::String built = write_gz(env, "cb", dftracer_lines());
         build_full(built);
         CHECK(cols.size() > 7);
-        CHECK(cols == view_of(built).columns());
+        CHECK(cols == dftu_utils_test::ok(view_of(built).columns()));
 
         // A rewrite would drop the sentinel.
         plant_sentinel(gz);
-        CHECK(view_of(gz).columns() == view_of(gz).columns());
+        CHECK(dftu_utils_test::ok(view_of(gz).columns()) ==
+              dftu_utils_test::ok(view_of(gz).columns()));
         CHECK(has_sentinel(gz));
     }
 
@@ -268,10 +276,10 @@ TEST_SUITE("CatalogFold") {
         const dstd::String built = write_gz(env, "gb", genesis_lines());
         build_full(built);
         REQUIRE(has_catalog(built));
-        const auto cols = view_of(gz).columns();
+        const auto cols = dftu_utils_test::ok(view_of(gz).columns());
         REQUIRE(has_catalog(gz));
         for (const char* want : {"v.p50", "v.p99", "count"})
             CHECK(std::find(cols.begin(), cols.end(), want) != cols.end());
-        CHECK(cols == view_of(built).columns());
+        CHECK(cols == dftu_utils_test::ok(view_of(built).columns()));
     }
 }

@@ -12,7 +12,7 @@
  *                   source module the utility comes from (hash ->
  *                   dstd/hash, hex -> the scalar hex codecs, text ->
  *                   utilities/text, fs -> runtime/fs, file ->
- *                   utilities/fileio). A leaf drops the family word when it
+ *                   fileio). A leaf drops the family word when it
  *                   would repeat it (hex64_parse -> dftu.hex.parse64).
  *     fn          - the dftu_* C ABI function implementing it.
  *     ret,o0..o2  - the signature tokens (DFTU_TOK_* suffixes): the return
@@ -22,7 +22,7 @@
  * Only host utilities that are genuine column kernels belong here. The file
  * and filesystem families (dftu.fs.*, dftu.file.*, dftu.text.line_filter) are
  * I/O, not kernels: they register into the same name-keyed registry at runtime
- * from the utilities layer (utilities/host_ops.h) via dftu_op_register, so the
+ * from the domains layer (domains/plugins/host_ops.h) via dftu_op_register, so the
  * columnar engine keeps no dependency on the file system.
  *
  * This is the whole column-op surface (every dftu_series_* op). Frame ops

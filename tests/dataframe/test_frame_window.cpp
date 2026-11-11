@@ -5,6 +5,7 @@
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/algorithm.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -14,6 +15,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <algorithm>
 #include <cmath>
@@ -102,7 +104,7 @@ Series tag_lists() {
 DataFrame win(const DataFrame& in, const dstd::Vector<dstd::String>& part,
               const dstd::Vector<dstd::String>& order,
               const dstd::Vector<WindowColumn>& specs) {
-    return dataframe::window(in, part, order, specs);
+    return dftu_utils_test::ok(dataframe::window(in, part, order, specs));
 }
 
 WindowColumn spec(WindowFunc func, dstd::Optional<dstd::String> value,
@@ -471,19 +473,22 @@ TEST_CASE("window - sessionize gives a null time a null session") {
 
 TEST_CASE("window - sessionize rejects a negative gap and a text end") {
     const DataFrame in = make3({1, 1}, {0, 10}, {0, 0});
-    CHECK_THROWS_AS(win(in, {"p"}, {"o"}, {session_spec("o", "sid", -1.0)}),
-                    std::invalid_argument);
-    CHECK_THROWS_AS(
-        win(in, {"p"}, {"o"}, {session_spec("o", "sid", 1.0, -2.0)}),
-        std::invalid_argument);
+    dftu_utils_test::expect_error(
+        dataframe::window(in, {"p"}, {"o"}, {session_spec("o", "sid", -1.0)}),
+        dftracer::utils::common::ErrorCode::InvalidArgument);
+    dftu_utils_test::expect_error(
+        dataframe::window(in, {"p"}, {"o"},
+                          {session_spec("o", "sid", 1.0, -2.0)}),
+        dftracer::utils::common::ErrorCode::InvalidArgument);
     DataFrame text;
     text.names = {"p", "o", "e"};
     text.columns.push_back(plain({1}));
     text.columns.push_back(plain({0}));
     text.columns.push_back(Series::strings(dstd::Vector<dstd::String>{"x"}));
-    CHECK_THROWS_AS(
-        win(text, {"p"}, {"o"}, {session_spec("o", "sid", 1.0, 0.0, "e")}),
-        std::invalid_argument);
+    dftu_utils_test::expect_error(
+        dataframe::window(text, {"p"}, {"o"},
+                          {session_spec("o", "sid", 1.0, 0.0, "e")}),
+        dftracer::utils::common::ErrorCode::InvalidArgument);
 }
 
 TEST_CASE("window - delta determinism across input order") {
@@ -654,12 +659,14 @@ TEST_CASE(
     CHECK(strs(out, "ff") == SCol{"c", "a", "a", "b"});
     CHECK(strs(out, "rmin") == SCol{"c", "a", "a", "a"});
     CHECK(strs(out, "fmax") == SCol{"c", "c", "b", "b"});
-    CHECK_THROWS_AS(win(in, {"p"}, {"o"},
-                        {frame_spec(WindowFunc::FrameSum, "s", "x", 1, 1)}),
-                    std::invalid_argument);
-    CHECK_THROWS_AS(
-        win(in, {"p"}, {"o"}, {spec(WindowFunc::RunningSum, "missing", "x")}),
-        std::out_of_range);
+    dftu_utils_test::expect_error(
+        dataframe::window(in, {"p"}, {"o"},
+                          {frame_spec(WindowFunc::FrameSum, "s", "x", 1, 1)}),
+        dftracer::utils::common::ErrorCode::InvalidArgument);
+    dftu_utils_test::expect_error(
+        dataframe::window(in, {"p"}, {"o"},
+                          {spec(WindowFunc::RunningSum, "missing", "x")}),
+        dftracer::utils::common::ErrorCode::NotFound);
 }
 
 TEST_CASE("window - frame determinism across input order") {
@@ -872,18 +879,19 @@ TEST_CASE(
 
 TEST_CASE("window - negative frame bounds are refused") {
     const DataFrame in = make3({1, 1}, {1, 2}, {1, 2});
-    CHECK_THROWS_AS(
-        (void)win(in, {"p"}, {"o"},
-                  {frame_spec(WindowFunc::FrameSum, "v", "fs", -3, 1)}),
-        std::invalid_argument);
-    CHECK_THROWS_AS(
-        (void)win(in, {"p"}, {"o"},
-                  {frame_spec(WindowFunc::FrameSum, "v", "fs", 1, -1)}),
-        std::invalid_argument);
-    CHECK_THROWS_AS(
-        (void)win(in, {"p"}, {"o"},
-                  {frame_spec(WindowFunc::FrameSum, "v", "fs", 1, 1, -1)}),
-        std::invalid_argument);
+    dftu_utils_test::expect_error(
+        dataframe::window(in, {"p"}, {"o"},
+                          {frame_spec(WindowFunc::FrameSum, "v", "fs", -3, 1)}),
+        dftracer::utils::common::ErrorCode::InvalidArgument);
+    dftu_utils_test::expect_error(
+        dataframe::window(in, {"p"}, {"o"},
+                          {frame_spec(WindowFunc::FrameSum, "v", "fs", 1, -1)}),
+        dftracer::utils::common::ErrorCode::InvalidArgument);
+    dftu_utils_test::expect_error(
+        dataframe::window(
+            in, {"p"}, {"o"},
+            {frame_spec(WindowFunc::FrameSum, "v", "fs", 1, 1, -1)}),
+        dftracer::utils::common::ErrorCode::InvalidArgument);
 }
 
 TEST_CASE("window - percent_rank/cume_dist/range determinism across order") {
@@ -1029,8 +1037,8 @@ void check_col(const DataFrame& d, const Expect& e) {
         bool same = g.has_value() == w.has_value();
         if (same && g) same = e.approx ? *g == doctest::Approx(*w) : *g == *w;
         if (!same)
-            bad = e.name + " differs at sorted row " + dstd::to_string(i) +
-                  ": got " + show(g) + ", want " + show(w);
+            bad = dstd::fmt<"{} differs at sorted row {}: got {}, want {}">(
+                e.name, i, show(g), show(w));
     }
     CHECK_MESSAGE(bad.empty(), bad);
 }
@@ -1109,10 +1117,9 @@ dstd::String frame_name(WindowFunc func, const dstd::String& value,
             tag = "fmean";
             break;
     }
-    return tag + "_" + value +
-           (mode == WindowFrameMode::Rows ? "_rows_" : "_range_") +
-           bound(fc.preceding) + "_" + bound(fc.following) + "_m" +
-           dstd::to_string(fc.min_count);
+    return dstd::fmt<"{}_{}{}{}_{}_m{}">(
+        tag, value, (mode == WindowFrameMode::Rows ? "_rows_" : "_range_"),
+        bound(fc.preceding), bound(fc.following), fc.min_count);
 }
 
 TypeId frame_type(WindowFunc func, TypeId value) {
@@ -1252,7 +1259,7 @@ TEST_CASE("window - randomized frames match a naive per-row reference") {
         for (std::int64_t k : {1, 3, 7, 200}) {
             add(specs, want,
                 offset_spec(WindowFunc::Ntile, dstd::nullopt,
-                            "ntile" + dstd::to_string(k), k),
+                            dstd::fmt<"ntile{}">(k), k),
                 TypeId::Int64,
                 per_row(s,
                         [k](const Part& part, std::size_t i) -> Val {
@@ -1277,8 +1284,8 @@ TEST_CASE("window - randomized frames match a naive per-row reference") {
             const dstd::String& n = vc.name;
             for (std::int64_t k : {1, 3}) {
                 add(specs, want,
-                    offset_spec(WindowFunc::Lag, n,
-                                "lag" + dstd::to_string(k) + "_" + n, k),
+                    offset_spec(WindowFunc::Lag, n, dstd::fmt<"lag{}_{}">(k, n),
+                                k),
                     vc.type,
                     per_row(
                         s,
@@ -1293,7 +1300,7 @@ TEST_CASE("window - randomized frames match a naive per-row reference") {
             for (std::int64_t k : {1, 2}) {
                 add(specs, want,
                     offset_spec(WindowFunc::Lead, n,
-                                "lead" + dstd::to_string(k) + "_" + n, k),
+                                dstd::fmt<"lead{}_{}">(k, n), k),
                     vc.type,
                     per_row(
                         s,
@@ -1305,14 +1312,16 @@ TEST_CASE("window - randomized frames match a naive per-row reference") {
                         }),
                     false);
             }
-            add(specs, want, spec(WindowFunc::FirstValue, n, "first_" + n),
+            add(specs, want,
+                spec(WindowFunc::FirstValue, n, dstd::fmt<"first_{}">(n)),
                 vc.type,
                 per_row(s,
                         [&v](const Part& part, std::size_t) -> Val {
                             return v[part.front()];
                         }),
                 false);
-            add(specs, want, spec(WindowFunc::LastValue, n, "last_" + n),
+            add(specs, want,
+                spec(WindowFunc::LastValue, n, dstd::fmt<"last_{}">(n)),
                 vc.type,
                 per_row(s,
                         [&v](const Part& part, std::size_t) -> Val {
@@ -1322,7 +1331,7 @@ TEST_CASE("window - randomized frames match a naive per-row reference") {
             for (std::int64_t k : {1, 2, 5}) {
                 add(specs, want,
                     offset_spec(WindowFunc::NthValue, n,
-                                "nth" + dstd::to_string(k) + "_" + n, k),
+                                dstd::fmt<"nth{}_{}">(k, n), k),
                     vc.type,
                     per_row(
                         s,
@@ -1334,7 +1343,8 @@ TEST_CASE("window - randomized frames match a naive per-row reference") {
                         }),
                     false);
             }
-            add(specs, want, spec(WindowFunc::FillForward, n, "ffill_" + n),
+            add(specs, want,
+                spec(WindowFunc::FillForward, n, dstd::fmt<"ffill_{}">(n)),
                 vc.type,
                 per_row(s,
                         [&v](const Part& part, std::size_t i) -> Val {
@@ -1343,7 +1353,8 @@ TEST_CASE("window - randomized frames match a naive per-row reference") {
                             return Val{};
                         }),
                 false);
-            add(specs, want, spec(WindowFunc::RunningSum, n, "rsum_" + n),
+            add(specs, want,
+                spec(WindowFunc::RunningSum, n, dstd::fmt<"rsum_{}">(n)),
                 vc.type,
                 per_row(s,
                         [&v](const Part& part, std::size_t i) -> Val {
@@ -1353,7 +1364,8 @@ TEST_CASE("window - randomized frames match a naive per-row reference") {
                             return sum;
                         }),
                 false);
-            add(specs, want, spec(WindowFunc::RunningMin, n, "rmin_" + n),
+            add(specs, want,
+                spec(WindowFunc::RunningMin, n, dstd::fmt<"rmin_{}">(n)),
                 vc.type,
                 per_row(s,
                         [&v](const Part& part, std::size_t i) -> Val {
@@ -1365,7 +1377,8 @@ TEST_CASE("window - randomized frames match a naive per-row reference") {
                             return best;
                         }),
                 false);
-            add(specs, want, spec(WindowFunc::RunningMax, n, "rmax_" + n),
+            add(specs, want,
+                spec(WindowFunc::RunningMax, n, dstd::fmt<"rmax_{}">(n)),
                 vc.type,
                 per_row(s,
                         [&v](const Part& part, std::size_t i) -> Val {
@@ -1377,7 +1390,8 @@ TEST_CASE("window - randomized frames match a naive per-row reference") {
                             return best;
                         }),
                 false);
-            add(specs, want, spec(WindowFunc::RunningProd, n, "rprod_" + n),
+            add(specs, want,
+                spec(WindowFunc::RunningProd, n, dstd::fmt<"rprod_{}">(n)),
                 TypeId::Float64,
                 per_row(s,
                         [&v](const Part& part, std::size_t i) -> Val {
@@ -1387,7 +1401,8 @@ TEST_CASE("window - randomized frames match a naive per-row reference") {
                             return prod;
                         }),
                 true);
-            add(specs, want, spec(WindowFunc::Delta, n, "delta_" + n), vc.type,
+            add(specs, want,
+                spec(WindowFunc::Delta, n, dstd::fmt<"delta_{}">(n)), vc.type,
                 per_row(s,
                         [&v](const Part& part, std::size_t i) -> Val {
                             if (i == 0) return Val{};
@@ -1469,13 +1484,11 @@ UCol uints(const DataFrame& d, const dstd::String& name) {
     return out;
 }
 
-dstd::String overflow_of(const dstd::Function<void()>& fn) {
-    try {
-        fn();
-    } catch (const std::overflow_error& e) {
-        return e.what();
-    }
-    return {};
+dstd::String overflow_of(const dstd::Result<DataFrame>& result) {
+    if (result.has_value()) return {};
+    CHECK(dftracer::utils::common::errorcode_of(result.error()) ==
+          dftracer::utils::common::ErrorCode::InvalidArgument);
+    return result.error().c_str();
 }
 
 constexpr std::uint64_t BIG = std::uint64_t{1} << 63;
@@ -1491,22 +1504,20 @@ TEST_CASE("window - running_sum of uint64 values past 2^63 is exact") {
 
 TEST_CASE("window - integer sums outside the type are errors, not wraps") {
     const DataFrame u = make3u({1, 1}, {1, 2}, {UINT64_MAX, 1});
-    const dstd::String run = overflow_of([&] {
-        (void)win(u, {"p"}, {"o"}, {spec(WindowFunc::RunningSum, "v", "s")});
-    });
+    const dstd::String run = overflow_of(dataframe::window(
+        u, {"p"}, {"o"}, {spec(WindowFunc::RunningSum, "v", "s")}));
     CHECK(run.find("RUNNING_SUM") != dstd::String::npos);
     CHECK(run.find("uint64") != dstd::String::npos);
 
     const DataFrame i = make3({1, 1}, {1, 2}, {INT64_MAX, 1});
-    CHECK(overflow_of([&] {
-              (void)win(i, {"p"}, {"o"},
-                        {spec(WindowFunc::RunningSum, "v", "s")});
-          }).find("int64") != dstd::String::npos);
-    CHECK(overflow_of([&] {
-              (void)win(i, {"p"}, {"o"},
-                        {frame_spec(WindowFunc::FrameSum, "v", "s",
-                                    WINDOW_UNBOUNDED, 0)});
-          }).find("FRAME_SUM") != dstd::String::npos);
+    CHECK(
+        overflow_of(dataframe::window(i, {"p"}, {"o"},
+                                      {spec(WindowFunc::RunningSum, "v", "s")}))
+            .find("int64") != dstd::String::npos);
+    CHECK(overflow_of(dataframe::window(i, {"p"}, {"o"},
+                                        {frame_spec(WindowFunc::FrameSum, "v",
+                                                    "s", WINDOW_UNBOUNDED, 0)}))
+              .find("FRAME_SUM") != dstd::String::npos);
 }
 
 TEST_CASE("window - frame_sum of uint64 values past 2^63 slides exactly") {
@@ -1523,16 +1534,14 @@ TEST_CASE("window - delta is exact int64 or an error") {
     for (const auto& values : {dstd::Vector<std::uint64_t>{0, UINT64_MAX},
                                dstd::Vector<std::uint64_t>{0, BIG}}) {
         const DataFrame in = make3u({1, 1}, {1, 2}, values);
-        const dstd::String e = overflow_of([&] {
-            (void)win(in, {"p"}, {"o"}, {spec(WindowFunc::Delta, "v", "d")});
-        });
+        const dstd::String e = overflow_of(dataframe::window(
+            in, {"p"}, {"o"}, {spec(WindowFunc::Delta, "v", "d")}));
         CHECK(e.find("DELTA") != dstd::String::npos);
     }
     const DataFrame signed_in = make3({1, 1}, {1, 2}, {INT64_MIN, INT64_MAX});
-    CHECK(overflow_of([&] {
-              (void)win(signed_in, {"p"}, {"o"},
-                        {spec(WindowFunc::Delta, "v", "d")});
-          }).find("DELTA") != dstd::String::npos);
+    CHECK(overflow_of(dataframe::window(signed_in, {"p"}, {"o"},
+                                        {spec(WindowFunc::Delta, "v", "d")}))
+              .find("DELTA") != dstd::String::npos);
 }
 
 TEST_CASE("window - sliding integer sums equal a 128-bit reference") {
@@ -1864,7 +1873,7 @@ void run_stat_frames(std::uint64_t seed, bool order_nulls, WindowFrameMode mode,
     dstd::Vector<dstd::Function<void(const DataFrame&)>> checks;
     int id = 0;
     const auto uniq = [&id](const char* tag, const dstd::String& col) {
-        return dstd::String(tag) + "_" + col + "_" + dstd::to_string(id++);
+        return dstd::fmt<"{}_{}_{}">(tag, col, id++);
     };
 
     for (const FrameCase& fc : frames) {
@@ -2101,18 +2110,15 @@ TEST_CASE("window - collect past 2^27 values in all fails naming the frame") {
         part.names = in.names;
         for (const Series& c : in.columns)
             part.columns.push_back(c.slice(0, rows));
-        return win(part, {"p"}, {"o"},
-                   {frame_spec(WindowFunc::FrameCollect, "v", "c",
-                               WINDOW_UNBOUNDED, WINDOW_UNBOUNDED)});
+        return dataframe::window(
+            part, {"p"}, {"o"},
+            {frame_spec(WindowFunc::FrameCollect, "v", "c", WINDOW_UNBOUNDED,
+                        WINDOW_UNBOUNDED)});
     };
-    try {
-        (void)run(n);
-        FAIL("expected the cap error");
-    } catch (const std::length_error& e) {
-        CHECK(dstd::String(e.what()).find("FRAME_COLLECT") !=
-              dstd::String::npos);
-    }
-    CHECK(run(100).num_rows() == 100);
+    dftu_utils_test::expect_error(
+        run(n), dftracer::utils::common::ErrorCode::InvalidArgument,
+        "window: FRAME_COLLECT frames hold more than 2^27 values in all");
+    CHECK(dftu_utils_test::ok(run(100)).num_rows() == 100);
 }
 
 TEST_CASE("window - new frame functions refuse bad parameters") {
@@ -2121,37 +2127,47 @@ TEST_CASE("window - new frame functions refuse bad parameters") {
         WindowColumn w = frame_spec(WindowFunc::FrameQuantile, "dur", "q",
                                     WINDOW_UNBOUNDED, 0);
         w.params.frame.q = level;
-        return win(in, {"p"}, {"o"}, {w});
+        return dataframe::window(in, {"p"}, {"o"}, {w});
     };
-    CHECK_THROWS_AS((void)quantile(-0.1), std::invalid_argument);
-    CHECK_THROWS_AS((void)quantile(1.5), std::invalid_argument);
-    CHECK_THROWS_AS((void)quantile(std::nan("")), std::invalid_argument);
-    CHECK_NOTHROW((void)quantile(0.0));
-    CHECK_NOTHROW((void)quantile(1.0));
+    dftu_utils_test::expect_error(
+        quantile(-0.1), dftracer::utils::common::ErrorCode::InvalidArgument);
+    dftu_utils_test::expect_error(
+        quantile(1.5), dftracer::utils::common::ErrorCode::InvalidArgument);
+    dftu_utils_test::expect_error(
+        quantile(std::nan("")),
+        dftracer::utils::common::ErrorCode::InvalidArgument);
+    dftu_utils_test::ok(quantile(0.0));
+    dftu_utils_test::ok(quantile(1.0));
 
-    CHECK_THROWS_AS(
-        (void)win(in, {"p"}, {"o"},
-                  {frame_spec(WindowFunc::FrameArgMax, "name", "r", 1, 0)}),
-        std::invalid_argument);
+    dftu_utils_test::expect_error(
+        dataframe::window(
+            in, {"p"}, {"o"},
+            {frame_spec(WindowFunc::FrameArgMax, "name", "r", 1, 0)}),
+        dftracer::utils::common::ErrorCode::InvalidArgument);
     WindowColumn unknown =
         frame_spec(WindowFunc::FrameArgMax, "name", "r", 1, 0);
     unknown.set_by("nope");
-    CHECK_THROWS_AS((void)win(in, {"p"}, {"o"}, {unknown}), std::out_of_range);
+    dftu_utils_test::expect_error(
+        dataframe::window(in, {"p"}, {"o"}, {unknown}),
+        dftracer::utils::common::ErrorCode::NotFound);
     WindowColumn listed = frame_spec(WindowFunc::FrameArgMin, "dur", "r", 1, 0);
     listed.set_by("tags");
     DataFrame with_tags = names_dur({"a", "b"}, {1, 2});
     with_tags.names.push_back("tags");
     with_tags.columns.push_back(tag_lists());
-    CHECK_THROWS_AS((void)win(with_tags, {"p"}, {"o"}, {listed}),
-                    std::invalid_argument);
-    CHECK_THROWS_AS(
-        (void)win(in, {"p"}, {"o"},
-                  {frame_spec(WindowFunc::FrameVar, "name", "r", 1, 0)}),
-        std::invalid_argument);
-    CHECK_THROWS_AS(
-        (void)win(in, {"p"}, {"o"},
-                  {frame_spec(WindowFunc::FrameQuantile, "name", "r", 1, 0)}),
-        std::invalid_argument);
+    dftu_utils_test::expect_error(
+        dataframe::window(with_tags, {"p"}, {"o"}, {listed}),
+        dftracer::utils::common::ErrorCode::InvalidArgument);
+    dftu_utils_test::expect_error(
+        dataframe::window(
+            in, {"p"}, {"o"},
+            {frame_spec(WindowFunc::FrameVar, "name", "r", 1, 0)}),
+        dftracer::utils::common::ErrorCode::InvalidArgument);
+    dftu_utils_test::expect_error(
+        dataframe::window(
+            in, {"p"}, {"o"},
+            {frame_spec(WindowFunc::FrameQuantile, "name", "r", 1, 0)}),
+        dftracer::utils::common::ErrorCode::InvalidArgument);
 }
 
 TEST_CASE("window - frame variance near 1e9 matches a two-pass reference") {
@@ -2389,17 +2405,18 @@ TEST_CASE("lag and lead read the row `offset` back or ahead in the partition") {
     dstd::Vector<WindowColumn> specs;
     for (std::int64_t n : offsets) {
         specs.push_back(
-            offset_spec(WindowFunc::Lag, "v", "lag" + dstd::to_string(n), n));
+            offset_spec(WindowFunc::Lag, "v", dstd::fmt<"lag{}">(n), n));
         specs.push_back(
-            offset_spec(WindowFunc::Lead, "v", "lead" + dstd::to_string(n), n));
+            offset_spec(WindowFunc::Lead, "v", dstd::fmt<"lead{}">(n), n));
     }
-    const DataFrame out = dataframe::window(frame, {"k"}, {"ord"}, specs);
+    const DataFrame out =
+        dftu_utils_test::ok(dataframe::window(frame, {"k"}, {"ord"}, specs));
     const auto start_of = [&](std::size_t r) { return r < 4 ? 0 : 4; };
     const auto size_of = [&](std::size_t r) { return r < 4 ? 4 : 3; };
     for (std::int64_t n : offsets) {
         for (const char* dir : {"lag", "lead"}) {
             const Series col =
-                out.column(dir + dstd::to_string(n)).materialize();
+                out.column(dstd::fmt<"{}{}">(dir, n)).materialize();
             for (std::size_t r = 0; r < 7; ++r) {
                 const std::int64_t local =
                     static_cast<std::int64_t>(r) - start_of(r);

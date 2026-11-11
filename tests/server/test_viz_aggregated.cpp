@@ -1,24 +1,25 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/detail/coro.h>
+#include <dftracer/utils/domains/server/http_request.h>
+#include <dftracer/utils/domains/server/http_response.h>
+#include <dftracer/utils/domains/server/router.h>
+#include <dftracer/utils/domains/server/trace_index.h>
+#include <dftracer/utils/domains/server/viz/density.h>
+#include <dftracer/utils/domains/server/viz_api.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/fileio/compress/gzip_rechunker.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/json/value.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/server/http_request.h>
-#include <dftracer/utils/server/http_response.h>
-#include <dftracer/utils/server/router.h>
-#include <dftracer/utils/server/trace_index.h>
-#include <dftracer/utils/server/viz/density.h>
-#include <dftracer/utils/server/viz_api.h>
-#include <dftracer/utils/utilities/fileio/compress/gzip_rechunker.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <algorithm>
@@ -26,7 +27,7 @@
 #include <memory>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::server;
+using namespace dftracer::utils::domains::server;
 
 namespace {
 
@@ -58,7 +59,7 @@ dstd::String regular_event(long ts) {
 
 void write_single_member(const dstd::String& path,
                          const dstd::String& content) {
-    utilities::fileio::compress::GzipMemberCompressor comp;
+    fileio::compress::GzipMemberCompressor comp;
     auto member = comp.compress_member(content.data(), content.size());
     REQUIRE(member.has_value());
     dftu_utils_test::FileOut ofs(path);
@@ -78,7 +79,7 @@ dstd::String density_body(Router& router, const dstd::String& target) {
         body = resp.body;
         co_return;
     });
-    rt.submit(std::move(task), "density").wait();
+    dftu_utils_test::ok(rt.submit(std::move(task), "density").wait());
     rt.shutdown();
     return body;
 }
@@ -90,10 +91,11 @@ dstd::UniquePtr<TraceIndex> build_index(const dstd::String& content,
     auto index = dstd::make_unique<TraceIndex>(
         dstd::String(dir.str()), dstd::String((dir / "idx").str()));
     Runtime rt(4);
-    auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-        co_await index->initialize();
-    });
-    rt.submit(std::move(task), "setup").wait();
+    auto task = coro::with_scope(
+        [&](coro::Scope&) -> coro::CoroTask<dstd::Result<void>> {
+            co_return co_await index->initialize();
+        });
+    dftu_utils_test::ok(rt.submit(std::move(task), "setup").wait());
     rt.shutdown();
     return index;
 }

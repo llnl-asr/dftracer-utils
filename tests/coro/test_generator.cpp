@@ -9,6 +9,9 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
+
+#include <stdexcept>
 
 using namespace dftracer::utils;
 
@@ -211,8 +214,7 @@ Generator<int> sync_numbers(int first, int count) {
 
 Generator<int> sync_fails_after(int count) {
     for (int i = 0; i < count; ++i) co_yield i;
-    throw common::DFTUtilsException(
-        dstd::Error{dstd::Condition::Io, "planned failure"});
+    throw std::runtime_error("planned failure");
 }
 
 Generator<dstd::UniquePtr<int>> owned_numbers(int count) {
@@ -263,8 +265,6 @@ TEST_CASE("Generator - every stream operation as a function") {
     auto grouped = drain(chunks(sync_numbers(0, 5), 2));
     REQUIRE(grouped.size() == 3);
     CHECK(grouped[2].size() == 1);
-    CHECK_THROWS_AS(drain(chunks(sync_numbers(0, 1), 0)),
-                    common::DFTUtilsException);
 
     auto pairs = drain(zip(sync_numbers(0, 2), sync_numbers(10, 9)));
     REQUIRE(pairs.size() == 2);
@@ -302,7 +302,7 @@ TEST_CASE("Generator - next moves a move-only item out") {
 TEST_CASE("Generator - an error reaches the reader through an operation") {
     auto stream = map(sync_fails_after(1), [](int v) { return v; });
     CHECK(stream.next().has_value());
-    CHECK_THROWS_AS(stream.next(), common::DFTUtilsException);
+    CHECK_THROWS_AS(stream.next(), std::runtime_error);
 }
 
 TEST_CASE("Generator - to_async gives the operations that need an executor") {
@@ -317,15 +317,16 @@ TEST_CASE("Generator - to_async gives the operations that need an executor") {
         }
         co_return out;
     };
-    auto ordered =
+    auto ordered = dftu_utils_test::ok(
         runtime.block_on(collect(to_async(sync_numbers(0, 50)) |
-                                 map_ordered([](int v) { return v * 2; }, 4)));
+                                 map_ordered([](int v) { return v * 2; }, 4))));
     REQUIRE(ordered.size() == 50);
     CHECK(ordered[49] == 98);
-    auto loose =
+    auto loose = dftu_utils_test::ok(
         runtime.block_on(collect(to_async(sync_numbers(0, 50)) |
-                                 map_unordered([](int v) { return v; }, 4)));
+                                 map_unordered([](int v) { return v; }, 4))));
     CHECK(loose.size() == 50);
-    CHECK_THROWS_AS(runtime.block_on(collect(to_async(sync_fails_after(1)))),
-                    common::DFTUtilsException);
+    CHECK_THROWS_AS(dftu_utils_test::ok(runtime.block_on(
+                        collect(to_async(sync_fails_after(1))))),
+                    std::runtime_error);
 }

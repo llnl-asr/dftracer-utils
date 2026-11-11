@@ -3,7 +3,6 @@
 #define DFTRACER_UTILS_CORO_CHANNEL_H
 
 #include <dftracer/utils/common/platform_compat.h>
-#include <dftracer/utils/coro/cancelled.h>
 #include <dftracer/utils/coro/detail/channel_queue.h>
 #include <dftracer/utils/coro/detail/parked.h>
 #include <dftracer/utils/coro/detail/resumption_helper.h>
@@ -133,8 +132,7 @@ class BasicChannel : public std::enable_shared_from_this<BasicChannel<Queue>> {
     };
 
    public:
-    /// co_await throws a cancelled error (see coro::is_cancelled) when the
-    /// executor shuts down while it waits.
+    /// The awaiting task stops when the executor shuts down while it waits.
     class ReceiveAwaitable {
        private:
         BasicChannel* channel_;
@@ -207,7 +205,7 @@ class BasicChannel : public std::enable_shared_from_this<BasicChannel<Queue>> {
                 park_ = nullptr;
             }
             suspended_ = false;
-            if (cancelled_) throw_cancelled("channel receive cancelled");
+            if (cancelled_) detail::cancelled_unstoppable("channel receive");
             return std::move(result_);
         }
 
@@ -223,7 +221,7 @@ class BasicChannel : public std::enable_shared_from_this<BasicChannel<Queue>> {
                     return;
                 cancelled_ = true;
             }
-            detail::post_resumption(waiter_.executor, waiter_.handle);
+            detail::stop_or_resume(waiter_.executor, park_, waiter_.handle);
         }
 
         ~ReceiveAwaitable() {
@@ -238,9 +236,8 @@ class BasicChannel : public std::enable_shared_from_this<BasicChannel<Queue>> {
     };
 
     /// co_await returns false when the channel is closed, and the item is then
-    /// dropped with the awaitable. It throws a cancelled error (see
-    /// coro::is_cancelled) when the executor shuts down while it waits for
-    /// room.
+    /// dropped with the awaitable. The awaiting task stops when the executor
+    /// shuts down while it waits for room.
     class SendAwaitable {
        private:
         BasicChannel* channel_;
@@ -324,7 +321,7 @@ class BasicChannel : public std::enable_shared_from_this<BasicChannel<Queue>> {
                 park_ = nullptr;
             }
             suspended_ = false;
-            if (cancelled_) throw_cancelled("channel send cancelled");
+            if (cancelled_) detail::cancelled_unstoppable("channel send");
             return sent_;
         }
 
@@ -340,7 +337,7 @@ class BasicChannel : public std::enable_shared_from_this<BasicChannel<Queue>> {
                     return;
                 cancelled_ = true;
             }
-            detail::post_resumption(waiter_.executor, waiter_.handle);
+            detail::stop_or_resume(waiter_.executor, park_, waiter_.handle);
         }
 
         ~SendAwaitable() {

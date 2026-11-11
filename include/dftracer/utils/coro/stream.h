@@ -14,9 +14,11 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/time.h>
 #include <dftracer/utils/dstd/error.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/vector.h>
 
 #include <atomic>
@@ -35,6 +37,8 @@ template <typename T>
 struct StreamMessage {
     dstd::Optional<T> value;
     std::exception_ptr error;
+    /// The source stopped, which stops the reader.
+    bool stopped{false};
 };
 
 // What the pumps share with the generator that reads them. The pumps own it,
@@ -67,16 +71,24 @@ struct StreamCloser {
     }
 };
 
+// A pump ends at a wait that shutdown cancelled, so what it must release goes
+// in destructors.
+struct SlotRelease {
+    AsyncSemaphore* slot;
+    ~SlotRelease() {
+        if (slot) slot->release(1);
+    }
+};
+
 inline void start_stream_pump(Coro pump, Executor* executor) {
     pump.handle().promise().executor = executor;
+    pump.handle().promise().stoppable = true;
     executor->post(pump.release());
 }
 
 inline Executor* require_stream_executor(Executor* executor) {
     if (executor == nullptr) {
-        throw common::DFTUtilsException(
-            dstd::Error{dstd::Condition::InvalidArgument,
-                        "a merged stream needs a running executor"});
+        dstd::fatal("coro: a merged stream needs a running executor");
     }
     return executor;
 }
@@ -87,29 +99,23 @@ Coro pump_stream(dstd::SharedPtr<Shared> shared,
                  AsyncGenerator<T> source, AsyncSemaphore* slot = nullptr) {
     source.stop_on(&shared->stopped);
     auto guard = producer.guard();
-    try {
-        for (;;) {
-            StreamMessage<T> message;
-            bool done = false;
-            try {
-                auto value = co_await source.next();
-                if (value) {
-                    message.value.emplace(std::move(*value));
-                } else {
-                    done = true;
-                }
-            } catch (...) {
-                message.error = std::current_exception();
-            }
-            if (done) break;
-            const bool failed = message.error != nullptr;
-            const bool sent = co_await shared->channel.send(std::move(message));
-            if (failed || !sent) break;
+    SlotRelease release{slot};
+    for (;;) {
+        auto settled = co_await source.settled_next();
+        StreamMessage<T> message;
+        if (settled.stopped) {
+            message.stopped = true;
+        } else if (settled.exception) {
+            message.error = std::move(settled.exception);
+        } else if (*settled.value) {
+            message.value.emplace(std::move(**settled.value));
+        } else {
+            break;
         }
-    } catch (...) {
-        // A wait cancelled at shutdown. The reader sees the channel end.
+        const bool last = message.error != nullptr || message.stopped;
+        const bool sent = co_await shared->channel.send(std::move(message));
+        if (last || !sent) break;
     }
-    if (slot) slot->release(1);
 }
 
 template <typename T>
@@ -122,22 +128,8 @@ AsyncGenerator<T> read_stream(dstd::SharedPtr<StreamShared<T>> shared) {
             co_return;
         }
         if (message->error) common::rethrow_and_clear(message->error);
+        if (message->stopped) co_await stop_here();
         co_yield std::move(*message->value);
-    }
-}
-
-// Sends a source error after any wait: the channel can be full.
-template <typename T>
-Coro send_stream_error(dstd::SharedPtr<StreamShared<T>> shared,
-                       ChannelProducer<StreamMessage<T>> producer,
-                       std::exception_ptr error) {
-    auto guard = producer.guard();
-    StreamMessage<T> message;
-    message.error = std::move(error);
-    try {
-        co_await shared->channel.send(std::move(message));
-    } catch (...) {
-        // A wait cancelled at shutdown. The reader sees the channel end.
     }
 }
 
@@ -169,32 +161,37 @@ Coro pump_outer(dstd::SharedPtr<MergeMapShared<U, F>> shared,
     using Inner = AsyncGenerator<U>;
     source.stop_on(&shared->stopped);
     auto guard = producer.guard();
-    std::exception_ptr error;
-    try {
-        for (;;) {
-            auto value = co_await source.next();
-            if (!value) co_return;
-            co_await shared->slots.acquire(1);
-            if (shared->channel.is_closed()) {
-                shared->slots.release(1);
-                co_return;
-            }
-            Inner inner =
-                co_await call_as_task<Inner>(shared->fn, std::move(*value));
-            start_stream_pump(pump_stream<U>(shared, shared->channel.producer(),
-                                             std::move(inner), &shared->slots),
-                              shared->executor);
-        }
-    } catch (...) {
-        error = std::current_exception();
-    }
     StreamMessage<U> message;
-    message.error = std::move(error);
-    try {
-        co_await shared->channel.send(std::move(message));
-    } catch (...) {
-        // A wait cancelled at shutdown. The reader sees the channel end.
+    for (;;) {
+        auto next = co_await source.settled_next();
+        if (next.stopped) {
+            message.stopped = true;
+            break;
+        }
+        if (next.exception) {
+            message.error = std::move(next.exception);
+            break;
+        }
+        if (!*next.value) co_return;
+        co_await shared->slots.acquire(1);
+        if (shared->channel.is_closed()) {
+            shared->slots.release(1);
+            co_return;
+        }
+        auto made = co_await settle(
+            call_as_task<Inner>(shared->fn, std::move(**next.value)));
+        if (made.stopped || made.exception) {
+            shared->slots.release(1);
+            message.stopped = made.stopped;
+            message.error = std::move(made.exception);
+            break;
+        }
+        start_stream_pump(
+            pump_stream<U>(shared, shared->channel.producer(),
+                           std::move(*made.value), &shared->slots),
+            shared->executor);
     }
+    co_await shared->channel.send(std::move(message));
 }
 
 template <typename U>
@@ -228,30 +225,29 @@ Coro pump_ordered(
     using Item = dstd::Pair<std::size_t, U>;
     source.stop_on(&shared->stopped);
     auto guard = producer.guard();
-    std::exception_ptr error;
-    try {
-        for (std::size_t index = 0;; ++index) {
-            auto value = co_await source.next();
-            if (!value) co_return;
-            co_await shared->tokens.acquire(1);
-            if (shared->channel.is_closed()) co_return;
-            start_stream_pump(
-                pump_stream<Item>(
-                    shared, shared->channel.producer(),
-                    one_indexed_item<U>(
-                        index, call_as_task<U>(shared->fn, std::move(*value)))),
-                shared->executor);
-        }
-    } catch (...) {
-        error = std::current_exception();
-    }
     StreamMessage<Item> message;
-    message.error = std::move(error);
-    try {
-        co_await shared->channel.send(std::move(message));
-    } catch (...) {
-        // A wait cancelled at shutdown. The reader sees the channel end.
+    for (std::size_t index = 0;; ++index) {
+        auto next = co_await source.settled_next();
+        if (next.stopped) {
+            message.stopped = true;
+            break;
+        }
+        if (next.exception) {
+            message.error = std::move(next.exception);
+            break;
+        }
+        if (!*next.value) co_return;
+        co_await shared->tokens.acquire(1);
+        if (shared->channel.is_closed()) co_return;
+        start_stream_pump(
+            pump_stream<Item>(
+                shared, shared->channel.producer(),
+                one_indexed_item<U>(
+                    index,
+                    call_as_task<U>(shared->fn, std::move(**next.value)))),
+            shared->executor);
     }
+    co_await shared->channel.send(std::move(message));
 }
 
 // A token is held from the start of a job until its result leaves the reader,
@@ -278,6 +274,7 @@ AsyncGenerator<U> read_ordered(dstd::SharedPtr<OrderedShared<U, F>> shared,
             co_return;
         }
         if (message->error) common::rethrow_and_clear(message->error);
+        if (message->stopped) co_await stop_here();
         window[message->value->first % limit].emplace(
             std::move(message->value->second));
         for (;;) {
@@ -424,14 +421,11 @@ AsyncGenerator<T> concat(AsyncGenerator<T> first, F factory) {
 }
 
 /// Yields lists of @p size items, and a shorter last one with what is left, so
-/// no item is lost. Raises an invalid-argument error on a size of 0.
+/// no item is lost. A size of 0 is misuse and ends the process.
 template <typename T>
 AsyncGenerator<dstd::Vector<T>> chunks(AsyncGenerator<T> source,
                                        std::size_t size) {
-    if (size == 0) {
-        throw common::DFTUtilsException(dstd::Error{
-            dstd::Condition::InvalidArgument, "chunks needs a size above 0"});
-    }
+    if (size == 0) dstd::fatal("coro: chunks needs a size above 0");
     dstd::Vector<T> chunk;
     chunk.reserve(size);
     for (;;) {
@@ -513,15 +507,12 @@ AsyncGenerator<T> merge(dstd::Vector<AsyncGenerator<T>> sources) {
 /**
  * @brief Reads @p source ahead of the reader, holding at most @p size items.
  *
- * Order holds. The source runs in the background and must own what it uses.
- * Raises an invalid-argument error on a size of 0.
+ * Order holds. The source runs in the background and must own what it uses. A
+ * size of 0 is misuse and ends the process.
  */
 template <typename T>
 AsyncGenerator<T> buffer(AsyncGenerator<T> source, std::size_t size) {
-    if (size == 0) {
-        throw common::DFTUtilsException(dstd::Error{
-            dstd::Condition::InvalidArgument, "buffer needs a size above 0"});
-    }
+    if (size == 0) dstd::fatal("coro: buffer needs a size above 0");
     Executor* running = co_await this_coro::executor;
     Executor* executor = detail::require_stream_executor(running);
     auto shared = dstd::make_shared<detail::StreamShared<T>>(size, executor);
@@ -545,18 +536,14 @@ AsyncGenerator<T> buffer(AsyncGenerator<T> source, std::size_t size) {
  * inner generators, and a new one starts when one ends. The first error is
  * raised from the next read. The generators run in the background and must own
  * what they use, and the stream keeps @p fn alive until its generators end.
- * Raises an invalid-argument error on a limit of 0.
+ * A limit of 0 is misuse and ends the process.
  */
 template <typename T, typename F, typename R = std::invoke_result_t<F&, T&&>,
           typename Inner = typename detail::UnwrapTask<R>::type,
           typename U = typename Inner::value_type>
 AsyncGenerator<U> flat_map_merge(AsyncGenerator<T> source, F fn,
                                  std::size_t limit) {
-    if (limit == 0) {
-        throw common::DFTUtilsException(
-            dstd::Error{dstd::Condition::InvalidArgument,
-                        "flat_map_merge needs a limit above 0"});
-    }
+    if (limit == 0) dstd::fatal("coro: flat_map_merge needs a limit above 0");
     Executor* running = co_await this_coro::executor;
     Executor* executor = detail::require_stream_executor(running);
     auto shared = dstd::make_shared<detail::MergeMapShared<U, F>>(
@@ -579,7 +566,7 @@ AsyncGenerator<U> flat_map_merge(AsyncGenerator<T> source, F fn,
  *
  * `fn` runs at the same time on separate items. It lives until the jobs end.
  * The first error is raised from the next read. Jobs run in the background and
- * must own what they use. Raises an invalid-argument error on a limit of 0.
+ * must own what they use. A limit of 0 is misuse and ends the process.
  */
 template <typename T, typename F,
           typename U =
@@ -597,19 +584,15 @@ AsyncGenerator<U> map_unordered(AsyncGenerator<T> source, F fn,
  * @brief @ref map_unordered that yields results in the order of @p source.
  *
  * @p limit tokens bound the jobs that run plus the results that wait for an
- * earlier one, so a slow item holds back at most that many. Raises an
- * invalid-argument error on a limit of 0.
+ * earlier one, so a slow item holds back at most that many. A limit of 0 is
+ * misuse and ends the process.
  */
 template <typename T, typename F,
           typename U =
               typename detail::UnwrapTask<std::invoke_result_t<F&, T&&>>::type>
 AsyncGenerator<U> map_ordered(AsyncGenerator<T> source, F fn,
                               std::size_t limit) {
-    if (limit == 0) {
-        throw common::DFTUtilsException(
-            dstd::Error{dstd::Condition::InvalidArgument,
-                        "map_ordered needs a limit above 0"});
-    }
+    if (limit == 0) dstd::fatal("coro: map_ordered needs a limit above 0");
     Executor* running = co_await this_coro::executor;
     Executor* executor = detail::require_stream_executor(running);
     auto shared = dstd::make_shared<detail::OrderedShared<U, F>>(
@@ -627,19 +610,23 @@ AsyncGenerator<U> map_ordered(AsyncGenerator<T> source, F fn,
 }
 
 /**
- * @brief Yields the items of @p source, and raises a dstd::Condition::Timeout
- * error when one takes longer than @p wait to come.
+ * @brief Yields the items of @p source as results, and ends with a
+ * dstd::Condition::Timeout error when one takes longer than @p wait to come.
  *
  * The wait in the source ends with the timeout. A source that computes without
  * waiting delays the error until its next wait.
  */
 template <typename T, typename Rep, typename Period>
-AsyncGenerator<T> with_item_timeout(AsyncGenerator<T> source,
-                                    std::chrono::duration<Rep, Period> wait) {
+AsyncGenerator<dstd::Result<T>> with_item_timeout(
+    AsyncGenerator<T> source, std::chrono::duration<Rep, Period> wait) {
     for (;;) {
         auto value = co_await with_timeout(detail::next_item<T>(source), wait);
-        if (!value) co_return;
-        co_yield std::move(*value);
+        if (!value) {
+            co_yield dstd::Result<T>(dstd::Unexpected(value.error()));
+            co_return;
+        }
+        if (!*value) co_return;
+        co_yield dstd::Result<T>(std::move(**value));
     }
 }
 
@@ -741,10 +728,7 @@ Generator<T> concat(Generator<T> first, F factory) {
 /// @ref chunks on a sync @ref Generator.
 template <typename T>
 Generator<dstd::Vector<T>> chunks(Generator<T> source, std::size_t size) {
-    if (size == 0) {
-        throw common::DFTUtilsException(dstd::Error{
-            dstd::Condition::InvalidArgument, "chunks needs a size above 0"});
-    }
+    if (size == 0) dstd::fatal("coro: chunks needs a size above 0");
     dstd::Vector<T> chunk;
     chunk.reserve(size);
     for (;;) {

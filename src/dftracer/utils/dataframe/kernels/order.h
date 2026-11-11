@@ -32,7 +32,7 @@ class ColumnView {
     /// Whether a column of type `t` can be viewed.
     static bool supports(TypeId t) noexcept;
 
-    /// Throws std::invalid_argument for an unsupported type.
+    /// Ends the process for an unsupported type: check @ref supports first.
     explicit ColumnView(const Series& column);
 
     /// A view of the same buffers.

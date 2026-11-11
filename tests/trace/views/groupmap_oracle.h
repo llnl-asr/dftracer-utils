@@ -23,8 +23,8 @@
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/schemas/dft/agg/reserved_args.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/reserved_args.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/agg_fold.h>
 #include <dftracer/utils/trace/views/aggfold.h>
@@ -36,6 +36,7 @@
 #include <dftracer/utils/trace/views/view_executor.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/trace/views/view_scan.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <unistd.h>
 
@@ -163,8 +164,10 @@ void fold_numeric_args_t(AggAccum& a, const Src& src, bool want_sketch) {
         feed("size", *sz);
     src.for_each_numeric_arg([&](dftracer::utils::dstd::StringView key,
                                  double num) {
-        if (dftracer::utils::index::schemas::dft::agg::is_reserved_arg(key) ||
-            dftracer::utils::index::schemas::dft::agg::is_preagg_suffix(key))
+        if (dftracer::utils::trace::index::schemas::dft::agg::is_reserved_arg(
+                key) ||
+            dftracer::utils::trace::index::schemas::dft::agg::is_preagg_suffix(
+                key))
             return;
         feed(key, num);
     });
@@ -867,7 +870,8 @@ class OracleAggFold : public dftracer::utils::trace::views::detail::Fold {
         return dftracer::utils::dstd::make_unique<OracleAggFold>(*plan_,
                                                                  *intern_);
     }
-    void step(const dftracer::utils::trace::views::detail::FoldBatch& batch)
+    dftracer::utils::dstd::Result<void> step(
+        const dftracer::utils::trace::views::detail::FoldBatch& batch)
         override {
         for (const auto& ev : batch.events) {
             if (ev.phase == dftracer::utils::trace::RecordPhase::Metadata) {
@@ -883,12 +887,13 @@ class OracleAggFold : public dftracer::utils::trace::views::detail::Fold {
             dftracer::utils::trace::views::detail::PodSource src(ev, *intern_);
             fold_event_over(map_, src, *plan_, keybuf_);
         }
+        return {};
     }
     void seal_unit(
         const dftracer::utils::trace::views::detail::ScanUnit&) override {}
     void drop_unit(
         const dftracer::utils::trace::views::detail::ScanUnit&) override {}
-    void merge(Fold& other) override {
+    dftracer::utils::dstd::Result<void> merge(Fold& other) override {
         auto& o = static_cast<OracleAggFold&>(other);
         merge_maps(map_, o.map_, *plan_);
         o.map_.clear();
@@ -898,6 +903,7 @@ class OracleAggFold : public dftracer::utils::trace::views::detail::Fold {
         for (auto& [h, n] : o.maps_.host) maps_.host.emplace(h, std::move(n));
         o.maps_.fpath.clear();
         o.maps_.host.clear();
+        return {};
     }
     dftracer::utils::coro::CoroTask<bool> finalize(
         const dftracer::utils::trace::views::detail::CoverageSet&) override {
@@ -992,8 +998,8 @@ inline dftracer::utils::dataframe::DataFrame groupmap_oracle(
     plan.resolver.reset();
     dftracer::utils::trace::views::detail::ensure_schema(plan);
     dftracer::utils::trace::views::ViewDefinition vdef =
-        dftracer::utils::trace::views::detail::make_vdef(
-            plan, /*for_aggregation=*/true);
+        dftu_utils_test::ok(dftracer::utils::trace::views::detail::make_vdef(
+            plan, /*for_aggregation=*/true));
     // Keep the FH/HH/PR metadata records so the fold can build its own name and
     // rank maps for resolved group keys.
     if (plan_wants_names(plan) ||
@@ -1008,7 +1014,7 @@ inline dftracer::utils::dataframe::DataFrame groupmap_oracle(
     }
     static dftracer::utils::Runtime rt;
     dftracer::utils::dataframe::DataFrame result;
-    rt.block_on(dftracer::utils::coro::named(
+    dftu_utils_test::ok(rt.block_on(dftracer::utils::coro::named(
         "groupmap-oracle",
         dftracer::utils::coro::with_scope(
             [&](dftracer::utils::coro::Scope&)
@@ -1017,13 +1023,15 @@ inline dftracer::utils::dataframe::DataFrame groupmap_oracle(
                 OracleAggFold agg(plan, intern);
                 std::array<dftracer::utils::trace::views::detail::Fold*, 1>
                     folds{&agg};
-                co_await dftracer::utils::trace::views::detail::fuse(
-                    plan, vdef, folds, intern);
+                dftu_utils_test::ok(
+                    co_await dftracer::utils::trace::views::detail::fuse(
+                        plan, vdef, folds, intern));
                 resolve_group_keys(agg.map(), plan, agg.maps());
                 result = to_batch(agg.map(), plan);
-            })));
-    return dftracer::utils::trace::views::detail::apply_agg_post_ops(
-        std::move(result), plan);
+            }))));
+    return dftu_utils_test::ok(
+        dftracer::utils::trace::views::detail::apply_agg_post_ops(
+            std::move(result), plan));
 }
 
 }  // namespace gmoracle

@@ -7,6 +7,7 @@
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -16,7 +17,7 @@
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/cache/rollup_store.h>
+#include <dftracer/utils/trace/index/cache/rollup_store.h>
 #include <dftracer/utils/trace/views/aggfold.h>
 #include <dftracer/utils/trace/views/batch_bridge.h>
 #include <dftracer/utils/trace/views/fold.h>
@@ -154,8 +155,7 @@ dataframe::Agg to_engine_agg(AggOp op) {
         case AggOp::Active:
             return dataframe::Agg::Active;
     }
-    throw common::DFTUtilsException::cat(common::ErrorCode::Internal,
-                                         "agg engine: unknown aggregate op");
+    dstd::fatal("agg engine: unknown aggregate op");
 }
 
 dataframe::GroupAgg to_group_agg(const AggSpec& spec, bool by_path) {
@@ -215,9 +215,7 @@ dataframe::Series key_column_to_string(const dataframe::Series& col) {
             break;
         }
         default:
-            throw common::DFTUtilsException::cat(
-                common::ErrorCode::Internal,
-                "agg engine: unexpected group-key column type");
+            dstd::fatal("agg engine: unexpected group-key column type");
     }
     dstd::Vector<dstd::StringView> views(vals.begin(), vals.end());
     if (col.null_count() == 0)
@@ -250,7 +248,7 @@ bool key_is_resolved(GroupKey::Kind kind) {
 // group_col_name after aggregation), else the key's own column.
 // Which group keys of a path-decoded `plan` read a field of mixed JSON types;
 // each keys on the value's JSON text and gives a JSON key column.
-dstd::Vector<char> json_keys(const ViewPlan& plan) {
+dstd::Result<dstd::Vector<char>> json_keys(const ViewPlan& plan) {
     dstd::Vector<char> out(plan.group_by.size(), 0);
     if (!plan_by_path(plan)) return out;
     const auto plain_field = [](const GroupKey& gk) {
@@ -260,7 +258,9 @@ dstd::Vector<char> json_keys(const ViewPlan& plan) {
     };
     if (std::none_of(plan.group_by.begin(), plan.group_by.end(), plain_field))
         return out;
-    const auto json = scan::json_columns(plan);
+    const auto columns = scan::json_columns(plan);
+    if (!columns) return columns.error();
+    const auto& json = *columns;
     if (!json) return out;
     for (std::size_t j = 0; j < plan.group_by.size(); ++j)
         out[j] = plain_field(plan.group_by[j]) &&
@@ -299,7 +299,7 @@ bool key_is_nullable(const GroupKey& gk) {
 // same FileName-from-FilePath basename derivation).
 dataframe::Series resolve_key_column(
     const dataframe::Series& hashes,
-    const dftracer::utils::index::plan::GroupResolver& resolver,
+    const dftracer::utils::trace::index::plan::GroupResolver& resolver,
     const GroupKey& gk) {
     const std::int64_t n = hashes.length();
     const bool nullable = key_is_nullable(gk) && hashes.null_count() > 0;
@@ -337,9 +337,7 @@ dstd::String cell_to_key_string(const dataframe::Series& col, std::int64_t r) {
         case TypeId::Uint64:
             return dstd::to_string(col.data<std::uint64_t>()[r]);
         default:
-            throw common::DFTUtilsException::cat(
-                common::ErrorCode::Internal,
-                "agg engine: unexpected transform key-column type");
+            dstd::fatal("agg engine: unexpected transform key-column type");
     }
 }
 
@@ -350,7 +348,7 @@ dstd::String cell_to_key_string(const dataframe::Series& col, std::int64_t r) {
 // the rest keep their rendered value.
 dstd::String transform_key_base(
     const GroupKey& gk, dstd::String raw,
-    const dftracer::utils::index::plan::GroupResolver* resolver) {
+    const dftracer::utils::trace::index::plan::GroupResolver* resolver) {
     if (key_is_resolved(gk.kind))
         return resolver ? resolve_group_value(*resolver, gk, raw) : raw;
     if (gk.kind == GroupKey::Kind::Cat)
@@ -391,9 +389,7 @@ dataframe::AggOp to_dyn_op(AggOp op) {
         case AggOp::Active:
             break;
     }
-    throw common::DFTUtilsException::cat(
-        common::ErrorCode::Internal,
-        "agg engine: op has no per-arg dyn reduction");
+    dstd::fatal("agg engine: op has no per-arg dyn reduction");
 }
 
 // The dyn reductions for an auto_numeric_metrics plan, matching the canonical
@@ -419,7 +415,7 @@ dstd::Vector<dataframe::AggDynSpec> build_dyn_specs(const ViewPlan& plan) {
 // `r` arrives
 // from agg_finalize as [keys, value specs, text specs, dyn]; `dyn_specs` are
 // the AggState's dyn side-table reductions.
-dataframe::DataFrame finalize_engine_frame(
+dstd::Result<dataframe::DataFrame> finalize_engine_frame(
     dataframe::DataFrame r, const ViewPlan& plan,
     const dstd::Vector<dataframe::AggDynSpec>& dyn_specs) {
     const std::size_t ng = plan.group_by.size();
@@ -445,10 +441,7 @@ dataframe::DataFrame finalize_engine_frame(
     if (plan.agg.empty()) n_plan_value = 1;
     const std::size_t fixed = off + ng + n_plan_value + n_plan_text;
     if (r.columns.size() < fixed || r.names.size() != r.columns.size())
-        throw common::DFTUtilsException::cat(
-            common::ErrorCode::Internal, "agg engine: the grouped result has ",
-            r.columns.size(), " columns and ", r.names.size(),
-            " names, the plan needs at least ", fixed);
+        dstd::fatal("agg engine: the grouped result does not fit the plan");
 
     // agg_finalize appends dyn last; the canonical layout slots it between the
     // value and text columns. Rotate the [value..end) tail so [text, dyn]
@@ -483,7 +476,9 @@ dataframe::DataFrame finalize_engine_frame(
             k == GroupKey::Kind::Field || k == GroupKey::Kind::Expr)
             r.names[off + j].assign(key_names[j]);
     }
-    const dstd::Vector<char> json = json_keys(plan);
+    const auto json_of_keys = json_keys(plan);
+    if (!json_of_keys) return json_of_keys.error();
+    const dstd::Vector<char>& json = *json_of_keys;
     for (std::size_t i = 0; i < off + ng; ++i)
         if (i < off || plan.group_by[i - off].kind != GroupKey::Kind::Expr) {
             r.columns[i] = key_column_to_string(r.columns[i]);
@@ -514,7 +509,7 @@ dataframe::DataFrame finalize_engine_frame(
             needs_resolver ||
             (key_is_resolved(plan.group_by[j].kind) && !key_transformed[j]);
     if (needs_resolver) {
-        const dftracer::utils::index::plan::GroupResolver* resolver =
+        const dftracer::utils::trace::index::plan::GroupResolver* resolver =
             ensure_resolver(plan);
         for (std::size_t j = 0; j < ng; ++j) {
             if (!key_is_resolved(plan.group_by[j].kind) || key_transformed[j])
@@ -568,14 +563,19 @@ dstd::String agg_value_base_field(dstd::StringView value_name) {
 dstd::Optional<dataframe::Schema> aggregated_output_schema(
     const ViewPlan& plan_in) {
     if (plan_in.auto_numeric_metrics) return dstd::nullopt;
+    if (!resolve_record_schema(plan_in)) return dstd::nullopt;
     const ViewPlan plan = resolve_bucket_origin(plan_in);
     ensure_schema(plan);
-    AggInputSpec spec = make_agg_input_spec(plan);
+    auto made = make_agg_input_spec(plan);
+    if (!made) return dstd::nullopt;
+    AggInputSpec& spec = *made;
     dataframe::LoweredGroupAggs lowered =
         dataframe::lower_group_aggs(spec.gaggs);
     dataframe::AggStatePtr st =
         dataframe::agg_new(std::move(lowered.specs), spec.dyn_specs);
-    dataframe::DataFrame r = finalize_engine_result(*st, plan);
+    auto finalized = finalize_engine_result(*st, plan);
+    if (!finalized) return dstd::nullopt;
+    dataframe::DataFrame r = std::move(*finalized);
     // An aggregate that passes its input's values through (sum/min/max of an
     // integer field) takes the input's type, which only a scan settles.
     dstd::Vector<dstd::String> input_typed;
@@ -600,8 +600,8 @@ dstd::Optional<dataframe::Schema> aggregated_output_schema(
     return s;
 }
 
-dataframe::DataFrame finalize_engine_result(const dataframe::AggState& st,
-                                            const ViewPlan& plan) {
+dstd::Result<dataframe::DataFrame> finalize_engine_result(
+    const dataframe::AggState& st, const ViewPlan& plan) {
     dstd::Vector<dstd::String> names;
     names.reserve(1 + plan.group_by.size());
     if (plan.time_bucket_us > 0) names.push_back("time_bucket");
@@ -624,7 +624,7 @@ bool scans_by_overlap(const ViewPlan& plan) {
     return occupancy_window(plan).has_value();
 }
 
-AggInputSpec make_agg_input_spec(const ViewPlan& plan) {
+dstd::Result<AggInputSpec> make_agg_input_spec(const ViewPlan& plan) {
     AggInputSpec spec;
     const bool by_path = plan_by_path(plan);
     spec.by_path = by_path;
@@ -654,7 +654,9 @@ AggInputSpec make_agg_input_spec(const ViewPlan& plan) {
 
     dstd::Vector<dstd::String> key_fields;
     key_fields.reserve(plan.group_by.size());
-    const dstd::Vector<char> json = json_keys(plan);
+    const auto json_of_keys = json_keys(plan);
+    if (!json_of_keys) return json_of_keys.error();
+    const dstd::Vector<char>& json = *json_of_keys;
     for (std::size_t j = 0; j < plan.group_by.size(); ++j)
         key_fields.push_back(json[j] ? dstd::String(AGG_KEY_JSON_PREFIX) +
                                            plan.group_by[j].arg
@@ -888,16 +890,14 @@ static double cell_as_double(const dataframe::Series& c, std::int64_t r) {
         case dataframe::TypeId::Float64:
             return c.data<double>()[r];
         default:
-            throw common::DFTUtilsException::cat(
-                common::ErrorCode::Internal,
-                "agg engine: unexpected numeric column type");
+            dstd::fatal("agg engine: unexpected numeric column type");
     }
 }
 
 static void append_transform_columns(
     dataframe::DataFrame& frame,
     const dstd::Vector<AggInputSpec::Transform>& transforms,
-    const dftracer::utils::index::plan::GroupResolver* resolver) {
+    const dftracer::utils::trace::index::plan::GroupResolver* resolver) {
     const std::int64_t n = frame.num_rows();
     for (const AggInputSpec::Transform& t : transforms) {
         const dataframe::Series& src = frame.columns[static_cast<std::size_t>(
@@ -932,7 +932,8 @@ class TransformSource final : public dataframe::Source {
    public:
     TransformSource(
         dataframe::LazyFrame inner, dstd::Vector<AggInputSpec::Transform> tfs,
-        dstd::SharedPtr<const dftracer::utils::index::plan::GroupResolver>
+        dstd::SharedPtr<
+            const dftracer::utils::trace::index::plan::GroupResolver>
             resolver)
         : inner_(std::move(inner)),
           tfs_(std::move(tfs)),
@@ -947,7 +948,7 @@ class TransformSource final : public dataframe::Source {
     dataframe::Schema schema() const override { return schema_; }
     bool undeclared_columns() const override { return true; }
 
-    dataframe::ScanResult scan(
+    dstd::Result<dataframe::ScanResult> scan(
         const dataframe::ScanRequest& req) const override {
         dataframe::ScanResult r;
         r.cursor = dstd::make_unique<Rows>(*this, req.projection);
@@ -964,26 +965,35 @@ class TransformSource final : public dataframe::Source {
               resolver_(src.resolver_),
               projection_(std::move(projection)) {}
 
-        coro::CoroTask<dstd::Optional<dataframe::Morsel>> next(
+        coro::CoroTask<dataframe::MorselResult> next(
             std::int64_t max_rows) override {
             for (;;) {
                 if (rows_) {
-                    auto m = co_await rows_->next(max_rows);
-                    if (m) {
-                        m->dyn_state().name_ids = ids_;
-                        m->dyn->intern = intern_;
+                    auto next_task = rows_->next(max_rows);
+                    auto m = co_await std::move(next_task);
+                    if (!m) co_return m.error();
+                    if (*m) {
+                        (*m)->dyn_state().name_ids = ids_;
+                        (*m)->dyn->intern = intern_;
                         co_return m;
                     }
                 }
                 auto batch = co_await batches_.next();
-                if (!batch) co_return dstd::nullopt;
-                dataframe::DataFrame f = std::move(*batch);
+                if (!batch) co_return dataframe::MorselResult(dstd::nullopt);
+                if (!*batch) co_return batch->error();
+                dataframe::DataFrame f = std::move(**batch);
                 append_transform_columns(f, tfs_, resolver_.get());
-                if (!projection_.empty()) f = f.select(projection_);
+                if (!projection_.empty()) {
+                    auto selected = f.select(projection_);
+                    if (!selected) co_return selected.error();
+                    f = std::move(*selected);
+                }
                 ids_.clear();
                 for (const auto& n : f.names)
                     ids_.push_back(intern_->get_or_insert(n));
-                rows_ = dataframe::InMemorySource(std::move(f)).scan({}).cursor;
+                auto scanned = dataframe::InMemorySource(std::move(f)).scan({});
+                if (!scanned) co_return scanned.error();
+                rows_ = std::move(scanned->cursor);
             }
         }
 
@@ -991,9 +1001,10 @@ class TransformSource final : public dataframe::Source {
         dstd::SharedPtr<dftracer::utils::dstd::StringIntern> intern_ =
             dstd::make_shared<dftracer::utils::dstd::StringIntern>();
         dstd::Vector<std::uint32_t> ids_;
-        coro::AsyncGenerator<dataframe::DataFrame> batches_;
+        coro::AsyncGenerator<dstd::Result<dataframe::DataFrame>> batches_;
         dstd::Vector<AggInputSpec::Transform> tfs_;
-        dstd::SharedPtr<const dftracer::utils::index::plan::GroupResolver>
+        dstd::SharedPtr<
+            const dftracer::utils::trace::index::plan::GroupResolver>
             resolver_;
         dstd::Vector<dstd::String> projection_;
         dstd::UniquePtr<dataframe::Cursor> rows_;
@@ -1002,17 +1013,17 @@ class TransformSource final : public dataframe::Source {
     dataframe::LazyFrame inner_;
     dstd::Vector<AggInputSpec::Transform> tfs_;
     // Shared, so the plan can run after the ViewPlan that built it is gone.
-    dstd::SharedPtr<const dftracer::utils::index::plan::GroupResolver>
+    dstd::SharedPtr<const dftracer::utils::trace::index::plan::GroupResolver>
         resolver_;
     dataframe::Schema schema_;
 };
 
 }  // namespace
 
-dataframe::DataFrame build_agg_input_frame(
+dstd::Result<dataframe::DataFrame> build_agg_input_frame(
     const dstd::Vector<FoldEvent>& events,
     const dftracer::utils::dstd::StringIntern& intern, const AggInputSpec& spec,
-    const dftracer::utils::index::plan::GroupResolver* resolver) {
+    const dftracer::utils::trace::index::plan::GroupResolver* resolver) {
     dataframe::DataFrame f =
         events_to_frame(events, intern,
                         ColumnSpec{spec.select, spec.base_time_scale,
@@ -1029,8 +1040,11 @@ dataframe::DataFrame build_agg_input_frame(
                 f.column_index(canonical_row_column_name(tok, spec.by_path)))]);
         dstd::Vector<dstd::Pair<dstd::String, dataframe::Series>> out;
         out.reserve(spec.computed.size());
-        for (const AggInputSpec::Computed& c : spec.computed)
-            out.emplace_back(c.name, dataframe::eval(c.expr, inputs));
+        for (const AggInputSpec::Computed& c : spec.computed) {
+            auto value = dataframe::eval(c.expr, inputs);
+            if (!value) return value.error();
+            out.emplace_back(c.name, std::move(*value));
+        }
         for (auto& [name, col] : out) {
             const std::int64_t at = f.column_index(name);
             if (at >= 0) {
@@ -1117,8 +1131,11 @@ dataframe::DataFrame build_agg_input_frame(
     return f;
 }
 
-coro::CoroTask<EnginePrep> prepare_engine_group(const ViewPlan& plan) {
-    AggInputSpec spec = make_agg_input_spec(plan);
+coro::CoroTask<dstd::Result<EnginePrep>> prepare_engine_group(
+    const ViewPlan& plan) {
+    auto made = make_agg_input_spec(plan);
+    if (!made) co_return made.error();
+    AggInputSpec spec = std::move(*made);
 
     auto next = dstd::make_shared<ViewPlan>(plan);
     next->group_by.clear();
@@ -1211,26 +1228,27 @@ namespace {
 // A paginated result is never cached.
 void persist_rollup(const ViewPlan& plan, const dataframe::AggState& state) {
     const dstd::String rdir =
-        dftracer::utils::index::cache::rollup_cache_path(plan);
+        dftracer::utils::trace::index::cache::rollup_cache_path(plan);
     if (rdir.empty()) return;
-    plan_record_schema(plan);
-    try {
-        auto db = dftracer::utils::index::cache::open_rollup_db(
-            rdir, dftracer::utils::index::cache::CacheStore::Mode::ReadWrite);
-        if (db)
-            dftracer::utils::index::cache::persist_rollup(
-                *db, dftracer::utils::index::cache::plan_signature(plan),
-                dftracer::utils::index::cache::rest_signature(plan),
-                plan.time_bucket_us, plan.group_by, state);
-    } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_WARN("rollup materialize skipped: %s", e.what());
-    }
+    auto db = dftracer::utils::trace::index::cache::open_rollup_db(
+        rdir,
+        dftracer::utils::trace::index::cache::CacheStore::Mode::ReadWrite);
+    if (!db) return;
+    auto persisted = dftracer::utils::trace::index::cache::persist_rollup(
+        *db, dftracer::utils::trace::index::cache::plan_signature(plan),
+        dftracer::utils::trace::index::cache::rest_signature(plan),
+        plan.time_bucket_us, plan.group_by, state);
+    if (!persisted)
+        DFTRACER_UTILS_LOG_WARN("rollup materialize skipped: {}",
+                                persisted.error().message());
 }
 
 }  // namespace
 
-coro::CoroTask<dataframe::DataFrame> run_collect_via_engine(
+coro::CoroTask<dstd::Result<dataframe::DataFrame>> run_collect_via_engine(
     const ViewPlan& plan_in) {
+    if (auto resolved = resolve_record_schema(plan_in); !resolved)
+        co_return resolved.error();
     const ViewPlan plan = resolve_bucket_origin(plan_in);
     ensure_schema(plan);
 
@@ -1239,28 +1257,31 @@ coro::CoroTask<dataframe::DataFrame> run_collect_via_engine(
     if (auto df = try_serve_rollup(plan)) co_return std::move(*df);
     {
         dataframe::AggStatePtr served;
-        const auto try_serve_aggregate_no_scan_ok =
-            co_await try_serve_aggregate_no_scan(plan, served);
-        if (try_serve_aggregate_no_scan_ok)
-            co_return finalize_engine_result(*served, plan);
+        const auto no_scan = co_await try_serve_aggregate_no_scan(plan, served);
+        if (!no_scan.has_value()) co_return no_scan.error();
+        if (*no_scan) co_return finalize_engine_result(*served, plan);
     }
 
     dataframe::AggStatePtr scanned;
-    const bool folded = co_await partials_scan_collect(plan, scanned);
-    if (folded) {
+    const auto folded = co_await partials_scan_collect(plan, scanned);
+    if (!folded.has_value()) co_return folded.error();
+    if (*folded) {
         if (plan.materialize && !plan.limit && !plan.offset)
             persist_rollup(plan, *scanned);
         co_return finalize_engine_result(*scanned, plan);
     }
 
-    EnginePrep ep = co_await prepare_engine_group(plan);
+    auto prepared = co_await prepare_engine_group(plan);
+    if (!prepared) co_return prepared.error();
+    EnginePrep& ep = *prepared;
 
     // materialize() persists the AggState partials as a rollup (opt-in).
     if (plan.materialize && !plan.limit && !plan.offset) {
         auto state = co_await ep.lf->collect_group_state(
             ep.group_key_names, ep.gaggs, ep.dyn_specs, ep.dyn_prefix);
-        persist_rollup(plan, *state);
-        co_return finalize_engine_result(*state, plan);
+        if (!state) co_return state.error();
+        persist_rollup(plan, **state);
+        co_return finalize_engine_result(**state, plan);
     }
 
     // A global aggregation (no group_by, no time_bucket) is one group, which
@@ -1270,27 +1291,35 @@ coro::CoroTask<dataframe::DataFrame> run_collect_via_engine(
         clips_occupancy(plan)) {
         auto state = co_await ep.lf->collect_group_state(
             ep.group_key_names, ep.gaggs, ep.dyn_specs, ep.dyn_prefix);
-        co_return finalize_engine_result(*state, plan);
+        if (!state) co_return state.error();
+        co_return finalize_engine_result(**state, plan);
     }
 
-    dataframe::DataFrame r = co_await ep.lf
-                                 ->group_by(ep.group_key_names, ep.gaggs,
-                                            ep.dyn_specs, ep.dyn_prefix)
-                                 .collect();
-    co_return finalize_engine_frame(
-        co_await dataframe::join_chunks(std::move(r)), plan, ep.dyn_specs);
+    auto grouped = co_await ep.lf
+                       ->group_by(ep.group_key_names, ep.gaggs, ep.dyn_specs,
+                                  ep.dyn_prefix)
+                       .collect();
+    if (!grouped) co_return grouped.error();
+    auto joined = co_await dataframe::join_chunks(std::move(*grouped));
+    if (!joined) co_return joined.error();
+    co_return finalize_engine_frame(std::move(*joined), plan, ep.dyn_specs);
 }
 
-coro::CoroTask<dataframe::AggStatePtr> build_engine_agg_state(
+coro::CoroTask<dstd::Result<dataframe::AggStatePtr>> build_engine_agg_state(
     const ViewPlan& plan_in) {
+    if (auto resolved = resolve_record_schema(plan_in); !resolved)
+        co_return resolved.error();
     const ViewPlan plan = resolve_bucket_origin(plan_in);
     ensure_schema(plan);
     dataframe::AggStatePtr scanned;
     // Named, not awaited in the condition: GCC 12.1 miscompiles a co_await in
     // an if header.
-    const bool folded = co_await partials_scan_collect(plan, scanned);
-    if (folded) co_return std::move(scanned);
-    EnginePrep ep = co_await prepare_engine_group(plan);
+    const auto folded = co_await partials_scan_collect(plan, scanned);
+    if (!folded.has_value()) co_return folded.error();
+    if (*folded) co_return std::move(scanned);
+    auto prepared = co_await prepare_engine_group(plan);
+    if (!prepared) co_return prepared.error();
+    EnginePrep& ep = *prepared;
     co_return co_await ep.lf->collect_group_state(ep.group_key_names, ep.gaggs,
                                                   ep.dyn_specs, ep.dyn_prefix);
 }

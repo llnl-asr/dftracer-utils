@@ -16,9 +16,9 @@
 #include <memory>
 #include <utility>
 
-namespace dftracer::utils::index::plan {
+namespace dftracer::utils::trace::index::plan {
 class GroupResolver;
-}  // namespace dftracer::utils::index::plan
+}  // namespace dftracer::utils::trace::index::plan
 
 namespace dftracer::utils::trace::views::detail {
 
@@ -211,24 +211,26 @@ class NativeRowFold : public Fold {
                                                 keep_metadata_, by_path_);
     }
 
-    void step(const FoldBatch& batch) override {
+    dstd::Result<void> step(const FoldBatch& batch) override {
         for (const FoldEvent& ev : batch.events) {
             if (ev.phase == RecordPhase::Unknown ||
                 (!keep_metadata_ && ev.phase == RecordPhase::Metadata))
                 continue;
             events_.push_back(ev);
         }
+        return {};
     }
 
     void seal_unit(const ScanUnit&) override {}
     void drop_unit(const ScanUnit&) override {}
 
-    void merge(Fold& other) override {
+    dstd::Result<void> merge(Fold& other) override {
         auto& o = static_cast<NativeRowFold&>(other);
         events_.insert(events_.end(),
                        std::make_move_iterator(o.events_.begin()),
                        std::make_move_iterator(o.events_.end()));
         o.events_.clear();
+        return {};
     }
 
     coro::CoroTask<bool> finalize(const CoverageSet&) override {

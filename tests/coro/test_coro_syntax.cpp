@@ -6,6 +6,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <atomic>
 #include <chrono>
@@ -21,7 +22,7 @@ TEST_CASE("CoroTask - then() combinator") {
     auto task = []() -> CoroTask<int> { co_return 42; };
 
     Runtime rt(2);
-    int result = rt.block_on(task());
+    int result = dftu_utils_test::ok(rt.block_on(task()));
     CHECK(result == 42);
 }
 
@@ -38,7 +39,7 @@ TEST_CASE("CoroTask - then() with transformation inside coroutine") {
     };
 
     Runtime rt(2);
-    dstd::String result = rt.block_on(parent_task());
+    dstd::String result = dftu_utils_test::ok(rt.block_on(parent_task()));
     CHECK(result == "42");
 }
 
@@ -55,7 +56,7 @@ TEST_CASE("CoroTask - operator> for chaining") {
     };
 
     Runtime rt(2);
-    int result = rt.block_on(parent_task());
+    int result = dftu_utils_test::ok(rt.block_on(parent_task()));
     CHECK(result == 30);  // (10 + 5) * 2
 }
 
@@ -73,7 +74,7 @@ TEST_CASE("CoroTask - tap() for inspection without transformation") {
     };
 
     Runtime rt(2);
-    int result = rt.block_on(parent_task());
+    int result = dftu_utils_test::ok(rt.block_on(parent_task()));
     CHECK(result == 99);
     CHECK(inspected_value.load() == 99);
 }
@@ -96,7 +97,7 @@ TEST_CASE("CoroTask - tap() chained with then()") {
     };
 
     Runtime rt(2);
-    dstd::String result = rt.block_on(parent_task());
+    dstd::String result = dftu_utils_test::ok(rt.block_on(parent_task()));
     CHECK(result == "50");
     CHECK(log.size() == 2);
     CHECK(log[0] == 5);
@@ -119,7 +120,7 @@ TEST_CASE("CoroTask<void> - then() combinator") {
     };
 
     Runtime rt(2);
-    int result = rt.block_on(parent_task());
+    int result = dftu_utils_test::ok(rt.block_on(parent_task()));
     CHECK(result == 42);
     CHECK(work_done.load() == true);
 }
@@ -139,7 +140,7 @@ TEST_CASE("CoroTask<void> - tap() for side effects") {
     };
 
     Runtime rt(2);
-    int result = rt.block_on(parent_task());
+    int result = dftu_utils_test::ok(rt.block_on(parent_task()));
     CHECK(result == 2);
     CHECK(side_effect_count.load() == 2);
 }
@@ -156,7 +157,7 @@ TEST_CASE("CoroTask - operator< reverse composition") {
     };
 
     Runtime rt(2);
-    dstd::String result = rt.block_on(parent_task());
+    dstd::String result = dftu_utils_test::ok(rt.block_on(parent_task()));
     CHECK(result == "21");
 }
 
@@ -184,7 +185,7 @@ TEST_CASE("Mixed - CoroTask combinators with side effects") {
     };
 
     Runtime rt(2);
-    int result = rt.block_on(task());
+    int result = dftu_utils_test::ok(rt.block_on(task()));
     CHECK(result == 40);  // (15 + 5) * 2
     CHECK(checkpoint.load() == 4);
 }
@@ -214,7 +215,7 @@ TEST_CASE("Performance - Long chain of then() operations") {
     };
 
     Runtime rt(2);
-    int result = rt.block_on(task());
+    int result = dftu_utils_test::ok(rt.block_on(task()));
     CHECK(result == 11);  // 1 + 10
 }
 
@@ -235,7 +236,7 @@ TEST_CASE("Performance - Multiple tap() operations") {
     };
 
     Runtime rt(2);
-    int result = rt.block_on(task());
+    int result = dftu_utils_test::ok(rt.block_on(task()));
     CHECK(result == 42);
     CHECK(tap_count.load() == 5);
 }
@@ -259,7 +260,7 @@ TEST_CASE("CoroTask - operator& parallel composition") {
     };
 
     Runtime rt(2);
-    int result = rt.block_on(task());
+    int result = dftu_utils_test::ok(rt.block_on(task()));
     CHECK(result == 15);  // 10 + 5 (length of "hello")
 }
 
@@ -280,7 +281,7 @@ TEST_CASE("CoroTask<void> - operator& with value task") {
     };
 
     Runtime rt(2);
-    int result = rt.block_on(task());
+    int result = dftu_utils_test::ok(rt.block_on(task()));
     CHECK(result == 42);
     CHECK(side_effect.load() == true);
 }
@@ -301,7 +302,7 @@ TEST_CASE("CoroTask - operator| fallback on success") {
     };
 
     Runtime rt(2);
-    int result = rt.block_on(task());
+    int result = dftu_utils_test::ok(rt.block_on(task()));
     CHECK(result == 99);
 }
 
@@ -320,7 +321,7 @@ TEST_CASE("CoroTask - operator| fallback on failure") {
     };
 
     Runtime rt(2);
-    int result = rt.block_on(task());
+    int result = dftu_utils_test::ok(rt.block_on(task()));
     CHECK(result == 42);
 }
 
@@ -344,7 +345,7 @@ TEST_CASE("CoroTask<void> - operator| fallback") {
     };
 
     Runtime rt(2);
-    rt.block_on(task());
+    dftu_utils_test::ok(rt.block_on(task()));
 
     CHECK(execution_count.load() == 2);  // Both executed
 }
@@ -372,6 +373,6 @@ TEST_CASE("CoroTask - Combining & and | operators") {
     };
 
     Runtime rt(2);
-    int result = rt.block_on(task());
+    int result = dftu_utils_test::ok(rt.block_on(task()));
     CHECK(result == 15);  // 10 + 5 (fallback)
 }

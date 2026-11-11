@@ -1,0 +1,78 @@
+// SPDX-License-Identifier: MIT
+#ifndef DFTRACER_UTILS_TRACE_VIEWS_COMPARE_VIEW_H
+#define DFTRACER_UTILS_TRACE_VIEWS_COMPARE_VIEW_H
+
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/trace/views/view.h>
+
+#include <cstddef>
+#include <cstdint>
+#include <utility>
+
+namespace dftracer::utils::trace::views {
+
+/**
+ * @brief A comparison of two Views, expressed entirely on the View/@ref
+ * dftracer::utils::dataframe::DataFrame "DataFrame" engine.
+ *
+ * collect() aggregates the baseline and variant with the same group_by + agg
+ * (one shared scan when both read the same files), joins their result
+ * DataFrames on the group key, and appends per metric `m`:
+ *   - `delta_<m>`  = variant - baseline
+ *   - `pct_<m>`    = 100 * (delta / baseline)
+ *
+ * View already owns index resolution, the parallel pruned scan, and the
+ * aggregation; the delta is just dataframe column math. There is no bespoke
+ * aggregator or comparison-tree machinery. Like StatsView, a CompareView is a
+ * cheap description of two sources, not a materialized result.
+ */
+class CompareView {
+   public:
+    static CompareView of(views::View baseline, views::View variant) {
+        return CompareView(std::move(baseline), std::move(variant));
+    }
+
+    CompareView& group_by(dstd::Vector<views::GroupKey> keys) {
+        group_by_ = std::move(keys);
+        return *this;
+    }
+    CompareView& agg(dstd::Vector<views::AggSpec> specs) {
+        agg_ = std::move(specs);
+        return *this;
+    }
+
+    /// The comparison @ref dftracer::utils::dataframe::DataFrame "DataFrame":
+    /// the group key columns, `l_<m>`/`r_<m>` for each aggregated metric, plus
+    /// `delta_<m>` and `pct_<m>`. The first error of either view or of the
+    /// scan is the result.
+    coro::CoroTask<dstd::Result<dataframe::DataFrame>> collect() const {
+        dataframe::LazyFrame plan =
+            baseline_.group_by(group_by_).agg(agg_).compare(variant_);
+        co_return co_await plan.collect();
+    }
+
+    /// FULL-join two aggregation results on their first `n_key` group-key
+    /// columns and append `delta_<m>`/`pct_<m>` for each numeric `l_`/`r_`
+    /// metric pair.
+    static dstd::Result<dataframe::DataFrame> compare_batches(
+        const dataframe::DataFrame& base, const dataframe::DataFrame& variant,
+        std::int64_t n_key) {
+        return base.compare_agg(variant, n_key);
+    }
+
+   private:
+    CompareView(views::View baseline, views::View variant)
+        : baseline_(std::move(baseline)), variant_(std::move(variant)) {}
+
+    views::View baseline_;
+    views::View variant_;
+    dstd::Vector<views::GroupKey> group_by_;
+    dstd::Vector<views::AggSpec> agg_;
+};
+
+}  // namespace dftracer::utils::trace::views
+
+#endif  // DFTRACER_UTILS_TRACE_VIEWS_COMPARE_VIEW_H

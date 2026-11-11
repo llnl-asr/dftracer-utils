@@ -70,15 +70,22 @@ static void read_self_cgroup_paths(std::string &v2_path, std::string &v1_path) {
     std::fclose(f);
 }
 
+// The memory library links nothing of ours, so no dstd::fmt here.
+static std::size_t read_size_at(const std::string &dir, const char *leaf) {
+    std::string path;
+    path.reserve(dir.size() + std::strlen(leaf));
+    path.append(dir);
+    path.append(leaf);
+    return read_size_from_file(path.c_str());
+}
+
 static std::size_t cgroup_v2_limit_at(const std::string &cg_path) {
-    std::string base = "/sys/fs/cgroup" + cg_path;
-    std::string dir = base;
+    std::string dir("/sys/fs/cgroup");
+    dir.append(cg_path);
     while (true) {
-        std::size_t max_mem =
-            read_size_from_file((dir + "/memory.max").c_str());
+        std::size_t max_mem = read_size_at(dir, "/memory.max");
         if (max_mem > 0 && max_mem < CGROUP_LIMIT_SENTINEL) {
-            std::size_t current =
-                read_size_from_file((dir + "/memory.current").c_str());
+            std::size_t current = read_size_at(dir, "/memory.current");
             if (current >= max_mem) return 0;
             return max_mem - current;
         }
@@ -92,14 +99,12 @@ static std::size_t cgroup_v2_limit_at(const std::string &cg_path) {
 }
 
 static std::size_t cgroup_v1_limit_at(const std::string &cg_path) {
-    std::string base = "/sys/fs/cgroup/memory" + cg_path;
-    std::string dir = base;
+    std::string dir("/sys/fs/cgroup/memory");
+    dir.append(cg_path);
     while (true) {
-        std::size_t limit =
-            read_size_from_file((dir + "/memory.limit_in_bytes").c_str());
+        std::size_t limit = read_size_at(dir, "/memory.limit_in_bytes");
         if (limit > 0 && limit < CGROUP_LIMIT_SENTINEL) {
-            std::size_t usage =
-                read_size_from_file((dir + "/memory.usage_in_bytes").c_str());
+            std::size_t usage = read_size_at(dir, "/memory.usage_in_bytes");
             if (usage >= limit) return 0;
             return limit - usage;
         }

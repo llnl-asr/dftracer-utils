@@ -8,13 +8,16 @@
 // LazyFrame::output_schema() end to end over a provider-rooted plan.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/provider_source.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 
@@ -245,5 +248,19 @@ TEST_SUITE("provider schema types") {
         CHECK(s.fields[1].type.id == TypeId::Timestamp);
         CHECK(s.fields[1].type.time_unit() == TimeUnit::Milli);
         CHECK(s.fields[1].type.timezone() == "UTC");
+    }
+
+    TEST_CASE("a frame whose column type differs from the declared one fails") {
+        // The fixture's morsel holds Int64 columns; "val" is declared float64.
+        Fixture fx{{"id", "val"}, plain_scalars};
+        const auto collected =
+            dftracer::utils::default_runtime()
+                .submit(LazyFrame::scan(make_fixture(fx)).collect())
+                .get();
+        dftu_utils_test::expect_error(collected,
+                                      common::ErrorCode::InvalidArgument);
+        const dstd::String msg(collected.error().c_str());
+        CHECK(msg.find("column val") != dstd::String::npos);
+        CHECK(msg.find("declared float64") != dstd::String::npos);
     }
 }

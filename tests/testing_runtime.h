@@ -11,8 +11,10 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <task_result.h>
 
 #include <cstddef>
+#include <type_traits>
 #include <utility>
 
 namespace dftu_utils_test {
@@ -33,18 +35,24 @@ constexpr std::size_t pool_width(std::size_t n) {
 template <typename Fn>
 void run_coro(Fn&& fn, const char* tag = "test") {
     dftracer::utils::Runtime rt(4);
-    rt.submit(dftracer::utils::coro::with_scope(std::forward<Fn>(fn)), tag)
-        .wait();
+    ok(rt.submit(dftracer::utils::coro::with_scope(std::forward<Fn>(fn)), tag)
+           .wait());
     rt.shutdown();
 }
 
 /// Drives the task on the calling thread, as get() did before it used the
-/// process pool.
+/// process pool. Gives the value of the task, and ends the test when the task
+/// stopped.
 template <class T>
 T run_here(dftracer::utils::coro::CoroTask<T> task) {
     dftracer::utils::coro::RunLoop loop;
     dftracer::utils::coro::CurrentScope bind{loop};
-    return task.get();
+    auto result = task.get();
+    if constexpr (std::is_same_v<decltype(result), T>) {
+        return result;
+    } else {
+        return ok(std::move(result));
+    }
 }
 
 }  // namespace dftu_utils_test

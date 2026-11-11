@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 
@@ -25,8 +26,8 @@ struct Fixture {
 
     DataFrame run(dstd::Vector<dataframe::AggExprSpec> specs) {
         dstd::Vector<const Series*> inputs = {&g, &x};
-        return dataframe::group_agg_expr(dataframe::expr_col(0), specs, inputs,
-                                         "g");
+        return dftu_utils_test::ok(dataframe::group_agg_expr(
+            dataframe::expr_col(0), specs, inputs, "g"));
     }
 };
 
@@ -48,9 +49,10 @@ TEST_CASE("count of a column of nulls is 0") {
     Series g = Series::strings(dstd::Span<const dstd::StringView>(keys));
     Series x = Series::flat_f64(xs.data(), 2, valid.data());
     dstd::Vector<const Series*> inputs = {&g, &x};
-    DataFrame r = dataframe::group_agg_expr(
+    DataFrame r = dftu_utils_test::ok(dataframe::group_agg_expr(
         dataframe::expr_col(0),
-        {dataframe::agg_count_valid(dataframe::expr_col(1), "n")}, inputs, "g");
+        {dataframe::agg_count_valid(dataframe::expr_col(1), "n")}, inputs,
+        "g"));
     REQUIRE(r.num_rows() == 1);
     CHECK(r.column("n").data<std::int64_t>()[0] == 0);
     CHECK(x.count() == 0);

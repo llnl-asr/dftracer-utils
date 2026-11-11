@@ -18,10 +18,9 @@ dstd::Result<std::size_t> read_bytes(const char* name) {
     if (!raw) return std::size_t{0};
     auto parsed = parse_bytes(*raw);
     if (!parsed) {
-        return make_error(ErrorCode::InvalidArgument,
-                          str_cat(name, ": '", *raw,
-                                  "' is not a byte size (use e.g. 4294967296, "
-                                  "512MB, 4GB)"));
+        return make_error<
+            "{}: '{}' is not a byte size (use e.g. 4294967296, 512MB, 4GB)">(
+            ErrorCode::InvalidArgument, name, *raw);
     }
     return static_cast<std::size_t>(*parsed);
 }

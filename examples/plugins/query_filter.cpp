@@ -3,9 +3,8 @@
 // the ergonomic F/Field builder, e.g. `F("dur") > 300`. The plugin includes
 // only plugin.h and links nothing; the host parses the rendered DSL string.
 //
-// Build: c++ -std=c++20 -shared -fPIC -I<repo>/include \
-//            -o query_filter.so query_filter.cpp
-// Run:   dftracer_run ./traces --plugin ./query_filter.so
+// Build: c++ -std=c++20 -shared -fPIC -I<repo>/include -o query_filter.so
+// query_filter.cpp Run:   dftracer_run ./traces --plugin ./query_filter.so
 
 #include <dftracer/utils/plugins/plugin.h>
 

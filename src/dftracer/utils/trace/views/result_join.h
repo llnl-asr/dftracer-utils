@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_TRACE_VIEWS_RESULT_JOIN_H
 
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/trace/views/join_type.h>
 
 #include <cstdint>
@@ -18,8 +19,9 @@ namespace dftracer::utils::trace::views {
 /// column prefixed "l_", then (unless LEFT_SEMI/LEFT_ANTI) each non-key right
 /// column prefixed "r_". An OUTER row nulls the absent side. Rows are sorted by
 /// the key for a deterministic result. Returns an empty Batch when the two key
-/// schemas (the first `n_key` column names) differ.
-dftracer::utils::dataframe::DataFrame join_batches(
+/// schemas (the first `n_key` column names) differ, and an InvalidArgument
+/// error when a key column is not string-typed.
+dstd::Result<dftracer::utils::dataframe::DataFrame> join_batches(
     const dftracer::utils::dataframe::DataFrame& left,
     const dftracer::utils::dataframe::DataFrame& right, std::int64_t n_key,
     JoinType type);

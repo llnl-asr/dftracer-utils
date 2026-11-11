@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/binaries/json_cell_printer.h>
+#include <dftracer/utils/cli/json_cell_printer.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/float16.h>
@@ -11,16 +11,17 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/store/root_layout.h>
+#include <dftracer/utils/fileio/compress/gzip_rechunker.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/indexer.h>
+#include <dftracer/utils/trace/index/store/root_layout.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/sharded_view.h>
-#include <dftracer/utils/utilities/fileio/compress/gzip_rechunker.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
 #include <refused_lines.h>
 #include <sys/wait.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <unistd.h>
 
@@ -61,10 +62,11 @@ dstd::String make_multimember_pfw_gz(dftu_utils_test::TestEnvironment& env,
     dstd::String single = create_pfw_gz(env, event_count, id);
     if (single.empty()) return "";
     dstd::String mm = env.dir() + "/mm_" + dstd::to_string(id) + ".pfw.gz";
-    utilities::fileio::compress::gzip_rechunk_to_members(
-        dstd::String(single), dstd::String(mm), member_bytes, 6)
-        .get();
-    (void)dstd::fs::remove(single);
+    dftu_utils_test::ok(
+        fileio::compress::gzip_rechunk_to_members(
+            dstd::String(single), dstd::String(mm), member_bytes, 6)
+            .get());
+    dstd::fs::remove(single).discard();
     return mm;
 }
 
@@ -118,7 +120,7 @@ int run_view_capture(const dstd::String& binary,
         ::execv(binary.c_str(), const_cast<char* const*>(argv.data()));
         ::_exit(127);
     }
-    (void)capture->close();
+    capture->close().discard();
     int status = 0;
     ::waitpid(pid, &status, 0);
     out = dftu_utils_test::read_text(capture_path);
@@ -199,7 +201,7 @@ dataframe::Series make_unknown_series(std::int64_t n) {
 
 dstd::String cell(const dataframe::Series& c, std::int64_t i) {
     dstd::String s;
-    dftracer::utils::binaries::append_cell_json(s, c, i);
+    dftracer::utils::cli::append_cell_json(s, c, i);
     return dstd::String(s);
 }
 
@@ -214,11 +216,12 @@ dstd::String build_aggregated_shard(dftu_utils_test::TestEnvironment& env,
     dstd::String gz = dir + "/t.pfw.gz";
     REQUIRE(dstd::fs::rename(src, gz).has_value());
 
-    dftracer::utils::index::IndexerOptions options;
+    dftracer::utils::trace::index::IndexerOptions options;
     options.index_dir = index_dir;
-    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))},
-                                          options)
-        .build();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                                {dstd::String(dstd::StringView(gz))}, options))
+            .build());
     if (index_dir.empty())
         return dstd::String(trace::internal::determine_index_path(gz, ""));
     return dstd::String(trace::internal::determine_index_path("x", index_dir));
@@ -465,15 +468,16 @@ TEST_SUITE("DFTracerView") {
 
         const dstd::String set = env.dir() + "/set";
         const dstd::String root =
-            set + "/" + dstd::String(dftracer::utils::index::INDEX_ROOT_NAME);
+            set + "/" +
+            dstd::String(dftracer::utils::trace::index::INDEX_ROOT_NAME);
         dstd::String sa = build_aggregated_shard(
             env, "sa", 50,
-            dstd::String(dftracer::utils::index::shard_root(root, 0)));
+            dstd::String(dftracer::utils::trace::index::shard_root(root, 0)));
         dstd::String sb = build_aggregated_shard(
             env, "sb", 40,
-            dstd::String(dftracer::utils::index::shard_root(root, 1)));
-        dftracer::utils::trace::views::write_shard_set(
-            dstd::String(root), {dstd::String(sa), dstd::String(sb)});
+            dstd::String(dftracer::utils::trace::index::shard_root(root, 1)));
+        dftu_utils_test::ok(dftracer::utils::trace::views::write_shard_set(
+            dstd::String(root), {dstd::String(sa), dstd::String(sb)}));
 
         // A flat directory with the same two traces for the baseline query.
         dstd::String both = env.dir() + "/both";
@@ -530,7 +534,7 @@ TEST_SUITE("DFTracerView") {
         }
         dstd::String gz = pfw + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
 
         dstd::String cap = env.dir() + "/cap.txt";
         dstd::String out;
@@ -568,7 +572,7 @@ TEST_SUITE("DFTracerView") {
         }
         dstd::String gz = pfw + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
 
         dstd::String cap = env.dir() + "/cap.txt";
         dstd::String out;
@@ -607,7 +611,7 @@ TEST_SUITE("DFTracerView") {
         }
         dstd::String gz = pfw + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
 
         dstd::String cap = env.dir() + "/cap.txt";
         dstd::String out;
@@ -1160,21 +1164,17 @@ TEST_SUITE("DFTracerView JSON cell printer") {
     }
 
     TEST_CASE("cli_emittable leaves out the types it cannot render") {
+        CHECK(dftracer::utils::cli::cli_emittable(dataframe::TypeId::List));
+        CHECK(dftracer::utils::cli::cli_emittable(dataframe::TypeId::Struct));
         CHECK(
-            dftracer::utils::binaries::cli_emittable(dataframe::TypeId::List));
-        CHECK(dftracer::utils::binaries::cli_emittable(
-            dataframe::TypeId::Struct));
-        CHECK(dftracer::utils::binaries::cli_emittable(
-            dataframe::TypeId::LargeList));
-        CHECK_FALSE(dftracer::utils::binaries::cli_emittable(
+            dftracer::utils::cli::cli_emittable(dataframe::TypeId::LargeList));
+        CHECK_FALSE(dftracer::utils::cli::cli_emittable(
             dataframe::TypeId::FixedSizeList));
         CHECK_FALSE(
-            dftracer::utils::binaries::cli_emittable(dataframe::TypeId::Map));
+            dftracer::utils::cli::cli_emittable(dataframe::TypeId::Map));
+        CHECK(dftracer::utils::cli::cli_emittable(dataframe::TypeId::Int64));
+        CHECK(dftracer::utils::cli::cli_emittable(dataframe::TypeId::Bool));
         CHECK(
-            dftracer::utils::binaries::cli_emittable(dataframe::TypeId::Int64));
-        CHECK(
-            dftracer::utils::binaries::cli_emittable(dataframe::TypeId::Bool));
-        CHECK(dftracer::utils::binaries::cli_emittable(
-            dataframe::TypeId::Decimal128));
+            dftracer::utils::cli::cli_emittable(dataframe::TypeId::Decimal128));
     }
 }

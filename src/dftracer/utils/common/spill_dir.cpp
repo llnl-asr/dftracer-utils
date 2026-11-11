@@ -6,6 +6,7 @@
 #include <dftracer/utils/common/scratch.h>
 #include <dftracer/utils/common/spill_dir.h>
 #include <dftracer/utils/common/spill_dir_internal.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/path.h>
@@ -32,23 +33,22 @@ dstd::Result<dstd::Path> choose_spill_dir(
         dstd::StringView reason;
         const dstd::Path env_path{env};
         const auto made = dstd::fs::create_directories(env_path.view());
-        if (!made)
+        if (!made.has_value())
             reason = made.error().message();
         else if (::access(env_path.c_str(), W_OK | X_OK) != 0)
             reason = "Permission denied";
         if (!reason.empty())
-            return make_error(
-                ErrorCode::Io,
-                str_cat("spill: cannot use spill directory '", env, "' (",
-                        reason, "); set ", constants::SPILL_DIR_ENV,
-                        " to a writable directory"));
+            return make_error<
+                "spill: cannot use spill directory '{}' ({}); set {} to a "
+                "writable directory">(ErrorCode::Io, env, reason,
+                                      constants::SPILL_DIR_ENV);
         return env_path;
     }
     // The root is found once, so check it again: a cleaner may have removed it
     // since.
     if (!local_root.empty()) {
         const auto made = dstd::fs::create_directories(local_root.view());
-        if (made && ::access(local_root.c_str(), W_OK | X_OK) == 0)
+        if (made.has_value() && ::access(local_root.c_str(), W_OK | X_OK) == 0)
             return local_root;
     }
     // Spilled bytes on a RAM-backed file system stay in memory, which is what
@@ -58,22 +58,21 @@ dstd::Result<dstd::Path> choose_spill_dir(
         if (dir.empty()) continue;
         const dstd::PathView parent = dir.view().parent();
         const auto present = dstd::fs::exists(dir.view());
-        const dstd::Path probe = (present && *present) || parent.empty()
-                                     ? dir
-                                     : dstd::Path(parent.str());
+        const dstd::Path probe =
+            (present.has_value() && *present) || parent.empty()
+                ? dir
+                : dstd::Path(parent.str());
         if (is_memory_filesystem(filesystem_kind(probe))) continue;
-        if (!dstd::fs::create_directories(dir.view()) ||
+        if (!dstd::fs::create_directories(dir.view()).has_value() ||
             ::access(dir.c_str(), W_OK | X_OK) != 0)
             continue;
         return dir;
     }
-    return make_error(
-        ErrorCode::Io,
-        str_cat("spill: no spill directory off RAM (no writable local disk, "
-                "and the temp and cache directories are RAM-backed or not "
-                "writable); set ",
-                constants::SPILL_DIR_ENV,
-                " to a directory on a disk or a parallel file system"));
+    return make_error<
+        "spill: no spill directory off RAM (no writable local disk, and the "
+        "temp and cache directories are RAM-backed or not writable); set {} "
+        "to a directory on a disk or a parallel file system">(
+        ErrorCode::Io, constants::SPILL_DIR_ENV);
 }
 
 }  // namespace detail
@@ -83,7 +82,7 @@ dstd::Result<dstd::Path> spill_dir() {
     dstd::Vector<dstd::Path> fallbacks;
     const dstd::Path tmp = dstd::fs::temp_directory();
     const auto tmp_is_dir = dstd::fs::is_directory(tmp.view());
-    if (tmp_is_dir && *tmp_is_dir) fallbacks.push_back(tmp);
+    if (tmp_is_dir.has_value() && *tmp_is_dir) fallbacks.push_back(tmp);
     if (const auto home = Env::get("HOME"); home && !home->empty()) {
         dstd::Path spill{dstd::StringView(*home)};
         spill /= ".cache";
@@ -95,7 +94,7 @@ dstd::Result<dstd::Path> spill_dir() {
                                         local_spill_root(), fallbacks);
     if (dir) {
         static const bool logged = [&] {
-            DFTRACER_UTILS_LOG_INFO("spill directory: %s", dir->c_str());
+            DFTRACER_UTILS_LOG_INFO("spill directory: {}", dir->c_str());
             return true;
         }();
         (void)logged;
@@ -117,7 +116,7 @@ struct DirKinds {
 bool spill_dir_in_memory(dstd::CStringView dir) {
     DirKinds& known = dstd::Singleton<DirKinds>::get();
     [[maybe_unused]] static const bool hooked = [] {
-        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, [] {
+        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, []() noexcept {
             DirKinds& held = dstd::Singleton<DirKinds>::get();
             std::lock_guard<std::mutex> lock(held.mu);
             held.kinds.clear();
@@ -132,10 +131,10 @@ bool spill_dir_in_memory(dstd::CStringView dir) {
     if (in_memory && !known.warned) {
         known.warned = true;
         DFTRACER_UTILS_LOG_WARN(
-            "spill directory '%s' is RAM-backed (tmpfs): spilled bytes stay in "
-            "memory and count toward the memory budget; set %s to a directory "
+            "spill directory '{}' is RAM-backed (tmpfs): spilled bytes stay in "
+            "memory and count toward the memory budget; set {} to a directory "
             "on a disk",
-            dir.c_str(), constants::SPILL_DIR_ENV);
+            dir, constants::SPILL_DIR_ENV);
     }
     return in_memory;
 }
@@ -215,7 +214,7 @@ void sweep_stale(dstd::PathView root, dstd::StringView prefix) {
     if (!dir) return;
     auto listing = dir->entries();
     if (!listing) return;
-    const dstd::String tag = host_tag() + "_";
+    const dstd::String tag = dstd::fmt<"{}_">(host_tag());
     for (const dstd::fs::DirEntry& entry : *listing) {
         const dstd::StringView name = entry.name;
         if (name.size() <= prefix.size() + 1 ||
@@ -230,7 +229,7 @@ void sweep_stale(dstd::PathView root, dstd::StringView prefix) {
         if (perr != std::errc{} || stop == last || *stop != '_' || pid <= 0)
             continue;
         if (::kill(static_cast<pid_t>(pid), 0) == 0 || errno != ESRCH) continue;
-        (void)dstd::fs::remove_all((root / name).view());
+        dstd::fs::remove_all((root / name).view()).discard();
     }
 }
 
@@ -242,7 +241,7 @@ dstd::Result<ScopedSpillSubdir> ScopedSpillSubdir::create(
     if (!root) return dstd::Unexpected(std::move(root).error());
     SweptPrefixes& swept = dstd::Singleton<SweptPrefixes>::get();
     [[maybe_unused]] static const bool hooked = [] {
-        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, [] {
+        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, []() noexcept {
             SweptPrefixes& held = dstd::Singleton<SweptPrefixes>::get();
             std::lock_guard<std::mutex> lock(held.mu);
             held.prefixes.clear();
@@ -256,15 +255,14 @@ dstd::Result<ScopedSpillSubdir> ScopedSpillSubdir::create(
     }
     static std::atomic<std::uint64_t> counter{0};
     const dstd::Path dir =
-        root->view() / str_cat(prefix, "_", host_tag(), "_", ::getpid(), "_",
-                               counter.fetch_add(1));
+        root->view() / dstd::fmt<"{}_{}_{}_{}">(prefix, host_tag(), ::getpid(),
+                                                counter.fetch_add(1));
     const auto made = dstd::fs::create_directories(dir.view());
-    if (!made)
-        return make_error(
-            ErrorCode::Io,
-            str_cat("spill: cannot create '", dir.str(), "' (",
-                    made.error().message(), "); set ", constants::SPILL_DIR_ENV,
-                    " to a writable directory"));
+    if (!made.has_value())
+        return make_error<
+            "spill: cannot create '{}' ({}); set {} to a writable directory">(
+            ErrorCode::Io, dir.str(), made.error().message(),
+            constants::SPILL_DIR_ENV);
     auto charge = dstd::make_shared<SpillCharge>(spill_dir_in_memory(*root));
     SubdirRegistry& reg = subdirs();
     {
@@ -303,7 +301,7 @@ ScopedSpillSubdir::~ScopedSpillSubdir() { remove(); }
 // leave the gauge once the files are gone and no writer adds more.
 void ScopedSpillSubdir::remove() noexcept {
     if (path_.empty()) return;
-    (void)dstd::fs::remove_all(path_.view());
+    dstd::fs::remove_all(path_.view()).discard();
     SubdirRegistry& reg = subdirs();
     {
         std::lock_guard<std::mutex> lock(reg.mu);

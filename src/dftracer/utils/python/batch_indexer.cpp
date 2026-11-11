@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dstd/hash/hash_combine.h>
@@ -12,16 +13,7 @@
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
-#include <dftracer/utils/index/build/resolve_and_build.h>
-#include <dftracer/utils/index/build/resolver.h>
-#include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
-#include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/plan/prune.h>
-#include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
-#include <dftracer/utils/index/schemas/dft/agg/system_metrics.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
-#include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/fileio/file_helpers.h>
 #include <dftracer/utils/python/batch_indexer.h>
 #include <dftracer/utils/python/dataframe.h>
 #include <dftracer/utils/python/indexer.h>
@@ -35,6 +27,15 @@
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/build/resolve_and_build.h>
+#include <dftracer/utils/trace/index/build/resolver.h>
+#include <dftracer/utils/trace/index/gzip/checkpoint_indexer_factory.h>
+#include <dftracer/utils/trace/index/indexer.h>
+#include <dftracer/utils/trace/index/plan/prune.h>
+#include <dftracer/utils/trace/index/record_schema.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_config.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/system_metrics.h>
+#include <dftracer/utils/trace/index/tables.h>
 #include <dftracer/utils/trace/internal/utils.h>
 
 #include <algorithm>
@@ -44,8 +45,8 @@
 using namespace dftracer::utils;
 
 using dftracer::utils::Runtime;
-using namespace dftracer::utils::index::build;
-using namespace dftracer::utils::index::schemas::dft::agg;
+using namespace dftracer::utils::trace::index::build;
+using namespace dftracer::utils::trace::index::schemas::dft::agg;
 
 // ---------------------------------------------------------------------------
 // BatchIndexer - directory-level indexer with resolve/build pattern
@@ -314,9 +315,10 @@ static AggregationConfig build_aggregation_config(IndexerObject* self) {
     return config;
 }
 
-static dftracer::utils::dstd::Optional<dftracer::utils::index::IndexerOptions>
+static dftracer::utils::dstd::Optional<
+    dftracer::utils::trace::index::IndexerOptions>
 indexer_options(IndexerObject* self) {
-    dftracer::utils::index::IndexerOptions o;
+    dftracer::utils::trace::index::IndexerOptions o;
     const char* index_dir = as_utf8(self->index_dir);
     o.index_dir = index_dir ? index_dir : "";
     o.checkpoint_size = self->checkpoint_size;
@@ -373,42 +375,44 @@ static bool with_indexer(IndexerObject* self, Fn fn) {
     if (!options) return false;
     auto paths = indexer_paths(self);
     return run_blocking([&] {
-        fn(dftracer::utils::index::Indexer::open(std::move(paths),
-                                                 std::move(*options)));
+        fn(dftracer::utils::python::py_unwrap(
+            dftracer::utils::trace::index::Indexer::open(std::move(paths),
+                                                         std::move(*options))));
     });
 }
 
 enum class IndexerCall { Status, Build, Rebuild, Ensure };
 
 static bool run_indexer(IndexerObject* self, IndexerCall call,
-                        dftracer::utils::index::IndexStatus& out) {
+                        dftracer::utils::trace::index::IndexStatus& out) {
     auto options = indexer_options(self);
     if (!options) return false;
     auto paths = indexer_paths(self);
     const bool force = self->force_rebuild != 0;
     return run_blocking([&] {
-        auto ix = dftracer::utils::index::Indexer::open(std::move(paths),
-                                                        std::move(*options));
+        auto ix = dftracer::utils::python::py_unwrap(
+            dftracer::utils::trace::index::Indexer::open(std::move(paths),
+                                                         std::move(*options)));
         switch (call) {
             case IndexerCall::Status:
-                out = ix.status();
+                out = dftracer::utils::python::py_unwrap(ix.status());
                 break;
             case IndexerCall::Build:
-                out = ix.build();
+                out = dftracer::utils::python::py_unwrap(ix.build());
                 break;
             case IndexerCall::Rebuild:
-                out = ix.rebuild();
+                out = dftracer::utils::python::py_unwrap(ix.rebuild());
                 break;
             case IndexerCall::Ensure: {
                 if (!force) {
-                    out = ix.build();
+                    out = dftracer::utils::python::py_unwrap(ix.build());
                     break;
                 }
-                auto before = ix.status();
+                auto before = dftracer::utils::python::py_unwrap(ix.status());
                 out = before.needs_work.empty() &&
                               !before.aggregation_needs_rebuild
                           ? std::move(before)
-                          : ix.rebuild();
+                          : dftracer::utils::python::py_unwrap(ix.rebuild());
                 break;
             }
         }
@@ -430,7 +434,8 @@ static PyObject* string_list(
     return list;
 }
 
-static PyObject* status_dict(const dftracer::utils::index::IndexStatus& st) {
+static PyObject* status_dict(
+    const dftracer::utils::trace::index::IndexStatus& st) {
     PyObject* dict = PyDict_New();
     if (!dict) return nullptr;
     dict_set_steal(dict, "total_files", PyLong_FromSize_t(st.total));
@@ -452,7 +457,7 @@ static PyObject* status_dict(const dftracer::utils::index::IndexStatus& st) {
 
 static PyObject* Indexer_resolve(IndexerObject* self,
                                  PyObject* Py_UNUSED(ignored)) {
-    dftracer::utils::index::IndexStatus st;
+    dftracer::utils::trace::index::IndexStatus st;
     if (!run_indexer(self, IndexerCall::Status, st)) return nullptr;
     return status_dict(st);
 }
@@ -463,7 +468,7 @@ static PyObject* Indexer_resolve(IndexerObject* self,
 
 static PyObject* Indexer_build(IndexerObject* self,
                                PyObject* Py_UNUSED(ignored)) {
-    dftracer::utils::index::IndexStatus st;
+    dftracer::utils::trace::index::IndexStatus st;
     if (!run_indexer(
             self,
             self->force_rebuild ? IndexerCall::Rebuild : IndexerCall::Build,
@@ -478,7 +483,7 @@ static PyObject* Indexer_build(IndexerObject* self,
 
 static PyObject* Indexer_ensure_indexed(IndexerObject* self,
                                         PyObject* Py_UNUSED(ignored)) {
-    dftracer::utils::index::IndexStatus st;
+    dftracer::utils::trace::index::IndexStatus st;
     if (!run_indexer(self, IndexerCall::Ensure, st)) return nullptr;
     return status_dict(st);
 }
@@ -486,8 +491,9 @@ static PyObject* Indexer_ensure_indexed(IndexerObject* self,
 static PyObject* Indexer_manifest(IndexerObject* self,
                                   PyObject* Py_UNUSED(ignored)) {
     dftracer::utils::dstd::String json;
-    if (!with_indexer(self, [&](dftracer::utils::index::Indexer ix) {
-            json = dftracer::utils::index::to_json(ix.manifest());
+    if (!with_indexer(self, [&](dftracer::utils::trace::index::Indexer ix) {
+            json = dftracer::utils::trace::index::to_json(
+                dftracer::utils::python::py_unwrap(ix.manifest()));
         }))
         return nullptr;
     return PyUnicode_FromStringAndSize(json.data(),
@@ -498,8 +504,9 @@ static PyObject* Indexer_explain(IndexerObject* self, PyObject* args) {
     const char* query = nullptr;
     if (!PyArg_ParseTuple(args, "s", &query)) return nullptr;
     dftracer::utils::dstd::String json;
-    if (!with_indexer(self, [&](dftracer::utils::index::Indexer ix) {
-            json = dftracer::utils::index::to_json(ix.explain(query));
+    if (!with_indexer(self, [&](dftracer::utils::trace::index::Indexer ix) {
+            json = dftracer::utils::trace::index::to_json(
+                dftracer::utils::python::py_unwrap(ix.explain(query)));
         }))
         return nullptr;
     return PyUnicode_FromStringAndSize(json.data(),
@@ -510,9 +517,9 @@ static PyObject* Indexer_rebuild_extension(IndexerObject* self,
                                            PyObject* args) {
     const char* name = nullptr;
     if (!PyArg_ParseTuple(args, "s", &name)) return nullptr;
-    dftracer::utils::index::IndexStatus st;
-    if (!with_indexer(self, [&](dftracer::utils::index::Indexer ix) {
-            st = ix.rebuild_extension(name);
+    dftracer::utils::trace::index::IndexStatus st;
+    if (!with_indexer(self, [&](dftracer::utils::trace::index::Indexer ix) {
+            st = dftracer::utils::python::py_unwrap(ix.rebuild_extension(name));
         }))
         return nullptr;
     return status_dict(st);
@@ -521,9 +528,9 @@ static PyObject* Indexer_rebuild_extension(IndexerObject* self,
 static PyObject* Indexer_drop_extension(IndexerObject* self, PyObject* args) {
     const char* name = nullptr;
     if (!PyArg_ParseTuple(args, "s", &name)) return nullptr;
-    dftracer::utils::index::IndexStatus st;
-    if (!with_indexer(self, [&](dftracer::utils::index::Indexer ix) {
-            st = ix.drop_extension(name);
+    dftracer::utils::trace::index::IndexStatus st;
+    if (!with_indexer(self, [&](dftracer::utils::trace::index::Indexer ix) {
+            st = dftracer::utils::python::py_unwrap(ix.drop_extension(name));
         }))
         return nullptr;
     return status_dict(st);
@@ -565,10 +572,18 @@ static PyObject* Indexer_get_checkpoint_indexer(IndexerObject* self,
     }
 
     // Create the native handle
-    try {
-        auto native =
-            dftracer::utils::index::gzip::CheckpointIndexerFactory::create(
-                file_path, index_path, self->checkpoint_size, false);
+    {
+        auto created =
+            dftracer::utils::trace::index::gzip::CheckpointIndexerFactory::
+                try_create(file_path, index_path, self->checkpoint_size, false);
+        if (!created) {
+            Py_DECREF((PyObject*)indexer);
+            const auto message = created.error().message();
+            PyErr_SetString(PyExc_RuntimeError,
+                            dftracer::utils::dstd::String(message).c_str());
+            return nullptr;
+        }
+        auto native = std::move(*created);
         if (!native) {
             Py_DECREF((PyObject*)indexer);
             PyErr_SetString(PyExc_RuntimeError, "Unsupported archive format");
@@ -576,13 +591,9 @@ static PyObject* Indexer_get_checkpoint_indexer(IndexerObject* self,
         }
         indexer->handle =
             dftracer::utils::dstd::make_unique<dftracer::utils::dstd::SharedPtr<
-                dftracer::utils::index::gzip::CheckpointIndexer>>(
+                dftracer::utils::trace::index::gzip::CheckpointIndexer>>(
                 std::move(native))
                 .release();
-    } catch (const std::exception& e) {
-        Py_DECREF((PyObject*)indexer);
-        PyErr_SetString(PyExc_RuntimeError, e.what());
-        return nullptr;
     }
 
     return (PyObject*)indexer;
@@ -608,8 +619,8 @@ static PyObject* Indexer_rowset(IndexerObject* self, PyObject* args) {
     const char* name = nullptr;
     if (!PyArg_ParseTuple(args, "s", &name)) return nullptr;
     dftracer::utils::dataframe::DataFrame frame;
-    if (!with_indexer(self, [&](dftracer::utils::index::Indexer ix) {
-            frame = ix.rowset(name);
+    if (!with_indexer(self, [&](dftracer::utils::trace::index::Indexer ix) {
+            frame = dftracer::utils::python::py_unwrap(ix.rowset(name));
         }))
         return nullptr;
     return dftracer::utils::python::wrap_dataframe(std::move(frame));
@@ -633,11 +644,11 @@ using PidSet = dstd::HashSet<std::uint64_t>;
 using PidsByPath = dstd::HashMap<dftracer::utils::dstd::String, PidSet>;
 
 // The distinct PIDs the index recorded for one file.
-PidSet file_pids(const dftracer::utils::index::Snapshot& snapshot,
-                 const dftracer::utils::index::FileRef& file) {
+PidSet file_pids(const dftracer::utils::trace::index::Snapshot& snapshot,
+                 const dftracer::utils::trace::index::FileRef& file) {
     PidSet pids;
-    auto counts = dftracer::utils::common::unwrap(
-        dftracer::utils::index::pid_tid_counts(snapshot, file));
+    auto counts = dftracer::utils::python::py_unwrap(
+        dftracer::utils::trace::index::pid_tid_counts(snapshot, file));
     if (!counts) return pids;
     for (const auto& [key, _] : *counts) pids.insert(pid_of(key));
     return pids;
@@ -645,10 +656,11 @@ PidSet file_pids(const dftracer::utils::index::Snapshot& snapshot,
 
 // Every indexed file with its PID set, keyed by the path the index names it by.
 PidsByPath all_file_pids(const dftracer::utils::dstd::String& index_path) {
-    const auto snapshot = dftracer::utils::common::unwrap(
-        dftracer::utils::index::plan::open_snapshot(index_path));
+    const auto snapshot = dftracer::utils::python::py_unwrap(
+        dftracer::utils::trace::index::plan::open_snapshot(index_path));
     PidsByPath out;
-    for (const auto& file : dftracer::utils::common::unwrap(snapshot.files())) {
+    for (const auto& file :
+         dftracer::utils::python::py_unwrap(snapshot.files())) {
         const auto path = file.path();
         out.emplace(dftracer::utils::dstd::String(path.data(), path.size()),
                     file_pids(snapshot, file));
@@ -704,11 +716,10 @@ static PyObject* Indexer_query_file_pids(IndexerObject* self, PyObject* args) {
     PidSet pids;
     if (!run_blocking_r(
             [&] {
-                const auto snapshot = dftracer::utils::common::unwrap(
-                    dftracer::utils::index::plan::open_snapshot(index_path));
-                const auto file = snapshot.file(
-                    dftracer::utils::index::store::internal::get_logical_path(
-                        path));
+                const auto snapshot = dftracer::utils::python::py_unwrap(
+                    dftracer::utils::trace::index::plan::open_snapshot(
+                        index_path));
+                const auto file = snapshot.file(fileio::get_logical_path(path));
                 if (!file) return PidSet{};
                 return file_pids(snapshot, *file);
             },
@@ -812,63 +823,39 @@ static PyMethodDef Indexer_methods[] = {
      "Query every indexed file with its PIDs in one call.\n\n"
      "Returns:\n"
      "    dict mapping trace path to set of PIDs.\n"},
-    {nullptr}};
+    {NULL, NULL, 0, NULL}};
 
-static PyGetSetDef Indexer_getsetters[] = {{nullptr}};
+static PyGetSetDef Indexer_getsetters[] = {{NULL, NULL, NULL, NULL, NULL}};
 
 PyTypeObject IndexerType = {
-    PyVarObject_HEAD_INIT(nullptr, 0) "dftracer_utils_ext.Indexer",
-    sizeof(IndexerObject),
-    0,
-    (destructor)Indexer_dealloc,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
-    "BatchIndexer(directory='', files=None, index_dir='',\n"
-    "             require_checkpoint=True, require_bloom=True,\n"
-    "             time_interval_ms=1000.0, group_keys=None,\n"
-    "             compute_percentiles=True, parallelism=0,\n"
-    "             force_rebuild=False, runtime=None)\n"
-    "--\n\n"
-    "Indexer with tiered index building.\n\n"
-    "At least one of 'directory' or 'files' must be provided.\n"
-    "- directory: scan for .pfw/.jsonl/.ndjson/.json files, plain or gzip\n"
-    "- files: list of specific file paths\n\n"
-    "Supports:\n"
-    "- Tier 1: Checkpoints (require_checkpoint)\n"
-    "- Tier 2: Bloom filters (require_bloom)\n"
-    "- Tier 3: Aggregation, which every build makes; the time_interval_ms,\n"
-    "  group_keys, compute_percentiles and group_by_file arguments set its\n"
-    "  config, whose defaults are the standard config\n",
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    Indexer_methods,
-    0,
-    Indexer_getsetters,
-    0,
-    0,
-    0,
-    0,
-    0,
-    (initproc)Indexer_init,
-    0,
-    Indexer_new,
+    .ob_base = PyVarObject_HEAD_INIT(nullptr, 0).tp_name =
+        "dftracer_utils_ext.Indexer",
+    .tp_basicsize = sizeof(IndexerObject),
+    .tp_dealloc = (destructor)Indexer_dealloc,
+    .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
+    .tp_doc =
+        "BatchIndexer(directory='', files=None, index_dir='',\n"
+        "             require_checkpoint=True, require_bloom=True,\n"
+        "             time_interval_ms=1000.0, group_keys=None,\n"
+        "             compute_percentiles=True, parallelism=0,\n"
+        "             force_rebuild=False, runtime=None)\n"
+        "--\n\n"
+        "Indexer with tiered index building.\n\n"
+        "At least one of 'directory' or 'files' must be provided.\n"
+        "- directory: scan for .pfw/.jsonl/.ndjson/.json files, plain or gzip\n"
+        "- files: list of specific file paths\n\n"
+        "Supports:\n"
+        "- Tier 1: Checkpoints (require_checkpoint)\n"
+        "- Tier 2: Bloom filters (require_bloom)\n"
+        "- Tier 3: Aggregation, which every build makes; the "
+        "time_interval_ms,\n"
+        "  group_keys, compute_percentiles and group_by_file arguments set "
+        "its\n"
+        "  config, whose defaults are the standard config\n",
+    .tp_methods = Indexer_methods,
+    .tp_getset = Indexer_getsetters,
+    .tp_init = (initproc)Indexer_init,
+    .tp_new = Indexer_new,
 };
 
 namespace {
@@ -876,7 +863,7 @@ namespace {
 template <class Fn>
 PyObject* schema_str(Fn fn) {
     try {
-        const auto s = fn();
+        const auto s = dftracer::utils::python::py_unwrap(fn());
         return PyUnicode_FromStringAndSize(s.data(),
                                            static_cast<Py_ssize_t>(s.size()));
     } catch (const std::exception& e) {
@@ -889,38 +876,56 @@ PyObject* schema_register_fn(PyObject*, PyObject* args) {
     const char* text = nullptr;
     const char* source = "<text>";
     if (!PyArg_ParseTuple(args, "s|s", &text, &source)) return nullptr;
-    return schema_str([&] {
-        return dftracer::utils::index::register_schema(text, source).id;
-    });
+    return schema_str(
+        [&]() -> dftracer::utils::dstd::Result<dftracer::utils::dstd::String> {
+            const auto registered =
+                dftracer::utils::trace::index::register_schema(text, source);
+            if (!registered) return registered.error();
+            return (*registered)->id;
+        });
 }
 
 PyObject* schema_load_fn(PyObject*, PyObject* args) {
     const char* path = nullptr;
     if (!PyArg_ParseTuple(args, "s", &path)) return nullptr;
-    return schema_str([&] {
-        dftracer::utils::index::load_schemas(path);
-        return dftracer::utils::index::schemas_json();
-    });
+    return schema_str(
+        [&]() -> dftracer::utils::dstd::Result<dftracer::utils::dstd::String> {
+            const auto loaded =
+                dftracer::utils::trace::index::load_schemas(path);
+            if (!loaded) return loaded.error();
+            return dftracer::utils::trace::index::schemas_json();
+        });
 }
 
 PyObject* schema_list_fn(PyObject*, PyObject*) {
-    return schema_str([] { return dftracer::utils::index::schemas_json(); });
+    return schema_str(
+        []() -> dftracer::utils::dstd::Result<dftracer::utils::dstd::String> {
+            return dftracer::utils::trace::index::schemas_json();
+        });
 }
 
 PyObject* schema_detect_fn(PyObject*, PyObject* args) {
     const char* path = nullptr;
     if (!PyArg_ParseTuple(args, "s", &path)) return nullptr;
     return schema_str(
-        [&] { return dftracer::utils::index::detect_file_schema(path).id; });
+        [&]() -> dftracer::utils::dstd::Result<dftracer::utils::dstd::String> {
+            const auto detected =
+                dftracer::utils::trace::index::detect_file_schema(path);
+            if (!detected) return detected.error();
+            return (*detected)->id;
+        });
 }
 
 PyObject* schema_explain_fn(PyObject*, PyObject* args) {
     const char* path = nullptr;
     if (!PyArg_ParseTuple(args, "s", &path)) return nullptr;
-    return schema_str([&] {
-        return dftracer::utils::index::to_json(
-            dftracer::utils::index::explain_file_schema(path));
-    });
+    return schema_str(
+        [&]() -> dftracer::utils::dstd::Result<dftracer::utils::dstd::String> {
+            const auto explained =
+                dftracer::utils::trace::index::explain_file_schema(path);
+            if (!explained) return explained.error();
+            return dftracer::utils::trace::index::to_json(*explained);
+        });
 }
 
 PyMethodDef SCHEMA_METHODS[] = {

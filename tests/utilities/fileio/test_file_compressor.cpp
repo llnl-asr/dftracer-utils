@@ -2,13 +2,14 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/utilities/fileio/file_compressor_utility.h>
+#include <dftracer/utils/fileio/file_compressor_utility.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 #include <zlib.h>
@@ -16,7 +17,7 @@
 #include <random>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities::fileio;
+using namespace dftracer::utils::fileio;
 
 static dstd::Path create_test_dir() {
     auto dir =
@@ -35,15 +36,15 @@ TEST_SUITE("FileCompressor") {
         SUBCASE("Compress small text file") {
             dstd::String test_file =
                 dstd::String((test_dir / "test_compress.txt").str());
-            dstd::String expected_output = test_file + ".gz";
+            dstd::String expected_output = dstd::fmt<"{}.gz">(test_file);
 
             dstd::String ofs;
             for (int i = 0; i < 100; ++i) {
-                ofs += common::str_cat(
-                    "This is line ", i,
-                    " of test content that will be compressed.\n");
+                ofs += dstd::fmt<
+                    "This is line {} of test content that will be "
+                    "compressed.\n">(i);
             }
-            (void)dstd::fs::write_file(dstd::PathView(test_file), ofs);
+            dstd::fs::write_file(dstd::PathView(test_file), ofs).discard();
 
             auto original_size = dstd::fs::file_size(test_file).value();
 
@@ -70,13 +71,13 @@ TEST_SUITE("FileCompressor") {
                 dstd::String((test_dir / "no_newline.txt").str());
             dstd::String content;
             for (int i = 0; i < 500; ++i) {
-                content += "line " + dstd::to_string(i) + " of the file\n";
+                content += dstd::fmt<"line {} of the file\n">(i);
             }
             content += "last line without newline";
             {
                 dstd::String ofs;
-                ofs += common::str_cat(content);
-                (void)dstd::fs::write_file(dstd::PathView(test_file), ofs);
+                ofs += dstd::fmt<"{}">(content);
+                dstd::fs::write_file(dstd::PathView(test_file), ofs).discard();
             }
 
             FileCompressorUtility compressor;
@@ -104,7 +105,7 @@ TEST_SUITE("FileCompressor") {
 
             dstd::String ofs;
             ofs += "Test content for custom output path\n";
-            (void)dstd::fs::write_file(dstd::PathView(test_file), ofs);
+            dstd::fs::write_file(dstd::PathView(test_file), ofs).discard();
 
             FileCompressorUtility compressor;
 
@@ -134,7 +135,7 @@ TEST_SUITE("FileCompressor") {
             for (int i = 0; i < 1000; ++i) {
                 ofs += "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n";
             }
-            (void)dstd::fs::write_file(dstd::PathView(test_file), ofs);
+            dstd::fs::write_file(dstd::PathView(test_file), ofs).discard();
 
             FileCompressorUtility compressor;
 
@@ -176,11 +177,11 @@ TEST_SUITE("FileCompressor") {
 
             for (int i = 0; i < 10000; ++i) {
                 for (int j = 0; j < 80; ++j) {
-                    ofs += common::str_cat(static_cast<char>(dis(gen)));
+                    ofs += dstd::fmt<"{}">(static_cast<char>(dis(gen)));
                 }
-                ofs += common::str_cat('\n');
+                ofs += dstd::fmt<"\n">();
             }
-            (void)dstd::fs::write_file(dstd::PathView(test_file), ofs);
+            dstd::fs::write_file(dstd::PathView(test_file), ofs).discard();
 
             FileCompressorUtility compressor;
 
@@ -234,16 +235,16 @@ TEST_SUITE("FileCompressor") {
                 dftracer::utils::common::ErrorCode::NotFound));
             CHECK(result.error().message().find("does not exist") !=
                   dstd::String::npos);
-            CHECK(!dstd::fs::exists(non_existent + ".gz").value());
+            CHECK(!dstd::fs::exists(dstd::fmt<"{}.gz">(non_existent)).value());
         }
 
         SUBCASE("Empty file") {
             dstd::String test_file =
                 dstd::String((test_dir / "empty.txt").str());
-            dstd::String output_file = test_file + ".gz";
+            dstd::String output_file = dstd::fmt<"{}.gz">(test_file);
 
             dstd::String ofs;
-            (void)dstd::fs::write_file(dstd::PathView(test_file), ofs);
+            dstd::fs::write_file(dstd::PathView(test_file), ofs).discard();
 
             FileCompressorUtility compressor;
 
@@ -262,7 +263,7 @@ TEST_SUITE("FileCompressor") {
 
             dstd::String ofs;
             ofs += "Test content";
-            (void)dstd::fs::write_file(dstd::PathView(test_file), ofs);
+            dstd::fs::write_file(dstd::PathView(test_file), ofs).discard();
 
             FileCompressorUtility compressor;
 
@@ -271,7 +272,7 @@ TEST_SUITE("FileCompressor") {
             auto result = compressor(input).get();
 
             if (result.has_value()) {
-                CHECK(dstd::fs::exists(test_file + ".gz").value());
+                CHECK(dstd::fs::exists(dstd::fmt<"{}.gz">(test_file)).value());
             }
         }
     }
@@ -285,7 +286,7 @@ TEST_SUITE("FileCompressor") {
         SUBCASE("Compress binary data") {
             dstd::String test_file =
                 dstd::String((test_dir / "binary.dat").str());
-            dstd::String output_file = test_file + ".gz";
+            dstd::String output_file = dstd::fmt<"{}.gz">(test_file);
 
             dstd::String ofs;
             std::random_device rd;
@@ -297,7 +298,7 @@ TEST_SUITE("FileCompressor") {
                 byte = static_cast<unsigned char>(dis(gen));
             }
             ofs.append(reinterpret_cast<const char*>(data.data()), data.size());
-            (void)dstd::fs::write_file(dstd::PathView(test_file), ofs);
+            dstd::fs::write_file(dstd::PathView(test_file), ofs).discard();
 
             FileCompressorUtility compressor;
 

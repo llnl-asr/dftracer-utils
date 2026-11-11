@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/calendar.h>
-#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/field_ref.h>
 #include <dftracer/utils/dstd/algorithm.h>
 #include <dftracer/utils/dstd/deque.h>
+#include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -736,33 +737,34 @@ dstd::Optional<Ordered> ordered(const Value& v) {
         v);
 }
 
-// Row `r` of the column `t` reads; the table outlives the leaf.
-Value table_value(const LookupTable& t, std::int64_t r) {
+// Row `r` of the column `t` reads; the table outlives the leaf. A list or
+// object cell records an error for the scan's caller and reads as null.
+Value table_value(const TLookup& l, const LookupTable& t, std::int64_t r) {
     const auto& c = t.cells[static_cast<std::size_t>(r)];
-    if (!c)
-        throw common::DFTUtilsException(
-            common::ErrorCode::InvalidArgument,
-            ("View::duql a scan filter reads a list or object column of '" +
-             t.name + "'; read it in a stage after the scan filter")
-                .c_str());
+    if (!c) {
+        l.slot->failure.set(lookup_error(
+            dstd::fmt<"View::duql a scan filter reads a list or object "
+                      "column of '{}'; read it in a stage after the scan "
+                      "filter">(t.name)));
+        return VNull{};
+    }
     return of_cell(*c);
 }
 
 // Rows `a` and `b` of the column `t` reads hold equal values.
-bool same_value(const LookupTable& t, std::int64_t a, std::int64_t b) {
+bool same_value(const TLookup& l, const LookupTable& t, std::int64_t a,
+                std::int64_t b) {
     dstd::String ka;
     dstd::String kb;
-    const bool ha = value_key(ka, table_value(t, a));
-    const bool hb = value_key(kb, table_value(t, b));
+    const bool ha = value_key(ka, table_value(l, t, a));
+    const bool hb = value_key(kb, table_value(l, t, b));
     return ha == hb && ka == kb;
 }
 
 const LookupTable& bound_table(const TLookup& l) {
     if (!l.slot || !l.slot->table)
-        throw common::DFTUtilsException(
-            common::ErrorCode::InvalidArgument,
-            ("View::duql '" + l.name + "' was read before its rows were bound")
-                .c_str());
+        dstd::fatal("a lookup was read before its rows were bound",
+                    l.name.c_str());
     return *l.slot->table;
 }
 
@@ -805,7 +807,8 @@ Value slice(const Value& v, const Value& from,
         if (i >= *b && i < *e) append_element(out, el);
         ++i;
     }
-    return parsed(out + "]");
+    out += ']';
+    return parsed(out);
 }
 
 Value flatten(const Value& v) {
@@ -820,7 +823,8 @@ Value flatten(const Value& v) {
         }
         for (auto x : inner) append_element(out, x);
     }
-    return parsed(out + "]");
+    out += ']';
+    return parsed(out);
 }
 
 // The keys or the values of an object, in the byte order of the keys.
@@ -844,7 +848,8 @@ Value members(const Value& v, bool keys) {
         json::append_json_escaped(out, k);
         out += '"';
     }
-    return parsed(out + "]");
+    out += ']';
+    return parsed(out);
 }
 
 Value parse_json(const Value& v) {
@@ -871,7 +876,8 @@ Value split(const Value& v, const Value& sep) {
         if (hit == dstd::StringView::npos) break;
         at = hit + p->size();
     }
-    return parsed(out + "]");
+    out += ']';
+    return parsed(out);
 }
 
 Value index_of(const Value& v, const Value& x) {
@@ -905,7 +911,8 @@ Value sort_array(const Value& v) {
     for (const auto& p : present) append_element(out, p.second);
     for (std::size_t i = 0; i < arr.size() - present.size(); ++i)
         out += out.size() > 1 ? ",null" : "null";
-    return parsed(out + "]");
+    out += ']';
+    return parsed(out);
 }
 
 bool same(simdjson::dom::element a, simdjson::dom::element b) {
@@ -936,7 +943,8 @@ Value unique(const Value& v) {
         kept.push_back(el);
         append_element(out, el);
     }
-    return parsed(out + "]");
+    out += ']';
+    return parsed(out);
 }
 
 Value join(const Value& v, const Value& sep) {
@@ -1013,7 +1021,8 @@ class TermEval {
             const auto t = text_of((*this)(*item), true);
             out += t ? *t : "null";
         }
-        return parsed(out + "]");
+        out += ']';
+        return parsed(out);
     }
 
     // any: YES when some element is YES, NO when every one is NO; all: NO
@@ -1052,7 +1061,7 @@ class TermEval {
         const Truth stop = q.all ? Truth::No : Truth::Yes;
         Truth out = q.all ? Truth::Yes : Truth::No;
         for (const std::int64_t r : *hits) {
-            const Value v = t.value ? table_value(t, r) : Value{VMissing{}};
+            const Value v = t.value ? table_value(l, t, r) : Value{VMissing{}};
             const Truth x = truth(TermEval(rec_, &v)(*q.cond));
             if (x == stop) return of_truth(stop);
             if (x == Truth::Unknown) out = Truth::Unknown;
@@ -1083,7 +1092,7 @@ class TermEval {
                  l.range == RangeRead::CountIf)
             a.number = Number{std::int64_t{0}};
         if (l.kind == LookupKind::In) return (a.rows > 0) != l.negated;
-        if (a.row >= 0) return table_value(t, a.row);
+        if (a.row >= 0) return table_value(l, t, a.row);
         if (a.number)
             return std::visit([](auto x) -> Value { return x; }, *a.number);
         return VNull{};
@@ -1094,7 +1103,7 @@ class TermEval {
         if (l.range != RangeRead::None) return ranged(l, t);
         if (l.kind == LookupKind::Scalar && l.keys.empty()) {
             if (t.cells.empty()) return VNull{};
-            return table_value(t, 0);
+            return table_value(l, t, 0);
         }
         const auto k = key(l);
         if (l.kind == LookupKind::In) {
@@ -1111,8 +1120,11 @@ class TermEval {
         if (!hits || !t.value) return VMissing{};
         const std::int64_t first = hits->front();
         for (std::size_t i = 1; i < hits->size(); ++i)
-            if (!same_value(t, first, (*hits)[i])) conflict(t, l.column, *k);
-        return table_value(t, first);
+            if (!same_value(l, t, first, (*hits)[i])) {
+                l.slot->failure.set(conflict_error(t, l.column, *k));
+                return VMissing{};
+            }
+        return table_value(l, t, first);
     }
 
     Value node(const TUnary& u) const {
@@ -1471,7 +1483,7 @@ struct JsonRecord {
     JsonValue lookup(const dstd::String& path) const {
         JsonValue v = event.at(path);
         if (args_fallback && !v.exists() && !common::has_args_prefix(path))
-            v = event.at("args." + path);
+            v = event.at(dstd::fmt<"args.{}">(path));
         return v;
     }
 

@@ -93,7 +93,7 @@ PyObject* Series_div(PyObject* self, PyObject* other) {
 // `reverse` flag (`number <op> self`).
 enum class ExtraOp { FloorDiv, Mod, Pow };
 
-PyObject* extra_op(PyObject* self, PyObject* args, ExtraOp op) {
+static PyObject* extra_op(PyObject* self, PyObject* args, ExtraOp op) {
     Series* a = as_series(self);
     if (!a) return nullptr;
     PyObject* other = nullptr;

@@ -13,8 +13,8 @@
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
-#include <dftracer/utils/index/schemas/dft/agg/agg_partial.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/agg_partial.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_config.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -24,9 +24,9 @@
 // member, as in the index fold, so a member cut inside a line neither doubles
 // nor drops that line.
 
-namespace dftracer::utils::index {
+namespace dftracer::utils::trace::index {
 class Snapshot;
-}  // namespace dftracer::utils::index
+}  // namespace dftracer::utils::trace::index
 
 namespace dftracer::utils::trace {
 
@@ -41,7 +41,7 @@ struct AggQuerySource {
     dstd::Optional<std::uint64_t> params_hash;
     /// Read in place of a new snapshot of `index_path`, so the query sees the
     /// index its caller checked.
-    dstd::SharedPtr<const index::Snapshot> snapshot;
+    dstd::SharedPtr<const trace::index::Snapshot> snapshot;
 };
 
 /// The parts of a row that a query keeps. A part left out reads as absent and
@@ -62,7 +62,7 @@ struct AggQuery {
     /// The config the indexes were built with. Its params hash decides
     /// whether a file's partials are usable and its time_interval_us is the
     /// span of a pre-aggregated counter.
-    index::schemas::dft::agg::AggregationConfig config;
+    trace::index::schemas::dft::agg::AggregationConfig config;
 
     bool by_pid = false;
     bool by_tid = false;
@@ -139,7 +139,7 @@ struct AggQuery {
 };
 
 /// What a row holds, when the query splits them (AggQuery::by_kind).
-using AggKind = index::schemas::dft::agg::PartialKind;
+using AggKind = trace::index::schemas::dft::agg::PartialKind;
 
 struct AggKey {
     std::uint32_t cat = 0xFFFFFFFFu;    ///< id in AggQueryResult::text
@@ -221,7 +221,8 @@ struct AggSums {
 class AggQueryResult {
    public:
     using Rows =
-        dstd::HashMap<AggKey, index::schemas::dft::agg::AggPartial, AggKeyHash>;
+        dstd::HashMap<AggKey, trace::index::schemas::dft::agg::AggPartial,
+                      AggKeyHash>;
     using SumRows = dstd::HashMap<AggKey, AggSums, AggKeyHash>;
 
     AggQueryResult() : strings_(dstd::make_unique<dstd::StringIntern>()) {}

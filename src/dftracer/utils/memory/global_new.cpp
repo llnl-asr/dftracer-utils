@@ -38,11 +38,7 @@ Pool& new_pool() {
 
 [[gnu::always_inline]] inline void* try_get(std::size_t size, std::size_t align,
                                             void* site) noexcept {
-    try {
-        return get(size, align, site);
-    } catch (const std::bad_alloc&) {
-        return nullptr;
-    }
+    return memory::detail::try_allocate_at(size, align, new_pool(), site);
 }
 
 // Runs after the shared libraries are initialized and before the executable's

@@ -7,7 +7,7 @@ Unified indexing and reading infrastructure for compressed trace files. Builds a
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/index/indexer.h>
+   #include <dftracer/utils/trace/index/indexer.h>
 
 Overview
 --------
@@ -48,9 +48,9 @@ the caller's ``coro::Scope``. The same calls are in the C ABI
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/index/indexer.h>
+   #include <dftracer/utils/trace/index/indexer.h>
 
-   using namespace dftracer::utils::index;
+   using namespace dftracer::utils::trace::index;
 
    IndexerOptions options;
    options.index_dir = "/data/.dftindex";
@@ -60,7 +60,7 @@ the caller's ``coro::Scope``. The same calls are in the C ABI
    IndexStatus status = indexer.build();  // or co_await indexer.build(scope)
 
 The batch builder and resolver behind it are private
-(``src/dftracer/utils/index/build/``) and are not installed. The
+(``src/dftracer/utils/trace/index/build/``) and are not installed. The
 command-line tools use them directly for member normalization and bounded
 sub-batches, which ``Indexer`` does not offer yet.
 

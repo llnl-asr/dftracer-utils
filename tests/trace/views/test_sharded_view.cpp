@@ -7,14 +7,15 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
-#include <dftracer/utils/index/store/root_layout.h>
-#include <dftracer/utils/index/store/shard_manifest.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/agg_query.h>
+#include <dftracer/utils/trace/index/indexer.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_config.h>
+#include <dftracer/utils/trace/index/store/root_layout.h>
+#include <dftracer/utils/trace/index/store/shard_manifest.h>
 #include <dftracer/utils/trace/views/sharded_view.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_runtime.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
@@ -50,7 +51,7 @@ dstd::String make_x_trace(TestEnvironment& env, const dstd::String& tag,
     ofs.close();
     dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    (void)dstd::fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     return gz;
 }
 
@@ -59,27 +60,29 @@ dstd::String make_x_trace(TestEnvironment& env, const dstd::String& tag,
 // names the index root to build into, such as a shard root.
 void build_shard_index(
     const dstd::String& gz,
-    const index::schemas::dft::agg::AggregationConfig& config = {},
+    const trace::index::schemas::dft::agg::AggregationConfig& config = {},
     const dstd::String& index_dir = "") {
-    dftracer::utils::index::IndexerOptions options;
+    dftracer::utils::trace::index::IndexerOptions options;
     options.aggregation = config;
     options.index_dir = index_dir;
-    dftracer::utils::index::Indexer::open({dstd::String(dstd::StringView(gz))},
-                                          options)
-        .build();
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                                {dstd::String(dstd::StringView(gz))}, options))
+            .build());
 }
 
 // The trace files the root's store holds a current index for.
 dstd::Vector<dstd::String> indexed_files(
     const dstd::String& root, const dstd::Vector<dstd::String>& files) {
-    dftracer::utils::index::IndexerOptions options;
+    dftracer::utils::trace::index::IndexerOptions options;
     options.index_dir = dstd::String(dstd::StringView(root));
-    options.aggregation = index::schemas::dft::agg::AggregationConfig{};
+    options.aggregation = trace::index::schemas::dft::agg::AggregationConfig{};
     dstd::Vector<dstd::String> paths;
     for (const auto& file : files) paths.emplace_back(file);
-    auto status =
-        dftracer::utils::index::Indexer::open(std::move(paths), options)
-            .status();
+    auto status = dftu_utils_test::ok(
+        dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                                std::move(paths), options))
+            .status());
     REQUIRE(status.needs_work.empty());
     dstd::Vector<dstd::String> ready;
     for (const auto& file : status.ready) ready.emplace_back(file);
@@ -146,7 +149,7 @@ QueryOut run_query(const dftracer::utils::trace::AggQuery& q) {
 
 void check_merged_partials(
     const dstd::String& tag,
-    const index::schemas::dft::agg::AggregationConfig& config) {
+    const trace::index::schemas::dft::agg::AggregationConfig& config) {
     TestEnvironment env(200);
     REQUIRE(env.is_valid());
     dstd::String a = make_x_trace(env, tag + "alpha", 30, 20);
@@ -157,14 +160,15 @@ void check_merged_partials(
     build_shard_index(b, config);
 
     dstd::String root = env.dir() + "/set";
-    views::write_shard_set(dstd::String(root),
-                           {dstd::String(ia), dstd::String(ib)});
+    dftu_utils_test::ok(views::write_shard_set(
+        dstd::String(root), {dstd::String(ia), dstd::String(ib)}));
     dstd::String out = env.dir() + "/merged";
-    views::merge_shard_set(dstd::String(root), dstd::String(out));
+    dftu_utils_test::ok(
+        views::merge_shard_set(dstd::String(root), dstd::String(out)));
     dstd::String merged_idx = dstd::String(determine_index_path("x", out));
 
-    (void)dstd::fs::remove(a);
-    (void)dstd::fs::remove(b);
+    dstd::fs::remove(a).discard();
+    dstd::fs::remove(b).discard();
 
     dftracer::utils::trace::AggQuery sharded;
     sharded.config = config;
@@ -220,17 +224,18 @@ TEST_SUITE("ShardedView") {
                 .agg({{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "total"}});
         };
 
-        auto expect = canon(
+        auto expect = canon(dftu_utils_test::ok(
             configure(View::from_files({{dstd::String(a), dstd::String(ia)},
                                         {dstd::String(b), dstd::String(ib)}}))
                 .collect()
-                .get());
+                .get()));
         REQUIRE(expect.size() == 2);  // POSIX + STDIO
 
-        auto got = canon(views::ShardedView::from_shard_dirs(
-                             {dstd::String(ia), dstd::String(ib)})
-                             .aggregate(configure)
-                             .get());
+        auto got =
+            canon(dftu_utils_test::ok(views::ShardedView::from_shard_dirs(
+                                          {dstd::String(ia), dstd::String(ib)})
+                                          .aggregate(configure)
+                                          .get()));
         CHECK(got == expect);
     }
 
@@ -251,16 +256,17 @@ TEST_SUITE("ShardedView") {
         };
 
         StringSink single;
-        configure(View::from_files({{dstd::String(a), dstd::String(ia)},
-                                    {dstd::String(b), dstd::String(ib)}}))
-            .sink_counters(single)
-            .get();
+        dftu_utils_test::ok(
+            configure(View::from_files({{dstd::String(a), dstd::String(ia)},
+                                        {dstd::String(b), dstd::String(ib)}}))
+                .sink_counters(single)
+                .get());
 
         StringSink sharded;
-        views::ShardedView::from_shard_dirs(
-            {dstd::String(ia), dstd::String(ib)})
-            .aggregate_counters(configure, sharded)
-            .get();
+        dftu_utils_test::ok(views::ShardedView::from_shard_dirs(
+                                {dstd::String(ia), dstd::String(ib)})
+                                .aggregate_counters(configure, sharded)
+                                .get());
 
         auto sl = single.lines();
         auto ml = sharded.lines();
@@ -281,26 +287,29 @@ TEST_SUITE("ShardedView") {
         build_shard_index(a);
         build_shard_index(b);
 
-        index::store::IndexShardManifest manifest;
+        trace::index::store::IndexShardManifest manifest;
         manifest.format_version =
             static_cast<std::uint32_t>(DFTRACER_UTILS_INDEX_FORMAT_VERSION);
         manifest.shards.push_back({dstd::String(dstd::StringView(ia)), 1, 0});
         manifest.shards.push_back({dstd::String(dstd::StringView(ib)), 1, 0});
         dstd::String root = env.dir() + "/set";
-        index::store::write_shard_manifest(root, manifest);
+        dftu_utils_test::ok(
+            trace::index::store::write_shard_manifest(root, manifest));
 
         auto configure = [](View v) -> View {
             return v.group_by({GroupKey::cat()}).agg({{AggOp::Count, "", "n"}});
         };
 
-        auto expect = canon(
+        auto expect = canon(dftu_utils_test::ok(
             configure(View::from_files({{dstd::String(a), dstd::String(ia)},
                                         {dstd::String(b), dstd::String(ib)}}))
                 .collect()
-                .get());
-        auto got = canon(views::ShardedView::from_manifest(dstd::String(root))
-                             .aggregate(configure)
-                             .get());
+                .get()));
+        auto got = canon(dftu_utils_test::ok(
+            dftu_utils_test::ok(
+                views::ShardedView::from_manifest(dstd::String(root)))
+                .aggregate(configure)
+                .get()));
         CHECK(got == expect);
     }
 
@@ -323,12 +332,14 @@ TEST_SUITE("ShardedView") {
         };
         auto sharded = views::ShardedView::from_shard_dirs(
             {dstd::String(ia), dstd::String(ib)});
-        auto with_traces = canon(sharded.aggregate(configure).get());
+        auto with_traces =
+            canon(dftu_utils_test::ok(sharded.aggregate(configure).get()));
         REQUIRE(with_traces.size() == 2);
 
-        (void)dstd::fs::remove(a);
-        (void)dstd::fs::remove(b);
-        auto without_traces = canon(sharded.aggregate(configure).get());
+        dstd::fs::remove(a).discard();
+        dstd::fs::remove(b).discard();
+        auto without_traces =
+            canon(dftu_utils_test::ok(sharded.aggregate(configure).get()));
         CHECK(without_traces == with_traces);
     }
 
@@ -343,10 +354,11 @@ TEST_SUITE("ShardedView") {
         build_shard_index(b);
 
         dstd::String root = env.dir() + "/set";
-        views::write_shard_set(dstd::String(root),
-                               {dstd::String(ia), dstd::String(ib)});
+        dftu_utils_test::ok(views::write_shard_set(
+            dstd::String(root), {dstd::String(ia), dstd::String(ib)}));
 
-        auto manifest = index::store::read_shard_manifest(root);
+        auto manifest =
+            dftu_utils_test::ok(trace::index::store::read_shard_manifest(root));
         REQUIRE(manifest.has_value());
         CHECK(manifest->format_version ==
               static_cast<std::uint32_t>(DFTRACER_UTILS_INDEX_FORMAT_VERSION));
@@ -356,14 +368,16 @@ TEST_SUITE("ShardedView") {
         auto configure = [](View v) -> View {
             return v.group_by({GroupKey::cat()}).agg({{AggOp::Count, "", "n"}});
         };
-        auto expect = canon(
+        auto expect = canon(dftu_utils_test::ok(
             configure(View::from_files({{dstd::String(a), dstd::String(ia)},
                                         {dstd::String(b), dstd::String(ib)}}))
                 .collect()
-                .get());
-        auto got = canon(views::ShardedView::from_manifest(dstd::String(root))
-                             .aggregate(configure)
-                             .get());
+                .get()));
+        auto got = canon(dftu_utils_test::ok(
+            dftu_utils_test::ok(
+                views::ShardedView::from_manifest(dstd::String(root)))
+                .aggregate(configure)
+                .get()));
         CHECK(got == expect);
     }
 
@@ -386,10 +400,11 @@ TEST_SUITE("ShardedView") {
         auto configure = [](View v) -> View {
             return v.group_by({GroupKey::cat()}).agg({{AggOp::Count, "", "n"}});
         };
-        auto got = canon(views::ShardedView::from_shard_dirs(
-                             {dstd::String(ia), dstd::String(ib)})
-                             .aggregate(configure)
-                             .get());
+        auto got =
+            canon(dftu_utils_test::ok(views::ShardedView::from_shard_dirs(
+                                          {dstd::String(ia), dstd::String(ib)})
+                                          .aggregate(configure)
+                                          .get()));
 
         // Restore write perms so the environment can clean up.
         REQUIRE(dstd::fs::set_permissions(ia, 0750).has_value());
@@ -421,15 +436,17 @@ TEST_SUITE("ShardedView") {
                 .agg({{AggOp::SetUnion, "name", "names"}});
         };
 
-        index::store::IndexShardManifest m;
+        trace::index::store::IndexShardManifest m;
         m.format_version =
             static_cast<std::uint32_t>(DFTRACER_UTILS_INDEX_FORMAT_VERSION);
         m.shards.push_back({dstd::String(dstd::StringView(moved)), 1, 0});
         dstd::String root = env.dir() + "/set";
-        index::store::write_shard_manifest(root, m);
-        auto got = views::ShardedView::from_manifest(dstd::String(root))
-                       .aggregate(scan_cfg)
-                       .get();
+        dftu_utils_test::ok(trace::index::store::write_shard_manifest(root, m));
+        auto got = dftu_utils_test::ok(
+            dftu_utils_test::ok(
+                views::ShardedView::from_manifest(dstd::String(root)))
+                .aggregate(scan_cfg)
+                .get());
 
         CHECK(got.num_rows() == 2);  // POSIX + STDIO, resolved via stored paths
     }
@@ -447,14 +464,16 @@ TEST_SUITE("ShardedView") {
         const dstd::String root = env.dir() + "/root/.dftindex";
         dstd::Vector<dstd::String> shards;
         for (std::size_t i = 0; i < files.size(); ++i) {
-            shards.emplace_back(
-                dstd::String(dftracer::utils::index::shard_root(root, i)));
+            shards.emplace_back(dstd::String(
+                dftracer::utils::trace::index::shard_root(root, i)));
             build_shard_index(files[i], {}, shards.back());
         }
         dstd::Vector<dstd::String> shard_dirs;
         for (const auto& shard : shards) shard_dirs.emplace_back(shard);
-        views::write_shard_set(dstd::String(root), shard_dirs);
-        auto manifest = index::store::read_shard_manifest(root);
+        dftu_utils_test::ok(
+            views::write_shard_set(dstd::String(root), shard_dirs));
+        auto manifest =
+            dftu_utils_test::ok(trace::index::store::read_shard_manifest(root));
         REQUIRE(manifest.has_value());
         REQUIRE(manifest->shards.size() == 3);
         CHECK(manifest->shards[0].path == "shards/0");
@@ -465,29 +484,33 @@ TEST_SUITE("ShardedView") {
         };
         const dstd::String single = env.dir() + "/single/.dftindex";
         for (const auto& f : files) build_shard_index(f, {}, single);
-        auto expect =
-            canon(configure(View::from_files(
-                                {{dstd::String(a), dstd::String(single)},
-                                 {dstd::String(b), dstd::String(single)},
-                                 {dstd::String(c), dstd::String(single)}}))
-                      .collect()
-                      .get());
+        auto expect = canon(dftu_utils_test::ok(
+            configure(
+                View::from_files({{dstd::String(a), dstd::String(single)},
+                                  {dstd::String(b), dstd::String(single)},
+                                  {dstd::String(c), dstd::String(single)}}))
+                .collect()
+                .get()));
         REQUIRE(expect.size() == 2);
 
-        CHECK(views::consolidate_shard_set(dstd::String(root)) == 3);
-        CHECK_FALSE(index::store::read_shard_manifest(root).has_value());
+        CHECK(dftu_utils_test::ok(
+                  views::consolidate_shard_set(dstd::String(root))) == 3);
         CHECK_FALSE(
-            dstd::fs::exists(dftracer::utils::index::shards_dir(root)).value());
-        CHECK(
-            dstd::fs::exists(dftracer::utils::index::store_dir(root)).value());
+            dftu_utils_test::ok(trace::index::store::read_shard_manifest(root))
+                .has_value());
+        CHECK_FALSE(
+            dstd::fs::exists(dftracer::utils::trace::index::shards_dir(root))
+                .value());
+        CHECK(dstd::fs::exists(dftracer::utils::trace::index::store_dir(root))
+                  .value());
         CHECK(indexed_files(root, files).size() == 3);
 
-        auto got = canon(
+        auto got = canon(dftu_utils_test::ok(
             configure(View::from_files({{dstd::String(a), dstd::String(root)},
                                         {dstd::String(b), dstd::String(root)},
                                         {dstd::String(c), dstd::String(root)}}))
                 .collect()
-                .get());
+                .get()));
         CHECK(got == expect);
     }
 
@@ -503,18 +526,19 @@ TEST_SUITE("ShardedView") {
         const dstd::String root = env.dir() + "/root/.dftindex";
         dstd::Vector<dstd::String> shards;
         for (std::size_t i = 0; i < files.size(); ++i) {
-            shards.emplace_back(
-                dstd::String(dftracer::utils::index::shard_root(root, i)));
+            shards.emplace_back(dstd::String(
+                dftracer::utils::trace::index::shard_root(root, i)));
             build_shard_index(files[i], {}, shards.back());
         }
         dstd::Vector<dstd::String> shard_dirs;
         for (const auto& shard : shards) shard_dirs.emplace_back(shard);
-        views::write_shard_set(dstd::String(root), shard_dirs);
+        dftu_utils_test::ok(
+            views::write_shard_set(dstd::String(root), shard_dirs));
 
         // A regular file where the second shard's store belongs, so listing it
         // fails whatever user the merge runs as.
         const dstd::String store_b(
-            dftracer::utils::index::store_dir(shards[1]));
+            dftracer::utils::trace::index::store_dir(shards[1]));
         const dstd::String held = store_b + ".held";
         REQUIRE(dstd::fs::rename(store_b, held).has_value());
         {
@@ -522,26 +546,35 @@ TEST_SUITE("ShardedView") {
             ofs << "not a store";
         }
 
-        CHECK_THROWS(views::consolidate_shard_set(dstd::String(root)));
-        CHECK(index::store::read_shard_manifest(root).has_value());
+        CHECK_FALSE(
+            views::consolidate_shard_set(dstd::String(root)).has_value());
+        CHECK(
+            dftu_utils_test::ok(trace::index::store::read_shard_manifest(root))
+                .has_value());
         CHECK(dstd::fs::exists(shards[0]).value());
         CHECK(dstd::fs::exists(shards[1]).value());
         std::size_t moved = 0;
         for (const auto& entry : dftu_utils_test::list_dir(
-                 dftracer::utils::index::store_dir(root))) {
+                 dftracer::utils::trace::index::store_dir(root))) {
             if (entry.path.view().extension() == ".dfs") ++moved;
         }
         CHECK(moved == 1);
 
-        (void)dstd::fs::remove(store_b);
+        dstd::fs::remove(store_b).discard();
         REQUIRE(dstd::fs::rename(held, store_b).has_value());
 
-        CHECK(views::consolidate_shard_set(dstd::String(root)) == 2);
-        CHECK_FALSE(index::store::read_shard_manifest(root).has_value());
+        CHECK(dftu_utils_test::ok(
+                  views::consolidate_shard_set(dstd::String(root))) == 2);
         CHECK_FALSE(
-            dstd::fs::exists(dftracer::utils::index::shards_dir(root)).value());
+            dftu_utils_test::ok(trace::index::store::read_shard_manifest(root))
+                .has_value());
+        CHECK_FALSE(
+            dstd::fs::exists(dftracer::utils::trace::index::shards_dir(root))
+                .value());
         CHECK(indexed_files(root, files).size() == 2);
-        CHECK_THROWS(views::consolidate_shard_set(dstd::String(root)));
+        dftu_utils_test::expect_error(
+            views::consolidate_shard_set(dstd::String(root)),
+            dftracer::utils::common::ErrorCode::Io);
     }
 
     // No-rescan tier merge: transcode each shard's tier into one consolidated
@@ -558,38 +591,43 @@ TEST_SUITE("ShardedView") {
         build_shard_index(b);
 
         dstd::String root = env.dir() + "/set";
-        views::write_shard_set(dstd::String(root),
-                               {dstd::String(ia), dstd::String(ib)});
+        dftu_utils_test::ok(views::write_shard_set(
+            dstd::String(root), {dstd::String(ia), dstd::String(ib)}));
 
         auto configure = [](View v) -> View {
             return v.group_by({GroupKey::cat()})
                 .agg({{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "total"}});
         };
-        auto sharded =
-            canon(views::ShardedView::from_manifest(dstd::String(root))
-                      .aggregate(configure)
-                      .get());
+        auto sharded = canon(dftu_utils_test::ok(
+            dftu_utils_test::ok(
+                views::ShardedView::from_manifest(dstd::String(root)))
+                .aggregate(configure)
+                .get()));
         REQUIRE(sharded.size() == 2);
 
         dstd::String out = env.dir() + "/merged";
-        std::size_t n =
-            views::merge_shard_set(dstd::String(root), dstd::String(out));
+        std::size_t n = dftu_utils_test::ok(
+            views::merge_shard_set(dstd::String(root), dstd::String(out)));
         CHECK(n == 2);
 
         // The tiers arrive in the new root; the shards stay where they are.
-        CHECK(index::store::read_shard_manifest(root).has_value());
-        CHECK_FALSE(index::store::read_shard_manifest(out).has_value());
+        CHECK(
+            dftu_utils_test::ok(trace::index::store::read_shard_manifest(root))
+                .has_value());
+        CHECK_FALSE(
+            dftu_utils_test::ok(trace::index::store::read_shard_manifest(out))
+                .has_value());
 
-        (void)dstd::fs::remove(a);
-        (void)dstd::fs::remove(b);
+        dstd::fs::remove(a).discard();
+        dstd::fs::remove(b).discard();
         const dstd::String out_idx =
             dstd::String(determine_index_path("x", out));
-        auto merged =
-            canon(configure(View::from_files(
-                                {{dstd::String(a), dstd::String(out_idx)},
-                                 {dstd::String(b), dstd::String(out_idx)}}))
-                      .collect()
-                      .get());
+        auto merged = canon(dftu_utils_test::ok(
+            configure(
+                View::from_files({{dstd::String(a), dstd::String(out_idx)},
+                                  {dstd::String(b), dstd::String(out_idx)}}))
+                .collect()
+                .get()));
         CHECK(merged == sharded);
     }
 
@@ -600,17 +638,18 @@ TEST_SUITE("ShardedView") {
 
     // A shard built with another sketch accuracy keeps its quantiles.
     TEST_CASE("merge_shard_set keeps quantiles of a non-default accuracy") {
-        index::schemas::dft::agg::AggregationConfig config;
+        trace::index::schemas::dft::agg::AggregationConfig config;
         config.compute_percentiles = true;
         config.sketch_accuracy = 0.05;
         check_merged_partials("q", config);
     }
 
-    TEST_CASE("from_manifest throws when the manifest is absent") {
+    TEST_CASE("from_manifest is an Io error when the manifest is absent") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        CHECK_THROWS(views::ShardedView::from_manifest(
-            dstd::String(env.dir() + "/nope")));
+        dftu_utils_test::expect_error(views::ShardedView::from_manifest(
+                                          dstd::String(env.dir() + "/nope")),
+                                      dftracer::utils::common::ErrorCode::Io);
     }
 
     TEST_CASE("from_manifest rejects a manifest with no or another version") {
@@ -623,18 +662,25 @@ TEST_SUITE("ShardedView") {
             dftu_utils_test::FileOut ofs(root + "/shards.json");
             ofs << R"({"shards":[]})";
         }
-        CHECK_THROWS(views::ShardedView::from_manifest(dstd::String(root)));
+        dftu_utils_test::expect_error(
+            views::ShardedView::from_manifest(dstd::String(root)),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
 
-        index::store::IndexShardManifest other;
+        trace::index::store::IndexShardManifest other;
         other.format_version =
             static_cast<std::uint32_t>(DFTRACER_UTILS_INDEX_FORMAT_VERSION) + 1;
-        index::store::write_shard_manifest(root, other);
-        CHECK_THROWS(views::ShardedView::from_manifest(dstd::String(root)));
+        dftu_utils_test::ok(
+            trace::index::store::write_shard_manifest(root, other));
+        dftu_utils_test::expect_error(
+            views::ShardedView::from_manifest(dstd::String(root)),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
 
-        index::store::IndexShardManifest current;
+        trace::index::store::IndexShardManifest current;
         current.format_version =
             static_cast<std::uint32_t>(DFTRACER_UTILS_INDEX_FORMAT_VERSION);
-        index::store::write_shard_manifest(root, current);
-        CHECK_NOTHROW(views::ShardedView::from_manifest(dstd::String(root)));
+        dftu_utils_test::ok(
+            trace::index::store::write_shard_manifest(root, current));
+        CHECK(
+            views::ShardedView::from_manifest(dstd::String(root)).has_value());
     }
 }

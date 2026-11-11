@@ -32,7 +32,7 @@ RootMap& held(dstd::Optional<RootMap>& slot) {
 dstd::SharedPtr<IndexRoot> index_root(const dstd::String& index_path) {
     IndexRoots& known = dstd::Singleton<IndexRoots>::get();
     [[maybe_unused]] static const bool hooked = [] {
-        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, [] {
+        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, []() noexcept {
             IndexRoots& roots = dstd::Singleton<IndexRoots>::get();
             const std::lock_guard<std::mutex> lock(roots.guard);
             roots.roots.reset();

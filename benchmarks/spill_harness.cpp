@@ -45,11 +45,14 @@
 //   spill_harness --case NAME BUDGET_BYTES
 //                            one case in this process; prints RESULT
 
+#include <bench_ok.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -96,7 +99,7 @@ constexpr std::uint64_t MIN_DATA = 64 * MIB;
 constexpr std::uint64_t MAX_DATA = 512 * MIB;
 constexpr std::uint64_t SPILLING_BUDGET_MAX = 64 * MIB;
 constexpr int SPILLING_RUNS = 3;
-constexpr std::int64_t MORSEL_ROWS = 65536;
+constexpr std::int64_t BATCH_SIZE = 65536;
 constexpr std::uint64_t SEED = 42;
 constexpr std::int64_t HOT_KEYS = 16;
 constexpr std::int64_t DIM_ROWS = 4096;
@@ -223,7 +226,7 @@ class GenSource : public dataframe::Source {
         return out;
     }
 
-    dataframe::ScanResult scan(
+    dftracer::utils::dstd::Result<dataframe::ScanResult> scan(
         const dataframe::ScanRequest& req) const override {
         dftracer::utils::dstd::Vector<std::size_t> picked;
         if (req.projection.empty()) {
@@ -253,10 +256,12 @@ class GenSource : public dataframe::Source {
              dftracer::utils::dstd::Vector<std::size_t> picked)
             : shape_(std::move(shape)), picked_(std::move(picked)) {}
 
-        coro::CoroTask<dftracer::utils::dstd::Optional<dataframe::Morsel>> next(
+        coro::CoroTask<dataframe::MorselResult> next(
             std::int64_t max_rows) override {
-            if (pos_ >= shape_->rows) co_return dftracer::utils::dstd::nullopt;
-            const std::int64_t want = max_rows > 0 ? max_rows : MORSEL_ROWS;
+            if (pos_ >= shape_->rows)
+                co_return dataframe::MorselResult(
+                    dftracer::utils::dstd::nullopt);
+            const std::int64_t want = max_rows > 0 ? max_rows : BATCH_SIZE;
             const std::int64_t n = std::min(want, shape_->rows - pos_);
             dataframe::Morsel m;
             m.rows = n;
@@ -264,7 +269,7 @@ class GenSource : public dataframe::Source {
                 m.columns.push_back(
                     generate(shape_->columns[c], c, shape_->seed, pos_, n));
             pos_ += n;
-            co_return m;
+            co_return dataframe::MorselResult(std::move(m));
         }
 
        private:
@@ -441,9 +446,12 @@ dftracer::utils::dstd::Vector<Case> make_cases() {
 }
 
 coro::CoroTask<std::int64_t> drain(LazyFrame plan) {
-    auto gen = plan.stream(MORSEL_ROWS);
+    auto gen = plan.stream(BATCH_SIZE);
     std::int64_t rows = 0;
-    while (auto part = co_await gen.next()) rows += part->num_rows();
+    while (auto part = co_await gen.next()) {
+        if (!*part) co_return -1;
+        rows += (*part)->num_rows();
+    }
     co_return rows;
 }
 
@@ -535,7 +543,8 @@ int run_one(dftracer::utils::dstd::StringView name, std::uint64_t budget) {
         const std::uint64_t base = current_rss();
         const std::uint64_t written = bytes_written();
         auto start = Clock::now();
-        const std::int64_t out = runtime.submit(drain(std::move(plan))).get();
+        const std::int64_t out =
+            dftu::bench::ok(runtime.submit(drain(std::move(plan))).get());
         auto end = Clock::now();
         const std::uint64_t spilled = bytes_written() - written;
         const std::uint64_t peak = peak_rss();
@@ -615,9 +624,8 @@ double mib(std::uint64_t bytes) {
 }
 
 dftracer::utils::dstd::String budget_label(std::uint64_t budget) {
-    return budget >= GIB
-               ? dftracer::utils::dstd::to_string(budget / GIB) + " GiB"
-               : dftracer::utils::dstd::to_string(budget / MIB) + " MiB";
+    return budget >= GIB ? dftracer::utils::dstd::fmt<"{} GiB">(budget / GIB)
+                         : dftracer::utils::dstd::fmt<"{} MiB">(budget / MIB);
 }
 
 int drive(const dftracer::utils::dstd::String& self) {
@@ -677,7 +685,7 @@ int smoke() {
         bool ok = false;
         std::int64_t out = -1;
         try {
-            out = runtime.submit(drain(c.plan(in))).get();
+            out = dftu::bench::ok(runtime.submit(drain(c.plan(in))).get());
             ok = c.rows_ok(out, in);
         } catch (const std::exception& e) {
             std::fprintf(stderr, "%s: %s\n", c.name.c_str(), e.what());

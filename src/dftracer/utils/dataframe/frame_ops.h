@@ -7,6 +7,7 @@
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
@@ -124,13 +125,15 @@ WindowColumn window_column(const dftu_window_spec& s);
 /// row order and nulls last. Each spec's type follows its function and value
 /// column. Frame* default to Rows framing; Range framing needs one numeric
 /// order column and includes equal-order peers. Running and Lag/Lead read a
-/// null source cell as null; an all-null frame aggregate is null. Throws
-/// std::out_of_range on an unknown column and std::invalid_argument on an
-/// unsupported column type or an invalid parameter.
-DataFrame window(const DataFrame& df,
-                 const dstd::Vector<dstd::String>& partition_by,
-                 const dstd::Vector<dstd::String>& order_by,
-                 const dstd::Vector<WindowColumn>& specs);
+/// null source cell as null; an all-null frame aggregate is null. An unknown
+/// column is a NotFound error; an unsupported column type, an invalid
+/// parameter or an integer sum or delta past its type is an InvalidArgument
+/// error. A FrameCollect whose frames hold more than 2^27 values in all is
+/// fatal.
+dstd::Result<DataFrame> window(const DataFrame& df,
+                               const dstd::Vector<dstd::String>& partition_by,
+                               const dstd::Vector<dstd::String>& order_by,
+                               const dstd::Vector<WindowColumn>& specs);
 
 /// One row per grid point per partition of width `bucket` over the integer or
 /// floating `time` column: a real row that lands on a grid point is kept, one
@@ -142,11 +145,10 @@ DataFrame window(const DataFrame& df,
 /// Duplicate real times in one bucket keep the first. A row with a null time
 /// is dropped, and a partition with no real time gives no rows; with `range`
 /// real rows outside it are dropped but still neighbor the Locf and Linear
-/// fill. Throws
-/// std::invalid_argument on a non-positive width, a Linear fill over a
-/// non-numeric column or a grid over 10,000,000 points, and
-/// std::out_of_range on an unknown column.
-DataFrame gap_fill(
+/// fill. A non-positive width, a Linear fill over a non-numeric column or a
+/// grid over 10,000,000 points is an InvalidArgument error, and an unknown
+/// column is a NotFound error.
+dstd::Result<DataFrame> gap_fill(
     const DataFrame& df, const dstd::Vector<dstd::String>& partition_by,
     const dstd::String& time, std::int64_t bucket,
     const dstd::Vector<dstd::String>& values, GapFillMode mode,
@@ -164,11 +166,14 @@ DataFrame gap_fill(
 /// null key matches only a null key (pandas merge_asof). The output holds
 /// every left column, then the right columns but `on` and `by` (a colliding
 /// name gets "_right"),
-/// rows ordered by (by, time) with ties in left row order. Throws
-/// std::invalid_argument on non-numeric or unequal time or key types.
-DataFrame asof(const DataFrame& left, const DataFrame& right,
-               const dstd::String& on, const dstd::Vector<dstd::String>& by,
-               AsofDirection direction, dstd::Optional<double> tolerance);
+/// rows ordered by (by, time) with ties in left row order. Non-numeric or
+/// unequal time or key types are an InvalidArgument error, and an unknown
+/// column is a NotFound error.
+dstd::Result<DataFrame> asof(const DataFrame& left, const DataFrame& right,
+                             const dstd::String& on,
+                             const dstd::Vector<dstd::String>& by,
+                             AsofDirection direction,
+                             dstd::Optional<double> tolerance);
 
 /// Matches each `left.point` to every `right` row whose closed interval
 /// `[lo, hi]` contains it within the `by` partition, one output row per pair
@@ -176,12 +181,13 @@ DataFrame asof(const DataFrame& left, const DataFrame& right,
 /// unmatched left row once with null right values. A null or NaN point or
 /// bound never matches; a null key matches only a null key. The output holds
 /// every left column, then the right columns but `lo`, `hi` and `by` (a
-/// colliding name gets "_right"). Throws
-/// std::invalid_argument on non-numeric or unequal types.
-DataFrame interval(const DataFrame& left, const DataFrame& right,
-                   const dstd::String& point, const dstd::String& lo,
-                   const dstd::String& hi, const dstd::Vector<dstd::String>& by,
-                   bool outer);
+/// colliding name gets "_right"). Non-numeric or unequal types are an
+/// InvalidArgument error, and an unknown column is a NotFound error.
+dstd::Result<DataFrame> interval(const DataFrame& left, const DataFrame& right,
+                                 const dstd::String& point,
+                                 const dstd::String& lo, const dstd::String& hi,
+                                 const dstd::Vector<dstd::String>& by,
+                                 bool outer);
 
 }  // namespace dftracer::utils::dataframe
 

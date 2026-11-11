@@ -16,6 +16,8 @@
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <dftracer/utils/trace/views/view_source.h>
 #include <doctest/doctest.h>
+#include <generator_ok.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -50,7 +52,7 @@ dstd::String create_mixed_arg_trace(TestEnvironment& env) {
     // A small member size forces the x-events and y-events into separate
     // gzip members, so the scan splits them into separate batches/morsels.
     dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, 512);
-    (void)dstd::fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     return gz;
 }
 
@@ -170,7 +172,8 @@ TEST_SUITE("trace scan - streaming row query") {
         // The schema a plan declares comes from the index it reads, which
         // here holds both traces.
         dstd::Vector<dstd::String> schema_b;
-        for (const auto& name : views::detail::scan::columns(plan_b))
+        for (const auto& name :
+             dftu_utils_test::ok(views::detail::scan::columns(plan_b)))
             schema_b.emplace_back(name);
         CHECK(std::find(schema_b.begin(), schema_b.end(), "a") ==
               schema_b.end());
@@ -245,7 +248,8 @@ TEST_SUITE("trace scan - streaming row query") {
                                 dstd::Tuple<dstd::String, double, double>>> {
                     dstd::Vector<dstd::Tuple<dstd::String, double, double>>
                         rows;
-                    auto gen = views::detail::scan::stream(vv);
+                    auto gen = dftu_utils_test::ok_items(
+                        views::detail::scan::stream(vv));
                     while (auto chunk = co_await gen.next()) {
                         auto part = row_key_set(*chunk);
                         rows.insert(rows.end(), part.begin(), part.end());
@@ -256,7 +260,7 @@ TEST_SUITE("trace scan - streaming row query") {
         };
 
         dstd::Vector<dstd::Tuple<dstd::String, double, double>> via_stream =
-            drain(v);
+            dftu_utils_test::ok(drain(v));
         std::sort(via_stream.begin(), via_stream.end());
         dataframe::DataFrame via_collect =
             run(views::detail::scan::collect(v).collect());
@@ -291,21 +295,22 @@ TEST_SUITE("trace scan - streaming row query") {
                                            dstd::String(s.idx)),
             {"cat", "name"});
 
-        auto [chunks, rows] =
+        auto [chunks, rows] = dftu_utils_test::ok(
             dftracer::utils::default_runtime()
                 .submit([](views::detail::scan::ScanPlan vv)
                             -> coro::CoroTask<
                                 dstd::Pair<std::size_t, std::int64_t>> {
                     std::size_t n = 0;
                     std::int64_t nrows = 0;
-                    auto gen = views::detail::scan::stream(vv, 10);
+                    auto gen = dftu_utils_test::ok_items(
+                        views::detail::scan::stream(vv, 10));
                     while (auto chunk = co_await gen.next()) {
                         ++n;
                         nrows += chunk->num_rows();
                     }
                     co_return dstd::make_pair(n, nrows);
                 }(v))
-                .get();
+                .get());
 
         dataframe::DataFrame via_collect =
             run(views::detail::scan::collect(v).collect());
@@ -326,21 +331,22 @@ TEST_SUITE("trace scan - streaming row query") {
                 "dur", /*descending=*/true),
             20);
 
-        auto [chunks, rows] =
+        auto [chunks, rows] = dftu_utils_test::ok(
             dftracer::utils::default_runtime()
                 .submit([](views::detail::scan::ScanPlan vv)
                             -> coro::CoroTask<
                                 dstd::Pair<std::size_t, std::int64_t>> {
                     std::size_t n = 0;
                     std::int64_t nrows = 0;
-                    auto gen = views::detail::scan::stream(vv, 5);
+                    auto gen = dftu_utils_test::ok_items(
+                        views::detail::scan::stream(vv, 5));
                     while (auto chunk = co_await gen.next()) {
                         ++n;
                         nrows += chunk->num_rows();
                     }
                     co_return dstd::make_pair(n, nrows);
                 }(v))
-                .get();
+                .get());
 
         dataframe::DataFrame via_collect =
             run(views::detail::scan::collect(v).collect());
@@ -384,6 +390,27 @@ TEST_SUITE("trace scan - streaming row query") {
         CHECK(bnum(via_lazy, 0, "n") == bnum(via_eager, 0, "n"));
     }
 
+    TEST_CASE("a ViewSource whose scan fails returns the error, not a throw") {
+        TestEnvironment env(200);
+        dstd::String gz = create_mixed_arg_trace(env);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
+        views::detail::scan::ScanPlan v = views::detail::scan::agg(
+            views::detail::scan::group_by(
+                views::detail::scan::from_file(dstd::String(gz),
+                                               dstd::String(idx)),
+                {GroupKey::name()}),
+            {{AggOp::Count, "", "n"}});
+        auto src = dstd::make_shared<ViewSource>(v);
+
+        dataframe::ScanRequest req;
+        req.projection = {"no_such_column"};
+        const auto scanned = src->scan(req);
+        REQUIRE_FALSE(scanned.has_value());
+        CHECK(
+            dstd::StringView(scanned.error().c_str()).find("no_such_column") !=
+            dstd::StringView::npos);
+    }
+
     TEST_CASE("ViewSource pushdown: col filter -> Query (Exact), matches") {
         const auto& s = shared_trace();
         views::detail::scan::ScanPlan v = views::detail::scan::from_file(
@@ -400,7 +427,7 @@ TEST_SUITE("trace scan - streaming row query") {
         // trace scan, so it comes back Exact.
         dataframe::ScanRequest req;
         req.filters.push_back(dataframe::col(di) > std::int64_t{25});
-        dataframe::ScanResult sr = src->scan(req);
+        dataframe::ScanResult sr = dftu_utils_test::ok(src->scan(req));
         REQUIRE(sr.filters.size() == 1);
         CHECK(sr.filters[0] == dataframe::Pushed::Exact);
 
@@ -439,7 +466,7 @@ TEST_SUITE("trace scan - streaming row query") {
             (dataframe::col(di) + dataframe::col(di)) > std::int64_t{50};
         dataframe::ScanRequest req;
         req.filters.push_back(pred);
-        dataframe::ScanResult sr = src->scan(req);
+        dataframe::ScanResult sr = dftu_utils_test::ok(src->scan(req));
         REQUIRE(sr.filters.size() == 1);
         CHECK(sr.filters[0] == dataframe::Pushed::No);
 
@@ -471,7 +498,7 @@ TEST_SUITE("trace scan - streaming row query") {
         auto pushed_as = [&](const dataframe::Expr& pred) {
             dataframe::ScanRequest req;
             req.filters.push_back(pred);
-            dataframe::ScanResult sr = src->scan(req);
+            dataframe::ScanResult sr = dftu_utils_test::ok(src->scan(req));
             REQUIRE(sr.filters.size() == 1);
             return sr.filters[0];
         };
@@ -555,7 +582,7 @@ TEST_SUITE("trace scan - streaming row query") {
         auto pushed_as = [&](const dataframe::Expr& pred) {
             dataframe::ScanRequest req;
             req.filters.push_back(pred);
-            dataframe::ScanResult sr = src->scan(req);
+            dataframe::ScanResult sr = dftu_utils_test::ok(src->scan(req));
             REQUIRE(sr.filters.size() == 1);
             return sr.filters[0];
         };
@@ -770,17 +797,18 @@ TEST_SUITE("trace scan - streaming row query") {
                 {GroupKey::cat()}),
             {{AggOp::Hist, "dur", "h"}});
 
-        std::size_t chunks = dftracer::utils::default_runtime()
-                                 .submit([](views::detail::scan::ScanPlan vv)
-                                             -> coro::CoroTask<std::size_t> {
-                                     std::size_t n = 0;
-                                     auto gen =
-                                         views::detail::scan::stream(vv, 1);
-                                     while (auto chunk = co_await gen.next())
-                                         ++n;
-                                     co_return n;
-                                 }(v))
-                                 .get();
+        std::size_t chunks =
+            dftu_utils_test::ok(dftracer::utils::default_runtime()
+                                    .submit([](views::detail::scan::ScanPlan vv)
+                                                -> coro::CoroTask<std::size_t> {
+                                        std::size_t n = 0;
+                                        auto gen =
+                                            views::detail::scan::stream(vv, 1);
+                                        while (auto chunk = co_await gen.next())
+                                            ++n;
+                                        co_return n;
+                                    }(v))
+                                    .get());
 
         CHECK(chunks == 1);
     }
@@ -797,11 +825,11 @@ TEST_SUITE("trace scan - streaming row query") {
         // than data-dependent.
         {
             StringSink sink;
-            views::detail::scan::export_json(
-                views::detail::scan::from_file(dstd::String(gz),
-                                               dstd::String(idx)),
-                sink)
-                .get();
+            dftu_utils_test::ok(views::detail::scan::export_json(
+                                    views::detail::scan::from_file(
+                                        dstd::String(gz), dstd::String(idx)),
+                                    sink)
+                                    .get());
         }
 
         views::detail::scan::ScanPlan v = views::detail::scan::select(
@@ -830,8 +858,8 @@ TEST_SUITE("trace scan - streaming row query") {
             {"run", "metric"});
         {
             const auto& plan = *v;
-            auto vdef = dftracer::utils::trace::views::detail::make_vdef(
-                plan, /*for_aggregation=*/false);
+            auto vdef = ok(dftracer::utils::trace::views::detail::make_vdef(
+                plan, /*for_aggregation=*/false));
             std::uint64_t skipped = 0;
             auto units =
                 run(dftracer::utils::trace::views::detail::gather_units(
@@ -903,13 +931,14 @@ TEST_SUITE("trace scan - streaming row query") {
         // io_cat comes from the event name, which a scan key cannot read as
         // a field, so the host cursor must see the real categories.
         const std::int64_t host =
-            run(views::detail::scan::collect(
-                    views::detail::scan::select(
-                        views::detail::scan::from_file(dstd::String(gz),
-                                                       dstd::String(idx)),
-                        {"io_cat"}))
-                    .collect())
-                .unique()
+            dftu_utils_test::ok(
+                run(views::detail::scan::collect(
+                        views::detail::scan::select(
+                            views::detail::scan::from_file(dstd::String(gz),
+                                                           dstd::String(idx)),
+                            {"io_cat"}))
+                        .collect())
+                    .unique())
                 .num_rows();
         CHECK(host > 1);
         CHECK(run(lf.unique().collect()).num_rows() == host);

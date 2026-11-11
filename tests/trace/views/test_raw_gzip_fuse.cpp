@@ -5,26 +5,27 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/build/index_fold_driver.h>
-#include <dftracer/utils/index/extensions/bloom_fold.h>
-#include <dftracer/utils/index/extensions/rowset_fold.h>
-#include <dftracer/utils/index/gzip/checkpoint_indexer.h>
-#include <dftracer/utils/index/gzip/gzip_indexer.h>
-#include <dftracer/utils/index/index.h>
-#include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/index/source.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
-#include <dftracer/utils/index/store/layout.h>
-#include <dftracer/utils/index/store/root_layout.h>
-#include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/fileio/file_helpers.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/build/index_fold_driver.h>
+#include <dftracer/utils/trace/index/extensions/bloom_fold.h>
+#include <dftracer/utils/trace/index/extensions/rowset_fold.h>
+#include <dftracer/utils/trace/index/gzip/checkpoint_indexer.h>
+#include <dftracer/utils/trace/index/gzip/gzip_indexer.h>
+#include <dftracer/utils/trace/index/index.h>
+#include <dftracer/utils/trace/index/record_schema.h>
+#include <dftracer/utils/trace/index/source.h>
+#include <dftracer/utils/trace/index/store/layout.h>
+#include <dftracer/utils/trace/index/store/root_layout.h>
+#include <dftracer/utils/trace/index/tables.h>
 #include <dftracer/utils/trace/views/aggfold.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
+#include <task_result.h>
 #include <testing_runtime.h>
 #include <testing_utilities.h>
 #include <trace/views/groupmap_oracle.h>
@@ -43,8 +44,8 @@ using namespace dftu_utils_test;
 using namespace test_view_common;
 
 using namespace dftracer::utils::trace::views::detail;
-using namespace dftracer::utils::index::build;
-using namespace dftracer::utils::index::extensions;
+using namespace dftracer::utils::trace::index::build;
+using namespace dftracer::utils::trace::index::extensions;
 
 namespace {
 
@@ -77,7 +78,7 @@ dstd::String create_meta_trace(TestEnvironment& env) {
     }
     dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, 600);
-    (void)dstd::fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     return gz;
 }
 
@@ -112,9 +113,10 @@ TEST_SUITE("RawGzipFuse") {
             dstd::String(determine_index_path(gz, env.dir() + "/refi"));
         {
             StringSink s;
-            View::from_file(dstd::String(gz), dstd::String(ref_idx))
-                .sink_json(s)
-                .get();
+            dftu_utils_test::ok(
+                View::from_file(dstd::String(gz), dstd::String(ref_idx))
+                    .sink_json(s)
+                    .get());
         }
         gmoracle::GroupMap ref;
         {
@@ -123,8 +125,9 @@ TEST_SUITE("RawGzipFuse") {
             dstd::StringIntern intern;
             gmoracle::OracleAggFold a(rp, intern);
             std::array<Fold*, 1> folds{&a};
-            ViewDefinition vd = make_vdef(rp, /*for_aggregation=*/true);
-            fuse(rp, vd, folds, intern).get();
+            ViewDefinition vd =
+                dftu_utils_test::ok(make_vdef(rp, /*for_aggregation=*/true));
+            dftu_utils_test::ok(fuse(rp, vd, folds, intern).get());
             ref = a.map();
         }
         REQUIRE(ref.size() == 2);  // POSIX + STDIO
@@ -138,24 +141,28 @@ TEST_SUITE("RawGzipFuse") {
         dstd::StringIntern intern;
         gmoracle::OracleAggFold agg(pp, intern);
         BloomFold bloom(intern);
-        RowSetFold dict(intern,
-                        dftracer::utils::index::indexed_rowsets(
-                            dftracer::utils::index::get_schema("dftracer")));
+        RowSetFold dict(
+            intern,
+            dftracer::utils::trace::index::indexed_rowsets(
+                dftu_utils_test::ok_ref(
+                    dftracer::utils::trace::index::get_schema("dftracer"))));
         std::array<Fold*, 3> folds{&agg, &bloom, &dict};
         IndexFoldDriver driver(intern, folds,
                                dstd::String(dstd::StringView(gz)),
                                dstd::String(dstd::StringView(idx)));
 
-        index::gzip::GzipBuildArtifacts arts;
+        trace::index::gzip::GzipBuildArtifacts arts;
         dftu_utils_test::run_coro(
             [&](coro::Scope& scope) -> dftracer::utils::coro::CoroTask<void> {
-                dftracer::utils::index::gzip::CheckpointIndexer::VisitorList vl;
+                dftracer::utils::trace::index::gzip::CheckpointIndexer::
+                    VisitorList vl;
                 vl.emplace_back(driver);
-                auto a = co_await index::gzip::build_gzip_index_artifacts(
-                    gz,
-                    dftracer::utils::index::gzip::CheckpointIndexer::
-                        DEFAULT_CHECKPOINT_SIZE,
-                    vl, &scope);
+                auto a =
+                    co_await trace::index::gzip::build_gzip_index_artifacts(
+                        gz,
+                        dftracer::utils::trace::index::gzip::CheckpointIndexer::
+                            DEFAULT_CHECKPOINT_SIZE,
+                        vl, &scope);
                 REQUIRE(a.has_value());
                 arts = std::move(*a);
                 co_return;
@@ -165,27 +172,22 @@ TEST_SUITE("RawGzipFuse") {
 
         // Persist the index this one pass produced.
         {
-            auto logical =
-                dftracer::utils::index::store::internal::get_logical_path(gz);
-            const auto hash =
-                dftracer::utils::index::store::internal::calculate_file_hash(
-                    gz);
+            auto logical = fileio::get_logical_path(gz);
+            const auto hash = fileio::calculate_file_hash(gz);
             const auto mtime = static_cast<std::uint64_t>(
-                dftracer::utils::index::store::internal::
-                    get_file_modification_time(gz));
-            const auto bytes =
-                dftracer::utils::index::store::internal::file_size_bytes(gz);
-            auto index = dftracer::utils::index::Index::open(
-                dftracer::utils::index::normalize_index_root(idx));
+                fileio::get_file_modification_time(gz));
+            const auto bytes = fileio::file_size_bytes(gz);
+            auto index = dftracer::utils::trace::index::Index::open(
+                dftracer::utils::trace::index::normalize_index_root(idx));
             REQUIRE(index);
             auto build = index->build(
                 logical,
-                dftracer::utils::index::SourceStat{mtime, bytes, hash});
+                dftracer::utils::trace::index::SourceStat{mtime, bytes, hash});
             REQUIRE(build);
-            dftracer::utils::index::gzip::persist_gzip_index_artifacts(*build,
-                                                                       arts);
-            bloom.write(*build);
-            dict.write(*build);
+            dftracer::utils::trace::index::gzip::persist_gzip_index_artifacts(
+                *build, arts);
+            dftu_utils_test::ok(bloom.write(*build));
+            dftu_utils_test::ok(dict.write(*build));
             REQUIRE(build->commit().get());
         }
 
@@ -204,8 +206,8 @@ TEST_SUITE("RawGzipFuse") {
         CHECK(dftu_utils_test::pruning_tier_current(snapshot, rfile));
         CHECK(!arts.members.empty());
         CHECK(dftu_utils_test::bloom_chunks(snapshot, rfile, "name") > 0);
-        CHECK(dftu_utils_test::index_take(
-                  dftracer::utils::index::rowset(snapshot, rfile, "files"))
+        CHECK(dftu_utils_test::index_take(dftracer::utils::trace::index::rowset(
+                                              snapshot, rfile, "files"))
                   .has_value());
     }
 
@@ -222,24 +224,27 @@ TEST_SUITE("RawGzipFuse") {
             dstd::String(determine_index_path(gz, env.dir() + "/ri"));
         {
             StringSink s;
-            View::from_file(dstd::String(gz), dstd::String(ref_idx))
-                .sink_json(s)
-                .get();
+            dftu_utils_test::ok(
+                View::from_file(dstd::String(gz), dstd::String(ref_idx))
+                    .sink_json(s)
+                    .get());
         }
-        auto ref = View::from_file(dstd::String(gz), dstd::String(ref_idx))
-                       .group_by({GroupKey::cat()})
-                       .agg({{AggOp::Count, "", "n"}})
-                       .collect()
-                       .get();
+        auto ref = dftu_utils_test::ok(
+            View::from_file(dstd::String(gz), dstd::String(ref_idx))
+                .group_by({GroupKey::cat()})
+                .agg({{AggOp::Count, "", "n"}})
+                .collect()
+                .get());
 
         dstd::String boot_idx =
             dstd::String(determine_index_path(gz, env.dir() + "/bi"));
         REQUIRE_FALSE(dstd::fs::exists(boot_idx).value());
-        auto boot = View::from_file(dstd::String(gz), dstd::String(boot_idx))
-                        .group_by({GroupKey::cat()})
-                        .agg({{AggOp::Count, "", "n"}})
-                        .collect()
-                        .get();
+        auto boot = dftu_utils_test::ok(
+            View::from_file(dstd::String(gz), dstd::String(boot_idx))
+                .group_by({GroupKey::cat()})
+                .agg({{AggOp::Count, "", "n"}})
+                .collect()
+                .get());
 
         CHECK(boot.names == ref.names);            // same group + value columns
         CHECK(boot.num_rows() == ref.num_rows());  // same groups, no metadata
@@ -265,9 +270,9 @@ TEST_SUITE("RawGzipFuse") {
             dstd::String(determine_index_path(gz, env.dir() + "/ei"));
         REQUIRE_FALSE(dstd::fs::exists(idx).value());
         StringSink boot;
-        View::from_file(dstd::String(gz), dstd::String(idx))
-            .sink_json(boot)
-            .get();  // bootstrap path
+        dftu_utils_test::ok(View::from_file(dstd::String(gz), dstd::String(idx))
+                                .sink_json(boot)
+                                .get());  // bootstrap path
 
         auto lines = boot.lines();
         CHECK(lines.size() == 20);
@@ -275,10 +280,10 @@ TEST_SUITE("RawGzipFuse") {
         CHECK(count_containing(lines, R"("ph":"X")") == 20);
 
         StringSink all;
-        View::from_file(dstd::String(gz), dstd::String(idx))
-            .phase(Phase::Any)
-            .sink_json(all)
-            .get();
+        dftu_utils_test::ok(View::from_file(dstd::String(gz), dstd::String(idx))
+                                .phase(Phase::Any)
+                                .sink_json(all)
+                                .get());
         CHECK(all.lines().size() == 22);
         CHECK(count_containing(all.lines(), R"("name":"FH")") == 1);
         CHECK(count_containing(all.lines(), R"("name":"HH")") == 1);
@@ -314,14 +319,14 @@ TEST_SUITE("RawGzipFuse") {
         }
         dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, 600);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
 
         dstd::String idx =
             dstd::String(determine_index_path(gz, env.dir() + "/ei"));
         StringSink boot;
-        View::from_file(dstd::String(gz), dstd::String(idx))
-            .sink_json(boot)
-            .get();
+        dftu_utils_test::ok(View::from_file(dstd::String(gz), dstd::String(idx))
+                                .sink_json(boot)
+                                .get());
         const auto lines = boot.lines();
         CHECK(lines.size() == 5);
         CHECK(count_containing(lines, R"("ph":"M")") == 0);
@@ -353,14 +358,14 @@ TEST_SUITE("RawGzipFuse") {
         }
         dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, 600);
-        (void)dstd::fs::remove(pfw);
+        dstd::fs::remove(pfw).discard();
 
         dstd::String idx =
             dstd::String(determine_index_path(gz, env.dir() + "/ei"));
         StringSink boot;
-        View::from_file(dstd::String(gz), dstd::String(idx))
-            .sink_json(boot)
-            .get();
+        dftu_utils_test::ok(View::from_file(dstd::String(gz), dstd::String(idx))
+                                .sink_json(boot)
+                                .get());
         const auto lines = boot.lines();
         CHECK(lines.size() == 4);
         CHECK(count_containing(lines, R"("ph":"M")") == 0);
@@ -380,27 +385,30 @@ TEST_SUITE("RawGzipFuse") {
             dstd::String(determine_index_path(gz, env.dir() + "/fr"));
         {
             StringSink s;
-            View::from_file(dstd::String(gz), dstd::String(ref_idx))
-                .sink_json(s)
-                .get();
+            dftu_utils_test::ok(
+                View::from_file(dstd::String(gz), dstd::String(ref_idx))
+                    .sink_json(s)
+                    .get());
         }
-        auto ref = View::from_file(dstd::String(gz), dstd::String(ref_idx))
-                       .duql(R"(cat == "POSIX")")
-                       .group_by({GroupKey::cat()})
-                       .agg({{AggOp::Count, "", "n"}})
-                       .collect()
-                       .get();
+        auto ref = dftu_utils_test::ok(
+            View::from_file(dstd::String(gz), dstd::String(ref_idx))
+                .duql(R"(cat == "POSIX")")
+                .group_by({GroupKey::cat()})
+                .agg({{AggOp::Count, "", "n"}})
+                .collect()
+                .get());
         REQUIRE(ref.num_rows() == 1);  // only POSIX
 
         dstd::String fresh =
             dstd::String(determine_index_path(gz, env.dir() + "/ff"));
         REQUIRE_FALSE(dstd::fs::exists(fresh).value());
-        auto got = View::from_file(dstd::String(gz), dstd::String(fresh))
-                       .duql(R"(cat == "POSIX")")
-                       .group_by({GroupKey::cat()})
-                       .agg({{AggOp::Count, "", "n"}})
-                       .collect()
-                       .get();
+        auto got = dftu_utils_test::ok(
+            View::from_file(dstd::String(gz), dstd::String(fresh))
+                .duql(R"(cat == "POSIX")")
+                .group_by({GroupKey::cat()})
+                .agg({{AggOp::Count, "", "n"}})
+                .collect()
+                .get());
         CHECK(got.num_rows() == ref.num_rows());  // filter applied: 1 group
         CHECK(rows_equal(got, ref));              // same counts
 
@@ -422,25 +430,28 @@ TEST_SUITE("RawGzipFuse") {
             dstd::String(determine_index_path(gz, env.dir() + "/nr"));
         {
             StringSink s;
-            View::from_file(dstd::String(gz), dstd::String(ref_idx))
-                .sink_json(s)
-                .get();
+            dftu_utils_test::ok(
+                View::from_file(dstd::String(gz), dstd::String(ref_idx))
+                    .sink_json(s)
+                    .get());
         }
-        auto ref = View::from_file(dstd::String(gz), dstd::String(ref_idx))
-                       .duql(R"(fhash == "fh1")")
-                       .group_by({GroupKey::cat()})
-                       .agg({{AggOp::Count, "", "n"}})
-                       .collect()
-                       .get();
+        auto ref = dftu_utils_test::ok(
+            View::from_file(dstd::String(gz), dstd::String(ref_idx))
+                .duql(R"(fhash == "fh1")")
+                .group_by({GroupKey::cat()})
+                .agg({{AggOp::Count, "", "n"}})
+                .collect()
+                .get());
 
         dstd::String fresh =
             dstd::String(determine_index_path(gz, env.dir() + "/nf"));
-        auto got = View::from_file(dstd::String(gz), dstd::String(fresh))
-                       .duql(R"(fhash == "fh1")")
-                       .group_by({GroupKey::cat()})
-                       .agg({{AggOp::Count, "", "n"}})
-                       .collect()
-                       .get();
+        auto got = dftu_utils_test::ok(
+            View::from_file(dstd::String(gz), dstd::String(fresh))
+                .duql(R"(fhash == "fh1")")
+                .group_by({GroupKey::cat()})
+                .agg({{AggOp::Count, "", "n"}})
+                .collect()
+                .get());
         CHECK(rows_equal(got, ref));  // correctly filtered via the fallback
     }
 }
@@ -449,6 +460,28 @@ namespace {
 
 // Logs every step as "checkpoint:name:ts" per event, by name so the log does
 // not depend on the order the intern assigned ids in.
+class FailingFold final : public Fold {
+   public:
+    bool accepts(const ScanShape&) const override { return true; }
+    dstd::UniquePtr<Fold> slice() const override {
+        return dstd::make_unique<FailingFold>();
+    }
+    dstd::Result<void> step(const FoldBatch&) override {
+        if (++batches == 12)
+            return dftracer::utils::common::make_error<"bad batch">(
+                dftracer::utils::common::ErrorCode::Aggregation);
+        return {};
+    }
+    void seal_unit(const ScanUnit&) override {}
+    void drop_unit(const ScanUnit&) override {}
+    dstd::Result<void> merge(Fold&) override { return {}; }
+    dftracer::utils::coro::CoroTask<bool> finalize(
+        const CoverageSet&) override {
+        co_return false;
+    }
+    int batches = 0;
+};
+
 class RecordingFold final : public Fold {
    public:
     explicit RecordingFold(const dstd::StringIntern& intern)
@@ -457,15 +490,16 @@ class RecordingFold final : public Fold {
     dstd::UniquePtr<Fold> slice() const override {
         return dstd::make_unique<RecordingFold>(*intern_);
     }
-    void step(const FoldBatch& batch) override {
+    dstd::Result<void> step(const FoldBatch& batch) override {
         for (const auto& e : batch.events)
             log.push_back(dstd::to_string(batch.unit.checkpoint_idx) + ":" +
                           dstd::String(intern_->resolve(e.name_id)) + ":" +
                           dstd::to_string(e.ts));
+        return {};
     }
     void seal_unit(const ScanUnit&) override {}
     void drop_unit(const ScanUnit&) override {}
-    void merge(Fold&) override {}
+    dstd::Result<void> merge(Fold&) override { return {}; }
     dftracer::utils::coro::CoroTask<bool> finalize(
         const CoverageSet&) override {
         co_return false;
@@ -519,15 +553,16 @@ dstd::Vector<dstd::String> record_index_pass(const dstd::String& gz,
     std::array<Fold*, 1> folds{&rec};
     IndexFoldDriver driver(intern, folds, dstd::String(dstd::StringView(gz)),
                            dstd::String(dstd::StringView(idx)));
-    dftracer::utils::index::build::ParseGate gate(nullptr, workers);
+    dftracer::utils::trace::index::build::ParseGate gate(nullptr, workers);
     if (workers > 1) driver.set_parse_gate(gate);
     dftu_utils_test::run_coro(
         [&](coro::Scope& scope) -> dftracer::utils::coro::CoroTask<void> {
-            dftracer::utils::index::gzip::CheckpointIndexer::VisitorList vl;
+            dftracer::utils::trace::index::gzip::CheckpointIndexer::VisitorList
+                vl;
             vl.emplace_back(driver);
-            auto a = co_await index::gzip::build_gzip_index_artifacts(
+            auto a = co_await trace::index::gzip::build_gzip_index_artifacts(
                 gz,
-                dftracer::utils::index::gzip::CheckpointIndexer::
+                dftracer::utils::trace::index::gzip::CheckpointIndexer::
                     DEFAULT_CHECKPOINT_SIZE,
                 vl, &scope);
             REQUIRE(a.has_value());
@@ -540,25 +575,6 @@ dstd::Vector<dstd::String> record_index_pass(const dstd::String& gz,
 
 }  // namespace
 
-class ThrowingFold final : public Fold {
-   public:
-    bool accepts(const ScanShape&) const override { return true; }
-    dstd::UniquePtr<Fold> slice() const override {
-        return dstd::make_unique<ThrowingFold>();
-    }
-    void step(const FoldBatch&) override {
-        if (++batches == 12) throw std::runtime_error("bad batch");
-    }
-    void seal_unit(const ScanUnit&) override {}
-    void drop_unit(const ScanUnit&) override {}
-    void merge(Fold&) override {}
-    dftracer::utils::coro::CoroTask<bool> finalize(
-        const CoverageSet&) override {
-        co_return false;
-    }
-    int batches = 0;
-};
-
 // Every live record of every family of an index, in order.
 static dstd::Vector<dftu_utils_test::IndexRecord> index_contents(
     const dstd::String& index_path) {
@@ -570,12 +586,13 @@ TEST_CASE("a first-touch query under a small budget spills the same index") {
     REQUIRE(env.is_valid());
     const dstd::String gz = write_multi_member(env.dir());
     auto count = [&](const dstd::String& idx, std::uint64_t budget) {
-        return View::from_file(dstd::String(gz), dstd::String(idx))
-            .memory_budget(budget)
-            .group_by({GroupKey::cat()})
-            .agg({{AggOp::Count, "", "n"}})
-            .collect()
-            .get()
+        return dftu_utils_test::ok(
+                   View::from_file(dstd::String(gz), dstd::String(idx))
+                       .memory_budget(budget)
+                       .group_by({GroupKey::cat()})
+                       .agg({{AggOp::Count, "", "n"}})
+                       .collect()
+                       .get())
             .num_rows();
     };
     const dstd::String held =
@@ -597,36 +614,36 @@ TEST_CASE("a first-touch query under a small budget spills the same index") {
     CHECK(expected == index_contents(runs));
 }
 
-TEST_CASE("a fold that throws while parsing ahead ends the index pass") {
+TEST_CASE("a fold whose step fails ends the index pass with its error") {
     TestEnvironment env(10);
     REQUIRE(env.is_valid());
     const dstd::String gz = write_multi_member(env.dir());
     dstd::StringIntern intern;
-    dftracer::utils::index::extensions::BloomFold bloom(intern);
-    ThrowingFold thrower;
-    std::array<Fold*, 2> folds{&bloom, &thrower};
+    dftracer::utils::trace::index::extensions::BloomFold bloom(intern);
+    FailingFold failing;
+    std::array<Fold*, 2> folds{&bloom, &failing};
     IndexFoldDriver driver(intern, folds, dstd::String(dstd::StringView(gz)),
                            dstd::String(dstd::StringView(env.dir() + "/idx")));
-    dftracer::utils::index::build::ParseGate gate(nullptr, 8);
+    dftracer::utils::trace::index::build::ParseGate gate(nullptr, 8);
     driver.set_parse_gate(gate);
-    bool threw = false;
+    bool failed = false;
     dftu_utils_test::run_coro(
         [&](coro::Scope& scope) -> dftracer::utils::coro::CoroTask<void> {
-            dftracer::utils::index::gzip::CheckpointIndexer::VisitorList vl;
+            dftracer::utils::trace::index::gzip::CheckpointIndexer::VisitorList
+                vl;
             vl.emplace_back(driver);
-            try {
-                co_await index::gzip::build_gzip_index_artifacts(
+            auto built =
+                co_await trace::index::gzip::build_gzip_index_artifacts(
                     gz,
-                    dftracer::utils::index::gzip::CheckpointIndexer::
+                    dftracer::utils::trace::index::gzip::CheckpointIndexer::
                         DEFAULT_CHECKPOINT_SIZE,
                     vl, &scope);
-            } catch (const std::runtime_error& e) {
-                threw = dstd::String(e.what()) == "bad batch";
-            }
+            failed =
+                !built.has_value() && built.error().message() == "bad batch";
         },
-        "fold-throws");
-    CHECK(threw);
-    CHECK(thrower.batches == 12);
+        "fold-fails");
+    CHECK(failed);
+    CHECK(failing.batches == 12);
 }
 
 TEST_CASE("parsing ahead steps the folds with the same events in order") {

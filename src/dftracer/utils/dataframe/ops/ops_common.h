@@ -3,42 +3,42 @@
 #define DFTRACER_UTILS_DATAFRAME_OPS_OPS_COMMON_H
 
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dataframe/internal/errors.h>
 #include <dftracer/utils/dataframe/kernels/order.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <stdexcept>
 
 namespace dftracer::utils::dataframe::ops {
 
-/// The index of the column `name` of `df`; throws std::out_of_range naming
-/// `who` when it has none.
-inline std::size_t column_named(const DataFrame& df, const dstd::String& name,
-                                const char* who) {
+/// The index of the column `name` of `df`; a NotFound error naming `who` when
+/// it has none.
+inline dstd::Result<std::size_t> column_named(const DataFrame& df,
+                                              const dstd::String& name,
+                                              const char* who) {
     const std::int64_t i = df.column_index(name);
-    if (i < 0)
-        throw std::out_of_range(
-            (dstd::String(who) + ": no column named " + name).c_str());
+    if (i < 0) return not_found<"{}: no column named {}">(who, name);
     return static_cast<std::size_t>(i);
 }
 
-/// One view per named column of `df`, in order; an unsupported type throws
-/// std::invalid_argument naming `who` and the column.
-inline dstd::Vector<ColumnView> views_of(
+/// One view per named column of `df`, in order; an unsupported type is an
+/// InvalidArgument error naming `who` and the column.
+inline dstd::Result<dstd::Vector<ColumnView>> views_of(
     const DataFrame& df, const dstd::Vector<dstd::String>& names,
     const char* who) {
     dstd::Vector<ColumnView> out;
     out.reserve(names.size());
     for (const dstd::String& n : names) {
-        const Series& c = df.columns[column_named(df, n, who)];
+        const dstd::Result<std::size_t> at = column_named(df, n, who);
+        if (!at) return at.error();
+        const Series& c = df.columns[*at];
         if (!ColumnView::supports(c.type()))
-            throw std::invalid_argument((dstd::String(who) + ": column '" + n +
-                                         "' of type " + type_name(c.type()) +
-                                         " has no order")
-                                            .c_str());
+            return invalid_argument<"{}: column '{}' of type {} has no order">(
+                who, n, type_name(c.type()));
         out.emplace_back(c);
     }
     return out;
@@ -130,12 +130,12 @@ inline bool closer_or_equal(const ColumnView& l, std::int64_t il,
 /// A frame of `left`'s columns gathered at `left_rows` followed by the columns
 /// of `right` not in `skip`, gathered at `right_rows` (-1 gathers a null). A
 /// right name that a left name or an earlier right name holds gets "_right";
-/// a second collision throws std::invalid_argument naming `who`.
-inline DataFrame join_columns(const DataFrame& left, const DataFrame& right,
-                              const dstd::Vector<std::size_t>& skip,
-                              const dstd::Vector<std::int64_t>& left_rows,
-                              const dstd::Vector<std::int64_t>& right_rows,
-                              const char* who) {
+/// a second collision is an InvalidArgument error naming `who`.
+inline dstd::Result<DataFrame> join_columns(
+    const DataFrame& left, const DataFrame& right,
+    const dstd::Vector<std::size_t>& skip,
+    const dstd::Vector<std::int64_t>& left_rows,
+    const dstd::Vector<std::int64_t>& right_rows, const char* who) {
     DataFrame out;
     for (std::size_t c = 0; c < left.columns.size(); ++c) {
         out.names.push_back(left.names[c]);
@@ -151,10 +151,8 @@ inline DataFrame join_columns(const DataFrame& left, const DataFrame& right,
         if (taken(name)) {
             name += "_right";
             if (taken(name))
-                throw std::invalid_argument(
-                    (dstd::String(who) +
-                     ": output column name collision: " + name)
-                        .c_str());
+                return invalid_argument<"{}: output column name collision: {}">(
+                    who, name);
         }
         out.names.push_back(std::move(name));
         out.columns.push_back(right.columns[c].take(right_rows));

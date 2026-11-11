@@ -8,16 +8,16 @@
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/store/types.h>
+#include <dftracer/utils/trace/index/store/types.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 
 #include <cstddef>
 #include <cstdint>
 #include <utility>
 
-namespace dftracer::utils::index {
+namespace dftracer::utils::trace::index {
 class Snapshot;
-}  // namespace dftracer::utils::index
+}  // namespace dftracer::utils::trace::index
 
 namespace dftracer::utils::trace::views {
 
@@ -34,7 +34,7 @@ struct ViewPlannerInput {
     bool scan_all_chunks = false;
     /// Borrowed snapshot of `index_path`, held by the caller across many files.
     /// When null the planner takes its own.
-    const index::Snapshot* snapshot = nullptr;
+    const trace::index::Snapshot* snapshot = nullptr;
 
     ViewPlannerInput& with_view(const ViewDefinition& v);
     ViewPlannerInput& with_file_path(const dstd::String& path);
@@ -43,7 +43,7 @@ struct ViewPlannerInput {
     ViewPlannerInput& with_checkpoint_count(std::size_t n);
     ViewPlannerInput& with_time_range(double begin, double end);
     ViewPlannerInput& with_scan_all_chunks(bool v);
-    ViewPlannerInput& with_snapshot(const index::Snapshot* s);
+    ViewPlannerInput& with_snapshot(const trace::index::Snapshot* s);
 };
 
 struct ViewChunkCandidate {

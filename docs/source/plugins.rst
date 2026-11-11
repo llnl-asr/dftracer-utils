@@ -1024,7 +1024,7 @@ shared scan must stay wide enough for every branch):
 
 .. code-block:: cpp
 
-   using dftracer::utils::plugins::Plugins;
+   using dftracer::utils::domains::plugins::Plugins;
 
    auto set = Plugins::builder()
                   .add("./name_edges.so", R"({"duql": "cat == \"POSIX\""})")
@@ -1069,7 +1069,7 @@ plugin never links the dataframe ABI to use the engine.
 
    static dftu_series* zscore(const dftu_series* v);   // series -> series
    static const dftu_op_desc ZSCORE = {"me.zscore",
-       DFTU_OP_SIG(SERIES, SERIES, NONE, NONE), (const void*)&zscore};
+       DFTU_OP_SIG(SERIES, SERIES, NONE, NONE), (dftu_op_generic_fn)&zscore};
    return plugin(h, config).op(ZSCORE).fold<MySlice>().build();
 
 **A source** (``DFTU_SVC_PROVIDERS``). A ``dftu_source_vt`` is the C mirror

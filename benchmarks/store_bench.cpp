@@ -65,6 +65,7 @@
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/error.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/little_endian.h>
@@ -91,6 +92,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <iostream>
 #include <numeric>
@@ -380,15 +382,26 @@ dftracer::utils::dstd::String dstring(dftracer::utils::dstd::StringView text) {
 dstd::String to_std(const dftracer::utils::dstd::Error& error) {
     const dftracer::utils::dstd::StringView message = error.message();
     if (message.empty()) return dstd::String(error.name());
-    return dstd::String(error.name()) + ": " + dstd::String(message);
+    return dstd::fmt<"{}: {}">(error.name(), message);
+}
+
+void require_ran(const dstd::Result<void>& ran) {
+    if (ran.has_value()) return;
+    std::fprintf(stderr, "store_bench: %s\n", ran.error().format().c_str());
+    std::exit(1);
 }
 
 dstd::String fixed(double value, int precision) {
-    return dftracer::utils::common::string_format("%.*f", precision, value);
+    char buf[64];
+    char* end = dstd::to_chars_fixed(buf, buf + sizeof(buf), value, precision);
+    return dstd::String(buf, end ? static_cast<std::size_t>(end - buf) : 0);
 }
 
 dstd::String general(double value, int precision) {
-    return dftracer::utils::common::string_format("%.*g", precision, value);
+    char buf[64];
+    char* end =
+        dstd::to_chars_general(buf, buf + sizeof(buf), value, precision);
+    return dstd::String(buf, end ? static_cast<std::size_t>(end - buf) : 0);
 }
 
 dstd::String format_ms(std::uint64_t nanos) {
@@ -399,15 +412,13 @@ dstd::String format_ms(std::uint64_t nanos) {
 /// blocks of them, the read calls that covered them and the bytes. An open
 /// leaves these at zero, and the first query for a copy pays its commits.
 dstd::String format_read_stats(const store::engine::ReadStats& reads) {
-    return dftracer::utils::common::str_cat(
-        "commits_read=", reads.commits_verified,
-        " extents_read=", reads.extents_read,
-        " pages_decoded=", reads.pages_decoded, " page_hits=", reads.page_hits,
-        " page_reads=", reads.page_reads,
-        " windows_warmed=", reads.windows_warmed,
-        " files_filtered=", reads.files_filtered,
-        " metadata_blocks_read=", reads.metadata_blocks_read,
-        " read_calls=", reads.read_calls, " mib_read=",
+    return dstd::fmt<
+        "commits_read={} extents_read={} pages_decoded={} "
+        "page_hits={} page_reads={} windows_warmed={} files_filtered={} "
+        "metadata_blocks_read={} read_calls={} mib_read={}">(
+        reads.commits_verified, reads.extents_read, reads.pages_decoded,
+        reads.page_hits, reads.page_reads, reads.windows_warmed,
+        reads.files_filtered, reads.metadata_blocks_read, reads.read_calls,
         fixed(static_cast<double>(reads.bytes_read) /
                   static_cast<double>(MIB_BYTES),
               1));
@@ -417,12 +428,11 @@ dstd::String format_read_stats(const store::engine::ReadStats& reads) {
 /// column.
 dstd::String format_stats(const store::engine::OpenStats& stats,
                           const store::engine::ReadStats& reads) {
-    return dftracer::utils::common::str_cat(
-        "files=", stats.files, " extents=", stats.extents, " ",
-        format_read_stats(reads), " ms list=", general(stats.ms_list, 3),
-        " files=", general(stats.ms_open_files, 3),
-        " tables=", general(stats.ms_tables, 3),
-        " total=", general(stats.ms_total, 3));
+    return dstd::fmt<
+        "files={} extents={} {} ms list={} files={} tables={} "
+        "total={}">(stats.files, stats.extents, format_read_stats(reads),
+                    general(stats.ms_list, 3), general(stats.ms_open_files, 3),
+                    general(stats.ms_tables, 3), general(stats.ms_total, 3));
 }
 
 dstd::String format_ms_value(double ms) { return general(ms, 3); }
@@ -490,16 +500,12 @@ class ValuePool {
         static const char* const CATS[] = {"POSIX", "STDIO", "MPI"};
         values_.reserve(VALUE_POOL);
         for (std::size_t i = 0; i < VALUE_POOL; ++i) {
-            dstd::String line =
-                "{\"id\":" + dstd::to_string(rng() % 100000000) +
-                ",\"name\":\"" + NAMES[rng() % 6] + "\",\"cat\":\"" +
-                CATS[rng() % 3] +
-                "\",\"pid\":" + dstd::to_string(rng() % 65536) +
-                ",\"tid\":" + dstd::to_string(rng() % 65536) +
-                ",\"ts\":" + dstd::to_string(rng() % 10000000000000ULL) +
-                ",\"dur\":" + dstd::to_string(rng() % 100000) +
-                ",\"args\":{\"fhash\":\"" + dstd::to_string(rng()) +
-                "\",\"size_t\":" + dstd::to_string(rng() % 1048576) + "}}";
+            dstd::String line = dstd::fmt<
+                "{\"id\":{},\"name\":\"{}\",\"cat\":\"{}\",\"pid\":{},\"tid\":{"
+                "},\"ts\":{},\"dur\":{},\"args\":{\"fhash\":\"{}\",\"size_t\":{"
+                "}}}">(rng() % 100000000, NAMES[rng() % 6], CATS[rng() % 3],
+                       rng() % 65536, rng() % 65536, rng() % 10000000000000ULL,
+                       rng() % 100000, rng(), rng() % 1048576);
             while (line.size() < value_bytes) line += line;
             line.resize(value_bytes);
             values_.push_back(std::move(line));
@@ -523,8 +529,7 @@ class ValuePool {
 };
 
 dstd::String scope_name(std::uint64_t coro, std::uint64_t slot) {
-    return "/bench/c" + dstd::to_string(coro) + "-s" + dstd::to_string(slot) +
-           ".dft";
+    return dstd::fmt<"/bench/c{}-s{}.dft">(coro, slot);
 }
 
 /// The key of one fold entry: 'k' and six digits, so a lexicographic scan
@@ -867,7 +872,7 @@ bool print_space(const dstd::String& dir) {
     std::sort(names.begin(), names.end());
     store::engine::SpaceReport sum;
     for (const dstd::String& name : names) {
-        const dstd::String path = dir + "/" + name;
+        const dstd::String path = dstd::fmt<"{}/{}">(dir, name);
         auto report = store::engine::space_report(path);
         if (!report) {
             std::cerr << "store_bench: " << path << ": "
@@ -941,29 +946,30 @@ struct Bench {
         }
         const auto made_base =
             dftracer::utils::dstd::fs::create_directories(base);
-        if (!made_base) {
-            fail("cannot create " + dstd::String(base.str()) + ": " +
-                 to_std(made_base.error()));
+        if (!made_base.has_value()) {
+            fail(dstd::fmt<"cannot create {}: {}">(base.str(),
+                                                   to_std(made_base.error())));
             return false;
         }
         root = make_temp_dir(base);
         if (root.empty()) {
-            fail("cannot create a directory under " + dstd::String(base.str()));
+            fail(dstd::fmt<"cannot create a directory under {}">(base.str()));
             return false;
         }
         auto chosen = store::engine::extent_size_for(root);
         if (!chosen) {
-            fail("extent size of " + root + ": " + to_std(chosen.error()));
+            fail(dstd::fmt<"extent size of {}: {}">(root,
+                                                    to_std(chosen.error())));
             return false;
         }
         extent_size = *chosen;
         return true;
     }
 
-    void cleanup() { (void)dftracer::utils::dstd::fs::remove_all(root); }
+    void cleanup() { dftracer::utils::dstd::fs::remove_all(root).discard(); }
 
     dstd::String case_dir(const dstd::String& name) {
-        return root + "/" + dstd::to_string(case_index++) + "-" + name;
+        return dstd::fmt<"{}/{}-{}">(root, case_index++, name);
     }
 
     void note_backend(Runtime& runtime) {
@@ -1123,54 +1129,51 @@ void Bench::print_write_row(const WriteRow& row) {
     const auto writes_of = [&counts](store::engine::io_fault::WriteKind kind) {
         return counts.writes[static_cast<std::size_t>(kind)];
     };
-    const dstd::String line = dftracer::utils::common::str_cat(
-        row.mode, '\t', row.threads, '\t', row.payload, '\t', fixed(seconds, 6),
-        '\t', fixed(gib_per_s, 4), '\t', fixed(row.seconds_flushed, 6), '\t',
-        fixed(row.seconds_compacted, 6), '\t',
-        writes_of(store::engine::io_fault::WriteKind::Extent), '\t',
-        indexed(counts, store::engine::io_fault::WriteKind::Extent), '\t',
-        writes_of(store::engine::io_fault::WriteKind::Big), '\t',
-        indexed(counts, store::engine::io_fault::WriteKind::Big), '\t',
-        writes_of(store::engine::io_fault::WriteKind::Record), '\t',
-        indexed(counts, store::engine::io_fault::WriteKind::Record), '\t',
-        writes_of(store::engine::io_fault::WriteKind::Header), '\t',
-        indexed(counts, store::engine::io_fault::WriteKind::Header), '\t',
-        indexed(counts, store::engine::io_fault::WriteKind::Footer), '\t',
-        indexed(counts, store::engine::io_fault::WriteKind::Trailer), '\t',
-        counts.syncs, '\t', total, '\t', fixed(write_amp, 4), '\t',
-        row.disk_bytes, '\t', fixed(disk_amp, 4), '\t', row.busy, '\t',
+    const dstd::String line = dstd::fmt_join<"\t">(
+        row.mode, row.threads, row.payload, fixed(seconds, 6),
+        fixed(gib_per_s, 4), fixed(row.seconds_flushed, 6),
+        fixed(row.seconds_compacted, 6),
+        writes_of(store::engine::io_fault::WriteKind::Extent),
+        indexed(counts, store::engine::io_fault::WriteKind::Extent),
+        writes_of(store::engine::io_fault::WriteKind::Big),
+        indexed(counts, store::engine::io_fault::WriteKind::Big),
+        writes_of(store::engine::io_fault::WriteKind::Record),
+        indexed(counts, store::engine::io_fault::WriteKind::Record),
+        writes_of(store::engine::io_fault::WriteKind::Header),
+        indexed(counts, store::engine::io_fault::WriteKind::Header),
+        indexed(counts, store::engine::io_fault::WriteKind::Footer),
+        indexed(counts, store::engine::io_fault::WriteKind::Trailer),
+        counts.syncs, total, fixed(write_amp, 4), row.disk_bytes,
+        fixed(disk_amp, 4), row.busy,
         counts.max_bytes[static_cast<std::size_t>(
             store::engine::io_fault::WriteKind::Extent)],
-        '\t', fixed(commits_per_s, 1));
+        fixed(commits_per_s, 1));
     std::cout << line << '\n';
 }
 
 void Bench::print_query_row(const QueryRow& row) {
     ensure_query_header();
     ensure_comment();
-    const dstd::String line = dftracer::utils::common::str_cat(
-        row.op, '\t', row.count, '\t', fixed(row.ms_total, 3), '\t',
-        fixed(row.ns_per_item, 1), '\t', row.extra, '\t',
-        fixed(row.rss_growth_mib, 3));
+    const dstd::String line = dstd::fmt_join<"\t">(
+        row.op, row.count, fixed(row.ms_total, 3), fixed(row.ns_per_item, 1),
+        row.extra, fixed(row.rss_growth_mib, 3));
     std::cout << line << '\n';
 }
 
 void Bench::print_scope_row(const ScopeRow& row) {
     ensure_scope_header();
     ensure_comment();
-    const dstd::String line = dftracer::utils::common::str_cat(
-        row.scopes, '\t', fixed(row.ns_new_scope, 1), '\t',
-        fixed(row.ns_commit, 1));
+    const dstd::String line = dstd::fmt_join<"\t">(
+        row.scopes, fixed(row.ns_new_scope, 1), fixed(row.ns_commit, 1));
     std::cout << line << '\n';
 }
 
 void Bench::print_fold_row(const FoldRow& row) {
     ensure_fold_header();
     ensure_comment();
-    const dstd::String line = dftracer::utils::common::str_cat(
-        row.scopes, '\t', row.keys, '\t', row.threads, '\t',
-        fixed(row.ms_open, 3), '\t', fixed(row.ms_scan, 3), '\t',
-        fixed(row.ns_per_key, 1), '\t', row.mismatches, '\t',
+    const dstd::String line = dstd::fmt_join<"\t">(
+        row.scopes, row.keys, row.threads, fixed(row.ms_open, 3),
+        fixed(row.ms_scan, 3), fixed(row.ns_per_key, 1), row.mismatches,
         format_read_stats(row.reads));
     std::cout << line << '\n';
 }
@@ -1178,10 +1181,9 @@ void Bench::print_fold_row(const FoldRow& row) {
 void Bench::print_grow_row(const GrowRow& row) {
     ensure_grow_header();
     ensure_comment();
-    const dstd::String line = dftracer::utils::common::str_cat(
-        row.copies, '\t', row.state, '\t', row.op, '\t', row.count, '\t',
-        fixed(row.ms_total, 3), '\t', fixed(row.ns_per_item, 1), '\t',
-        row.extra);
+    const dstd::String line = dstd::fmt_join<"\t">(
+        row.copies, row.state, row.op, row.count, fixed(row.ms_total, 3),
+        fixed(row.ns_per_item, 1), row.extra);
     std::cout << line << '\n';
 }
 
@@ -1202,7 +1204,8 @@ bool Bench::report_single_thread_open(const dstd::String& dir,
         nanos_between(started, std::chrono::steady_clock::now());
     dftracer::utils::configure_default_runtime({.threads = previous});
     if (!opened) {
-        fail("one-thread snapshot of " + dir + ": " + to_std(opened.error()));
+        fail(dstd::fmt<"one-thread snapshot of {}: {}">(
+            dir, to_std(opened.error())));
         return false;
     }
     QueryRow row = query_row(
@@ -1231,8 +1234,7 @@ bool Bench::check_write_row(const WriteRow& row) {
     bool ok = true;
     const auto require = [&](bool condition, const char* what) {
         if (!condition) {
-            fail(row.mode + " " + dstd::to_string(row.threads) +
-                 " threads: " + what);
+            fail(dstd::fmt<"{} {} threads: {}">(row.mode, row.threads, what));
             ok = false;
         }
     };
@@ -1261,7 +1263,7 @@ bool Bench::check_write_row(const WriteRow& row) {
 std::uint64_t Bench::count_keys(const dstd::String& dir) {
     auto snapshot = Snapshot::open(dir);
     if (!snapshot) {
-        fail("snapshot of " + dir + ": " + to_std(snapshot.error()));
+        fail(dstd::fmt<"snapshot of {}: {}">(dir, to_std(snapshot.error())));
         return 0;
     }
     std::uint64_t count = 0;
@@ -1271,7 +1273,7 @@ std::uint64_t Bench::count_keys(const dstd::String& dir) {
         cursor.next();
     }
     if (cursor.error()) {
-        fail("scan of " + dir + ": " + to_std(*cursor.error()));
+        fail(dstd::fmt<"scan of {}: {}">(dir, to_std(*cursor.error())));
     }
     return count;
 }
@@ -1279,7 +1281,7 @@ std::uint64_t Bench::count_keys(const dstd::String& dir) {
 void Bench::close_writers(Runtime& runtime,
                           dstd::Vector<dstd::UniquePtr<Writer>>& writers,
                           std::atomic<int>& errors) {
-    runtime.block_on(coro::named(
+    require_ran(runtime.block_on(coro::named(
         "store_bench close",
         coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
             for (std::size_t at = 0; at < writers.size(); ++at) {
@@ -1293,7 +1295,7 @@ void Bench::close_writers(Runtime& runtime,
                 });
             }
             co_return;
-        })));
+        }))));
 }
 
 WriteRow Bench::run_write_case(Runtime& runtime, const Workload& workload,
@@ -1306,8 +1308,8 @@ WriteRow Bench::run_write_case(Runtime& runtime, const Workload& workload,
     row.keys = workload.total_keys;
     row.commits = workload.batches * workload.threads;
     const auto made = dftracer::utils::dstd::fs::create_directories(dir);
-    if (!made) {
-        fail("cannot create " + dir + ": " + to_std(made.error()));
+    if (!made.has_value()) {
+        fail(dstd::fmt<"cannot create {}: {}">(dir, to_std(made.error())));
         return row;
     }
 
@@ -1319,13 +1321,14 @@ WriteRow Bench::run_write_case(Runtime& runtime, const Workload& workload,
         auto created =
             Writer::create(dir, *runtime.executor(), writer_options());
         if (!created) {
-            fail("writer of " + dir + ": " + to_std(created.error()));
+            fail(dstd::fmt<"writer of {}: {}">(dir, to_std(created.error())));
             return row;
         }
         writers[at] = std::move(*created);
         auto namespace_id = writers[at]->add_namespace(spec());
         if (!namespace_id) {
-            fail("namespace of " + dir + ": " + to_std(namespace_id.error()));
+            fail(dstd::fmt<"namespace of {}: {}">(
+                dir, to_std(namespace_id.error())));
             return row;
         }
         namespaces[at] = *namespace_id;
@@ -1335,7 +1338,7 @@ WriteRow Bench::run_write_case(Runtime& runtime, const Workload& workload,
     std::atomic<int> errors{0};
     store::engine::io_fault::start_counting();
     const auto started = std::chrono::steady_clock::now();
-    runtime.block_on(coro::named(
+    require_ran(runtime.block_on(coro::named(
         "store_bench write",
         coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
             for (std::uint64_t at = 0; at < workload.threads; ++at) {
@@ -1370,7 +1373,7 @@ WriteRow Bench::run_write_case(Runtime& runtime, const Workload& workload,
                 });
             }
             co_return;
-        })));
+        }))));
     close_writers(runtime, writers, errors);
     const auto stopped = std::chrono::steady_clock::now();
     row.counts = store::engine::io_fault::stop_counting();
@@ -1381,8 +1384,8 @@ WriteRow Bench::run_write_case(Runtime& runtime, const Workload& workload,
         row.busy += WriterTestHook::extents(*writer).busy;
     }
     if (errors.load() > 0) {
-        fail(row.mode + " " + dstd::to_string(workload.threads) +
-             " threads: a commit or a close failed");
+        fail(dstd::fmt<"{} {} threads: a commit or a close failed">(
+            row.mode, workload.threads));
     }
     row.read_keys = count_keys(dir);
     row.disk_bytes = directory_bytes(dir);
@@ -1391,7 +1394,7 @@ WriteRow Bench::run_write_case(Runtime& runtime, const Workload& workload,
     if (keep_dir) {
         row.keep_dir = dir;
     } else {
-        (void)dftracer::utils::dstd::fs::remove_all(dir);
+        dftracer::utils::dstd::fs::remove_all(dir).discard();
     }
     return row;
 }
@@ -1464,8 +1467,8 @@ bool Bench::query_store(const Workload& workload, const dstd::String& dir,
         cold_nanos =
             nanos_between(cold_started, std::chrono::steady_clock::now());
         if (!opened_cold) {
-            fail("cold snapshot of " + dir + ": " +
-                 to_std(opened_cold.error()));
+            fail(dstd::fmt<"cold snapshot of {}: {}">(
+                dir, to_std(opened_cold.error())));
             return false;
         }
         cold = std::move(*opened_cold);
@@ -1475,18 +1478,18 @@ bool Bench::query_store(const Workload& workload, const dstd::String& dir,
     const std::uint64_t open_nanos =
         nanos_between(open_started, std::chrono::steady_clock::now());
     if (!opened) {
-        fail("snapshot of " + dir + ": " + to_std(opened.error()));
+        fail(dstd::fmt<"snapshot of {}: {}">(dir, to_std(opened.error())));
         return false;
     }
     Snapshot snapshot = std::move(*opened);
     query_rows.push_back(query_row(
         "open", 1, open_nanos, cold_rss,
-        "warm ms reported, cold=" + format_ms(cold_nanos) +
-            " ms (cold ms list=" + format_ms_value(cold->open_stats().ms_list) +
-            " files=" + format_ms_value(cold->open_stats().ms_open_files) +
-            " tables=" + format_ms_value(cold->open_stats().ms_tables) +
-            "), rss_growth of the cold open, " +
-            format_stats(snapshot.open_stats(), snapshot.read_stats())));
+        dstd::fmt<"warm ms reported, cold={} ms (cold ms list={} files={} "
+                  "tables={}), rss_growth of the cold open, {}">(
+            format_ms(cold_nanos), format_ms_value(cold->open_stats().ms_list),
+            format_ms_value(cold->open_stats().ms_open_files),
+            format_ms_value(cold->open_stats().ms_tables),
+            format_stats(snapshot.open_stats(), snapshot.read_stats()))));
     // The first get of the cold snapshot: it pays the reads of the commits
     // that hold the copy, which the open above did not make.
     if (cold.has_value()) {
@@ -1503,8 +1506,8 @@ bool Bench::query_store(const Workload& workload, const dstd::String& dir,
                 query_row("first_get", 1, nanos, rss,
                           format_read_stats(cold->read_stats())));
         } else {
-            fail("the first get of the cold snapshot of " + dir +
-                 " returned nothing");
+            fail(dstd::fmt<"the first get of the cold snapshot of {} returned "
+                           "nothing">(dir));
         }
         cold.reset();
     }
@@ -1522,7 +1525,7 @@ bool Bench::query_store(const Workload& workload, const dstd::String& dir,
                 snapshot.get(namespace_spec, plan.scopes[item.scope],
                              ByteView{item.key.data(), item.key.size()});
             if (!found) {
-                fail("get of " + dir + ": " + to_std(found.error()));
+                fail(dstd::fmt<"get of {}: {}">(dir, to_std(found.error())));
                 return false;
             }
             const auto& value = *found;
@@ -1536,14 +1539,14 @@ bool Bench::query_store(const Workload& workload, const dstd::String& dir,
         }
         const std::uint64_t nanos =
             nanos_between(started, std::chrono::steady_clock::now());
-        query_rows.push_back(
-            query_row("get_hit", plan.hits.size(), nanos, rss,
-                      "mismatches=" + dstd::to_string(mismatches) + " " +
-                          format_read_stats(snapshot.read_stats())));
+        query_rows.push_back(query_row(
+            "get_hit", plan.hits.size(), nanos, rss,
+            dstd::fmt<"mismatches={} {}">(
+                mismatches, format_read_stats(snapshot.read_stats()))));
     }
     if (mismatches > 0) {
-        fail(dstd::to_string(mismatches) + " point gets of " + dir +
-             " did not return the value written");
+        fail(dstd::fmt<"{} point gets of {} did not return the value written">(
+            mismatches, dir));
     }
     mismatches = 0;
     {
@@ -1554,21 +1557,20 @@ bool Bench::query_store(const Workload& workload, const dstd::String& dir,
                 snapshot.get(namespace_spec, plan.scopes[item.scope],
                              ByteView{item.key.data(), item.key.size()});
             if (!found) {
-                fail("get of " + dir + ": " + to_std(found.error()));
+                fail(dstd::fmt<"get of {}: {}">(dir, to_std(found.error())));
                 return false;
             }
             if (found->has_value()) ++mismatches;
         }
         const std::uint64_t nanos =
             nanos_between(started, std::chrono::steady_clock::now());
-        query_rows.push_back(
-            query_row("get_miss", plan.misses.size(), nanos, rss,
-                      "mismatches=" + dstd::to_string(mismatches) + " " +
-                          format_read_stats(snapshot.read_stats())));
+        query_rows.push_back(query_row(
+            "get_miss", plan.misses.size(), nanos, rss,
+            dstd::fmt<"mismatches={} {}">(
+                mismatches, format_read_stats(snapshot.read_stats()))));
     }
     if (mismatches > 0) {
-        fail(dstd::to_string(mismatches) + " absent keys of " + dir +
-             " were found");
+        fail(dstd::fmt<"{} absent keys of {} were found">(mismatches, dir));
     }
 
     std::uint64_t scanned = 0;
@@ -1585,27 +1587,27 @@ bool Bench::query_store(const Workload& workload, const dstd::String& dir,
                 cursor.next();
             }
             if (cursor.error()) {
-                fail("scan of " + dir + ": " + to_std(*cursor.error()));
+                fail(dstd::fmt<"scan of {}: {}">(dir, to_std(*cursor.error())));
             }
             scanned += rows;
             if (rows != scan.rows) ++wrong_scopes;
         }
         const std::uint64_t nanos =
             nanos_between(started, std::chrono::steady_clock::now());
-        const dstd::String extra = dftracer::utils::common::str_cat(
-            "scopes=", plan.scans.size(), " rows_per_scope=",
+        const dstd::String extra = dstd::fmt<"scopes={} rows_per_scope={} {}">(
+            plan.scans.size(),
             fixed(plan.scans.empty()
                       ? 0
                       : static_cast<double>(scanned) /
                             static_cast<double>(plan.scans.size()),
                   1),
-            " ", format_read_stats(snapshot.read_stats()));
+            format_read_stats(snapshot.read_stats()));
         query_rows.push_back(
             query_row("scan_scope", scanned, nanos, rss, extra));
     }
     if (wrong_scopes > 0) {
-        fail(dstd::to_string(wrong_scopes) + " scopes of " + dir +
-             " hold another row count than written");
+        fail(dstd::fmt<"{} scopes of {} hold another row count than written">(
+            wrong_scopes, dir));
     }
 
     {
@@ -1618,18 +1620,18 @@ bool Bench::query_store(const Workload& workload, const dstd::String& dir,
             cursor.next();
         }
         if (cursor.error()) {
-            fail("scan of " + dir + ": " + to_std(*cursor.error()));
+            fail(dstd::fmt<"scan of {}: {}">(dir, to_std(*cursor.error())));
         }
         const std::uint64_t nanos =
             nanos_between(started, std::chrono::steady_clock::now());
-        query_rows.push_back(query_row(
-            "full_scan", rows, nanos, rss,
-            "rows_per_s=" + format_rate(rows, nanos) +
-                " rows_expected=" + dstd::to_string(workload.total_keys) + " " +
-                format_read_stats(snapshot.read_stats())));
+        query_rows.push_back(
+            query_row("full_scan", rows, nanos, rss,
+                      dstd::fmt<"rows_per_s={} rows_expected={} {}">(
+                          format_rate(rows, nanos), workload.total_keys,
+                          format_read_stats(snapshot.read_stats()))));
         if (rows != workload.total_keys) {
-            fail("the full scan of " + dir + " read " + dstd::to_string(rows) +
-                 " rows, not " + dstd::to_string(workload.total_keys));
+            fail(dstd::fmt<"the full scan of {} read {} rows, not {}">(
+                dir, rows, workload.total_keys));
         }
     }
     return true;
@@ -1649,21 +1651,22 @@ bool Bench::run_query_case(const Workload& workload, const dstd::String& dir) {
 ScopeRow Bench::run_scope_case(Runtime& runtime, std::uint64_t scopes) {
     ScopeRow row;
     row.scopes = scopes;
-    const dstd::String dir = case_dir("scopes-" + dstd::to_string(scopes));
+    const dstd::String dir = case_dir(dstd::fmt<"scopes-{}">(scopes));
     const auto made = dftracer::utils::dstd::fs::create_directories(dir);
-    if (!made) {
-        fail("cannot create " + dir + ": " + to_std(made.error()));
+    if (!made.has_value()) {
+        fail(dstd::fmt<"cannot create {}: {}">(dir, to_std(made.error())));
         return row;
     }
     auto created = Writer::create(dir, *runtime.executor(), writer_options());
     if (!created) {
-        fail("writer of " + dir + ": " + to_std(created.error()));
+        fail(dstd::fmt<"writer of {}: {}">(dir, to_std(created.error())));
         return row;
     }
     dstd::UniquePtr<Writer> writer = std::move(*created);
     auto namespace_id = writer->add_namespace(spec());
     if (!namespace_id) {
-        fail("namespace of " + dir + ": " + to_std(namespace_id.error()));
+        fail(dstd::fmt<"namespace of {}: {}">(dir,
+                                              to_std(namespace_id.error())));
         return row;
     }
 
@@ -1671,13 +1674,13 @@ ScopeRow Bench::run_scope_case(Runtime& runtime, std::uint64_t scopes) {
     std::atomic<bool> ok{true};
     std::uint64_t new_scope_nanos = 0;
     std::uint64_t commit_nanos = 0;
-    runtime.block_on(
+    require_ran(runtime.block_on(
         coro::named("store_bench scopes", [&]() -> coro::CoroTask<void> {
             std::uint32_t ordinal = 0;
             const auto new_started = std::chrono::steady_clock::now();
             for (std::uint64_t at = 0; at < scopes; ++at) {
                 const ScopeKey scope_key =
-                    ScopeKey::file("/bench/s" + dstd::to_string(at) + ".dft");
+                    ScopeKey::file(dstd::fmt<"/bench/s{}.dft">(at));
                 Batch batch = writer->batch(*namespace_id, scope_key, 0);
                 const auto key =
                     make_key(0, ordinal, static_cast<std::uint32_t>(at));
@@ -1698,8 +1701,8 @@ ScopeRow Bench::run_scope_case(Runtime& runtime, std::uint64_t scopes) {
             const auto commit_started = std::chrono::steady_clock::now();
             for (std::uint64_t at = 0; at < opt.commits; ++at) {
                 const std::uint64_t scope_index = random() % scopes;
-                const ScopeKey scope_key = ScopeKey::file(
-                    "/bench/s" + dstd::to_string(scope_index) + ".dft");
+                const ScopeKey scope_key =
+                    ScopeKey::file(dstd::fmt<"/bench/s{}.dft">(scope_index));
                 Batch batch = writer->batch(*namespace_id, scope_key, 0);
                 const auto key = make_key(
                     0, ordinal, static_cast<std::uint32_t>(scope_index));
@@ -1715,23 +1718,22 @@ ScopeRow Bench::run_scope_case(Runtime& runtime, std::uint64_t scopes) {
             }
             commit_nanos =
                 nanos_between(commit_started, std::chrono::steady_clock::now());
-        }()));
-    runtime.block_on(
+        }())));
+    require_ran(runtime.block_on(
         coro::named("store_bench scopes close", [&]() -> coro::CoroTask<void> {
             auto closed = co_await writer->close();
             if (!closed) {
-                fail("close of " + dir + ": " + to_std(closed.error()));
+                fail(dstd::fmt<"close of {}: {}">(dir, to_std(closed.error())));
                 ok.store(false, std::memory_order_relaxed);
             }
-        }()));
-    if (!ok.load())
-        fail("scope case of " + dstd::to_string(scopes) + " scopes");
+        }())));
+    if (!ok.load()) fail(dstd::fmt<"scope case of {} scopes">(scopes));
     row.ns_new_scope =
         static_cast<double>(new_scope_nanos) / static_cast<double>(scopes);
     row.ns_commit =
         static_cast<double>(commit_nanos) / static_cast<double>(opt.commits);
     writer.reset();
-    (void)dftracer::utils::dstd::fs::remove_all(dir);
+    dftracer::utils::dstd::fs::remove_all(dir).discard();
     return row;
 }
 
@@ -1747,19 +1749,20 @@ NamespaceSpec Bench::fold_spec() const {
 bool Bench::write_fold(Runtime& runtime, const dstd::String& dir,
                        std::uint64_t scopes, std::uint64_t keys) {
     const auto made = dftracer::utils::dstd::fs::create_directories(dir);
-    if (!made) {
-        fail("cannot create " + dir + ": " + to_std(made.error()));
+    if (!made.has_value()) {
+        fail(dstd::fmt<"cannot create {}: {}">(dir, to_std(made.error())));
         return false;
     }
     auto created = Writer::create(dir, *runtime.executor(), writer_options());
     if (!created) {
-        fail("writer of " + dir + ": " + to_std(created.error()));
+        fail(dstd::fmt<"writer of {}: {}">(dir, to_std(created.error())));
         return false;
     }
     dstd::UniquePtr<Writer> writer = std::move(*created);
     auto namespace_id = writer->add_namespace(fold_spec());
     if (!namespace_id) {
-        fail("namespace of " + dir + ": " + to_std(namespace_id.error()));
+        fail(dstd::fmt<"namespace of {}: {}">(dir,
+                                              to_std(namespace_id.error())));
         return false;
     }
 
@@ -1772,7 +1775,7 @@ bool Bench::write_fold(Runtime& runtime, const dstd::String& dir,
     std::array<std::uint8_t, FOLD_VALUE_BYTES> one{};
     dftracer::utils::dstd::write_u64_le(one.data(), 1);
     std::atomic<bool> ok{true};
-    runtime.block_on(
+    require_ran(runtime.block_on(
         coro::named("store_bench fold write", [&]() -> coro::CoroTask<void> {
             for (std::uint64_t scope = 0; scope < scopes; ++scope) {
                 const ScopeKey scope_key = ScopeKey::file(scope_name(0, scope));
@@ -1801,17 +1804,17 @@ bool Bench::write_fold(Runtime& runtime, const dstd::String& dir,
                     }
                 }
             }
-        }()));
-    runtime.block_on(
+        }())));
+    require_ran(runtime.block_on(
         coro::named("store_bench fold close", [&]() -> coro::CoroTask<void> {
             auto closed = co_await writer->close();
             if (!closed) {
-                fail("close of " + dir + ": " + to_std(closed.error()));
+                fail(dstd::fmt<"close of {}: {}">(dir, to_std(closed.error())));
                 ok.store(false, std::memory_order_relaxed);
             }
-        }()));
+        }())));
     if (!ok.load()) {
-        fail("fold write of " + dir + " failed");
+        fail(dstd::fmt<"fold write of {} failed">(dir));
         return false;
     }
     return true;
@@ -1886,7 +1889,7 @@ bool Bench::run_fold_case(Runtime& runtime, std::uint64_t scopes) {
     for (std::uint64_t scope = 0; scope < scopes; ++scope) {
         scope_keys.push_back(ScopeKey::file(scope_name(0, scope)));
     }
-    const dstd::String dir = case_dir("fold-" + dstd::to_string(scopes));
+    const dstd::String dir = case_dir(dstd::fmt<"fold-{}">(scopes));
     bool ok = true;
     if (!write_fold(runtime, dir, scopes, keys)) {
         ok = false;
@@ -1897,12 +1900,11 @@ bool Bench::run_fold_case(Runtime& runtime, std::uint64_t scopes) {
             nanos_between(open_started, std::chrono::steady_clock::now());
         const double ms_open = static_cast<double>(open_nanos) / 1e6;
         if (!opened) {
-            fail("snapshot of " + dir + ": " + to_std(opened.error()));
+            fail(dstd::fmt<"snapshot of {}: {}">(dir, to_std(opened.error())));
             ok = false;
         } else {
             Snapshot snapshot = std::move(*opened);
-            const dstd::String scope_column =
-                "scopes=" + dstd::to_string(scopes) + " ";
+            const dstd::String scope_column = dstd::fmt<"scopes={} ">(scopes);
             // This case prints its rows as they come, so the open rows of
             // this directory are printed here and not queued.
             print_query_row(
@@ -1929,15 +1931,16 @@ bool Bench::run_fold_case(Runtime& runtime, std::uint64_t scopes) {
                 row.mismatches = scan.mismatches;
                 print_fold_row(row);
                 if (scan.mismatches > 0) {
-                    fail(dstd::to_string(scan.mismatches) + " fold sums of " +
-                         dir + " differ from the ones written");
+                    fail(dstd::fmt<
+                         "{} fold sums of {} differ from the ones written">(
+                        scan.mismatches, dir));
                     ok = false;
                 }
                 if (!scan.ok) ok = false;
             }
         }
     }
-    (void)dftracer::utils::dstd::fs::remove_all(dir);
+    dftracer::utils::dstd::fs::remove_all(dir).discard();
     return ok;
 }
 
@@ -1972,7 +1975,7 @@ bool Bench::grow_reads(const dstd::String& label, const char* state,
     const std::uint64_t open_nanos =
         nanos_between(open_started, std::chrono::steady_clock::now());
     if (!opened) {
-        fail("snapshot of " + dir + ": " + to_std(opened.error()));
+        fail(dstd::fmt<"snapshot of {}: {}">(dir, to_std(opened.error())));
         return false;
     }
     Snapshot snapshot = std::move(*opened);
@@ -1982,8 +1985,7 @@ bool Bench::grow_reads(const dstd::String& label, const char* state,
     const DiskUse use = disk_use(dir);
     print_grow_row(
         grow_row(label, state, "disk", use.files, 0,
-                 dftracer::utils::common::str_cat("disk_bytes=", use.bytes,
-                                                  " files=", use.files)));
+                 dstd::fmt<"disk_bytes={} files={}">(use.bytes, use.files)));
 
     const ValuePool values(opt.value_bytes, opt.trace_values);
     const dstd::String expected_meta = grow_meta(last_refresh);
@@ -1999,7 +2001,7 @@ bool Bench::grow_reads(const dstd::String& label, const char* state,
             auto found = snapshot.get(namespace_spec, scope,
                                       ByteView{key.data(), key.size()});
             if (!found) {
-                fail("get of " + dir + ": " + to_std(found.error()));
+                fail(dstd::fmt<"get of {}: {}">(dir, to_std(found.error())));
                 return false;
             }
             if (!found->has_value() ||
@@ -2010,14 +2012,14 @@ bool Bench::grow_reads(const dstd::String& label, const char* state,
         }
         const std::uint64_t nanos =
             nanos_between(started, std::chrono::steady_clock::now());
-        print_grow_row(grow_row(label, state, "get_chunk", opt.gets, nanos,
-                                "mismatches=" + dstd::to_string(mismatches) +
-                                    " " +
-                                    format_read_stats(snapshot.read_stats())));
+        print_grow_row(grow_row(
+            label, state, "get_chunk", opt.gets, nanos,
+            dstd::fmt<"mismatches={} {}">(
+                mismatches, format_read_stats(snapshot.read_stats()))));
     }
     if (mismatches > 0) {
-        fail(dstd::to_string(mismatches) + " chunk gets of " + dir +
-             " did not return the value written");
+        fail(dstd::fmt<"{} chunk gets of {} did not return the value written">(
+            mismatches, dir));
         ok = false;
     }
 
@@ -2027,7 +2029,8 @@ bool Bench::grow_reads(const dstd::String& label, const char* state,
         for (std::uint64_t at = 0; at < opt.gets; ++at) {
             auto found = snapshot.get(namespace_spec, scope, meta_key);
             if (!found) {
-                fail("get of meta of " + dir + ": " + to_std(found.error()));
+                fail(dstd::fmt<"get of meta of {}: {}">(dir,
+                                                        to_std(found.error())));
                 return false;
             }
             if (!found->has_value() ||
@@ -2038,11 +2041,11 @@ bool Bench::grow_reads(const dstd::String& label, const char* state,
         const std::uint64_t nanos =
             nanos_between(started, std::chrono::steady_clock::now());
         print_grow_row(grow_row(label, state, "get_meta", opt.gets, nanos,
-                                "mismatches=" + dstd::to_string(mismatches)));
+                                dstd::fmt<"mismatches={}">(mismatches)));
     }
     if (mismatches > 0) {
-        fail(dstd::to_string(mismatches) + " meta gets of " + dir +
-             " did not return the newest summary");
+        fail(dstd::fmt<"{} meta gets of {} did not return the newest summary">(
+            mismatches, dir));
         ok = false;
     }
 
@@ -2079,7 +2082,7 @@ bool Bench::grow_reads(const dstd::String& label, const char* state,
                 cursor.next();
             }
             if (cursor.error()) {
-                fail("scan of " + dir + ": " + to_std(*cursor.error()));
+                fail(dstd::fmt<"scan of {}: {}">(dir, to_std(*cursor.error())));
                 return false;
             }
             if (rows != span) ++mismatches;
@@ -2088,15 +2091,16 @@ bool Bench::grow_reads(const dstd::String& label, const char* state,
             nanos_between(started, std::chrono::steady_clock::now());
         print_grow_row(
             grow_row(label, state, "scan_range", scans, nanos,
-                     "keys_per_scan=" + dstd::to_string(span) + " ns_per_key=" +
+                     dstd::fmt<"keys_per_scan={} ns_per_key={} mismatches={}">(
+                         span,
                          fixed(static_cast<double>(nanos) /
                                    static_cast<double>(scans * span),
-                               1) +
-                         " mismatches=" + dstd::to_string(mismatches)));
+                               1),
+                         mismatches)));
     }
     if (mismatches > 0) {
-        fail(dstd::to_string(mismatches) + " range scans of " + dir +
-             " did not return the keys written");
+        fail(dstd::fmt<"{} range scans of {} did not return the keys written">(
+            mismatches, dir));
         ok = false;
     }
 
@@ -2129,25 +2133,24 @@ bool Bench::grow_reads(const dstd::String& label, const char* state,
             cursor.next();
         }
         if (cursor.error()) {
-            fail("scan of " + dir + ": " + to_std(*cursor.error()));
+            fail(dstd::fmt<"scan of {}: {}">(dir, to_std(*cursor.error())));
             return false;
         }
         const std::uint64_t nanos =
             nanos_between(started, std::chrono::steady_clock::now());
-        print_grow_row(
-            grow_row(label, state, "full_scan", rows, nanos,
-                     "rows_expected=" + dstd::to_string(total + 1) +
-                         " mismatches=" + dstd::to_string(mismatches) + " " +
-                         format_read_stats(snapshot.read_stats())));
+        print_grow_row(grow_row(label, state, "full_scan", rows, nanos,
+                                dstd::fmt<"rows_expected={} mismatches={} {}">(
+                                    total + 1, mismatches,
+                                    format_read_stats(snapshot.read_stats()))));
         if (rows != total + 1) {
-            fail("the full scan of " + dir + " read " + dstd::to_string(rows) +
-                 " rows, not " + dstd::to_string(total + 1));
+            fail(dstd::fmt<"the full scan of {} read {} rows, not {}">(
+                dir, rows, total + 1));
             ok = false;
         }
     }
     if (mismatches > 0) {
-        fail(dstd::to_string(mismatches) + " rows of the full scan of " + dir +
-             " are not the ones written");
+        fail(dstd::fmt<"{} rows of the full scan of {} are not the ones "
+                       "written">(mismatches, dir));
         ok = false;
     }
     return ok;
@@ -2157,22 +2160,22 @@ bool Bench::run_grow_case(const dstd::String& label, std::uint64_t copies,
                           bool shared, bool do_pack) {
     const std::uint64_t per_refresh = opt.grow_keys / copies;
     if (per_refresh == 0) {
-        fail("--grow-keys " + dstd::to_string(opt.grow_keys) +
-             " is below --copies " + dstd::to_string(copies));
+        fail(dstd::fmt<"--grow-keys {} is below --copies {}">(opt.grow_keys,
+                                                              copies));
         return false;
     }
     const std::uint64_t total = per_refresh * copies;
-    const dstd::String dir = case_dir("grow-" + label);
+    const dstd::String dir = case_dir(dstd::fmt<"grow-{}">(label));
     auto opened = store::Store::open(dstd::StringView(dir.data(), dir.size()));
     if (!opened) {
-        fail("store of " + dir + ": " + to_std(opened.error()));
+        fail(dstd::fmt<"store of {}: {}">(dir, to_std(opened.error())));
         return false;
     }
     store::Store grown = std::move(*opened);
     const NamespaceSpec namespace_spec = grow_spec(shared);
     auto handle = grown.ns(namespace_spec);
     if (!handle) {
-        fail("namespace of " + dir + ": " + to_std(handle.error()));
+        fail(dstd::fmt<"namespace of {}: {}">(dir, to_std(handle.error())));
         return false;
     }
     const ScopeKey scope = ScopeKey::file("/bench/grow.dft");
@@ -2195,7 +2198,7 @@ bool Bench::run_grow_case(const dstd::String& label, std::uint64_t copies,
         auto committed =
             default_runtime().submit(grown.commit(std::move(batch))).get();
         if (!committed) {
-            fail("commit of " + dir + ": " + to_std(committed.error()));
+            fail(dstd::fmt<"commit of {}: {}">(dir, to_std(committed.error())));
             return false;
         }
         store::Publish target;
@@ -2208,12 +2211,13 @@ bool Bench::run_grow_case(const dstd::String& label, std::uint64_t copies,
                                                                       1)))
                 .get();
         if (!published) {
-            fail("publish of " + dir + ": " + to_std(published.error()));
+            fail(
+                dstd::fmt<"publish of {}: {}">(dir, to_std(published.error())));
             return false;
         }
         auto closed = default_runtime().submit(grown.close()).get();
         if (!closed) {
-            fail("close of " + dir + ": " + to_std(closed.error()));
+            fail(dstd::fmt<"close of {}: {}">(dir, to_std(closed.error())));
             return false;
         }
         const std::uint64_t nanos =
@@ -2226,15 +2230,14 @@ bool Bench::run_grow_case(const dstd::String& label, std::uint64_t copies,
         static_cast<std::size_t>((refresh_nanos.size() * 99 + 99) / 100 - 1);
     print_grow_row(grow_row(
         label, "grown", "refresh", copies, write_nanos,
-        "mean_ms=" +
+        dstd::fmt<"mean_ms={} p99_ms={} total_ms={} keys_per_refresh={} "
+                  "keys={}">(
             fixed(static_cast<double>(write_nanos) / 1e6 /
                       static_cast<double>(copies),
-                  3) +
-            " p99_ms=" +
-            fixed(static_cast<double>(refresh_nanos[p99_at]) / 1e6, 3) +
-            " total_ms=" + fixed(static_cast<double>(write_nanos) / 1e6, 3) +
-            " keys_per_refresh=" + dstd::to_string(per_refresh) +
-            " keys=" + dstd::to_string(total)));
+                  3),
+            fixed(static_cast<double>(refresh_nanos[p99_at]) / 1e6, 3),
+            fixed(static_cast<double>(write_nanos) / 1e6, 3), per_refresh,
+            total)));
     bool ok = grow_reads(label, "grown", dir, namespace_spec, scope, total,
                          copies - 1);
     if (ok && do_pack) {
@@ -2248,19 +2251,18 @@ bool Bench::run_grow_case(const dstd::String& label, std::uint64_t copies,
             print_grow_row(grow_row(label, "grown", "pack_refused", 1, nanos,
                                     to_std(packed.error())));
         } else {
-            print_grow_row(
-                grow_row(label, "packed", "pack", 1, nanos,
-                         dftracer::utils::common::str_cat(
-                             "files_packed=", packed->files_packed,
-                             " copies_written=", packed->copies_written,
-                             " copies_skipped=", packed->copies_skipped,
-                             " files_deleted=", packed->files_deleted,
-                             " bytes_deleted=", packed->bytes_deleted)));
+            print_grow_row(grow_row(
+                label, "packed", "pack", 1, nanos,
+                dstd::fmt<"files_packed={} copies_written={} copies_skipped={} "
+                          "files_deleted={} bytes_deleted={}">(
+                    packed->files_packed, packed->copies_written,
+                    packed->copies_skipped, packed->files_deleted,
+                    packed->bytes_deleted)));
             ok = grow_reads(label, "packed", dir, namespace_spec, scope, total,
                             copies - 1);
         }
     }
-    (void)dftracer::utils::dstd::fs::remove_all(dir);
+    dftracer::utils::dstd::fs::remove_all(dir).discard();
     return ok;
 }
 
@@ -2274,17 +2276,19 @@ bool Bench::run_kept() {
             note_backend(runtime);
             const Workload workload =
                 workload_of(opt, static_cast<std::uint64_t>(threads));
-            const dstd::String name = mode + "-" + dstd::to_string(threads) +
-                                      "-" + dstd::to_string(opt.payload_mib);
-            const dstd::String dir = base + "/" + name;
+            const dstd::String name =
+                dstd::fmt<"{}-{}-{}">(mode, threads, opt.payload_mib);
+            const dstd::String dir = dstd::fmt<"{}/{}">(base, name);
             const bool exists =
                 dftracer::utils::dstd::fs::exists(dir).value_or(false);
             if (keep && exists) {
-                fail(dir + " exists; --keep writes only a new directory");
+                fail(dstd::fmt<"{} exists; --keep writes only a new directory">(
+                    dir));
                 return false;
             }
             if (!keep && !exists) {
-                fail(dir + " does not exist; write it first with --keep");
+                fail(dstd::fmt<"{} does not exist; write it first with --keep">(
+                    dir));
                 return false;
             }
             if (keep) {
@@ -2322,9 +2326,8 @@ bool Bench::run() {
             for (const dstd::String& mode : modes) {
                 const bool per_thread = mode == "per-thread";
                 const bool keep_dir = do_query && !per_thread;
-                const dstd::String name = mode + "-" +
-                                          dstd::to_string(threads) + "-" +
-                                          dstd::to_string(opt.payload_mib);
+                const dstd::String name =
+                    dstd::fmt<"{}-{}-{}">(mode, threads, opt.payload_mib);
                 const WriteRow row = run_write_case(
                     runtime, workload, case_dir(name), per_thread, keep_dir);
                 if (print_writes) print_write_row(row);
@@ -2333,7 +2336,7 @@ bool Bench::run() {
             if (do_query) {
                 run_query_case(workload, query_dir);
                 if (!query_dir.empty()) {
-                    (void)dftracer::utils::dstd::fs::remove_all(query_dir);
+                    dftracer::utils::dstd::fs::remove_all(query_dir).discard();
                 }
             }
         }

@@ -2,20 +2,22 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/fileio/parallel/parallel_writer.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/utilities/fileio/parallel/parallel_writer.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 #include <cstdio>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::coro;
-using namespace dftracer::utils::utilities::fileio::parallel;
+using namespace dftracer::utils::fileio::parallel;
 
 namespace {
 
@@ -39,8 +41,9 @@ void cleanup(const dstd::Vector<dstd::String>& paths) {
 
 TEST_CASE("ShardedWriter - one shard per worker with header/footer placement") {
     dstd::String base = tmp_path("test_sharded_basic");
-    dstd::Vector<dstd::String> expected = {base + ".shard_0", base + ".shard_1",
-                                           base + ".shard_2"};
+    dstd::Vector<dstd::String> expected = {dstd::fmt<"{}.shard_0">(base),
+                                           dstd::fmt<"{}.shard_1">(base),
+                                           dstd::fmt<"{}.shard_2">(base)};
     cleanup(expected);
 
     Runtime runtime(2);
@@ -58,7 +61,8 @@ TEST_CASE("ShardedWriter - one shard per worker with header/footer placement") {
         if (co_await w->close() != 0) co_return 7;
         co_return 0;
     };
-    CHECK(runtime.submit(task(), "sharded_basic").get() == 0);
+    CHECK(dftu_utils_test::ok(runtime.submit(task(), "sharded_basic").get()) ==
+          0);
 
     REQUIRE(paths.size() == 3);
     CHECK(paths == expected);
@@ -72,8 +76,8 @@ TEST_CASE("ShardedWriter - one shard per worker with header/footer placement") {
 
 TEST_CASE("ShardedWriter - gzip_extension appends .gz to shard names") {
     dstd::String base = tmp_path("test_sharded_gz");
-    dstd::Vector<dstd::String> expected = {base + ".shard_0.gz",
-                                           base + ".shard_1.gz"};
+    dstd::Vector<dstd::String> expected = {dstd::fmt<"{}.shard_0.gz">(base),
+                                           dstd::fmt<"{}.shard_1.gz">(base)};
     cleanup(expected);
 
     Runtime runtime(2);
@@ -88,7 +92,7 @@ TEST_CASE("ShardedWriter - gzip_extension appends .gz to shard names") {
         if (co_await w->close() != 0) co_return 4;
         co_return 0;
     };
-    CHECK(runtime.submit(task(), "sharded_gz").get() == 0);
+    CHECK(dftu_utils_test::ok(runtime.submit(task(), "sharded_gz").get()) == 0);
     CHECK(paths == expected);
     for (const auto& p : expected) CHECK(dstd::fs::exists(p).value());
     cleanup(expected);
@@ -96,7 +100,7 @@ TEST_CASE("ShardedWriter - gzip_extension appends .gz to shard names") {
 
 TEST_CASE("ShardedWriter - out-of-range worker_idx fails") {
     dstd::String base = tmp_path("test_sharded_oor");
-    cleanup({base + ".shard_0"});
+    cleanup({dstd::fmt<"{}.shard_0">(base)});
 
     Runtime runtime(2);
     auto task = [&]() -> CoroTask<int> {
@@ -107,6 +111,7 @@ TEST_CASE("ShardedWriter - out-of-range worker_idx fails") {
         co_await w->close();
         co_return rc == 0 ? 99 : 0;
     };
-    CHECK(runtime.submit(task(), "sharded_oor").get() == 0);
-    cleanup({base + ".shard_0"});
+    CHECK(dftu_utils_test::ok(runtime.submit(task(), "sharded_oor").get()) ==
+          0);
+    cleanup({dstd::fmt<"{}.shard_0">(base)});
 }

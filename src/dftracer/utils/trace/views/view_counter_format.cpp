@@ -4,8 +4,8 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/json/json_escape.h>
+#include <dftracer/utils/trace/index/record_schema.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
 #include <dftracer/utils/trace/views/view_counter_format.h>
@@ -65,11 +65,11 @@ dstd::String counter_line(
     s += "\",\"cat\":\"";
     append_json_escaped(s, cat);
     s += "\",\"pid\":";
-    s += dstd::to_string(pid.empty() ? 0
-                                     : dftracer::utils::index::entity_id(pid));
+    s += dstd::to_string(
+        pid.empty() ? 0 : dftracer::utils::trace::index::entity_id(pid));
     s += ",\"tid\":";
-    s += dstd::to_string(tid.empty() ? 0
-                                     : dftracer::utils::index::entity_id(tid));
+    s += dstd::to_string(
+        tid.empty() ? 0 : dftracer::utils::trace::index::entity_id(tid));
     s += ",\"ts\":";
     s += bucket.empty() ? "0" : bucket;
     s += ",\"ph\":";
@@ -128,9 +128,12 @@ double col_cell_double(const dftracer::utils::dataframe::Series& c,
 
 }  // namespace
 
-void emit_counters_from_state(const dftracer::utils::dataframe::AggState& state,
-                              const ViewPlan& plan, ExportSink& sink) {
-    dataframe::DataFrame f = finalize_engine_result(state, plan);
+dstd::Result<void> emit_counters_from_state(
+    const dftracer::utils::dataframe::AggState& state, const ViewPlan& plan,
+    ExportSink& sink) {
+    auto finalized = finalize_engine_result(state, plan);
+    if (!finalized) return finalized.error();
+    dataframe::DataFrame f = std::move(*finalized);
 
     dstd::Vector<dstd::String> group_cols;
     if (plan.time_bucket_us > 0) group_cols.push_back("time_bucket");
@@ -209,6 +212,7 @@ void emit_counters_from_state(const dftracer::utils::dataframe::AggState& state,
             counter_line(group_cols, keys, value_cols, values, entity, lane));
         sink.write("\n");
     }
+    return {};
 }
 
 }  // namespace dftracer::utils::trace::views::detail

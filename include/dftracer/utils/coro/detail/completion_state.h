@@ -2,9 +2,9 @@
 #ifndef DFTRACER_UTILS_CORO_DETAIL_COMPLETION_STATE_H
 #define DFTRACER_UTILS_CORO_DETAIL_COMPLETION_STATE_H
 
-#include <dftracer/utils/coro/cancelled.h>
 #include <dftracer/utils/coro/completion_latch.h>
 #include <dftracer/utils/coro/detail/parked.h>
+#include <dftracer/utils/coro/detail/resumption_helper.h>
 #include <dftracer/utils/coro/executor.h>
 
 #include <atomic>
@@ -16,12 +16,48 @@ namespace dftracer::utils::coro::detail {
 
 /// Common suspension/completion coordination shared by when_all / when_any
 /// shared-state structs. Holds the awaiting coroutine, its executor, and the
-/// @ref CompletionLatch that guards the suspend-vs-complete race. Shutdown
-/// resumes a suspended awaiter with a cancelled error.
+/// @ref CompletionLatch that guards the suspend-vs-complete race. A child that
+/// stopped and no error end the awaiter as stopped, in place of resuming it.
+/// Shutdown ends a suspended awaiter the same way.
 struct CompletionState {
     std::coroutine_handle<> awaiting_coroutine{};
     Executor* executor{nullptr};
+    ParkOwner owner;
     CompletionLatch latch;
+    /// A child stopped. Set before the child counts as done.
+    std::atomic<bool> stopped{false};
+    /// A child failed with an exception, which the awaiter raises in place of
+    /// the stop.
+    std::atomic<bool> failed{false};
+
+    /// Records the awaiter. Call first in await_suspend.
+    template <typename Promise>
+    void bind_awaiter(std::coroutine_handle<Promise> h) noexcept {
+        awaiting_coroutine = h;
+        owner = park_owner_of(h);
+    }
+
+    bool stop_wanted() const noexcept {
+        return stopped.load(std::memory_order_acquire) &&
+               !failed.load(std::memory_order_acquire);
+    }
+
+    /// For an await_suspend that finds its children done. True when the awaiter
+    /// was ended as stopped, so await_suspend returns true and the frame stays
+    /// suspended. False when the awaiter continues.
+    bool end_stopped() noexcept {
+        return stop_wanted() && stop_task(executor, nullptr, owner);
+    }
+
+    /// Continues the awaiter once its children are done: ends it as stopped, or
+    /// resumes it.
+    void continue_awaiter() noexcept {
+        if (stop_wanted()) {
+            stop_or_continue(executor, owner, awaiting_coroutine);
+            return;
+        }
+        resume_continuation(executor, awaiting_coroutine);
+    }
 
     ~CompletionState() {
         if (park_) executor->unpark(park_);
@@ -37,19 +73,24 @@ struct CompletionState {
         const std::uint8_t before = latch.on_suspended();
         if (before &
             (CompletionLatch::BIT_COMPLETED | CompletionLatch::BIT_CANCELLED)) {
-            if (!(before & CompletionLatch::BIT_COMPLETED)) cancelled_ = true;
-            resume_continuation(executor, awaiting_coroutine);
+            if (!(before & CompletionLatch::BIT_COMPLETED)) {
+                cancelled_ = true;
+                stop_or_resume(executor, park_, awaiting_coroutine);
+                return;
+            }
+            continue_awaiter();
         }
     }
 
-    /// First step of await_resume: leaves the registry and throws the
-    /// cancelled error when shutdown, not completion, resumed the awaiter.
+    /// First step of await_resume: leaves the registry. Ends the process when
+    /// the awaiter could not stop and shutdown, or a stopped child, resumed it.
     void finish_wait() {
         if (park_) {
             executor->unpark(park_);
             park_ = nullptr;
         }
-        if (cancelled_) throw_cancelled("wait cancelled");
+        if (cancelled_) cancelled_unstoppable("a wait for tasks");
+        if (stop_wanted()) cancelled_unstoppable("a wait for stopped tasks");
     }
 
     static void cancel_thunk(void* self) noexcept {
@@ -59,7 +100,7 @@ struct CompletionState {
     void cancel_parked() noexcept {
         if (latch.on_cancelled()) {
             cancelled_ = true;
-            resume_continuation(executor, awaiting_coroutine);
+            stop_or_resume(executor, park_, awaiting_coroutine);
         }
     }
 
@@ -102,8 +143,7 @@ struct WhenAllCompletionState : CompletionState {
         std::size_t count =
             completed_count.fetch_add(1, std::memory_order_acq_rel) + 1;
         if (count == total) {
-            if (latch.on_completed())
-                resume_continuation(executor, awaiting_coroutine);
+            if (latch.on_completed()) continue_awaiter();
         }
     }
 
@@ -114,6 +154,12 @@ struct WhenAllCompletionState : CompletionState {
                                                   std::memory_order_relaxed)) {
             exception = e;
         }
+        failed.store(true, std::memory_order_release);
+        on_one_complete();
+    }
+
+    void on_stopped() {
+        stopped.store(true, std::memory_order_release);
         on_one_complete();
     }
 };
@@ -150,8 +196,7 @@ struct WhenAnyCompletionState : CompletionState {
     static constexpr std::size_t FINISHED_MASK = ~WINNER;
 
     void release() {
-        if (latch.on_completed())
-            resume_continuation(executor, awaiting_coroutine);
+        if (latch.on_completed()) continue_awaiter();
     }
 
     std::atomic<std::size_t> progress_{0};

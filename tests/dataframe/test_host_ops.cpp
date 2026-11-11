@@ -3,11 +3,11 @@
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/domains/plugins/host_ops.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/utilities/host_ops.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
@@ -52,15 +52,15 @@ dstd::Vector<dstd::String> rows(const Series& s) {
 
 void write_file(dstd::PathView p, const dstd::String& text) {
     const dstd::Path owned(p.str());
-    (void)dstd::fs::write_file(dstd::PathView(owned), text);
+    dstd::fs::write_file(dstd::PathView(owned), text).discard();
 }
 
 }  // namespace
 
 TEST_SUITE("host_ops") {
     TEST_CASE("register_host_ops is idempotent") {
-        dftracer::utils::utilities::register_host_ops();
-        dftracer::utils::utilities::register_host_ops();
+        domains::plugins::register_host_ops();
+        domains::plugins::register_host_ops();
         CHECK(dftu_op_find("dftu.fs.scan_dir") != nullptr);
     }
 

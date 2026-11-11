@@ -4,6 +4,8 @@
 #include <dftracer/utils/dataframe/internal/string_reader.h>
 #include <dftracer/utils/dataframe/internal/string_simd.h>
 #include <dftracer/utils/dataframe/internal/varwidth_offsets.h>
+#include <dftracer/utils/dataframe/kernels/limited_rows.h>
+#include <dftracer/utils/dataframe/kernels/string_match.h>
 #include <dftracer/utils/dataframe/kernels/string_ops.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
@@ -382,107 +384,13 @@ dftracer::utils::dstd::String replace_literal(
     return out;
 }
 
-// The strings whose regex match reached its work limit; their rows turn null.
-class LimitedRows {
-   public:
-    void add(dftracer::utils::dstd::StringView s) {
-        std::lock_guard<std::mutex> lock(mu_);
-        rows_.emplace(s);
-    }
-
-    // `out` with every row of `v` whose string is listed made null.
-    dftu_series* apply(dftu_series* out, const dftu_series* v) const {
-        if (!out || rows_.empty()) return out;
-        dftu_series* ok =
-            string_mask(v, [this](dftracer::utils::dstd::StringView s) {
-                return !rows_.contains(dftracer::utils::dstd::String(s));
-            });
-        if (!ok) return out;
-        const std::size_t bytes = buffer_bytes(TypeId::Bool, v->length);
-        auto valid = new_buffer(bytes);
-        for (std::size_t k = 0; k < bytes; ++k) {
-            const std::uint8_t have = out->validity.block()
-                                          ? out->validity.data()[k]
-                                          : std::uint8_t{0xFF};
-            writable(valid)[k] =
-                static_cast<std::uint8_t>(ok->data.data()[k] & have);
-        }
-        std::int64_t nulls = 0;
-        for (std::int64_t i = 0; i < v->length; ++i)
-            if (!((valid.data()[i >> 3] >> (i & 7)) & 1)) ++nulls;
-        delete ok;
-        out->validity = std::move(valid);
-        out->null_count = nulls;
-        return out;
-    }
-
-   private:
-    std::mutex mu_;
-    dftracer::utils::dstd::HashSet<dftracer::utils::dstd::String> rows_;
-};
-
-// Bool mask of `p` over `v`; a row whose match reached the work limit is null.
-dftu_series* pattern_predicate(const dftu_series* v,
-                               const duql::CompiledPattern& p) {
-    DFTU_PER_CHUNK(v, pattern_predicate, p);
-    // A literal pattern runs inline, with no call per row.
-    if (const auto t = duql::literal_test(p); t && !t->icase) {
-        const dftracer::utils::dstd::StringView lit = t->text;
-        switch (t->op) {
-            case duql::LiteralTest::Op::Equals:
-                return string_mask(v,
-                                   [lit](dftracer::utils::dstd::StringView s) {
-                                       return s == lit;
-                                   });
-            case duql::LiteralTest::Op::StartsWith:
-                return string_mask(v,
-                                   [lit](dftracer::utils::dstd::StringView s) {
-                                       return s.starts_with(lit);
-                                   });
-            case duql::LiteralTest::Op::EndsWith:
-                return string_mask(v,
-                                   [lit](dftracer::utils::dstd::StringView s) {
-                                       return s.ends_with(lit);
-                                   });
-            case duql::LiteralTest::Op::Contains:
-                return string_mask(v, [lit](
-                                          dftracer::utils::dstd::StringView s) {
-                    return substr_find(
-                               s.data(), static_cast<std::int64_t>(s.size()),
-                               lit.data(),
-                               static_cast<std::int64_t>(lit.size())) >= 0;
-                });
-        }
-    }
-    // Case-sensitive globs run inline too; SEGMENTS search long strings.
-    if (!p.icase && p.kind == duql::detail::Kind::Glob)
-        return string_mask(
-            v, [toks = p.glob](dftracer::utils::dstd::StringView s) {
-                return duql::detail::glob_match_t<false, true>(toks, s);
-            });
-    if (!p.icase && p.kind == duql::detail::Kind::Segments)
-        return string_mask(
-            v, [&p, toks = p.glob](dftracer::utils::dstd::StringView s) {
-                return s.size() < duql::detail::SIMD_MIN_HAY
-                           ? duql::detail::glob_match_t<false, false>(toks, s)
-                           : duql::detail::segments_match(p, s);
-            });
-    LimitedRows limited;
-    dftu_series* out = string_mask(v, [&](dftracer::utils::dstd::StringView s) {
-        const auto r = duql::match(p, s);
-        if (r == duql::MatchResult::Limit) limited.add(s);
-        return r == duql::MatchResult::Yes;
-    });
-    return limited.apply(out, v);
-}
-
 }  // namespace
 
 namespace dftracer::utils::dataframe {
 
 Series str_pattern(const Series& v, const duql::CompiledPattern& p) {
     if (!v.valid()) return {};
-    return Series{pattern_predicate(v.handle(), p)};
+    return Series{kernels::string_match().pattern(v.handle(), p)};
 }
 
 }  // namespace dftracer::utils::dataframe
@@ -560,38 +468,24 @@ dftracer::utils::dstd::StringView pattern_text(const char* pattern,
 
 dftu_series* dftu_series_str_eq(const dftu_series* v, const char* rhs,
                                 int32_t rhs_size) {
-    dftracer::utils::dstd::StringView r(rhs,
-                                        static_cast<std::size_t>(rhs_size));
-    return string_mask(
-        v, [r](dftracer::utils::dstd::StringView s) { return s == r; });
+    return dataframe::kernels::string_match().eq(v, rhs, rhs_size);
 }
 
 dftu_series* dftu_series_str_contains(const dftu_series* v, const char* needle,
                                       int32_t needle_size) {
-    dftracer::utils::dstd::StringView n(needle,
-                                        static_cast<std::size_t>(needle_size));
-    return string_mask(v, [n](dftracer::utils::dstd::StringView s) {
-        return substr_find(s.data(), static_cast<std::int64_t>(s.size()),
-                           n.data(), static_cast<std::int64_t>(n.size())) >= 0;
-    });
+    return dataframe::kernels::string_match().contains(v, needle, needle_size);
 }
 
 dftu_series* dftu_series_str_starts_with(const dftu_series* v,
                                          const char* prefix,
                                          int32_t prefix_size) {
-    dftracer::utils::dstd::StringView p(prefix,
-                                        static_cast<std::size_t>(prefix_size));
-    return string_mask(v, [p](dftracer::utils::dstd::StringView s) {
-        return s.starts_with(p);
-    });
+    return dataframe::kernels::string_match().starts_with(v, prefix,
+                                                          prefix_size);
 }
 
 dftu_series* dftu_series_str_ends_with(const dftu_series* v, const char* suffix,
                                        int32_t suffix_size) {
-    dftracer::utils::dstd::StringView p(suffix,
-                                        static_cast<std::size_t>(suffix_size));
-    return string_mask(
-        v, [p](dftracer::utils::dstd::StringView s) { return s.ends_with(p); });
+    return dataframe::kernels::string_match().ends_with(v, suffix, suffix_size);
 }
 
 dftu_series* dftu_series_str_matches(const dftu_series* v, const char* pattern,
@@ -599,7 +493,7 @@ dftu_series* dftu_series_str_matches(const dftu_series* v, const char* pattern,
     const auto p = compiled(duql::compile_regex(
         pattern_text(pattern, pattern_size), false, /*whole=*/true));
     if (!p) return nullptr;
-    return pattern_predicate(v, *p);
+    return dataframe::kernels::string_match().pattern(v, *p);
 }
 
 namespace {
@@ -680,7 +574,7 @@ dftu_series* dftu_series_str_search(const dftu_series* v, const char* pattern,
     const auto p = compiled(
         duql::compile_regex(pattern_text(pattern, pattern_size), false));
     if (!p) return nullptr;
-    return pattern_predicate(v, *p);
+    return dataframe::kernels::string_match().pattern(v, *p);
 }
 
 dftu_series* dftu_series_str_like(const dftu_series* v, const char* pattern,
@@ -688,7 +582,7 @@ dftu_series* dftu_series_str_like(const dftu_series* v, const char* pattern,
     const auto p = compiled(
         duql::compile_like(pattern_text(pattern, pattern_size), false, '\\'));
     if (!p) return nullptr;
-    return pattern_predicate(v, *p);
+    return dataframe::kernels::string_match().pattern(v, *p);
 }
 
 dftu_series* dftu_series_str_len_bytes(const dftu_series* v) {
@@ -1923,7 +1817,7 @@ dftu_series* dftu_series_str_findall(const dftu_series* v, const char* pattern,
     const auto re = compiled(
         duql::compile_regex(pattern_text(pattern, pattern_size), false));
     if (!re) return nullptr;
-    LimitedRows limited;
+    dataframe::kernels::LimitedRows limited;
     dftu_series* out = list_transform(
         v, [&](dftracer::utils::dstd::StringView row,
                dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>&

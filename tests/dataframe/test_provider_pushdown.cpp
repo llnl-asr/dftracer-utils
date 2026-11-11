@@ -19,6 +19,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 #include <limits>
@@ -29,13 +30,21 @@ using namespace dftracer::utils::dataframe;
 
 namespace {
 
-DataFrame run(coro::CoroTask<DataFrame> t) {
-    return dftracer::utils::default_runtime().submit(std::move(t)).get();
+DataFrame run(coro::CoroTask<dstd::Result<DataFrame>> t) {
+    return dftu_utils_test::ok(
+        dftracer::utils::default_runtime().submit(std::move(t)).get());
+}
+
+DataFrame run_frame(coro::CoroTask<DataFrame> t) {
+    return dftu_utils_test::ok(
+        dftracer::utils::default_runtime().submit(std::move(t)).get());
 }
 
 coro::CoroTask<DataFrame> drain_cursor(dstd::UniquePtr<Cursor> cur) {
     DataFrame out;
-    while (auto m = co_await cur->next(1 << 20)) {
+    for (;;) {
+        auto m = dftu_utils_test::ok(co_await cur->next(1 << 20));
+        if (!m) break;
         out.columns = std::move(m->columns);
         out.names.assign(out.columns.size(), dstd::String());
     }
@@ -195,9 +204,30 @@ dstd::SharedPtr<Source> make_fixture_source(FixtureConfig& cfg) {
     return make_provider_source(vt, &cfg);
 }
 
+void* refusing_scan(void*, const dftu_scan_request*, int32_t*, void**,
+                    const dftu_cursor_vt**) {
+    return nullptr;
+}
+
+dstd::SharedPtr<Source> make_refusing_source(FixtureConfig& cfg) {
+    static const dftu_source_vt vt = {fixture_schema, refusing_scan,
+                                      fixture_destroy, nullptr, nullptr};
+    return make_provider_source(vt, &cfg);
+}
+
 }  // namespace
 
 TEST_SUITE("provider pushdown") {
+    TEST_CASE("a provider whose scan opens no cursor fails the collect") {
+        FixtureConfig cfg;
+        dftu_utils_test::expect_error(
+            dftracer::utils::default_runtime()
+                .submit(LazyFrame::scan(make_refusing_source(cfg)).collect())
+                .get(),
+            dftracer::utils::common::ErrorCode::Internal,
+            "provider scan: the provider opened no cursor");
+    }
+
     TEST_CASE("Exact and No give the same rows (engine re-applies No)") {
         FixtureConfig exact_cfg;
         exact_cfg.filter_behavior = FilterBehavior::ApplyExact;
@@ -242,10 +272,10 @@ TEST_SUITE("provider pushdown") {
 
         ScanRequest req;
         req.filters.push_back(col(0) > std::int64_t{5});
-        ScanResult r = source->scan(req);
+        ScanResult r = dftu_utils_test::ok(source->scan(req));
         REQUIRE(r.filters.size() == 1);
         CHECK(r.filters[0] == Pushed::No);
-        DataFrame raw = run(drain_cursor(std::move(r.cursor)));
+        DataFrame raw = run_frame(drain_cursor(std::move(r.cursor)));
         CHECK(raw.num_rows() == 10);  // unfiltered; the engine would re-apply
 
         DataFrame result = run(
@@ -260,7 +290,7 @@ TEST_SUITE("provider pushdown") {
 
         ScanRequest req;
         req.filters.push_back(col(0) > std::int64_t{5});
-        ScanResult r = source->scan(req);
+        ScanResult r = dftu_utils_test::ok(source->scan(req));
         REQUIRE(r.filters.size() == 1);
         CHECK(r.filters[0] == Pushed::No);
 
@@ -285,10 +315,13 @@ TEST_SUITE("provider pushdown") {
         "downstream") {
         FixtureConfig cfg;
         cfg.honor_projection = false;
-        CHECK_THROWS_AS(run(LazyFrame::scan(make_fixture_source(cfg))
-                                .select({"val", "id"})
-                                .collect()),
-                        std::runtime_error);
+        dftu_utils_test::expect_error(
+            dftracer::utils::default_runtime()
+                .submit(LazyFrame::scan(make_fixture_source(cfg))
+                            .select({"val", "id"})
+                            .collect())
+                .get(),
+            dftracer::utils::common::ErrorCode::Internal);
     }
 
     TEST_CASE(
@@ -314,16 +347,18 @@ TEST_SUITE("provider pushdown") {
         honored.apply_limit = true;
         ScanRequest req1;
         req1.limit = 3;
-        DataFrame got1 = run(drain_cursor(
-            std::move(make_fixture_source(honored)->scan(req1).cursor)));
+        DataFrame got1 = run_frame(drain_cursor(std::move(
+            dftu_utils_test::ok(make_fixture_source(honored)->scan(req1))
+                .cursor)));
         CHECK(got1.num_rows() == 3);
 
         FixtureConfig ignored;
         ignored.apply_limit = false;
         ScanRequest req2;
         req2.limit = 3;
-        DataFrame got2 = run(drain_cursor(
-            std::move(make_fixture_source(ignored)->scan(req2).cursor)));
+        DataFrame got2 = run_frame(drain_cursor(std::move(
+            dftu_utils_test::ok(make_fixture_source(ignored)->scan(req2))
+                .cursor)));
         CHECK(got2.num_rows() == 10);
     }
 }
@@ -343,7 +378,7 @@ class LimitRecordingSource : public dftracer::utils::dataframe::Source {
             true}}};
     }
 
-    dftracer::utils::dataframe::ScanResult scan(
+    dstd::Result<dftracer::utils::dataframe::ScanResult> scan(
         const ScanRequest& req) const override {
         seen_limit = req.limit;
         dftracer::utils::dataframe::ScanResult r;
@@ -356,8 +391,8 @@ class LimitRecordingSource : public dftracer::utils::dataframe::Source {
    private:
     struct OneShot : Cursor {
         bool done = false;
-        coro::CoroTask<dstd::Optional<Morsel>> next(std::int64_t) override {
-            if (done) co_return dstd::nullopt;
+        coro::CoroTask<MorselResult> next(std::int64_t) override {
+            if (done) co_return MorselResult(dstd::nullopt);
             done = true;
             dstd::Vector<std::int64_t> v{1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
             dftracer::utils::dataframe::Morsel m;
@@ -366,7 +401,7 @@ class LimitRecordingSource : public dftracer::utils::dataframe::Source {
                 dftracer::utils::dataframe::Series{dftu_series_new_flat(
                     DFTU_TYPE_INT64, v.data(),
                     static_cast<std::int64_t>(v.size()), nullptr)});
-            co_return m;
+            co_return MorselResult(std::move(m));
         }
     };
 };

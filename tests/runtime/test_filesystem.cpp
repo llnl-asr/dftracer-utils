@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/runtime/fs/filesystem.h>
 #include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -99,7 +101,7 @@ class MemoryFileSystem final : public FileSystem {
             info.size = found->second.size();
             co_return info;
         }
-        const dstd::String prefix = key + "/";
+        const dstd::String prefix = dstd::fmt<"{}/">(key);
         for (const auto& item : store_.files) {
             if (dstd::StringView(item.first).starts_with(prefix)) {
                 info.kind = dstd::fs::FileKind::Directory;
@@ -114,7 +116,7 @@ class MemoryFileSystem final : public FileSystem {
         dstd::PathView path) override {
         std::lock_guard<std::mutex> lock(store_.mutex);
         ++store_.lists;
-        const dstd::String prefix = dstd::String(path.str()) + "/";
+        const dstd::String prefix = dstd::fmt<"{}/">(path.str());
         dstd::Vector<Entry> entries;
         for (const auto& item : store_.files) {
             dstd::StringView rest(item.first);
@@ -122,7 +124,8 @@ class MemoryFileSystem final : public FileSystem {
             rest.remove_prefix(prefix.size());
             const std::size_t slash = rest.find('/');
             const bool is_dir = slash != dstd::StringView::npos;
-            dstd::String child = prefix + dstd::String(rest.substr(0, slash));
+            dstd::String child =
+                dstd::fmt<"{}{}">(prefix, dstd::String(rest.substr(0, slash)));
             const bool seen = std::any_of(
                 entries.begin(), entries.end(), [&](const Entry& entry) {
                     return entry.path.str() == dstd::StringView(child);
@@ -165,7 +168,7 @@ TEST_CASE("file system: find runs on a registered file system") {
     mounted.store.files["mem://bucket/sub/c.pfw"] = "cc";
     Runtime rt(ExecutorConfig{.thread_count = 2}, false);
     dstd::Vector<FoundFile> found;
-    rt.block_on(
+    dftu_utils_test::ok(rt.block_on(
         coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
             runtime::fs::FindOptions options;
             options.patterns.push_back(dstd::String("*.pfw"));
@@ -173,7 +176,7 @@ TEST_CASE("file system: find runs on a registered file system") {
                 scope, dstd::PathView("mem://bucket"), std::move(options));
             REQUIRE(all.has_value());
             found = std::move(*all);
-        }));
+        })));
     const auto paths = sorted_paths(found);
     REQUIRE(paths.size() == 2);
     CHECK(paths[0] == "mem://bucket/a.pfw");
@@ -198,7 +201,7 @@ TEST_CASE("file system: read_file and write_file take short transfers") {
         REQUIRE(read.has_value());
         CHECK(*read == text);
     };
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     CHECK(mounted.store.closes == 2);
 }
 
@@ -211,7 +214,7 @@ TEST_CASE("file system: a missing file reports NotFound through the seam") {
         REQUIRE_FALSE(read.has_value());
         CHECK(read.error().is(dstd::Condition::NotFound));
     };
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
 }
 
 TEST_CASE("file system: an unknown scheme is an error everywhere") {
@@ -225,13 +228,13 @@ TEST_CASE("file system: an unknown scheme is an error everywhere") {
         auto stat = co_await runtime::fs::stat(path);
         CHECK_FALSE(stat.has_value());
     };
-    rt.block_on(body());
-    rt.block_on(
+    dftu_utils_test::ok(rt.block_on(body()));
+    dftu_utils_test::ok(rt.block_on(
         coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
             auto found = co_await runtime::fs::find_all(scope, path);
             REQUIRE_FALSE(found.has_value());
             CHECK(found.error().is(dstd::Condition::InvalidArgument));
-        }));
+        })));
 }
 
 TEST_CASE("file system: a file:// path and a plain path are one local file") {
@@ -239,7 +242,7 @@ TEST_CASE("file system: a file:// path and a plain path are one local file") {
     const int fd = ::mkstemp(name);
     REQUIRE(fd >= 0);
     ::close(fd);
-    const dstd::String uri = dstd::String("file://") + name;
+    const dstd::String uri = dstd::fmt<"file://{}">(name);
     Runtime rt(ExecutorConfig{.thread_count = 2}, false);
     auto body = [&]() -> coro::CoroTask<void> {
         auto written = co_await runtime::fs::write_file(dstd::PathView(uri),
@@ -249,7 +252,7 @@ TEST_CASE("file system: a file:// path and a plain path are one local file") {
         REQUIRE(read.has_value());
         CHECK(*read == "through the uri");
     };
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     ::unlink(name);
 }
 
@@ -257,8 +260,8 @@ TEST_CASE(
     "file system: exists, create_directories and remove run off the worker") {
     char root[] = "/tmp/dftu_fs_ops_XXXXXX";
     REQUIRE(::mkdtemp(root) != nullptr);
-    const dstd::String dir = dstd::String(root) + "/a/b";
-    const dstd::String file = dstd::String(root) + "/file";
+    const dstd::String dir = dstd::fmt<"{}/a/b">(root);
+    const dstd::String file = dstd::fmt<"{}/file">(root);
     Runtime rt(ExecutorConfig{.thread_count = 2}, false);
     auto body = [&]() -> coro::CoroTask<void> {
         auto missing = co_await runtime::fs::exists(dstd::PathView(dir));
@@ -281,7 +284,7 @@ TEST_CASE(
             co_await runtime::fs::write_file(dstd::PathView(file), "x");
         REQUIRE(written.has_value());
         auto under_file = co_await runtime::fs::create_directories(
-            dstd::PathView(file + "/sub"));
+            dstd::PathView(dstd::fmt<"{}/sub">(file)));
         CHECK_FALSE(under_file.has_value());
 
         auto removed = co_await runtime::fs::remove(dstd::PathView(file));
@@ -291,11 +294,11 @@ TEST_CASE(
         REQUIRE(gone.has_value());
         CHECK_FALSE(*gone);
         auto not_empty = co_await runtime::fs::remove(
-            dstd::PathView(dstd::String(root) + "/a"));
+            dstd::PathView(dstd::fmt<"{}/a">(root)));
         CHECK_FALSE(not_empty.has_value());
     };
-    rt.block_on(body());
+    dftu_utils_test::ok(rt.block_on(body()));
     ::rmdir(dir.c_str());
-    ::rmdir((dstd::String(root) + "/a").c_str());
+    ::rmdir((dstd::fmt<"{}/a">(root)).c_str());
     ::rmdir(root);
 }

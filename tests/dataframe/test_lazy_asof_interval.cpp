@@ -10,6 +10,7 @@
 #include <dftracer/utils/dataframe/frame_ops.h>
 #include <dftracer/utils/dataframe/internal/cell_ops.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
@@ -17,6 +18,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <algorithm>
 #include <cmath>
@@ -90,23 +92,27 @@ coro::CoroTask<dstd::Vector<DataFrame>> stream_all(LazyFrame lf,
                                                    std::int64_t max_rows) {
     dstd::Vector<DataFrame> out;
     auto g = lf.stream(max_rows);
-    while (auto df = co_await g.next()) out.push_back(std::move(*df));
+    while (auto df = co_await g.next())
+        out.push_back(dftu_utils_test::ok(std::move(*df)));
     co_return out;
 }
 
 dstd::Vector<DataFrame> morsels(const LazyFrame& lf,
                                 std::int64_t max_rows = 1'000'000) {
-    return dftracer::utils::default_runtime()
-        .submit(stream_all(lf, max_rows))
-        .get();
+    return dftu_utils_test::ok(dftracer::utils::default_runtime()
+                                   .submit(stream_all(lf, max_rows))
+                                   .get());
 }
 
 dstd::Vector<dstd::String> row_keys(const DataFrame& d) {
     dstd::Vector<Series> cols;
     for (const Series& c : d.columns) cols.push_back(c.materialize());
     dstd::Vector<dstd::String> keys;
-    for (std::int64_t r = 0; r < d.num_rows(); ++r)
-        keys.push_back(dataframe::row_key(cols, r));
+    for (std::int64_t r = 0; r < d.num_rows(); ++r) {
+        dataframe::KeyRefusal refusal;
+        keys.push_back(dataframe::row_key(cols, r, refusal));
+        REQUIRE_FALSE(refusal.refused());
+    }
     return keys;
 }
 
@@ -148,7 +154,7 @@ Inputs make_inputs(std::uint32_t seed, std::int64_t nl, std::int64_t nr,
     const auto key = [&](dstd::Vector<I>& g, dstd::Vector<S>& s) {
         const std::int64_t k = pick(8) == 0 ? -1 : pick(4);
         g.push_back(k < 0 ? I{} : I{k});
-        s.push_back(k < 0 ? S{} : S{dstd::String("k") + dstd::to_string(k)});
+        s.push_back(k < 0 ? S{} : S{dstd::fmt<"k{}">(k)});
     };
     const auto time = [&](dstd::Vector<I>& t) {
         t.push_back(pick(20) == 0 ? I{} : I{pick(60)});
@@ -209,8 +215,9 @@ TEST_CASE("asof matches the eager op over groups, ties, nulls and any order") {
                                      << string_key << " by=" << by.size()
                                      << " dir=" << static_cast<int>(dir)
                                      << " tol=" << (tol ? *tol : -1.0));
-                        const DataFrame eager = dataframe::asof(
-                            in.left, in.right, "ts", by, dir, tol);
+                        const DataFrame eager =
+                            dftu_utils_test::ok(dataframe::asof(
+                                in.left, in.right, "ts", by, dir, tol));
                         expect_same(run_asof(in, SMALL_BUDGET, by, dir, tol),
                                     eager);
                         expect_same(run_asof(in, 1, by, dir, tol), eager);
@@ -225,8 +232,9 @@ TEST_CASE("asof leaves in several morsels cut by the budget") {
         in, SMALL_BUDGET, {"g"}, AsofDirection::Backward, dstd::nullopt);
     // Collect-then-eager would hand the whole result over in one morsel.
     CHECK(parts.size() > 4);
-    const DataFrame eager = dataframe::asof(
-        in.left, in.right, "ts", {"g"}, AsofDirection::Backward, dstd::nullopt);
+    const DataFrame eager = dftu_utils_test::ok(
+        dataframe::asof(in.left, in.right, "ts", {"g"}, AsofDirection::Backward,
+                        dstd::nullopt));
     CHECK(row_keys(parts) == row_keys(eager));
 }
 
@@ -236,40 +244,45 @@ TEST_CASE("asof with an empty side") {
     const DataFrame none_r = in.right.slice(0, 0);
     for (const AsofDirection dir :
          {AsofDirection::Backward, AsofDirection::Nearest}) {
-        expect_same(
-            morsels(
-                budgeted(none_l, SMALL_BUDGET)
-                    .asof(in.right.lazy(), "ts", {"g"}, dir, dstd::nullopt)),
-            dataframe::asof(none_l, in.right, "ts", {"g"}, dir, dstd::nullopt));
+        expect_same(morsels(budgeted(none_l, SMALL_BUDGET)
+                                .asof(in.right.lazy(), "ts", {"g"}, dir,
+                                      dstd::nullopt)),
+                    dftu_utils_test::ok(dataframe::asof(
+                        none_l, in.right, "ts", {"g"}, dir, dstd::nullopt)));
         expect_same(
             morsels(budgeted(in.left, SMALL_BUDGET)
                         .asof(none_r.lazy(), "ts", {"g"}, dir, dstd::nullopt)),
-            dataframe::asof(in.left, none_r, "ts", {"g"}, dir, dstd::nullopt));
+            dftu_utils_test::ok(dataframe::asof(in.left, none_r, "ts", {"g"},
+                                                dir, dstd::nullopt)));
         expect_same(
             morsels(budgeted(none_l, SMALL_BUDGET)
                         .asof(none_r.lazy(), "ts", {}, dir, dstd::nullopt)),
-            dataframe::asof(none_l, none_r, "ts", {}, dir, dstd::nullopt));
+            dftu_utils_test::ok(
+                dataframe::asof(none_l, none_r, "ts", {}, dir, dstd::nullopt)));
     }
 }
 
 TEST_CASE("asof refuses what the eager op refuses") {
     const Inputs in = make_inputs(3, 10, 10, TimeKind::Int, false);
     const LazyFrame left = budgeted(in.left, SMALL_BUDGET);
-    CHECK_THROWS_AS(
-        left.asof(in.right.lazy(), "ts", {}, AsofDirection::Backward, -1.0),
-        std::invalid_argument);
-    CHECK_THROWS_AS(
-        left.asof(in.right.lazy(), "nope", {}, AsofDirection::Backward),
-        std::out_of_range);
+    dftu_utils_test::expect_error(
+        left.asof(in.right.lazy(), "ts", {}, AsofDirection::Backward, -1.0)
+            .status(),
+        dftracer::utils::common::ErrorCode::InvalidArgument);
+    dftu_utils_test::expect_error(
+        left.asof(in.right.lazy(), "nope", {}, AsofDirection::Backward)
+            .status(),
+        dftracer::utils::common::ErrorCode::NotFound);
     const Inputs fl = make_inputs(3, 10, 10, TimeKind::Float, false);
-    CHECK_THROWS_AS(
-        left.asof(fl.right.lazy(), "ts", {}, AsofDirection::Backward),
-        std::invalid_argument);
+    dftu_utils_test::expect_error(
+        left.asof(fl.right.lazy(), "ts", {}, AsofDirection::Backward).status(),
+        dftracer::utils::common::ErrorCode::InvalidArgument);
     const Inputs text = make_inputs(3, 10, 10, TimeKind::Int, true);
-    CHECK_THROWS_AS(
+    dftu_utils_test::expect_error(
         budgeted(text.left, SMALL_BUDGET)
-            .asof(text.right.lazy(), "g", {}, AsofDirection::Backward),
-        std::invalid_argument);
+            .asof(text.right.lazy(), "g", {}, AsofDirection::Backward)
+            .status(),
+        dftracer::utils::common::ErrorCode::InvalidArgument);
 }
 
 TEST_CASE("interval matches the eager op with overlaps, nulls and outer") {
@@ -284,7 +297,7 @@ TEST_CASE("interval matches the eager op with overlaps, nulls and outer") {
         const auto key = [&](dstd::Vector<I>& g, dstd::Vector<S>& s) {
             const std::int64_t k = pick(8) == 0 ? -1 : pick(3);
             g.push_back(k < 0 ? I{} : I{k});
-            s.push_back(k < 0 ? S{} : S{"k" + dstd::to_string(k)});
+            s.push_back(k < 0 ? S{} : S{dstd::fmt<"k{}">(k)});
         };
         for (std::int64_t i = 0; i < 300; ++i) {
             key(lg, ls);
@@ -311,8 +324,8 @@ TEST_CASE("interval matches the eager op with overlaps, nulls and outer") {
                           : dstd::Vector<dstd::String>{};
                 INFO("string_key=" << string_key << " outer=" << outer
                                    << " keyed=" << keyed);
-                const DataFrame eager = dataframe::interval(
-                    left, right, "point", "lo", "hi", by, outer);
+                const DataFrame eager = dftu_utils_test::ok(dataframe::interval(
+                    left, right, "point", "lo", "hi", by, outer));
                 for (const std::uint64_t budget :
                      {SMALL_BUDGET, std::uint64_t{1}})
                     expect_same(morsels(budgeted(left, budget)
@@ -334,8 +347,8 @@ TEST_CASE("interval cuts the pairs of one point into morsels") {
     const DataFrame left = frame({"point"}, i64s(point));
     const DataFrame right =
         frame({"lo", "hi", "id"}, i64s(lo), i64s(hi), i64s(id));
-    const DataFrame eager =
-        dataframe::interval(left, right, "point", "lo", "hi", {}, true);
+    const DataFrame eager = dftu_utils_test::ok(
+        dataframe::interval(left, right, "point", "lo", "hi", {}, true));
     const dstd::Vector<DataFrame> parts =
         morsels(budgeted(left, SMALL_BUDGET)
                     .interval(right.lazy(), "point", "lo", "hi", {}, true));
@@ -357,8 +370,8 @@ TEST_CASE("long intervals stay active across many right morsels") {
         frame({"lo", "hi", "id"}, i64s(lo), i64s(hi), i64s(id));
     for (const bool outer : {false, true}) {
         INFO("outer=" << outer);
-        const DataFrame eager =
-            dataframe::interval(left, right, "point", "lo", "hi", {}, outer);
+        const DataFrame eager = dftu_utils_test::ok(
+            dataframe::interval(left, right, "point", "lo", "hi", {}, outer));
         for (const std::uint64_t budget : {SMALL_BUDGET, std::uint64_t{1}})
             expect_same(morsels(budgeted(left, budget)
                                     .interval(budgeted(right, budget), "point",
@@ -380,24 +393,24 @@ TEST_CASE("interval with an empty side") {
     const DataFrame none_l = left.slice(0, 0);
     const DataFrame none_r = right.slice(0, 0);
     for (const bool outer : {false, true}) {
-        expect_same(
-            morsels(
-                budgeted(left, SMALL_BUDGET)
-                    .interval(none_r.lazy(), "point", "lo", "hi", {}, outer)),
-            dataframe::interval(left, none_r, "point", "lo", "hi", {}, outer));
-        expect_same(
-            morsels(
-                budgeted(none_l, SMALL_BUDGET)
-                    .interval(right.lazy(), "point", "lo", "hi", {}, outer)),
-            dataframe::interval(none_l, right, "point", "lo", "hi", {}, outer));
+        expect_same(morsels(budgeted(left, SMALL_BUDGET)
+                                .interval(none_r.lazy(), "point", "lo", "hi",
+                                          {}, outer)),
+                    dftu_utils_test::ok(dataframe::interval(
+                        left, none_r, "point", "lo", "hi", {}, outer)));
+        expect_same(morsels(budgeted(none_l, SMALL_BUDGET)
+                                .interval(right.lazy(), "point", "lo", "hi", {},
+                                          outer)),
+                    dftu_utils_test::ok(dataframe::interval(
+                        none_l, right, "point", "lo", "hi", {}, outer)));
     }
 }
 
 TEST_CASE(
     "without a budget both plans are collected and the rows are the same") {
     const Inputs in = make_inputs(8, 120, 90, TimeKind::Int, false);
-    const DataFrame eager = dataframe::asof(in.left, in.right, "ts", {"g"},
-                                            AsofDirection::Nearest, 4.0);
+    const DataFrame eager = dftu_utils_test::ok(dataframe::asof(
+        in.left, in.right, "ts", {"g"}, AsofDirection::Nearest, 4.0));
     expect_same(morsels(in.left.lazy().asof(in.right.lazy(), "ts", {"g"},
                                             AsofDirection::Nearest, 4.0)),
                 eager);

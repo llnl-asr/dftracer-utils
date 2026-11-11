@@ -19,7 +19,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/builder.h>
 #include <dftracer/utils/duql/query.h>
-#include <dftracer/utils/index/plan/chunk_pruner.h>
+#include <dftracer/utils/trace/index/plan/chunk_pruner.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
@@ -27,6 +27,8 @@
 #include <dftracer/utils/trace/views/view_scanner_utility.h>
 #include <dftracer/utils/trace/views/view_source.h>
 #include <doctest/doctest.h>
+#include <generator_ok.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
 
@@ -60,15 +62,17 @@ struct NameCollectorFold : Fold {
     dstd::UniquePtr<Fold> slice() const override {
         return dstd::make_unique<NameCollectorFold>();
     }
-    void step(const FoldBatch& b) override {
+    dstd::Result<void> step(const FoldBatch& b) override {
         for (const auto& e : b.events) name_ids.push_back(e.name_id);
+        return {};
     }
     void seal_unit(const ScanUnit&) override { ++sealed_units; }
     void drop_unit(const ScanUnit&) override {}
-    void merge(Fold& other) override {
+    dstd::Result<void> merge(Fold& other) override {
         auto& o = static_cast<NameCollectorFold&>(other);
         name_ids.insert(name_ids.end(), o.name_ids.begin(), o.name_ids.end());
         sealed_units += o.sealed_units;
+        return {};
     }
     coro::CoroTask<bool> finalize(const CoverageSet&) override {
         co_return true;
@@ -118,7 +122,7 @@ dstd::String create_grouped_trace(TestEnvironment& env, int per_name = 40) {
     ofs.close();
     dstd::String gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, 200);
-    (void)dstd::fs::remove(pfw);
+    dstd::fs::remove(pfw).discard();
     return gz;
 }
 
@@ -131,10 +135,10 @@ struct CountingCursor : dataframe::Cursor {
     CountingCursor(dstd::UniquePtr<dataframe::Cursor> in, std::size_t* r,
                    std::size_t* n)
         : inner(std::move(in)), rows(r), narrows(n) {}
-    coro::CoroTask<dstd::Optional<dataframe::Morsel>> next(
+    coro::CoroTask<dataframe::MorselResult> next(
         std::int64_t max_rows) override {
         auto m = co_await inner->next(max_rows);
-        if (m) *rows += static_cast<std::size_t>(m->rows);
+        if (m && *m) *rows += static_cast<std::size_t>((*m)->rows);
         co_return m;
     }
     coro::CoroTask<bool> narrow(const dataframe::Expr& predicate) override {
@@ -150,9 +154,11 @@ struct CountingSource : dataframe::Source {
     explicit CountingSource(dstd::SharedPtr<const dataframe::Source> in)
         : inner(std::move(in)) {}
     dataframe::Schema schema() const override { return inner->schema(); }
-    dataframe::ScanResult scan(
+    dstd::Result<dataframe::ScanResult> scan(
         const dataframe::ScanRequest& req) const override {
-        dataframe::ScanResult r = inner->scan(req);
+        auto scanned = inner->scan(req);
+        if (!scanned) return scanned.error();
+        dataframe::ScanResult r = std::move(*scanned);
         r.cursor = dstd::make_unique<CountingCursor>(std::move(r.cursor), &rows,
                                                      &narrows);
         return r;
@@ -166,7 +172,7 @@ coro::CoroTask<std::uint64_t> scan_unit_events(ScanUnit unit,
     std::uint64_t matched = 0;
     const ViewScannerInput input =
         make_scanner_input(unit, vdef, dstd::nullopt);
-    auto gen = scanner(input);
+    auto gen = dftu_utils_test::ok_items(scanner(input));
     while (auto batch = co_await gen.next()) matched += batch->events_matched;
     co_return matched;
 }
@@ -187,7 +193,8 @@ TEST_SUITE("Dynamic filter pushdown") {
         views::detail::scan::ScanPlan plan_ptr =
             views::detail::scan::from_file(dstd::String(gz), dstd::String(idx));
         const ViewPlan& plan = *plan_ptr;
-        ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
+        ViewDefinition vdef =
+            dftu_utils_test::ok(make_vdef(plan, /*for_aggregation=*/false));
 
         std::uint64_t static_skipped = 0;
         auto units = run(gather_units(plan, vdef, static_skipped));
@@ -213,10 +220,10 @@ TEST_SUITE("Dynamic filter pushdown") {
 
         DynamicPrune dyn_prune;
         for (const ViewFile& f : plan.files) {
-            dftracer::utils::index::plan::ChunkPrunerInput pin{
+            dftracer::utils::trace::index::plan::ChunkPrunerInput pin{
                 dstd::String(dstd::StringView(f.index_path)),
                 dstd::String(dstd::StringView(f.file_path)), narrow_query};
-            dftracer::utils::index::plan::ChunkPruner pruner;
+            dftracer::utils::trace::index::plan::ChunkPruner pruner;
             auto out = run(pruner(pin));
             REQUIRE(out.success);
             dstd::Set<std::uint64_t> keep(out.candidate_checkpoints.begin(),
@@ -280,7 +287,7 @@ TEST_SUITE("Dynamic filter pushdown") {
         dataframe::ScanRequest req;
         req.projection = {"pid"};
         req.memory_budget = 300;
-        dataframe::ScanResult res = src.scan(req);
+        dataframe::ScanResult res = dftu_utils_test::ok(src.scan(req));
         REQUIRE(res.cursor);
 
         // Pull the first morsel before narrowing, exactly like a plugin that
@@ -328,7 +335,7 @@ TEST_SUITE("Dynamic filter pushdown") {
         // than the nominal 120 events: tight checkpointing can replay a
         // boundary chunk in more than one unit, inflating even a full scan
         // past the nominal count.
-        dataframe::ScanResult unnarrowed = src.scan(req);
+        dataframe::ScanResult unnarrowed = dftu_utils_test::ok(src.scan(req));
         REQUIRE(unnarrowed.cursor);
         std::size_t full_total = 0, full_pid3 = 0;
         for (;;) {
@@ -350,7 +357,7 @@ TEST_SUITE("Dynamic filter pushdown") {
         auto source =
             dstd::make_shared<dataframe::InMemorySource>(std::move(df));
         dataframe::ScanRequest req;
-        dataframe::ScanResult res = source->scan(req);
+        dataframe::ScanResult res = dftu_utils_test::ok(source->scan(req));
         REQUIRE(res.cursor);
 
         // The base Cursor::narrow() a source does not override: it must be
@@ -438,11 +445,13 @@ TEST_SUITE("Dynamic filter pushdown") {
                 views::detail::scan::from_file(dstd::String(gz),
                                                dstd::String(idx));
             const ViewPlan& plan = *plan_ptr;
-            ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
+            ViewDefinition vdef =
+                dftu_utils_test::ok(make_vdef(plan, /*for_aggregation=*/false));
             std::uint64_t skipped = 0;
             std::uint64_t matched = 0;
-            for (const ScanUnit& u : gather_units(plan, vdef, skipped).get())
-                matched += scan_unit_events(u, vdef).get();
+            for (const ScanUnit& u :
+                 dftu_utils_test::ok(gather_units(plan, vdef, skipped).get()))
+                matched += dftu_utils_test::ok(scan_unit_events(u, vdef).get());
             return matched;
         };
         const std::uint64_t expected = scan_all();

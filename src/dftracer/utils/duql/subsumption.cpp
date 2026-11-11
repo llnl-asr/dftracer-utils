@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
@@ -23,13 +24,13 @@ dstd::Optional<double> as_number(const LiteralValue& v) {
 
 // Canonical token for one literal, used as a set-membership key.
 dstd::String literal_key(const LiteralValue& v) {
-    if (auto p = std::get_if<dstd::String>(&v)) return "s:" + *p;
+    if (auto p = std::get_if<dstd::String>(&v)) return dstd::fmt<"s:{}">(*p);
     if (auto p = std::get_if<bool>(&v)) return *p ? "b:1" : "b:0";
     if (auto p = std::get_if<std::int64_t>(&v))
-        return "n:" + dstd::fixed_text(static_cast<double>(*p));
+        return dstd::fmt<"n:{:f}">(static_cast<double>(*p));
     if (auto p = std::get_if<std::uint64_t>(&v))
-        return "n:" + dstd::fixed_text(static_cast<double>(*p));
-    if (auto p = std::get_if<double>(&v)) return "n:" + dstd::fixed_text(*p);
+        return dstd::fmt<"n:{:f}">(static_cast<double>(*p));
+    if (auto p = std::get_if<double>(&v)) return dstd::fmt<"n:{:f}">(*p);
     return "?";
 }
 

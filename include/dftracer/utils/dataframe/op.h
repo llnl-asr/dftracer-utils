@@ -127,7 +127,7 @@ class OpDesc {
 
     dstd::StringView name() const noexcept { return desc_->name; }
     OpSig sig() const noexcept { return OpSig(desc_->sig); }
-    const void* fn() const noexcept { return desc_->fn; }
+    dftu_op_generic_fn fn() const noexcept { return desc_->fn; }
 
     explicit operator bool() const noexcept { return desc_ != nullptr; }
 

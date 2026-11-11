@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/view_builder.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
 #include <cstring>
 #include <limits>
-#include <stdexcept>
 
 namespace dftracer::utils::dataframe {
 
@@ -41,10 +41,8 @@ std::int32_t ViewBuilder::add_buffer(BufferView buffer) {
     auto [it, fresh] =
         index_of_.try_emplace(key, static_cast<std::int32_t>(buffers_.size()));
     if (fresh) {
-        if (buffers_.size() >= static_cast<std::size_t>(INT32_LIMIT)) {
-            index_of_.erase(it);
-            throw std::length_error("view column: too many buffers");
-        }
+        if (buffers_.size() >= static_cast<std::size_t>(INT32_LIMIT))
+            dstd::fatal("view column: too many buffers");
         buffers_.push_back(std::move(buffer));
     }
     return it->second;
@@ -60,7 +58,7 @@ std::int32_t ViewBuilder::cached_buffer(const BufferView& buffer) {
 
 void ViewBuilder::append_inline(dstd::StringView bytes) {
     if (bytes.size() > static_cast<std::size_t>(INLINE_MAX))
-        throw std::length_error("view column: inline value over 12 bytes");
+        dstd::fatal("view column: inline value over 12 bytes");
     std::uint8_t* v = new_view();
     const auto size = static_cast<std::int32_t>(bytes.size());
     std::memcpy(v, &size, sizeof(size));
@@ -72,12 +70,12 @@ void ViewBuilder::append(dstd::StringView bytes, std::int32_t buffer_index) {
     if (bytes.size() <= static_cast<std::size_t>(INLINE_MAX))
         return append_inline(bytes);
     if (bytes.size() > static_cast<std::size_t>(INT32_LIMIT))
-        throw std::length_error("view column: value over INT32_MAX bytes");
+        dstd::fatal("view column: value over INT32_MAX bytes");
     const std::int64_t offset =
         reinterpret_cast<const std::uint8_t*>(bytes.data()) -
         buffers_[static_cast<std::size_t>(buffer_index)].data();
     if (offset < 0 || offset > INT32_LIMIT)
-        throw std::length_error("view column: offset outside int32");
+        dstd::fatal("view column: offset outside int32");
     std::uint8_t* v = new_view();
     const auto size = static_cast<std::int32_t>(bytes.size());
     const auto off = static_cast<std::int32_t>(offset);
@@ -109,7 +107,7 @@ void ViewBuilder::append_flat(const dftu_series& c, std::int64_t row) {
     const std::int64_t len = end - begin;
     if (len > INLINE_MAX) {
         if (len > INT32_LIMIT)
-            throw std::length_error("view column: value over INT32_MAX bytes");
+            dstd::fatal("view column: value over INT32_MAX bytes");
         const char* bytes =
             reinterpret_cast<const char*>(c.data.data()) + begin;
         if (begin > INT32_LIMIT) {
@@ -171,8 +169,7 @@ void ViewBuilder::append_row(const dftu_series& col, std::int64_t row) {
                 break;
             }
             default:
-                throw std::invalid_argument(
-                    "view column: unsupported encoding");
+                dstd::fatal("view column: unsupported encoding");
         }
     }
 }

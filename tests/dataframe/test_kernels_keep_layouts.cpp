@@ -5,6 +5,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
@@ -14,6 +15,7 @@
 #include <dftracer/utils/dataframe/mask.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dstd/algorithm.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/span.h>
@@ -22,6 +24,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -197,9 +200,9 @@ dstd::String truth_of(const Series& m) {
 dstd::String ints_of(const Series& m) {
     dstd::String out;
     for (std::int64_t i = 0; i < m.length(); ++i)
-        out += (m.is_null(i) ? dstd::String("N")
-                             : dstd::to_string(m.data<std::int64_t>()[i])) +
-               ",";
+        out += dstd::fmt<"{},">(
+            (m.is_null(i) ? dstd::String("N")
+                          : dstd::to_string(m.data<std::int64_t>()[i])));
     return out;
 }
 
@@ -250,7 +253,8 @@ dstd::String in_truth(const Series& col, const dstd::String& query) {
     f.columns.push_back(col.share());
     auto q = dftracer::utils::duql::Query::from_string(query);
     REQUIRE(q.has_value());
-    return truth_of(evaluate_mask(duql::detail::QueryAccess::root(*q), f));
+    return truth_of(dftu_utils_test::ok(
+        evaluate_mask(duql::detail::QueryAccess::root(*q), f)));
 }
 
 }  // namespace
@@ -406,9 +410,10 @@ TEST_SUITE("kernels keep layouts") {
             same(df.tail(10), flat.tail(10));
             same(df.slice(20, 30), flat.slice(20, 30));
             same(df.take({3, -1, 3, 80}), flat.take({3, -1, 3, 80}));
-            same(df.sort_by("id"), flat.sort_by("id"));
-            same(df.sort_by_multi({"key", "id"}, true),
-                 flat.sort_by_multi({"key", "id"}, true));
+            same(dftu_utils_test::ok(df.sort_by("id")),
+                 dftu_utils_test::ok(flat.sort_by("id")));
+            same(dftu_utils_test::ok(df.sort_by_multi({"key", "id"}, true)),
+                 dftu_utils_test::ok(flat.sort_by_multi({"key", "id"}, true)));
 
             DataFrame right;
             right.names = {"key", "w"};
@@ -416,8 +421,9 @@ TEST_SUITE("kernels keep layouts") {
             right.columns.push_back(Series::flat_i64(rk.data(), 4));
             right.columns.push_back(Series::flat_i64(rw.data(), 4));
             for (JoinHow how : {JoinHow::Inner, JoinHow::Left}) {
-                DataFrame j = df.join(right, {"key"}, how);
-                DataFrame jf = flat.join(right, {"key"}, how);
+                DataFrame j = dftu_utils_test::ok(df.join(right, {"key"}, how));
+                DataFrame jf =
+                    dftu_utils_test::ok(flat.join(right, {"key"}, how));
                 REQUIRE(j.num_rows() == jf.num_rows());
                 CHECK(rows_of(j.columns[0]) == rows_of(jf.columns[0]));
                 check_layout(c, j.columns[0]);
@@ -530,21 +536,22 @@ TEST_SUITE("kernels keep layouts") {
 
     TEST_CASE("in over every layout equals the flat path") {
         dstd::Vector<dstd::String> lits;
-        for (int i = 0; i < 18; ++i) lits.push_back("lit" + dstd::to_string(i));
+        for (int i = 0; i < 18; ++i) lits.push_back(dstd::fmt<"lit{}">(i));
         lits.push_back("read");
         lits.push_back("a name of exactly 16");
         for (const std::size_t n :
              {std::size_t{1}, std::size_t{2}, lits.size()}) {
-            dstd::String list = "\"" + lits[lits.size() - 1] + "\"";
+            dstd::String list = dstd::fmt<"\"{}\"">(lits[lits.size() - 1]);
             if (n == 1) list = "\"read\"";
             if (n == 2) list = "\"read\", \"write\"";
             if (n == lits.size()) {
                 list.clear();
                 for (const dstd::String& l : lits)
-                    list += (list.empty() ? "" : ", ") + ("\"" + l + "\"");
+                    list +=
+                        (list.empty() ? "" : ", ") + (dstd::fmt<"\"{}\"">(l));
             }
             for (const char* head : {"name in [", "name not in ["}) {
-                const dstd::String q = dstd::String(head) + list + "]";
+                const dstd::String q = dstd::fmt<"{}{}]">(head, list);
                 CAPTURE(q);
                 for (const Case& c : cases()) {
                     CAPTURE(c.name);
@@ -582,9 +589,9 @@ Frame scale_frame(bool long_keys) {
         if (g % 97 == 0)
             f.keys.emplace_back();
         else
-            f.keys.emplace_back(
-                (long_keys ? "a group key longer than sixteen bytes " : "k") +
-                dstd::to_string(g));
+            f.keys.emplace_back(dstd::fmt<"{}{}">(
+                (long_keys ? "a group key longer than sixteen bytes " : "k"),
+                g));
         f.a.push_back(i % 1000);
         f.b.push_back((i * 31) % 977);
         f.c.push_back(i % 13);
@@ -628,7 +635,8 @@ void scale_case(bool long_keys) {
     const Series c = Series::flat_i64(f.c.data(), SCALE_ROWS);
     const dstd::Vector<const Series*> values{&a, &b, &c};
     const auto names = dstd::Vector<dstd::String>{"k"};
-    const DataFrame want = group_agg({&flat}, values, scale_specs(), names);
+    const DataFrame want =
+        dftu_utils_test::ok(group_agg({&flat}, values, scale_specs(), names));
     REQUIRE(want.num_rows() > 2048);
     ViewBuilder vb;
     vb.append_column(*flat.handle());
@@ -637,7 +645,8 @@ void scale_case(bool long_keys) {
     REQUIRE(view.encoding() == Encoding::View);
     REQUIRE(dict.encoding() == Encoding::Dictionary);
     for (const Series* key : {&view, &dict}) {
-        const DataFrame got = group_agg({key}, values, scale_specs(), names);
+        const DataFrame got =
+            dftu_utils_test::ok(group_agg({key}, values, scale_specs(), names));
         CHECK(int_cells(got) == int_cells(want));
     }
 }
@@ -658,8 +667,7 @@ TEST_SUITE("kernels keep layouts: group-by drivers and size checks") {
         CHECK(fits_int32_offsets(0));
         CHECK(fits_int32_offsets(MAX));
         CHECK_FALSE(fits_int32_offsets(MAX + 1));
-        CHECK_NOTHROW(Series::check_string_bytes(MAX));
-        CHECK_THROWS_AS(Series::check_string_bytes(MAX + 1), std::length_error);
+        Series::check_string_bytes(MAX);
     }
 
     TEST_CASE("offsets from lengths refuse a total past the offset width") {
@@ -678,7 +686,7 @@ TEST_SUITE("kernels keep layouts: group-by drivers and size checks") {
         constexpr std::size_t N = 100000;
         constexpr std::size_t DISTINCT = 37;
         auto text = [](std::size_t j) {
-            dstd::String t = "name_" + dstd::to_string((j * 7919) % 1000);
+            dstd::String t = dstd::fmt<"name_{}">((j * 7919) % 1000);
             if (j % 5 == 0) t += " with a tail longer than twelve bytes";
             return t;
         };
@@ -734,10 +742,9 @@ TEST_SUITE("kernels keep layouts: group-by drivers and size checks") {
         keys.push_back({"view", view_of(rows), rows});
         Rows unique(N);
         for (std::size_t i = 0; i < N; ++i)
-            unique[i] = i % 13 == 0 ? Row()
-                        : i % 50 == 0
-                            ? Row("duplicated")
-                            : Row("u" + dstd::to_string((i * 7919) % N));
+            unique[i] = i % 13 == 0   ? Row()
+                        : i % 50 == 0 ? Row("duplicated")
+                                      : Row(dstd::fmt<"u{}">((i * 7919) % N));
         keys.push_back({"view mostly unique", view_of(unique), unique});
         keys.push_back({"selection over flat",
                         selection_over(flat_of(rows), sel), pick(rows, sel)});
@@ -777,11 +784,14 @@ TEST_SUITE("kernels keep layouts: group-by drivers and size checks") {
             for (bool desc : {false, true}) {
                 CAPTURE(desc);
                 const Idx one = expected(k.rows, desc, false);
-                CHECK(ids_of(df.sort_by("s", desc).columns[1]) == one);
-                CHECK(ids_of(df.sort_by_multi({"s"}, desc).columns[1]) == one);
+                CHECK(ids_of(dftu_utils_test::ok(df.sort_by("s", desc))
+                                 .columns[1]) == one);
+                CHECK(ids_of(dftu_utils_test::ok(df.sort_by_multi({"s"}, desc))
+                                 .columns[1]) == one);
                 CHECK(ids_of(k.col.argsort(desc)) == one);
-                CHECK(ids_of(df.sort_by_multi({"s", "o"}, desc).columns[1]) ==
-                      expected(k.rows, desc, true));
+                CHECK(ids_of(dftu_utils_test::ok(
+                                 df.sort_by_multi({"s", "o"}, desc))
+                                 .columns[1]) == expected(k.rows, desc, true));
             }
         }
     }

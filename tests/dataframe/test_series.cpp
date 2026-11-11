@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dataframe/expr_ok.h>
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/agg_expr.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
@@ -19,6 +21,8 @@
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <memory/fresh_process.h>
+#include <task_result.h>
 
 #include <cmath>
 #include <cstdint>
@@ -808,23 +812,28 @@ TEST_SUITE("vec") {
         std::int64_t base = 1700000000000000000LL;
         dstd::Vector<std::int64_t> v{base, 10, 20, 30};
         Series col = Series::flat_i64(v.data(), 4);
-        CHECK(scalar_value<std::int64_t>(sum(col)) == base + 60);
-        CHECK(scalar_value<std::int64_t>(min(col)) == 10);
-        CHECK(scalar_value<std::int64_t>(max(col)) == base);
+        CHECK(scalar_value<std::int64_t>(dftu_utils_test::ok(sum(col))) ==
+              base + 60);
+        CHECK(scalar_value<std::int64_t>(dftu_utils_test::ok(min(col))) == 10);
+        CHECK(scalar_value<std::int64_t>(dftu_utils_test::ok(max(col))) ==
+              base);
         CHECK(count(col) == 4);
 
         dstd::Vector<double> f{1.5, 2.5, 4.0};
         Series fc = Series::flat_f64(f.data(), 3);
-        CHECK(scalar_value<double>(sum(fc)) == doctest::Approx(8.0));
-        CHECK(scalar_value<double>(max(fc)) == doctest::Approx(4.0));
+        CHECK(scalar_value<double>(dftu_utils_test::ok(sum(fc))) ==
+              doctest::Approx(8.0));
+        CHECK(scalar_value<double>(dftu_utils_test::ok(max(fc))) ==
+              doctest::Approx(4.0));
 
         // Nulls are skipped by sum/count.
         dstd::Vector<std::int64_t> w{9, 9, 9, 9};
         std::uint8_t bitmap = 0b0000'0101;  // rows 0, 2 valid
         Series wc = Series::flat_i64(w.data(), 4, &bitmap);
-        CHECK(scalar_value<std::int64_t>(sum(wc)) == 18);
+        CHECK(scalar_value<std::int64_t>(dftu_utils_test::ok(sum(wc))) == 18);
         CHECK(count(wc) == 2);
-        CHECK(mean(wc) == doctest::Approx(9.0));  // 18 / 2 valid
+        CHECK(dftu_utils_test::ok(mean(wc)) ==
+              doctest::Approx(9.0));  // 18 / 2 valid
     }
 
     TEST_CASE("SIMD reduce matches scalar over a large column") {
@@ -846,14 +855,18 @@ TEST_SUITE("vec") {
             isum += vi[i];
         }
         Series fc = Series::flat_f64(fd.data(), n);
-        CHECK(scalar_value<double>(sum(fc)) == doctest::Approx(ref_sum));
-        CHECK(scalar_value<double>(min(fc)) == doctest::Approx(ref_min));
-        CHECK(scalar_value<double>(max(fc)) == doctest::Approx(ref_max));
+        CHECK(scalar_value<double>(dftu_utils_test::ok(sum(fc))) ==
+              doctest::Approx(ref_sum));
+        CHECK(scalar_value<double>(dftu_utils_test::ok(min(fc))) ==
+              doctest::Approx(ref_min));
+        CHECK(scalar_value<double>(dftu_utils_test::ok(max(fc))) ==
+              doctest::Approx(ref_max));
 
         Series ic = Series::flat_i64(vi.data(), n);
-        CHECK(scalar_value<std::int64_t>(sum(ic)) == isum);  // i64 sum
-        CHECK(scalar_value<std::int64_t>(min(ic)) == imin);
-        CHECK(scalar_value<std::int64_t>(max(ic)) == imax);
+        CHECK(scalar_value<std::int64_t>(dftu_utils_test::ok(sum(ic))) ==
+              isum);  // i64 sum
+        CHECK(scalar_value<std::int64_t>(dftu_utils_test::ok(min(ic))) == imin);
+        CHECK(scalar_value<std::int64_t>(dftu_utils_test::ok(max(ic))) == imax);
 
         // Null-present sum, every 4th row null: exact skip-nulls result.
         dstd::Vector<std::uint8_t> bm(static_cast<std::size_t>((n + 7) / 8), 0);
@@ -868,8 +881,10 @@ TEST_SUITE("vec") {
         }
         Series icn = Series::flat_i64(vi.data(), n, bm.data());
         Series fcn = Series::flat_f64(fd.data(), n, bm.data());
-        CHECK(scalar_value<std::int64_t>(sum(icn)) == isum_valid);
-        CHECK(scalar_value<double>(sum(fcn)) == doctest::Approx(fsum_valid));
+        CHECK(scalar_value<std::int64_t>(dftu_utils_test::ok(sum(icn))) ==
+              isum_valid);
+        CHECK(scalar_value<double>(dftu_utils_test::ok(sum(fcn))) ==
+              doctest::Approx(fsum_valid));
     }
 
     TEST_CASE("group_by aggregates values by a string key") {
@@ -1338,7 +1353,8 @@ TEST_SUITE("vec") {
             {dataframe::AggOp::Max, 0, "max_dur"}};
 
         // One-shot fused group-by: all four aggregates in a single pass.
-        DataFrame one = dataframe::group_agg(key, vals, specs, "cat");
+        DataFrame one =
+            dftu_utils_test::ok(dataframe::group_agg(key, vals, specs, "cat"));
         REQUIRE(one.num_rows() == 2);
         REQUIRE(one.names.size() == 5);
         REQUIRE(one.names == dstd::Vector<dstd::String>{"cat", "n", "sum_dur",
@@ -1363,8 +1379,8 @@ TEST_SUITE("vec") {
         auto s1 = dataframe::agg_new(specs);
         auto s2 = dataframe::agg_new(specs);
         dstd::Vector<const Series*> v1{&c1}, v2{&c2};
-        dataframe::agg_accumulate(*s1, k1, v1);
-        dataframe::agg_accumulate(*s2, k2, v2);
+        dftu_utils_test::ok(dataframe::agg_accumulate(*s1, k1, v1));
+        dftu_utils_test::ok(dataframe::agg_accumulate(*s2, k2, v2));
         dataframe::agg_merge(*s1, *s2);
         DataFrame merged = dataframe::agg_finalize(*s1, "cat");
         REQUIRE(merged.num_rows() == 2);
@@ -1376,7 +1392,7 @@ TEST_SUITE("vec") {
         // Serialize the merged partial, ship it (round-trip), finalize - must
         // match (the distributed-partial path).
         dstd::String blob = dataframe::agg_serialize(*s1);
-        auto s3 = dataframe::agg_deserialize(blob);
+        auto s3 = dftu_utils_test::ok(dataframe::agg_deserialize(blob));
         DataFrame rt = dataframe::agg_finalize(*s3, "cat");
         REQUIRE(rt.num_rows() == 2);
         CHECK(rt.columns[0].string_at(0) == "io");
@@ -1399,7 +1415,8 @@ TEST_SUITE("vec") {
             {dataframe::AggOp::Count, -1, "n"},
             {dataframe::AggOp::Sum, 0, "sum_dur"}};
 
-        DataFrame g = dataframe::group_agg(keys, vals, specs, {"cat", "pid"});
+        DataFrame g = dftu_utils_test::ok(
+            dataframe::group_agg(keys, vals, specs, {"cat", "pid"}));
         REQUIRE(g.num_rows() == 3);  // (io,1) (cpu,1) (io,2) - first-seen order
         REQUIRE(g.names ==
                 dstd::Vector<dstd::String>{"cat", "pid", "n", "sum_dur"});
@@ -1440,10 +1457,10 @@ TEST_SUITE("vec") {
         auto s2 = dataframe::agg_new(specs);
         dstd::Vector<const Series*> keys1{&ck1, &pid1}, keys2{&ck2, &pid2};
         dstd::Vector<const Series*> v1{&c1}, v2{&c2};
-        dataframe::agg_accumulate(*s1, keys1, v1);
-        dataframe::agg_accumulate(*s2, keys2, v2);
+        dftu_utils_test::ok(dataframe::agg_accumulate(*s1, keys1, v1));
+        dftu_utils_test::ok(dataframe::agg_accumulate(*s2, keys2, v2));
         dstd::String blob = dataframe::agg_serialize(*s2);
-        auto s2b = dataframe::agg_deserialize(blob);
+        auto s2b = dftu_utils_test::ok(dataframe::agg_deserialize(blob));
         dataframe::agg_merge(*s1, *s2b);
         DataFrame merged = dataframe::agg_finalize(
             *s1, dstd::Vector<dstd::String>{"cat", "pid"});
@@ -1471,7 +1488,8 @@ TEST_SUITE("vec") {
             {dataframe::AggOp::Std, 0, "std"},
             {dataframe::AggOp::Skew, 0, "skew"},
             {dataframe::AggOp::Kurt, 0, "kurt"}};
-        DataFrame g = dataframe::group_agg(key, vals, specs, "k");
+        DataFrame g =
+            dftu_utils_test::ok(dataframe::group_agg(key, vals, specs, "k"));
         REQUIRE(g.num_rows() == 2);
         REQUIRE(g.names ==
                 dstd::Vector<dstd::String>{"k", "var", "std", "skew", "kurt"});
@@ -1497,12 +1515,12 @@ TEST_SUITE("vec") {
         auto s1 = dataframe::agg_new(specs);
         auto s2 = dataframe::agg_new(specs);
         dstd::Vector<const Series*> v1{&c1}, v2{&c2};
-        dataframe::agg_accumulate(*s1, k1, v1);
-        dataframe::agg_accumulate(*s2, k2, v2);
+        dftu_utils_test::ok(dataframe::agg_accumulate(*s1, k1, v1));
+        dftu_utils_test::ok(dataframe::agg_accumulate(*s2, k2, v2));
         dataframe::agg_merge(*s1, *s2);
         dstd::String blob = dataframe::agg_serialize(*s1);
-        DataFrame m =
-            dataframe::agg_finalize(*dataframe::agg_deserialize(blob), "k");
+        DataFrame m = dataframe::agg_finalize(
+            *dftu_utils_test::ok(dataframe::agg_deserialize(blob)), "k");
         CHECK(m.columns[1].data<double>()[0] ==
               doctest::Approx(g.columns[1].data<double>()[0]));
         CHECK(m.columns[4].data<double>()[0] ==
@@ -1527,7 +1545,7 @@ TEST_SUITE("vec") {
                                    dataframe::expr_lit(std::int64_t{2}));
         // Two outputs sharing `a+b`; the shared node is computed once (CSE).
         dstd::Vector<dataframe::Series> outs =
-            dataframe::eval_many({sum_ab, twice}, in);
+            dftu_utils_test::eval_many_ok({sum_ab, twice}, in);
         REQUIRE(outs.size() == 2);
         REQUIRE(outs[0].length() == 4);
         CHECK(outs[0].data<std::int64_t>()[0] == 11);
@@ -1553,7 +1571,8 @@ TEST_SUITE("vec") {
         dstd::Vector<dataframe::AggExprSpec> specs{
             dataframe::agg_count("n"), dataframe::agg_sum(ab).as("sum_ab"),
             dataframe::agg_mean(ab).as("mean_ab")};
-        DataFrame out = dataframe::group_agg_expr(keyx, specs, in, "k");
+        DataFrame out = dftu_utils_test::ok(
+            dataframe::group_agg_expr(keyx, specs, in, "k"));
         REQUIRE(out.num_rows() == 2);
         REQUIRE(out.names ==
                 dstd::Vector<dstd::String>{"k", "n", "sum_ab", "mean_ab"});
@@ -1668,10 +1687,11 @@ TEST_SUITE("vec") {
         Series key = Series::strings(ks);
         Series dur = Series::flat_i64(dv.data(), n);
         dstd::Vector<const Series*> vals{&dur};
-        DataFrame g = dataframe::group_agg(key, vals,
-                                           {{dataframe::AggOp::Count, -1, "n"},
-                                            {dataframe::AggOp::Sum, 0, "s"}},
-                                           "cat");
+        DataFrame g = dftu_utils_test::ok(
+            dataframe::group_agg(key, vals,
+                                 {{dataframe::AggOp::Count, -1, "n"},
+                                  {dataframe::AggOp::Sum, 0, "s"}},
+                                 "cat"));
         REQUIRE(g.num_rows() == 2);
         // first-seen order: a then b
         CHECK(g.columns[0].string_at(0) == "a");
@@ -1695,13 +1715,13 @@ TEST_SUITE("vec") {
                                    dataframe::expr_col(0),
                                    dataframe::expr_col(1)),
             dataframe::expr_lit(std::int64_t{2}));
-        Series r = dataframe::eval(e, in);
+        Series r = dftu_utils_test::eval_ok(e, in);
         CHECK(r.type() == TypeId::Int64);
         CHECK(r.data<std::int64_t>()[0] == 22);
         CHECK(r.data<std::int64_t>()[3] == 88);
 
         // a / 2  promotes to float
-        Series rf = dataframe::eval(
+        Series rf = dftu_utils_test::eval_ok(
             dataframe::expr_binary(dataframe::BinaryOp::Div,
                                    dataframe::expr_col(0),
                                    dataframe::expr_lit(std::int64_t{2})),
@@ -1714,12 +1734,12 @@ TEST_SUITE("vec") {
         dataframe::Expr sum = dataframe::expr_binary(dataframe::BinaryOp::Add,
                                                      dataframe::expr_col(0),
                                                      dataframe::expr_col(1));
-        Series cse = dataframe::eval(
+        Series cse = dftu_utils_test::eval_ok(
             dataframe::expr_binary(dataframe::BinaryOp::Add, sum, sum), in);
         CHECK(cse.data<std::int64_t>()[0] == 22);  // (1+10)*2
 
         // comparison -> bool
-        Series mask = dataframe::eval(
+        Series mask = dftu_utils_test::eval_ok(
             dataframe::expr_cmp(
                 dataframe::CmpOp::Gt, dataframe::expr_col(1),
                 dftracer::utils::dataframe::to_scalar<std::int64_t>(25)),
@@ -1777,13 +1797,13 @@ TEST_SUITE("vec") {
         b.columns.push_back(Series::flat_i64(cnt.data(), 3));
 
         // select projects, sharing the underlying buffers (no copy).
-        DataFrame proj = select(b, {"count"});
+        DataFrame proj = dftu_utils_test::ok(select(b, {"count"}));
         REQUIRE(proj.num_columns() == 1);
         CHECK(proj.names[0] == "count");
         CHECK(proj.columns[0].data<std::int64_t>() ==
               b.columns[1].data<std::int64_t>());  // same buffer pointer
 
-        DataFrame rn = rename(b, {"key", "n"});
+        DataFrame rn = dftu_utils_test::ok(rename(b, {"key", "n"}));
         CHECK(rn.names[0] == "key");
         CHECK(rn.names[1] == "n");
         CHECK(rn.num_rows() == 3);
@@ -1800,10 +1820,10 @@ TEST_SUITE("vec") {
         CHECK(ord.data<std::int64_t>()[1] == 2);
         CHECK(ord.data<std::int64_t>()[2] == 0);
 
-        DataFrame asc = sort_by(b, "count", false);
+        DataFrame asc = dftu_utils_test::ok(sort_by(b, "count", false));
         CHECK(asc.columns[1].data<std::int64_t>()[0] == 10);
         CHECK(asc.columns[0].string_at(0) == "b");
-        DataFrame desc = sort_by(b, "count", true);
+        DataFrame desc = dftu_utils_test::ok(sort_by(b, "count", true));
         CHECK(desc.columns[1].data<std::int64_t>()[0] == 30);
         CHECK(desc.columns[0].string_at(0) == "a");
     }
@@ -2078,10 +2098,10 @@ TEST_SUITE("vec") {
         dstd::Vector<std::int64_t> dur{10, 20, 5, 30, 15};
         b.columns.push_back(Series::flat_i64(dur.data(), 5));
 
-        DataFrame g =
+        DataFrame g = dftu_utils_test::ok(
             dataframe::group_by(b, "cat",
                                 {{dataframe::Agg::Count, "", "count"},
-                                 {dataframe::Agg::Sum, "dur", "sum_dur"}});
+                                 {dataframe::Agg::Sum, "dur", "sum_dur"}}));
         REQUIRE(g.num_rows() == 2);
         REQUIRE(g.num_columns() == 3);
         CHECK(g.names[0] == "cat");
@@ -2104,7 +2124,7 @@ TEST_SUITE("vec") {
         b.columns.push_back(Series::flat_i64(dur.data(), 6));
 
         dstd::Vector<DataFrame> parts =
-            dataframe::hash_partition(b, {"cat"}, 4);
+            dftu_utils_test::ok(dataframe::hash_partition(b, {"cat"}, 4));
         REQUIRE(parts.size() == 4);
 
         std::int64_t total = 0;
@@ -2127,7 +2147,8 @@ TEST_SUITE("vec") {
 
         // partition_id is the per-row part each row of hash_partition landed
         // in, and it is a registry op.
-        Series ids = dataframe::partition_id(b, {"cat"}, 4);
+        Series ids =
+            dftu_utils_test::ok(dataframe::partition_id(b, {"cat"}, 4));
         REQUIRE(ids.type() == TypeId::Int32);
         REQUIRE(ids.length() == 6);
         const std::int32_t* id = ids.data<std::int32_t>();
@@ -2137,12 +2158,15 @@ TEST_SUITE("vec") {
         }
         CHECK(id[0] == id[2]);
         CHECK(id[1] == id[4]);
-        CHECK_THROWS_AS(dataframe::partition_id(b, {}, 4),
-                        std::invalid_argument);
-        CHECK_THROWS_AS(dataframe::partition_id(b, {"cat"}, 0),
-                        std::invalid_argument);
-        CHECK_THROWS_AS(dataframe::partition_id(b, {"nope"}, 4),
-                        std::out_of_range);
+        dftu_utils_test::expect_error(
+            dataframe::partition_id(b, {}, 4),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
+        dftu_utils_test::expect_error(
+            dataframe::partition_id(b, {"cat"}, 0),
+            dftracer::utils::common::ErrorCode::InvalidArgument);
+        dftu_utils_test::expect_error(
+            dataframe::partition_id(b, {"nope"}, 4),
+            dftracer::utils::common::ErrorCode::NotFound);
         const char* keys[1] = {"cat"};
         const dftu_dataframe* h = dftu_dataframe_new(
             dstd::Vector<const char*>{"cat", "dur"}.data(),
@@ -2171,13 +2195,15 @@ TEST_SUITE("vec") {
         dstd::Vector<std::int64_t> dur{50, 10, 90, 30, 70};
         b.columns.push_back(Series::flat_i64(dur.data(), 5));
 
-        DataFrame top2 = dataframe::topk(b, "dur", 2, true);  // largest
+        DataFrame top2 =
+            dftu_utils_test::ok(dataframe::topk(b, "dur", 2, true));  // largest
         REQUIRE(top2.num_rows() == 2);
         CHECK(top2.columns[1].data<std::int64_t>()[0] == 90);
         CHECK(top2.columns[1].data<std::int64_t>()[1] == 70);
         CHECK(top2.columns[0].string_at(0) == "c");
 
-        DataFrame bot2 = dataframe::topk(b, "dur", 2, false);  // smallest
+        DataFrame bot2 = dftu_utils_test::ok(
+            dataframe::topk(b, "dur", 2, false));  // smallest
         CHECK(bot2.columns[1].data<std::int64_t>()[0] == 10);
         CHECK(bot2.columns[1].data<std::int64_t>()[1] == 30);
     }
@@ -2194,7 +2220,7 @@ TEST_SUITE("vec") {
         dstd::Vector<std::int64_t> bn{3};
         b.columns.push_back(Series::flat_i64(bn.data(), 1));
 
-        DataFrame m = dataframe::concat({&a, &b});
+        DataFrame m = dftu_utils_test::ok(dataframe::concat({&a, &b}));
         REQUIRE(m.num_rows() == 3);
         CHECK(m.columns[0].string_at(2) == "z");
         CHECK(m.columns[1].data<std::int64_t>()[2] == 3);
@@ -2218,8 +2244,8 @@ TEST_SUITE("vec") {
         dstd::Vector<double> bm{30.5};
         b.columns.push_back(Series::flat_f64(bm.data(), 1));
 
-        DataFrame m =
-            dataframe::concat({&a, &b}, dataframe::ConcatHow::Diagonal);
+        DataFrame m = dftu_utils_test::ok(
+            dataframe::concat({&a, &b}, dataframe::ConcatHow::Diagonal));
         REQUIRE(m.num_rows() == 3);
         // Column order = first appearance: k, n, m, r.
         REQUIRE(m.names == dstd::Vector<dstd::String>{"k", "n", "m", "r"});
@@ -2259,8 +2285,8 @@ TEST_SUITE("vec") {
         c.names = {"v"};
         dstd::Vector<double> cn{2.5};
         c.columns.push_back(Series::flat_f64(cn.data(), 1));
-        DataFrame m =
-            dataframe::concat({&a, &b, &c}, dataframe::ConcatHow::Diagonal);
+        DataFrame m = dftu_utils_test::ok(
+            dataframe::concat({&a, &b, &c}, dataframe::ConcatHow::Diagonal));
         REQUIRE(m.columns.size() == 1);
         CHECK(m.columns[0].type() ==
               dftracer::utils::dataframe::TypeId::String);
@@ -2287,9 +2313,9 @@ TEST_SUITE("vec") {
         b.names = {"v"};
         dstd::Vector<std::int64_t> bn{1};
         b.columns.push_back(Series::flat_i64(bn.data(), 1));
-        CHECK_THROWS_AS(
+        dftu_utils_test::expect_error(
             dataframe::concat({&a, &b}, dataframe::ConcatHow::Diagonal),
-            std::invalid_argument);
+            dftracer::utils::common::ErrorCode::InvalidArgument);
     }
 
     TEST_CASE("elementwise: abs/clip/round/fillna/cumsum") {
@@ -2466,7 +2492,7 @@ TEST_SUITE("vec") {
         dstd::Vector<std::int64_t> v{5, 1, 5, 5, 1, 9};
         Series c =
             Series::flat_i64(v.data(), static_cast<std::int64_t>(v.size()));
-        DataFrame vc = c.value_counts();
+        DataFrame vc = dftu_utils_test::ok(c.value_counts());
 
         REQUIRE(vc.num_columns() == 2);
         CHECK(vc.column_index("value") == 0);
@@ -2490,22 +2516,25 @@ TEST_SUITE("vec") {
     TEST_CASE("Scalar ergonomic typed accessors") {
         dstd::Vector<double> f{1.0, 5.0, 2.0, 4.0};
         Series fc = Series::flat_f64(f.data(), 4);
-        CHECK(fc.max().f64() == doctest::Approx(5.0));
-        CHECK(fc.sum().f64() == doctest::Approx(12.0));
+        CHECK(dftu_utils_test::ok(fc.max()).f64() == doctest::Approx(5.0));
+        CHECK(dftu_utils_test::ok(fc.sum()).f64() == doctest::Approx(12.0));
         CHECK(fc.count() == 4);
 
         dstd::Vector<std::int64_t> iv{10, 20, 30};
         Series ic = Series::flat_i64(iv.data(), 3);
-        CHECK(ic.max().i64() == 30);
-        CHECK(ic.sum().i64() == 60);
-        CHECK(ic.max().u64() == 30u);
-        CHECK(ic.max().as<double>() == doctest::Approx(30.0));
-        CHECK(ic.max().tag() == DFTU_SCALAR_TAG_I64);
-        CHECK(ic.min().boolean() == true);
+        CHECK(dftu_utils_test::ok(ic.max()).i64() == 30);
+        CHECK(dftu_utils_test::ok(ic.sum()).i64() == 60);
+        CHECK(dftu_utils_test::ok(ic.max()).u64() == 30u);
+        CHECK(dftu_utils_test::ok(ic.max()).as<double>() ==
+              doctest::Approx(30.0));
+        CHECK(dftu_utils_test::ok(ic.max()).tag() == DFTU_SCALAR_TAG_I64);
+        CHECK(dftu_utils_test::ok(ic.min()).boolean() == true);
 
-        dftu_scalar raw = ic.max();           // implicit Scalar -> dftu_scalar
+        dftu_scalar raw =
+            dftu_utils_test::ok(ic.max());   // implicit Scalar -> dftu_scalar
         CHECK(raw.value.i == 30);
-        Series filled = ic.fillna(ic.min());  // Scalar as scalar-taking arg
+        Series filled = ic.fillna(
+            dftu_utils_test::ok(ic.min()));  // Scalar as scalar-taking arg
         CHECK(filled.valid());
 
         dstd::Vector<dstd::String> names{"a", "b", "b"};
@@ -3251,17 +3280,19 @@ TEST_CASE("dftu_series_string_at returns null and length 0 when no value") {
 
 TEST_CASE("Series::strings refuses more than INT32_MAX total bytes") {
     constexpr std::size_t MAX_BYTES = 2147483647u;
-    CHECK_NOTHROW(Series::check_string_bytes(MAX_BYTES));
-    CHECK_THROWS_AS(Series::check_string_bytes(MAX_BYTES + 1),
-                    std::length_error);
+    Series::check_string_bytes(MAX_BYTES);
+    auto result = fresh_process::run("Series::strings past INT32_MAX scenario");
+    CHECK(result.aborted_with("String column exceeds INT32_MAX bytes"));
+}
 
+TEST_CASE("Series::strings past INT32_MAX scenario" * doctest::skip()) {
+    fresh_process::announce_abort();
     // The sizes are summed before any byte is read, so the pointer is never
     // dereferenced.
     const char byte = 'x';
     const dstd::StringView big(&byte, std::size_t{1} << 30);
     const dstd::Vector<dstd::StringView> views = {big, big, big};
-    CHECK_THROWS_AS(Series::strings(dstd::Span<const dstd::StringView>(views)),
-                    std::length_error);
+    (void)Series::strings(dstd::Span<const dstd::StringView>(views));
 }
 
 TEST_CASE("dftu_series_new_string rejects wrapped offsets") {

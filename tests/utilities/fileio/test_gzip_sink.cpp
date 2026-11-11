@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
@@ -54,8 +55,8 @@ TEST_CASE("GzipSink - pieces split mid-line") {
 
     dstd::String expected;
     for (int i = 0; i < 9000; ++i) {
-        expected += "{\"id\":" + dstd::to_string(i) + ",\"p\":\"" +
-                    dstd::String(1000, 'x') + "\"}\n";
+        expected +=
+            dstd::fmt<"{\"id\":{},\"p\":\"{}\"}\n">(i, dstd::String(1000, 'x'));
     }
     expected += "{\"unterminated\":1}";
     {
@@ -69,5 +70,5 @@ TEST_CASE("GzipSink - pieces split mid-line") {
     CHECK(decode(path, last) == expected);
     REQUIRE(last.size() >= 2);
     for (std::size_t i = 0; i + 1 < last.size(); ++i) CHECK(last[i] == '\n');
-    (void)dstd::fs::remove_all(dir);
+    dstd::fs::remove_all(dir).discard();
 }

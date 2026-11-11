@@ -4,17 +4,18 @@
 // covering the same-batch delivery, the ordering rule, and the per-batch reset.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/domains/plugins/fold_adapter.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
-#include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 
@@ -58,10 +59,11 @@ struct ConsumerSlice {
 // Owns a plugin plus a PluginFold bound to `bus`, torn down in the right order.
 struct FoldHolder {
     dftu_plugin* plugin;
-    dstd::UniquePtr<plugins::PluginFold> fold;
+    dstd::UniquePtr<domains::plugins::PluginFold> fold;
     FoldHolder(dftu_plugin* p, dstd::StringIntern& intern,
                trace::views::detail::FoldPortBus* bus)
-        : plugin(p), fold(dstd::make_unique<plugins::PluginFold>(p, intern)) {
+        : plugin(p),
+          fold(dstd::make_unique<domains::plugins::PluginFold>(p, intern)) {
         fold->bind_port_bus(bus);
     }
     ~FoldHolder() {
@@ -137,8 +139,8 @@ TEST_SUITE("PluginPorts") {
         g_present = false;
         g_consumed = 0;
         bus.clear();
-        prod.fold->step(fb);
-        cons.fold->step(fb);
+        dftu_utils_test::ok(prod.fold->step(fb));
+        dftu_utils_test::ok(cons.fold->step(fb));
         CHECK(g_present);
         CHECK(g_consumed == 3);
     }
@@ -161,8 +163,9 @@ TEST_SUITE("PluginPorts") {
         g_present = true;
         g_consumed = 123;
         bus.clear();
-        cons.fold->step(fb);  // producer has not published yet
-        prod.fold->step(fb);
+        dftu_utils_test::ok(
+            cons.fold->step(fb));  // producer has not published yet
+        dftu_utils_test::ok(prod.fold->step(fb));
         CHECK_FALSE(g_present);
         CHECK(g_consumed == 0);
     }
@@ -183,14 +186,14 @@ TEST_SUITE("PluginPorts") {
             dstd::Span<const trace::views::detail::FoldEvent>(evs), unit};
 
         bus.clear();
-        prod.fold->step(fb);
-        cons.fold->step(fb);
+        dftu_utils_test::ok(prod.fold->step(fb));
+        dftu_utils_test::ok(cons.fold->step(fb));
         REQUIRE(g_present);
         REQUIRE(g_consumed == 2);
 
         // Next batch: the driver clears the bus and the producer stays silent.
         bus.clear();
-        cons.fold->step(fb);
+        dftu_utils_test::ok(cons.fold->step(fb));
         CHECK_FALSE(g_present);
         CHECK(g_consumed == 0);
     }

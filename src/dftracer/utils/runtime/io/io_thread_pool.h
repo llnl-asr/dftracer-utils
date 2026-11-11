@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/queue.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
 
@@ -43,8 +44,8 @@ class IoThreadPool {
     IoThreadPool(const IoThreadPool&) = delete;
     IoThreadPool& operator=(const IoThreadPool&) = delete;
 
-    /// Start the pool threads.
-    void start();
+    /// Start the pool threads. Fails when no thread can start.
+    dstd::Result<void> start();
 
     /// Stop and join all threads.
     void stop();
@@ -97,7 +98,9 @@ class IoThreadPool {
    private:
     void worker_loop();
     void wake(std::size_t items);
-    bool spawn_locked();
+    /// True when a thread started, false when none could but the pool has one,
+    /// an error when it has none.
+    dstd::Result<bool> spawn_locked();
     void reap_locked();
 
     std::atomic<std::size_t> thread_count_;

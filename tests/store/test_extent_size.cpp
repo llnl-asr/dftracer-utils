@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/filesystem_info.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
@@ -44,13 +45,13 @@ struct TempDir {
     dstd::Path path;
     TempDir() {
         path = dstd::fs::temp_directory() /
-               ("dftu_store_extent_size_" + dstd::to_string(::getpid()));
+               (dstd::fmt<"dftu_store_extent_size_{}">(::getpid()));
         REQUIRE(dstd::fs::remove_all(path).has_value());
         REQUIRE(dstd::fs::create_directories(path).has_value());
     }
     TempDir(const TempDir&) = delete;
     TempDir& operator=(const TempDir&) = delete;
-    ~TempDir() { (void)dstd::fs::remove_all(path); }
+    ~TempDir() { dstd::fs::remove_all(path).discard(); }
 };
 
 std::uint32_t chosen(std::size_t stripe_size,

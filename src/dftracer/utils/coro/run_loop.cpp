@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/run_loop.h>
+#include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/memory/detail/manager.h>
 
 #include <chrono>
@@ -23,7 +24,7 @@ bool RunLoop::drive_until(dstd::FunctionRef<bool()> done) {
             if (done()) break;
             std::unique_lock<std::mutex> lock(mutex_);
             if (!ready_.empty()) continue;
-            if (parked_.size() == 0) throw_stalled();
+            if (parked_.size() == 0) stalled();
             // A waiter parked here is woken by post() from another thread.
             ready_cv_.wait_for(lock, std::chrono::milliseconds(10),
                                [&] { return !ready_.empty() || done(); });
@@ -60,11 +61,10 @@ bool RunLoop::run_one() {
     return true;
 }
 
-void RunLoop::throw_stalled() {
-    throw common::DFTUtilsException(
-        common::ErrorCode::Pipeline,
-        "RunLoop stalled: no runnable coroutines but the awaited work has "
-        "not completed. Something is waiting on a resumption that will "
+void RunLoop::stalled() {
+    dstd::fatal(
+        "coro: RunLoop stalled: no runnable coroutines but the awaited work "
+        "has not completed. Something is waiting on a resumption that will "
         "never arrive.");
 }
 

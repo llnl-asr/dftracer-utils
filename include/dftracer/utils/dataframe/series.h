@@ -6,6 +6,8 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -114,16 +116,16 @@ class Series {
             [](void* ctx) { delete static_cast<Held*>(ctx); }, held)};
     }
 
-    /// Throws std::length_error when `total` bytes do not fit the int32
-    /// offsets of a String column.
+    /// Ends the process when `total` bytes do not fit the int32 offsets of a
+    /// String column.
     static void check_string_bytes(std::size_t total) {
         if (total >
             static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()))
-            throw std::length_error("String column exceeds INT32_MAX bytes");
+            dstd::fatal("String column exceeds INT32_MAX bytes");
     }
 
     /// Build a FLAT String column from `values` (offsets + concatenated bytes).
-    /// Throws std::length_error when the total bytes pass INT32_MAX.
+    /// Ends the process when the total bytes pass INT32_MAX.
     static Series strings(const dstd::Vector<dstd::String>& values) {
         dstd::Vector<std::int32_t> offsets(values.size() + 1, 0);
         std::size_t total = 0;
@@ -385,13 +387,11 @@ class Series {
     /// Reductions over the valid values. A bool column counts true as 1; min
     /// and max of a string column give a STR scalar borrowing the column. A
     /// reduction the engine does not define for the column type (sum of a
-    /// string, sum of a timestamp) throws @ref
-    /// dftracer::utils::common::DFTUtilsException "DFTUtilsException"
-    /// (INVALID_ARGUMENT) naming the operation and the type; it never returns 0
-    /// for a refusal.
-    Scalar sum() const;
-    Scalar min() const;
-    Scalar max() const;
+    /// string, sum of a timestamp) returns an InvalidArgument error naming the
+    /// operation and the type; it never returns 0 for a refusal.
+    dstd::Result<Scalar> sum() const;
+    dstd::Result<Scalar> min() const;
+    dstd::Result<Scalar> max() const;
     Scalar product() const;
     Scalar mode() const;           ///< most frequent non-null value (hash)
     bool all() const;              ///< every non-null Bool bit set
@@ -399,7 +399,8 @@ class Series {
     std::int64_t arg_min() const;  ///< index of min non-null value (-1 if none)
     std::int64_t arg_max() const;  ///< index of max non-null value (-1 if none)
     std::int64_t count() const;    ///< non-null row count
-    double mean() const;           ///< throws like sum() for a type with no sum
+    /// The mean; the error of sum() for a type with no sum.
+    dstd::Result<double> mean() const;
     double variance(bool sample = true) const;
     double stddev(bool sample = true) const;
     double skewness() const;
@@ -410,8 +411,9 @@ class Series {
 
     /// The distinct values of this column and their counts, as a @ref DataFrame
     /// with columns `value` (this column's type) and `count` (Int64),
-    /// most-frequent first.
-    DataFrame value_counts() const;
+    /// most-frequent first. An InvalidArgument error for a type with no
+    /// per-row value to count.
+    dstd::Result<DataFrame> value_counts() const;
 
     /// Rank of each row (`method` selects the tie-break), ascending unless
     /// `descending`, as a Float64 column; a null and a float NaN are unranked:

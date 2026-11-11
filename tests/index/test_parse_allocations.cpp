@@ -6,10 +6,11 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/memory/detail/heap.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/build/batch_builder.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 
 using namespace dftracer::utils;
@@ -46,18 +47,19 @@ TEST_SUITE("IndexParseAllocations") {
             files.emplace_back(write_trace(env.dir(), i));
 
         Runtime rt(4);
-        index::build::IndexBuildBatchResult result;
+        trace::index::build::IndexBuildBatchResult result;
         const auto pool_before = memory::detail::debug_allocation_count();
         auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
             auto config =
-                dstd::make_shared<index::build::IndexBuildBatchConfig>();
+                dstd::make_shared<trace::index::build::IndexBuildBatchConfig>();
             config->file_paths = files;
             config->index_dir = env.dir() + "/idx";
             config->parallelism = 4;
-            result =
-                co_await index::build::BatchBuilder::process(std::move(config));
+            result = co_await trace::index::build::BatchBuilder::process(
+                std::move(config));
         });
-        rt.submit(std::move(task), "parse-allocations").wait();
+        dftu_utils_test::ok(
+            rt.submit(std::move(task), "parse-allocations").wait());
         const auto pool =
             memory::detail::debug_allocation_count() - pool_before;
         REQUIRE(pool > 0);
@@ -82,18 +84,19 @@ TEST_SUITE("IndexParseAllocations") {
             files.emplace_back(write_trace(env.dir(), i, SMALL_EVENTS));
 
         Runtime rt(4);
-        index::build::IndexBuildBatchResult result;
+        trace::index::build::IndexBuildBatchResult result;
         const auto pool_before = memory::detail::debug_allocation_count();
         auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
             auto config =
-                dstd::make_shared<index::build::IndexBuildBatchConfig>();
+                dstd::make_shared<trace::index::build::IndexBuildBatchConfig>();
             config->file_paths = files;
             config->index_dir = env.dir() + "/idx";
             config->parallelism = 4;
-            result =
-                co_await index::build::BatchBuilder::process(std::move(config));
+            result = co_await trace::index::build::BatchBuilder::process(
+                std::move(config));
         });
-        rt.submit(std::move(task), "parse-allocations-small").wait();
+        dftu_utils_test::ok(
+            rt.submit(std::move(task), "parse-allocations-small").wait());
         const auto pool =
             memory::detail::debug_allocation_count() - pool_before;
         REQUIRE(pool > 0);

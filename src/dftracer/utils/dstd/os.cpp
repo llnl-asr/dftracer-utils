@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/os.h>
 
 #include <cerrno>
@@ -49,14 +50,8 @@ Condition condition_from_errno(int error) noexcept {
 }
 
 String make_message(StringView first, StringView second, StringView text) {
-    String message(first);
-    if (!second.empty()) {
-        message.append(" -> ");
-        message.append(second);
-    }
-    message.append(": ");
-    message.append(text);
-    return message;
+    if (second.empty()) return fmt<"{}: {}">(first, text);
+    return fmt<"{} -> {}: {}">(first, second, text);
 }
 
 Error errno_error(int error, StringView first, StringView second) {

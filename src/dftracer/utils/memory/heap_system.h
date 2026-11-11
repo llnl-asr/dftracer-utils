@@ -24,10 +24,14 @@ inline SystemHeader* system_header(void* p) noexcept {
 }
 
 void* system_allocate(std::size_t size, std::size_t align);
+/// Like system_allocate, but null when the memory is not available. The other
+/// ends the process.
+void* system_try_allocate(std::size_t size, std::size_t align);
 void system_deallocate(void* p) noexcept;
 void system_deallocate(void* p, std::size_t size) noexcept;
 
-/// Resize a block from system_allocate as reallocate() describes.
+/// Resize a block from system_allocate as reallocate() describes. Ends the
+/// process when the memory is not available.
 void* system_reallocate(void* p, std::size_t old_size, std::size_t new_size,
                         std::size_t align);
 

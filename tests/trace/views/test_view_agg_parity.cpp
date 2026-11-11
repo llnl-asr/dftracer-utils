@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <task_result.h>
 #include <trace/views/agg_parity_common.h>
 
 using namespace dftracer::utils;
@@ -77,8 +78,9 @@ TEST_SUITE("View") {
             };
 
             dataframe::DataFrame expect = collect_groupmap_plan(coarse());
-            views::detail::scan::run(fine())
-                .get();  // materialize only the finer rollup
+            dftu_utils_test::ok(
+                views::detail::scan::run(fine())
+                    .get());  // materialize only the finer rollup
             dataframe::DataFrame engine_served = collect_engine_plan(coarse());
             check_match(expect, engine_served, "cat");
         }
@@ -112,7 +114,7 @@ TEST_SUITE("View") {
                     });
             };
             dataframe::DataFrame expect = collect_groupmap_plan(q());
-            views::detail::scan::run(q()).get();
+            dftu_utils_test::ok(views::detail::scan::run(q()).get());
             check_match(expect, collect_engine_plan(q()), "cat");
         }
 
@@ -151,7 +153,7 @@ TEST_SUITE("View") {
                     specs());
             };
             dataframe::DataFrame expect = collect_groupmap_plan(coarse());
-            views::detail::scan::run(fine()).get();
+            dftu_utils_test::ok(views::detail::scan::run(fine()).get());
             check_match(expect, collect_engine_plan(coarse()), "cat");
         }
 
@@ -178,14 +180,16 @@ TEST_SUITE("View") {
             };
             dataframe::DataFrame same_expect =
                 collect_groupmap_plan(occ({GroupKey::cat()}));
-            views::detail::scan::run(occ({GroupKey::cat()})).get();
+            dftu_utils_test::ok(
+                views::detail::scan::run(occ({GroupKey::cat()})).get());
             check_match(same_expect,
                         collect_engine_plan(occ({GroupKey::cat()})), "cat");
 
             dataframe::DataFrame coarse_expect =
                 collect_groupmap_plan(occ({GroupKey::cat()}));
-            views::detail::scan::run(occ({GroupKey::cat(), GroupKey::name()}))
-                .get();
+            dftu_utils_test::ok(views::detail::scan::run(
+                                    occ({GroupKey::cat(), GroupKey::name()}))
+                                    .get());
             check_match(coarse_expect,
                         collect_engine_plan(occ({GroupKey::cat()})), "cat");
         }
@@ -230,13 +234,15 @@ TEST_SUITE("View") {
             };
             dataframe::DataFrame same_expect =
                 collect_groupmap_plan(hv({GroupKey::cat()}));
-            views::detail::scan::run(hv({GroupKey::cat()})).get();
+            dftu_utils_test::ok(
+                views::detail::scan::run(hv({GroupKey::cat()})).get());
             check_hist(same_expect, collect_engine_plan(hv({GroupKey::cat()})));
 
             dataframe::DataFrame coarse_expect =
                 collect_groupmap_plan(hv({GroupKey::cat()}));
-            views::detail::scan::run(hv({GroupKey::cat(), GroupKey::name()}))
-                .get();
+            dftu_utils_test::ok(views::detail::scan::run(
+                                    hv({GroupKey::cat(), GroupKey::name()}))
+                                    .get());
             check_hist(coarse_expect,
                        collect_engine_plan(hv({GroupKey::cat()})));
         }

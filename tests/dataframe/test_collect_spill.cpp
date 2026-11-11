@@ -8,6 +8,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/spill.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
@@ -18,6 +19,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <stdlib.h>
+#include <task_result.h>
 #include <testing_utilities.h>
 #include <unistd.h>
 
@@ -34,22 +36,23 @@ constexpr std::int64_t N = 3000;
 constexpr std::int64_t MORSEL = 100;
 constexpr const char* DIR_VAR = "DFTRACER_UTILS_SPILL_DIR";
 
-DataFrame run(dftracer::utils::coro::CoroTask<DataFrame> t) {
-    return dftracer::utils::default_runtime().submit(std::move(t)).get();
+DataFrame run(dftracer::utils::coro::CoroTask<dstd::Result<DataFrame>> t) {
+    return dftu_utils_test::ok(
+        dftracer::utils::default_runtime().submit(std::move(t)).get());
 }
 
 struct SpillDirVar {
     dstd::Path dir;
     explicit SpillDirVar(const dstd::String& name) {
-        dir = dstd::fs::temp_directory() /
-              (name + "_" + dstd::to_string(::getpid()));
+        dir =
+            dstd::fs::temp_directory() / (dstd::fmt<"{}_{}">(name, ::getpid()));
         REQUIRE(dstd::fs::remove_all(dir).has_value());
         REQUIRE(dstd::fs::create_directories(dir).has_value());
         ::setenv(DIR_VAR, dir.c_str(), 1);
     }
     ~SpillDirVar() {
         ::unsetenv(DIR_VAR);
-        (void)dstd::fs::remove_all(dir);
+        dstd::fs::remove_all(dir).discard();
     }
     std::size_t entries() const {
         std::size_t n = 0;
@@ -78,8 +81,8 @@ DataFrame make_frame() {
         if (i % 5 != 2)
             valid[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
         if (i % 7 != 3) sv[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
-        text.push_back(i % 7 == 3 ? "" : "name-" + dstd::to_string(i % 11));
-        json.push_back("{\"k\":" + dstd::to_string(i) + "}");
+        text.push_back(i % 7 == 3 ? "" : dstd::fmt<"name-{}">(i % 11));
+        json.push_back(dstd::fmt<"{\"k\":{}}">(i));
         inner.push_back(i);
         offs.push_back(static_cast<std::int32_t>(inner.size()));
     }
@@ -196,13 +199,15 @@ TEST_SUITE("collect spill") {
     TEST_CASE("a spill file goes to the directory the variable names") {
         SpillDirVar var("dftu_cs_dir");
         const dstd::Path run_path = [] {
-            dftracer::utils::dataframe::spill::Dir d;
-            return dstd::Path(d.run_path(0));
+            const auto d = dftu_utils_test::ok(
+                dftracer::utils::dataframe::spill::Dir::create());
+            return dstd::Path(d->run_path(0));
         }();
         CHECK(run_path.str().rfind(var.dir.str(), 0) == 0);
         {
-            dftracer::utils::dataframe::spill::Dir d;
-            (void)dstd::fs::write_file(dstd::PathView(d.run_path(0)), "x");
+            const auto d = dftu_utils_test::ok(
+                dftracer::utils::dataframe::spill::Dir::create());
+            dstd::fs::write_file(dstd::PathView(d->run_path(0)), "x").discard();
             CHECK(var.entries() == 1);
         }
         CHECK(var.entries() == 0);
@@ -211,24 +216,22 @@ TEST_SUITE("collect spill") {
     TEST_CASE("an unusable directory fails naming it and the variable") {
         SpillDirVar var("dftu_cs_bad");
         const dstd::Path blocker = var.dir / "file";
-        (void)dstd::fs::write_file(dstd::PathView(blocker), "x");
+        dstd::fs::write_file(dstd::PathView(blocker), "x").discard();
         const dstd::Path bad = blocker / "sub";
         ::setenv(DIR_VAR, bad.c_str(), 1);
         const DataFrame df = make_frame();
-        const auto msg_of = [](auto&& fn) {
-            try {
-                fn();
-            } catch (const std::exception& e) {
-                return dstd::String(e.what());
-            }
-            return dstd::String();
-        };
-        const dstd::String collect_msg =
-            msg_of([&] { run(lazy_of(df, 1).collect(MORSEL)); });
+        const auto collected = dftracer::utils::default_runtime()
+                                   .submit(lazy_of(df, 1).collect(MORSEL))
+                                   .get();
+        dftu_utils_test::expect_error(collected,
+                                      dftracer::utils::common::ErrorCode::Io);
+        const dstd::String collect_msg(collected.error().c_str());
         CHECK(collect_msg.find(bad.str()) != dstd::String::npos);
         CHECK(collect_msg.find(DIR_VAR) != dstd::String::npos);
-        const dstd::String dir_msg =
-            msg_of([] { dftracer::utils::dataframe::spill::Dir d; });
+        const auto dir = dftracer::utils::dataframe::spill::Dir::create();
+        dftu_utils_test::expect_error(dir,
+                                      dftracer::utils::common::ErrorCode::Io);
+        const dstd::String dir_msg(dir.error().c_str());
         CHECK(dir_msg.find(bad.str()) != dstd::String::npos);
         CHECK(dir_msg.find(DIR_VAR) != dstd::String::npos);
     }

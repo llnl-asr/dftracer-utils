@@ -8,9 +8,11 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/frame_native.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <task_result.h>
 
 #include <cstdint>
 #include <cstring>
@@ -52,7 +54,8 @@ Series binaries(const dstd::Vector<dstd::String>& values) {
 }
 
 dstd::String name_of(std::size_t length, std::size_t index) {
-    return dstd::String(length - 1, 'n') + static_cast<char>('a' + index);
+    return dstd::fmt<"{}{}">(dstd::String(length - 1, 'n'),
+                             static_cast<char>('a' + index));
 }
 
 DataFrame frame_with_name_size(std::size_t length) {
@@ -92,7 +95,7 @@ TEST_SUITE("native frame alignment") {
             CAPTURE(length);
             const DataFrame f = frame_with_name_size(length);
             for (const Series& c : f.columns) REQUIRE(c.valid());
-            const dstd::String bytes = frame_to_native(f);
+            const dstd::String bytes = dftu_utils_test::ok(frame_to_native(f));
             const auto back = frame_from_native(bytes);
             REQUIRE(back);
             CHECK(back->names == f.names);
@@ -106,7 +109,7 @@ TEST_SUITE("native frame alignment") {
             check_flat(back->columns[3], INT32S);
             check_flat(back->columns[4], INT64S);
             check_flat(back->columns[5], DOUBLES);
-            CHECK(frame_to_native(*back) == bytes);
+            CHECK(dftu_utils_test::ok(frame_to_native(*back)) == bytes);
         }
     }
 
@@ -120,13 +123,13 @@ TEST_SUITE("native frame alignment") {
             f.columns.push_back(large_strings(TEXT));
             for (std::size_t c = 0; c < f.columns.size(); ++c)
                 f.names.push_back(name_of(length, c));
-            const dstd::String bytes = frame_to_native(f);
+            const dstd::String bytes = dftu_utils_test::ok(frame_to_native(f));
             const auto back = frame_from_native(bytes);
             REQUIRE(back);
             CHECK(back->columns[0].is_null(1));
             check_strings(back->columns[1]);
             check_strings(back->columns[2]);
-            CHECK(frame_to_native(*back) == bytes);
+            CHECK(dftu_utils_test::ok(frame_to_native(*back)) == bytes);
         }
     }
 }

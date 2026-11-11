@@ -4,9 +4,9 @@
 // Series/DataFrame it already holds without linking the dataframe C ABI.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/domains/plugins/fold_adapter.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/plugins/abi.h>
-#include <dftracer/utils/plugins/fold_adapter.h>
 
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
 // arrow_abi.
@@ -34,8 +34,8 @@ struct HostFixture {
     dstd::StringIntern intern;
     dftu_plugin* plugin =
         dftracer::utils::plugins::make_plugin<TrivialSlice>(nullptr);
-    dstd::UniquePtr<plugins::PluginFold> fold =
-        dstd::make_unique<plugins::PluginFold>(plugin, intern);
+    dstd::UniquePtr<domains::plugins::PluginFold> fold =
+        dstd::make_unique<domains::plugins::PluginFold>(plugin, intern);
     dftu_plugin_host& host() { return fold->host(); }
     ~HostFixture() {
         fold.reset();
@@ -208,10 +208,10 @@ TEST_CASE("plugin ops: a plugin op over a chunked column equals the joined") {
 
     static const dftu_op_desc sum_op = {
         "chunk_join_test.sum", DFTU_OP_SIG(I64, SERIES, NONE, NONE),
-        reinterpret_cast<const void*>(&sum_through_data)};
+        reinterpret_cast<dftu_op_generic_fn>(&sum_through_data)};
     static const dftu_op_desc dbl_op = {
         "chunk_join_test.double", DFTU_OP_SIG(SERIES, SERIES, NONE, NONE),
-        reinterpret_cast<const void*>(&doubled_through_data)};
+        reinterpret_cast<dftu_op_generic_fn>(&doubled_through_data)};
     if (!dftu_op_find(sum_op.name)) REQUIRE(dftu_op_register(&sum_op) == 0);
     if (!dftu_op_find(dbl_op.name)) REQUIRE(dftu_op_register(&dbl_op) == 0);
 

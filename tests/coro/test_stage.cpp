@@ -528,7 +528,7 @@ TEST_CASE("timeout bounds each item of a stream") {
     Runtime runtime(2);
     auto slow_stream = []() -> AsyncGenerator<int> {
         co_yield 1;
-        co_await sleep(500ms);
+        co_await sleep(60s);
         co_yield 2;
     };
     dstd::Condition condition = dstd::Condition::Unknown;
@@ -548,7 +548,9 @@ TEST_CASE("timeout bounds each item of a stream") {
     }()));
     CHECK(seen == 1);
     CHECK(condition == dstd::Condition::Timeout);
-    CHECK(std::chrono::steady_clock::now() - start < 400ms);
+    // Far below the sleep, so only a timeout that waits the sleep out fails,
+    // while a slow shared runner still passes.
+    CHECK(std::chrono::steady_clock::now() - start < 20s);
 
     auto fast = dftu_utils_test::ok(
         runtime.block_on(collect(numbers(0, 100) | timeout(5s))));

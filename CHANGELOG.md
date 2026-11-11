@@ -7,8 +7,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Added
+
+- Add `yaml::Records` for a YAML text too large for memory.
+  It yields the elements of a top-level block sequence, or the documents of a `---` stream, one at a time, from a string or a file read in blocks.
+  Each chunk of about 64 MiB (`RecordsOptions::chunk_bytes`) is parsed on its own and its buffers are reused, so memory follows the chunk and not the text.
+
 ### Changed
 
+- Read YAML from the events of rapidyaml into a flat tape of 16-byte entries, with no tree.
+  A parsed text now holds its own bytes plus a tape of about 2.3 times its size for a list of small records and 1.8 times for a deeply nested map (measured on 100 MB inputs), where the rapidyaml tree held 17 to 23 times.
+  The reader behaves as before, except that a duplicate key error names the line and column (`file:3:1: duplicate key 'a'`), two aliases that name the same key are a duplicate key, and an own key now overrides a key of every map in a `<<: [*a, *b]` merge.
+  A mapping with a container as a key (`? [a, b]`) is refused.
+  An alias that expands past 2^27 nodes is refused.
 - Rename the library `libdftracer_utils_io` to `libdftracer_utils_fileio` and `libdftracer_utils_utilities` to `libdftracer_utils_domains`, with their pkg-config files.
   A program that links the `dftracer_utils` target needs no change.
 - Move the public index headers from `dftracer/utils/index/` to `dftracer/utils/trace/index/` and their namespace from `dftracer::utils::index` to `dftracer::utils::trace::index`.

@@ -17,6 +17,7 @@
 #include <dftracer/utils/runtime/io/backend.h>
 #include <dftracer/utils/store/record.h>
 #include <dftracer/utils/trace/views/fold_event.h>
+#include <dftracer/utils/yaml/tape.h>
 #include <doctest/doctest.h>
 
 #include <cstddef>
@@ -53,6 +54,10 @@ constexpr std::size_t RECORD_ITEM_BUDGET = 72;
 constexpr std::size_t FILE_STAT_BUDGET = 40;
 // Lives in the frame of each task that awaits I/O.
 constexpr std::size_t IO_OP_BUDGET = 80;
+// A parsed YAML text holds one entry per scalar and container, so the entry
+// stays at 16 bytes: a 64-bit offset or skip index, a 48-bit length and a
+// kind with its flags.
+constexpr std::size_t TAPE_ENTRY_BUDGET = 16;
 
 static_assert(within<dftu_series, SERIES_BUDGET, 8>());
 static_assert(within<runtime::io::IoOp, IO_OP_BUDGET, 8>());
@@ -70,6 +75,7 @@ static_assert(within<dftracer::utils::dstd::Result<void>, RESULT_VOID_BUDGET,
 static_assert(within<dftracer::utils::store::engine::RecordItem,
                      RECORD_ITEM_BUDGET, 8>());
 static_assert(within<dstd::fs::FileStat, FILE_STAT_BUDGET, 8>());
+static_assert(within<yaml::TapeEntry, TAPE_ENTRY_BUDGET, 8>());
 
 }  // namespace
 
@@ -88,4 +94,5 @@ TEST_CASE("the layout budgets hold") {
     CHECK(sizeof(dftracer::utils::store::engine::RecordItem) <=
           RECORD_ITEM_BUDGET);
     CHECK(sizeof(dstd::fs::FileStat) <= FILE_STAT_BUDGET);
+    CHECK(sizeof(yaml::TapeEntry) <= TAPE_ENTRY_BUDGET);
 }

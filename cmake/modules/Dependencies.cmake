@@ -1114,14 +1114,17 @@ function(link_boost_math TARGET_NAME)
 endfunction()
 
 # ==============================================================================
-# rapidyaml - YAML parser: the amalgamated release pair (header and source)
-# built as one static PIC archive with hidden visibility and no exceptions. The
-# yaml library links it privately, so no library of ours exports a ryml
-# symbol. No ryml header is installed: no public header includes one.
+# rapidyaml - YAML parser: the amalgamated release pair (header and source).
+# The yaml library compiles the source into the one unit that holds its event
+# handler, because the parse engine of rapidyaml is a template whose members
+# the source defines, and only a unit that sees them can instantiate the engine
+# for a handler of ours. So there is no archive, no library of ours exports a
+# ryml symbol, and no ryml header is installed: no public header includes one.
 # ==============================================================================
 
 function(need_rapidyaml)
-  if(TARGET dftracer::ryml)
+  get_property(_ryml_ready GLOBAL PROPERTY DFTU_RAPIDYAML_INCLUDE_DIRS SET)
+  if(_ryml_ready)
     return()
   endif()
   cpmaddpackage(
@@ -1148,7 +1151,10 @@ function(need_rapidyaml)
     YES)
 
   # The release source includes its header by the absolute path of the build
-  # machine that made it, so the copy we compile names it by file name.
+  # machine that made it, so the copy we compile names it by file name. The
+  # copy is marked a system header, so our warnings do not read third-party
+  # code, and its name ends in .hpp, so the precompiled header of the yaml
+  # library does not take it for a standard header.
   file(READ ${rapidyaml_cpp_SOURCE_DIR}/rapidyaml.v0.16.0.singlesrc.cpp
        _ryml_source)
   set(_ryml_original "${_ryml_source}")
@@ -1156,13 +1162,14 @@ function(need_rapidyaml)
     REPLACE
       "#include </home/runner/work/rapidyaml/rapidyaml/assets/rapidyaml.v0.16.0.singlesrc.hpp>"
       "#include <rapidyaml.v0.16.0.singlesrc.hpp>" _ryml_source "${_ryml_source}")
-  set(_ryml_generated ${CMAKE_BINARY_DIR}/rapidyaml/rapidyaml.v0.16.0.singlesrc.cpp)
   if(_ryml_source STREQUAL _ryml_original)
     message(
       FATAL_ERROR
         "need_rapidyaml: the include of the header was not found in the release source"
     )
   endif()
+  set(_ryml_source "#pragma GCC system_header\n${_ryml_source}")
+  set(_ryml_generated ${CMAKE_BINARY_DIR}/rapidyaml/rapidyaml_impl.hpp)
   set(_ryml_current "")
   if(EXISTS ${_ryml_generated})
     file(READ ${_ryml_generated} _ryml_current)
@@ -1170,40 +1177,22 @@ function(need_rapidyaml)
   if(NOT _ryml_current STREQUAL _ryml_source)
     file(WRITE ${_ryml_generated} "${_ryml_source}")
   endif()
-
-  add_library(dftracer_ryml STATIC ${_ryml_generated})
-  target_include_directories(
-    dftracer_ryml SYSTEM
-    PUBLIC $<BUILD_INTERFACE:${rapidyaml_hpp_SOURCE_DIR}>)
-  target_compile_features(dftracer_ryml PUBLIC cxx_std_17)
-  # Third-party source: no warnings, and no exceptions. rapidyaml throws only
-  # when RYML_DEFAULT_CALLBACK_USES_EXCEPTIONS is defined, which it is not.
-  target_compile_options(dftracer_ryml PRIVATE -w
-                                               $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)
-  set_target_properties(
-    dftracer_ryml
-    PROPERTIES OUTPUT_NAME dftracer_ryml
-               EXPORT_NAME ryml
-               ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
-               POSITION_INDEPENDENT_CODE ON
-               CXX_VISIBILITY_PRESET hidden
-               VISIBILITY_INLINES_HIDDEN ON)
-  add_library(dftracer::ryml ALIAS dftracer_ryml)
-  install_dependency_archive(dftracer_utils_ryml dftracer:: TARGETS
-                             dftracer_ryml)
-  dftracer_utils_ok("Using rapidyaml 0.16.0 (single source, static, hidden)")
+  set_property(GLOBAL PROPERTY DFTU_RAPIDYAML_INCLUDE_DIRS
+                            ${rapidyaml_hpp_SOURCE_DIR}
+                            ${CMAKE_BINARY_DIR}/rapidyaml)
+  dftracer_utils_ok("Using rapidyaml 0.16.0 (single source, in the yaml library)")
 endfunction()
 
-# Links the rapidyaml archive into TARGET_NAME privately.
-function(link_rapidyaml TARGET_NAME)
+# Puts the rapidyaml header and source on the include path of TARGET_NAME.
+function(use_rapidyaml TARGET_NAME)
   if(NOT TARGET ${TARGET_NAME})
-    message(
-      FATAL_ERROR "link_rapidyaml: target '${TARGET_NAME}' does not exist")
+    message(FATAL_ERROR "use_rapidyaml: target '${TARGET_NAME}' does not exist")
   endif()
-  if(NOT TARGET dftracer::ryml)
-    message(FATAL_ERROR "link_rapidyaml: call need_rapidyaml() first")
+  get_property(_ryml_dirs GLOBAL PROPERTY DFTU_RAPIDYAML_INCLUDE_DIRS)
+  if(NOT _ryml_dirs)
+    message(FATAL_ERROR "use_rapidyaml: call need_rapidyaml() first")
   endif()
-  target_link_libraries(${TARGET_NAME} PRIVATE dftracer::ryml)
+  target_include_directories(${TARGET_NAME} SYSTEM PRIVATE ${_ryml_dirs})
 endfunction()
 
 # ==============================================================================

@@ -137,17 +137,20 @@ TEST_CASE("yaml: a duplicate key is an error") {
         CHECK(doc.error().is_code(common::ErrorCode::InvalidArgument));
         return dstd::String(doc.error().message());
     };
-    CHECK(message_of("a: 1\nb: 2\na: 3\n") == "dup.yaml: duplicate key 'a'");
-    CHECK(message_of("{\"a\": 1, \"a\": 2}") == "dup.yaml: duplicate key 'a'");
+    CHECK(message_of("a: 1\nb: 2\na: 3\n") ==
+          "dup.yaml:3:1: duplicate key 'a'");
+    CHECK(message_of("{\"a\": 1, \"a\": 2}") ==
+          "dup.yaml:1:10: duplicate key 'a'");
     CHECK(message_of("x:\n  y:\n    k: 1\n    k: 2\n") ==
-          "dup.yaml: duplicate key 'k'");
+          "dup.yaml:4:5: duplicate key 'k'");
     CHECK(message_of("items:\n  - k: 1\n    k: 2\n") ==
-          "dup.yaml: duplicate key 'k'");
-    CHECK(message_of("\"a\": 1\na: 2\n") == "dup.yaml: duplicate key 'a'");
-    CHECK(message_of("'a': 1\n\"a\": 2\n") == "dup.yaml: duplicate key 'a'");
+          "dup.yaml:3:5: duplicate key 'k'");
+    CHECK(message_of("\"a\": 1\na: 2\n") == "dup.yaml:2:1: duplicate key 'a'");
+    CHECK(message_of("'a': 1\n\"a\": 2\n") ==
+          "dup.yaml:2:1: duplicate key 'a'");
     auto unnamed = Document::parse("a: 1\na: 2\n", "");
     REQUIRE_FALSE(unnamed.has_value());
-    CHECK(dstd::String(unnamed.error().message()) == "duplicate key 'a'");
+    CHECK(dstd::String(unnamed.error().message()) == "2:1: duplicate key 'a'");
 }
 
 TEST_CASE("yaml: a duplicate key is found in a large map too") {
@@ -158,7 +161,7 @@ TEST_CASE("yaml: a duplicate key is found in a large map too") {
     auto doc = Document::parse(text, "big.yaml");
     REQUIRE_FALSE(doc.has_value());
     CHECK(dstd::String(doc.error().message()) ==
-          "big.yaml: duplicate key 'key57'");
+          "big.yaml:101:1: duplicate key 'key57'");
 }
 
 TEST_CASE("yaml: distinct keys and the same key in two maps are fine") {

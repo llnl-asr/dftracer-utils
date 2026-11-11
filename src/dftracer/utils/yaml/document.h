@@ -61,6 +61,7 @@ class Value {
 
    private:
     friend class Document;
+    friend class Records;
 
     Value(const DocumentStorage* storage, std::size_t id)
         : storage_(storage), id_(id) {}
@@ -69,8 +70,9 @@ class Value {
     std::size_t id_ = 0;
 };
 
-/// A parsed YAML or JSON text. It owns the text and the tree built in it, so
-/// the strings of its values are views into that text.
+/// A parsed YAML or JSON text. It owns the text and the tape built over it, so
+/// the strings of its values are views into that text, or into the arena of
+/// the document for a string that grew while it was read.
 class Document {
    public:
     Document(Document&&) noexcept;
@@ -78,12 +80,18 @@ class Document {
     ~Document();
 
     /// Parses the first document of `text`, which the document keeps: a string
-    /// moved in is not copied. A syntax error is an InvalidArgument error whose
+    /// moved in is not copied. A text of several documents is read whole, and
+    /// the root is the first. A syntax error is an InvalidArgument error whose
     /// message is `source_name:line:column: reason`, or `line:column: reason`
     /// when `source_name` is empty. Nothing throws, and a failed parse leaves
     /// no state behind. A mapping that holds a key twice, by the text of the
-    /// key (`"a"` and `a` are the same key), is an InvalidArgument error
-    /// `source_name: duplicate key 'k'`, as YAML 1.2.2 requires unique keys.
+    /// key (`"a"` and `a` are the same key, and so are two aliases of one
+    /// scalar), is an InvalidArgument error `source_name:line:column:
+    /// duplicate key 'k'`, as YAML 1.2.2 requires unique keys. A container as
+    /// a key, an alias to a node that holds it and aliases that expand to
+    /// more than 2^27 nodes are InvalidArgument errors too. An alias reads as
+    /// the node it names, with no copy; a `<<` key reads as the members of
+    /// its maps, and a key of the map itself wins.
     static dstd::Result<Document> parse(dstd::String text,
                                         dstd::StringView source_name);
 

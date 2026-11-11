@@ -1,193 +1,142 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/dstd/fatal.h>
-#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
-#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/to_chars.h>
-#include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/memory/allocator.h>
 #include <dftracer/utils/yaml/document.h>
+#include <dftracer/utils/yaml/tape.h>
 
-#include <csetjmp>
 #include <cstddef>
 #include <limits>
 #include <utility>
-
-// The error callbacks of rapidyaml never return: they jump back to the parse.
-// Its templates and inline functions stay out of this library's symbols.
-#pragma GCC visibility push(hidden)
-#include <rapidyaml.v0.16.0.singlesrc.hpp>
-#pragma GCC visibility pop
 
 namespace dftracer::utils::yaml {
 
 namespace {
 
-constexpr std::size_t ERROR_TEXT_CAPACITY = 512;
+constexpr std::size_t NONE = static_cast<std::size_t>(-1);
+/// How many merge keys a lookup follows, one inside the other.
+constexpr std::size_t MERGE_DEPTH_LIMIT = 64;
 
-struct Trap {
-    std::jmp_buf env;
-    dstd::StringView source_name;
-    char text[ERROR_TEXT_CAPACITY];
-    std::size_t text_size = 0;
+const TapeEntry& entry_at(const DocumentStorage* storage, std::size_t id) {
+    return storage->tape[id];
+}
+
+// An alias reads as the node it names.
+std::size_t resolve(const DocumentStorage* storage, std::size_t id) {
+    if (id != NONE && storage->tape[id].kind == TapeKind::Alias)
+        return storage->tape[id].pos;
+    return id;
+}
+
+TapeKind kind_of(const DocumentStorage* storage, std::size_t id) {
+    if (id == NONE) return TapeKind::Null;
+    return entry_at(storage, resolve(storage, id)).kind;
+}
+
+// The tape index after the node at `id`.
+std::size_t skip(const DocumentStorage* storage, std::size_t id) {
+    const TapeEntry& entry = entry_at(storage, id);
+    return entry.is_container() ? entry.pos : id + 1;
+}
+
+// The value index of the key `key` among the own members of the map at
+// `map`, and the index of its merge value in `merge`.
+struct MapScan {
+    std::size_t found = NONE;
+    std::size_t merge = NONE;
 };
 
-ryml::Callbacks make_callbacks(void* user_data);
-
-}  // namespace
-
-struct DocumentStorage {
-    dstd::String buffer;
-    Trap* trap = nullptr;
-    ryml::Tree tree;
-
-    DocumentStorage() : tree(make_callbacks(this)) {}
-};
-
-namespace {
-
-using Block = std::max_align_t;
-
-std::size_t block_count(std::size_t bytes) {
-    return (bytes + sizeof(Block) - 1) / sizeof(Block);
-}
-
-void* ryml_allocate(std::size_t bytes, void*, void*) {
-    return memory::Allocator<Block>().allocate(block_count(bytes));
-}
-
-void ryml_free(void* mem, std::size_t bytes, void*) {
-    memory::Allocator<Block>().deallocate(static_cast<Block*>(mem),
-                                          block_count(bytes));
-}
-
-dstd::StringView view_of(ryml::csubstr s) {
-    return dstd::StringView(s.str, s.len);
-}
-
-[[noreturn]] void leave(void* user_data, std::size_t line, std::size_t col,
-                        ryml::csubstr msg) {
-    auto* storage = static_cast<DocumentStorage*>(user_data);
-    Trap* trap = storage->trap;
-    if (trap == nullptr) {
-        dstd::fatal("rapidyaml: error outside a parse",
-                    dstd::String(view_of(msg)).c_str());
+MapScan scan_map(const DocumentStorage* storage, std::size_t map,
+                 dstd::StringView key) {
+    MapScan scan;
+    const std::size_t end = entry_at(storage, map).pos;
+    for (std::size_t i = map + 1; i < end;) {
+        const TapeEntry& entry = entry_at(storage, i);
+        const std::size_t value = i + 1;
+        if ((entry.flags & tape_flag::MERGE) != 0) {
+            scan.merge = value;
+        } else if (key_text(*storage, i) == key) {
+            scan.found = value;
+            return scan;
+        }
+        i = skip(storage, value);
     }
-    const bool located = line != ryml::npos && col != ryml::npos;
-    dstd::FmtResult written;
-    if (located && !trap->source_name.empty()) {
-        written = dstd::fmt_to<"{}:{}:{}: {}">(trap->text, sizeof(trap->text),
-                                               trap->source_name, line + 1,
-                                               col + 1, view_of(msg));
-    } else if (located) {
-        written = dstd::fmt_to<"{}:{}: {}">(trap->text, sizeof(trap->text),
-                                            line + 1, col + 1, view_of(msg));
-    } else if (!trap->source_name.empty()) {
-        written = dstd::fmt_to<"{}: {}">(trap->text, sizeof(trap->text),
-                                         trap->source_name, view_of(msg));
-    } else {
-        written =
-            dstd::fmt_to<"{}">(trap->text, sizeof(trap->text), view_of(msg));
+    return scan;
+}
+
+std::size_t find_in(const DocumentStorage* storage, std::size_t map,
+                    dstd::StringView key, std::size_t depth);
+
+// The merge value is a map, an alias of one or a sequence of them; the first
+// map of a sequence that has the key wins.
+std::size_t find_merged(const DocumentStorage* storage, std::size_t merge,
+                        dstd::StringView key, std::size_t depth) {
+    if (depth >= MERGE_DEPTH_LIMIT) return NONE;
+    const std::size_t node = resolve(storage, merge);
+    const TapeEntry& entry = entry_at(storage, node);
+    if (entry.kind == TapeKind::Map) return find_in(storage, node, key, depth);
+    if (entry.kind != TapeKind::Seq) return NONE;
+    for (std::size_t i = node + 1; i < entry.pos; i = skip(storage, i)) {
+        const std::size_t element = resolve(storage, i);
+        if (entry_at(storage, element).kind != TapeKind::Map) continue;
+        const std::size_t found = find_in(storage, element, key, depth);
+        if (found != NONE) return found;
     }
-    trap->text_size = written.size;
-    std::longjmp(trap->env, 1);
+    return NONE;
 }
 
-[[noreturn]] void on_basic_error(ryml::csubstr msg,
-                                 const ryml::ErrorDataBasic& data,
-                                 void* user_data) {
-    leave(user_data, data.location.line, data.location.col, msg);
+std::size_t find_in(const DocumentStorage* storage, std::size_t map,
+                    dstd::StringView key, std::size_t depth) {
+    const MapScan scan = scan_map(storage, map, key);
+    if (scan.found != NONE || scan.merge == NONE) return scan.found;
+    return find_merged(storage, scan.merge, key, depth + 1);
 }
 
-[[noreturn]] void on_parse_error(ryml::csubstr msg,
-                                 const ryml::ErrorDataParse& data,
-                                 void* user_data) {
-    leave(user_data, data.ymlloc.line, data.ymlloc.col, msg);
-}
+// Calls `fn` with every member the map shows: its own, and those of its merge
+// values that no earlier member overrides. `root` is the map the lookup that
+// decides which member wins starts from.
+template <class Fn>
+void each_member(const DocumentStorage* storage, std::size_t root,
+                 std::size_t map, std::size_t depth, Fn& fn);
 
-[[noreturn]] void on_visit_error(ryml::csubstr msg, const ryml::ErrorDataVisit&,
-                                 void* user_data) {
-    leave(user_data, ryml::npos, ryml::npos, msg);
-}
-
-ryml::Callbacks make_callbacks(void* user_data) {
-    ryml::Callbacks callbacks;
-    callbacks.set_user_data(user_data)
-        .set_allocate(ryml_allocate)
-        .set_free(ryml_free)
-        .set_error_basic(on_basic_error)
-        .set_error_parse(on_parse_error)
-        .set_error_visit(on_visit_error);
-    return callbacks;
-}
-
-struct ParseJob {
-    ryml::Parser* parser;
-    ryml::Tree* tree;
-    ryml::ReferenceResolver* resolver;
-    ryml::csubstr name;
-    ryml::substr text;
-};
-
-void run_parse(ParseJob* job) {
-    ryml::parse_in_place(job->parser, job->name, job->text, job->tree);
-}
-
-void run_resolve(ParseJob* job) { job->tree->resolve(job->resolver); }
-
-// Holds only trivial locals, so the jump back leaves nothing undestroyed.
-bool run_guarded(Trap* trap, void (*step)(ParseJob*), ParseJob* job) {
-    if (setjmp(trap->env) != 0) return false;
-    step(job);
-    return true;
-}
-
-constexpr std::size_t LINEAR_KEY_LIMIT = 16;
-
-// Sets `duplicate` to the first key that a map of the tree holds twice, by the
-// text of the key, and returns whether there is one. Reads only.
-bool find_duplicate_key(const ryml::Tree& tree, dstd::StringView& duplicate) {
-    if (tree.empty()) return false;
-    dstd::Vector<std::size_t> pending;
-    dstd::Vector<dstd::StringView> keys;
-    dstd::HashSet<dstd::StringView> seen;
-    pending.push_back(tree.root_id());
-    while (!pending.empty()) {
-        const std::size_t id = pending.back();
-        pending.pop_back();
-        const bool is_map = tree.is_map(id);
-        keys.clear();
-        seen.clear();
-        for (std::size_t child = tree.first_child(id); child != ryml::npos;
-             child = tree.next_sibling(child)) {
-            if (tree.is_container(child)) pending.push_back(child);
-            if (!is_map) continue;
-            const dstd::StringView key = tree.key_is_null(child)
-                                             ? dstd::StringView{}
-                                             : view_of(tree.key(child));
-            if (keys.size() < LINEAR_KEY_LIMIT) {
-                for (const dstd::StringView earlier : keys) {
-                    if (earlier == key) {
-                        duplicate = key;
-                        return true;
-                    }
-                }
-                keys.push_back(key);
-                continue;
-            }
-            if (seen.empty()) seen.insert(keys.begin(), keys.end());
-            if (!seen.insert(key).second) {
-                duplicate = key;
-                return true;
-            }
+template <class Fn>
+void each_merged_member(const DocumentStorage* storage, std::size_t root,
+                        std::size_t merge, std::size_t depth, Fn& fn) {
+    if (depth >= MERGE_DEPTH_LIMIT) return;
+    const std::size_t node = resolve(storage, merge);
+    const TapeEntry& entry = entry_at(storage, node);
+    if (entry.kind == TapeKind::Map) {
+        each_member(storage, root, node, depth + 1, fn);
+    } else if (entry.kind == TapeKind::Seq) {
+        for (std::size_t i = node + 1; i < entry.pos; i = skip(storage, i)) {
+            const std::size_t element = resolve(storage, i);
+            if (entry_at(storage, element).kind == TapeKind::Map)
+                each_member(storage, root, element, depth + 1, fn);
         }
     }
-    return false;
 }
 
-const ryml::Tree& tree_of(const DocumentStorage* storage) {
-    return storage->tree;
+template <class Fn>
+void each_member(const DocumentStorage* storage, std::size_t root,
+                 std::size_t map, std::size_t depth, Fn& fn) {
+    const TapeEntry& begin = entry_at(storage, map);
+    const bool merges = (begin.flags & tape_flag::MERGE) != 0;
+    for (std::size_t i = map + 1; i < begin.pos;) {
+        const TapeEntry& entry = entry_at(storage, i);
+        const std::size_t value = i + 1;
+        if ((entry.flags & tape_flag::MERGE) != 0) {
+            each_merged_member(storage, root, value, depth, fn);
+        } else {
+            const dstd::StringView key = key_text(*storage, i);
+            // Without a merge key nothing overrides a member.
+            if (!merges && depth == 0) {
+                fn(key, value);
+            } else if (find_in(storage, root, key, 0) == value) {
+                fn(key, value);
+            }
+        }
+        i = skip(storage, value);
+    }
 }
 
 bool is_lower(char c) { return c >= 'a' && c <= 'z'; }
@@ -229,38 +178,12 @@ Document::~Document() = default;
 dstd::Result<Document> Document::parse(dstd::String text,
                                        dstd::StringView source_name) {
     auto storage = dstd::make_unique<DocumentStorage>();
-    storage->buffer = std::move(text);
-
-    Trap trap;
-    trap.source_name = source_name;
-    ryml::EventHandlerTree handler(storage->tree.callbacks());
-    ryml::Parser parser(&handler);
-    ryml::ReferenceResolver resolver;
-    ParseJob job{&parser, &storage->tree, &resolver,
-                 ryml::csubstr(source_name.data(), source_name.size()),
-                 ryml::substr(storage->buffer.data(), storage->buffer.size())};
-    storage->trap = &trap;
-    bool parsed = run_guarded(&trap, run_parse, &job);
-    storage->trap = nullptr;
-    if (parsed) {
-        // Before the references are resolved: a merge key overrides keys.
-        dstd::StringView duplicate;
-        if (find_duplicate_key(storage->tree, duplicate)) {
-            if (source_name.empty())
-                return common::make_error<"duplicate key '{}'">(
-                    common::ErrorCode::InvalidArgument, duplicate);
-            return common::make_error<"{}: duplicate key '{}'">(
-                common::ErrorCode::InvalidArgument, source_name, duplicate);
-        }
-        storage->trap = &trap;
-        parsed = run_guarded(&trap, run_resolve, &job);
-        storage->trap = nullptr;
-    }
-    if (!parsed) {
-        return common::make_error<"{}">(
-            common::ErrorCode::InvalidArgument,
-            dstd::StringView(trap.text, trap.text_size));
-    }
+    storage->text = std::move(text);
+    storage->base = storage->text.data();
+    storage->size = storage->text.size();
+    TapeParser parser;
+    if (auto parsed = parser.parse(*storage, source_name); !parsed)
+        return parsed.error();
     return Document(std::move(storage));
 }
 
@@ -271,67 +194,50 @@ dstd::Result<Document> Document::load_file(dstd::PathView path) {
 }
 
 Value Document::root() const {
-    const ryml::Tree& tree = tree_of(storage_.get());
-    if (tree.empty()) return Value(storage_.get(), ryml::npos);
-    std::size_t id = tree.root_id();
-    if (tree.is_stream(id)) id = tree.first_child(id);
-    return Value(storage_.get(), id);
+    return Value(storage_.get(), storage_->tape.empty() ? NONE : 0);
 }
 
 bool Value::is_object() const {
-    return id_ != ryml::npos && tree_of(storage_).is_map(id_);
+    return kind_of(storage_, id_) == TapeKind::Map;
 }
 
-bool Value::is_array() const {
-    return id_ != ryml::npos && tree_of(storage_).is_seq(id_);
-}
+bool Value::is_array() const { return kind_of(storage_, id_) == TapeKind::Seq; }
 
 bool Value::is_string() const {
-    if (id_ == ryml::npos) return false;
-    const ryml::Tree& tree = tree_of(storage_);
-    return tree.has_val(id_) && !tree.is_container(id_) &&
-           !tree.val_is_null(id_);
+    return kind_of(storage_, id_) == TapeKind::Scalar;
 }
 
-bool Value::is_null() const {
-    if (id_ == ryml::npos) return true;
-    const ryml::Tree& tree = tree_of(storage_);
-    if (tree.is_container(id_)) return false;
-    return !tree.has_val(id_) || tree.val_is_null(id_);
-}
+bool Value::is_null() const { return kind_of(storage_, id_) == TapeKind::Null; }
 
 dstd::Optional<Value> Value::find(dstd::StringView key) const {
     if (!is_object()) return dstd::nullopt;
-    const std::size_t child = tree_of(storage_).find_child(
-        id_, ryml::csubstr(key.data(), key.size()));
-    if (child == ryml::npos) return dstd::nullopt;
-    return Value(storage_, child);
+    const std::size_t found = find_in(storage_, resolve(storage_, id_), key, 0);
+    if (found == NONE) return dstd::nullopt;
+    return Value(storage_, found);
 }
 
 void Value::for_each_member(
     dstd::FunctionRef<void(dstd::StringView, Value)> fn) const {
     if (!is_object()) return;
-    const ryml::Tree& tree = tree_of(storage_);
-    for (std::size_t child = tree.first_child(id_); child != ryml::npos;
-         child = tree.next_sibling(child)) {
-        const dstd::StringView key = tree.key_is_null(child)
-                                         ? dstd::StringView{}
-                                         : view_of(tree.key(child));
-        fn(key, Value(storage_, child));
-    }
+    const DocumentStorage* storage = storage_;
+    auto emit = [&](dstd::StringView key, std::size_t value) {
+        fn(key, Value(storage, value));
+    };
+    const std::size_t map = resolve(storage, id_);
+    each_member(storage, map, map, 0, emit);
 }
 
 void Value::for_each_element(dstd::FunctionRef<void(Value)> fn) const {
     if (!is_array()) return;
-    const ryml::Tree& tree = tree_of(storage_);
-    for (std::size_t child = tree.first_child(id_); child != ryml::npos;
-         child = tree.next_sibling(child))
-        fn(Value(storage_, child));
+    const std::size_t seq = resolve(storage_, id_);
+    const std::size_t end = entry_at(storage_, seq).pos;
+    for (std::size_t i = seq + 1; i < end; i = skip(storage_, i))
+        fn(Value(storage_, i));
 }
 
 dstd::StringView Value::raw() const {
     if (!is_string()) return {};
-    return view_of(tree_of(storage_).val(id_));
+    return entry_text(*storage_, entry_at(storage_, resolve(storage_, id_)));
 }
 
 dstd::Optional<dstd::StringView> Value::as_string() const {

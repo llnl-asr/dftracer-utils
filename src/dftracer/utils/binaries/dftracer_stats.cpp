@@ -1229,7 +1229,6 @@ static coro::CoroTask<dstd::Result<void>> index_group_body(
     std::mutex* stats_mutex_ptr, bool needs_per_file_results,
     TraceStatistics* total_ptr, std::mutex* total_mutex_ptr,
     std::atomic<std::size_t>* successful_ptr,
-    std::atomic<std::size_t>* failed_ptr,
     StatisticsQueryType report_type_for_reader) {
     trace::statistics::StatNeeds needs;
     needs.names = report_type_for_reader == StatisticsQueryType::Names ||
@@ -1381,7 +1380,7 @@ static coro::CoroTask<void> process_index_group(
     auto processing = index_group_body(
         index_path_ptr, group_ptr, indexed_stats_ptr, stats_mutex_ptr,
         needs_per_file_results, total_ptr, total_mutex_ptr, successful_ptr,
-        failed_ptr, report_type_for_reader);
+        report_type_for_reader);
     auto done = co_await std::move(processing);
     if (done) co_return;
     DFTRACER_UTILS_LOG_ERROR("Indexed stats batch failed for {}: {}",

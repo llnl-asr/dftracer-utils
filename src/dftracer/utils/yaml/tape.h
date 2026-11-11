@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/yaml/line_index.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -79,6 +80,10 @@ struct DocumentStorage {
     dstd::RawBuffer<TapeEntry> tape;
     dstd::Vector<char> arena;
     std::size_t arena_used = 0;
+    /// The line index, when the text is in the accepted subset of the line
+    /// index: the tape is empty then.
+    LineIndex lines;
+    bool is_lines = false;
 
     void reset_tape() {
         tape.clear();

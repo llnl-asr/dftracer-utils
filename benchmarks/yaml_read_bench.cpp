@@ -5,11 +5,13 @@
 //            dur and an args map), the shape of a trace as YAML
 //   nested   four top maps, four levels, 20 x 20 integer leaves per group
 //
-// Each shape is read three ways, parse and a full walk included:
+// Each shape is read these ways, parse and a full walk included:
 //
 //   parse     yaml::Document::parse over the whole text, no walk
 //   document  yaml::Document::parse over the whole text, then the walk
+//   tape      the same, with the tape reader forced instead of the line index
 //   records   yaml::Records over a file of the text, chunks of --chunk MiB
+//   records1  the same, chunks of 1 MiB
 //   floor     the rapidyaml parse engine with a handler that does nothing,
 //             the speed no reader of this parser can pass; no walk
 //
@@ -27,7 +29,7 @@
 // Built only with DFTRACER_UTILS_BUILD_BENCHMARKS=ON and run manually.
 //
 //   yaml_read_bench [--mb N] [--rounds N] [--chunk MiB] [--dir PATH]
-//                   [--only parse|document|records|floor]
+//                   [--only parse|document|tape|records|records1|floor]
 //   yaml_read_bench --smoke
 
 #include <bench_ok.h>
@@ -40,6 +42,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/yaml/document.h>
+#include <dftracer/utils/yaml/document_test.h>
 #include <dftracer/utils/yaml/records.h>
 #include <unistd.h>
 
@@ -342,13 +345,17 @@ Outcome measure(Fn&& fn) {
     return outcome;
 }
 
-Outcome run_document(const dstd::String& text, Shape shape, bool walks) {
+Outcome run_document(const dstd::String& text, Shape shape, bool walks,
+                     bool force_tape = false) {
     dstd::String copy = text;
-    return measure([&](Answer& answer) {
+    yaml::detail::set_force_tape_for_test(force_tape);
+    const Outcome outcome = measure([&](Answer& answer) {
         auto doc =
             dftu::bench::ok(yaml::Document::parse(std::move(copy), "bench"));
         if (walks) walk(doc.root(), shape, answer);
     });
+    yaml::detail::set_force_tape_for_test(false);
+    return outcome;
 }
 
 Outcome run_records(const dstd::Path& path, Shape shape,
@@ -435,9 +442,9 @@ int main(int argc, char** argv) {
         dftu::bench::ok(dstd::fs::write_file(file, text));
         const double input_mb = static_cast<double>(text.size()) / 1e6;
 
-        constexpr int CASES = 4;
-        static const char* const NAMES[CASES] = {"parse", "document", "records",
-                                                 "floor"};
+        constexpr int CASES = 6;
+        static const char* const NAMES[CASES] = {
+            "parse", "document", "tape", "records", "records1", "floor"};
         dstd::Vector<double> seconds[CASES];
         Outcome outcomes[CASES];
         for (int round = 0; round < rounds; ++round) {
@@ -453,7 +460,14 @@ int main(int argc, char** argv) {
                         outcome = run_document(text, shape, true);
                         break;
                     case 2:
+                        outcome = run_document(text, shape, true, true);
+                        break;
+                    case 3:
                         outcome = run_records(file, shape, chunk_bytes);
+                        break;
+                    case 4:
+                        outcome =
+                            run_records(file, shape, std::size_t{1} << 20);
                         break;
                     default:
                         outcome = run_floor(text);
@@ -462,7 +476,7 @@ int main(int argc, char** argv) {
                 seconds[which].push_back(outcome.seconds);
             }
         }
-        for (const int which : {1, 2}) {
+        for (const int which : {1, 2, 3, 4}) {
             if (!seconds[which].empty() && !(outcomes[which].answer == truth)) {
                 std::fprintf(stderr, "%s: %s answer is not the generated one\n",
                              shape_name, NAMES[which]);

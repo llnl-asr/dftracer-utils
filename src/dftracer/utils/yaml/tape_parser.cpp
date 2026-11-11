@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/allocator.h>
+#include <dftracer/utils/yaml/scalar.h>
 #include <dftracer/utils/yaml/tape.h>
 
 #include <algorithm>
@@ -226,14 +227,6 @@ std::size_t count_newlines(const char* text, std::size_t size) {
     }
     for (; i < size; ++i) total += text[i] == '\n' ? 1u : 0u;
     return total;
-}
-
-bool is_null_text(ryml::csubstr s) {
-    if (s.len == 0) return true;
-    if (s.len == 1) return s.str[0] == '~';
-    return s.len == 4 && (std::memcmp(s.str, "null", 4) == 0 ||
-                          std::memcmp(s.str, "Null", 4) == 0 ||
-                          std::memcmp(s.str, "NULL", 4) == 0);
 }
 
 // Builds the tape from the events of the rapidyaml parser. Everything here
@@ -500,7 +493,8 @@ class TapeHandler : public ryml::EventHandlerStack<TapeHandler, TapeState> {
             entry.flags |= tape_flag::ARENA;
         }
         entry.set_size(s.len);
-        if (plain && is_null_text(s)) entry.kind = TapeKind::Null;
+        if (plain && is_null_text(dstd::StringView(s.str, s.len)))
+            entry.kind = TapeKind::Null;
         return entry;
     }
 

@@ -62,12 +62,21 @@ class Value {
    private:
     friend class Document;
     friend class Records;
+    friend struct LineAccess;
 
     Value(const DocumentStorage* storage, std::size_t id)
         : storage_(storage), id_(id) {}
+    Value(const DocumentStorage* storage, std::uint64_t id, std::uint32_t col,
+          std::uint8_t tag)
+        : storage_(storage), id_(id), col_(col), tag_(tag) {}
 
+    // A tape value: `id_` is the tape index. A line value: `id_` holds the
+    // first line and the limit of a container, or the start and end of a
+    // scalar; `col_` is the column of a container; `tag_` is its kind.
     const DocumentStorage* storage_ = nullptr;
-    std::size_t id_ = 0;
+    std::uint64_t id_ = 0;
+    std::uint32_t col_ = 0;
+    std::uint8_t tag_ = 0;
 };
 
 /// A parsed YAML or JSON text. It owns the text and the tape built over it, so
@@ -103,6 +112,8 @@ class Document {
     Value root() const;
 
    private:
+    friend struct DocumentTestAccess;
+
     explicit Document(dstd::UniquePtr<DocumentStorage> storage);
 
     dstd::UniquePtr<DocumentStorage> storage_;

@@ -4,8 +4,12 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/yaml/document.h>
+#include <dftracer/utils/yaml/document_test.h>
+#include <dftracer/utils/yaml/line_value.h>
+#include <dftracer/utils/yaml/scalar.h>
 #include <dftracer/utils/yaml/tape.h>
 
+#include <atomic>
 #include <cstddef>
 #include <limits>
 #include <utility>
@@ -140,21 +144,6 @@ void each_member(const DocumentStorage* storage, std::size_t root,
     }
 }
 
-bool is_flexible_case(dstd::StringView s) {
-    if (s.empty()) return true;
-    bool lower = true;
-    for (char c : s) lower = lower && dstd::is_ascii_lower(c);
-    if (lower) return true;
-    if (!dstd::is_ascii_upper(s[0])) return false;
-    bool rest_lower = true;
-    bool rest_upper = true;
-    for (std::size_t i = 1; i < s.size(); ++i) {
-        rest_lower = rest_lower && dstd::is_ascii_lower(s[i]);
-        rest_upper = rest_upper && dstd::is_ascii_upper(s[i]);
-    }
-    return rest_lower || rest_upper;
-}
-
 }  // namespace
 
 Document::Document(dstd::UniquePtr<DocumentStorage> storage)
@@ -163,12 +152,41 @@ Document::Document(Document&&) noexcept = default;
 Document& Document::operator=(Document&&) noexcept = default;
 Document::~Document() = default;
 
+namespace detail {
+
+namespace {
+std::atomic<bool> g_force_tape{false};
+}  // namespace
+
+void set_force_tape_for_test(bool force) { g_force_tape.store(force); }
+bool is_force_tape() { return g_force_tape.load(); }
+
+}  // namespace detail
+
+bool DocumentTestAccess::is_line_backed(const Document& doc) {
+    return doc.storage_->is_lines;
+}
+
 dstd::Result<Document> Document::parse(dstd::String text,
                                        dstd::StringView source_name) {
     auto storage = dstd::make_unique<DocumentStorage>();
     storage->text = std::move(text);
-    storage->base = storage->text.data();
-    storage->size = storage->text.size();
+    const std::size_t bom =
+        bom_size(storage->text.data(), storage->text.size());
+    storage->base = storage->text.data() + bom;
+    storage->size = storage->text.size() - bom;
+    if (!detail::is_force_tape()) {
+        const BuildResult built =
+            storage->lines.build(storage->base, storage->size);
+        if (built == BuildResult::Accepted) {
+            storage->is_lines = true;
+            return Document(std::move(storage));
+        }
+        if (built == BuildResult::Invalid) {
+            return line_problem_error(storage->lines.problem, source_name, 1);
+        }
+        storage->lines.release();
+    }
     TapeParser parser;
     if (auto parsed = parser.parse(*storage, source_name); !parsed)
         return parsed.error();
@@ -182,22 +200,32 @@ dstd::Result<Document> Document::load_file(dstd::PathView path) {
 }
 
 Value Document::root() const {
+    if (storage_->is_lines) return LineAccess::root(storage_.get());
     return Value(storage_.get(), storage_->tape.empty() ? NONE : 0);
 }
 
 bool Value::is_object() const {
+    if (storage_->is_lines) return LineAccess::is_object(*this);
     return kind_of(storage_, id_) == TapeKind::Map;
 }
 
-bool Value::is_array() const { return kind_of(storage_, id_) == TapeKind::Seq; }
+bool Value::is_array() const {
+    if (storage_->is_lines) return LineAccess::is_array(*this);
+    return kind_of(storage_, id_) == TapeKind::Seq;
+}
 
 bool Value::is_string() const {
+    if (storage_->is_lines) return LineAccess::is_string(*this);
     return kind_of(storage_, id_) == TapeKind::Scalar;
 }
 
-bool Value::is_null() const { return kind_of(storage_, id_) == TapeKind::Null; }
+bool Value::is_null() const {
+    if (storage_->is_lines) return LineAccess::is_null(*this);
+    return kind_of(storage_, id_) == TapeKind::Null;
+}
 
 dstd::Optional<Value> Value::find(dstd::StringView key) const {
+    if (storage_->is_lines) return LineAccess::find(*this, key);
     if (!is_object()) return dstd::nullopt;
     const std::size_t found = find_in(storage_, resolve(storage_, id_), key, 0);
     if (found == NONE) return dstd::nullopt;
@@ -206,6 +234,7 @@ dstd::Optional<Value> Value::find(dstd::StringView key) const {
 
 void Value::for_each_member(
     dstd::FunctionRef<void(dstd::StringView, Value)> fn) const {
+    if (storage_->is_lines) return LineAccess::for_each_member(*this, fn);
     if (!is_object()) return;
     const DocumentStorage* storage = storage_;
     auto emit = [&](dstd::StringView key, std::size_t value) {
@@ -216,6 +245,7 @@ void Value::for_each_member(
 }
 
 void Value::for_each_element(dstd::FunctionRef<void(Value)> fn) const {
+    if (storage_->is_lines) return LineAccess::for_each_element(*this, fn);
     if (!is_array()) return;
     const std::size_t seq = resolve(storage_, id_);
     const std::size_t end = entry_at(storage_, seq).pos;
@@ -224,6 +254,7 @@ void Value::for_each_element(dstd::FunctionRef<void(Value)> fn) const {
 }
 
 dstd::StringView Value::raw() const {
+    if (storage_->is_lines) return LineAccess::raw(*this);
     if (!is_string()) return {};
     return entry_text(*storage_, entry_at(storage_, resolve(storage_, id_)));
 }
@@ -235,16 +266,7 @@ dstd::Optional<dstd::StringView> Value::as_string() const {
 
 dstd::Optional<bool> Value::as_bool() const {
     if (!is_string()) return dstd::nullopt;
-    const dstd::StringView text = raw();
-    if (!is_flexible_case(text)) return dstd::nullopt;
-    static constexpr dstd::StringView TRUE_NAMES[] = {"y", "yes", "true", "on"};
-    static constexpr dstd::StringView FALSE_NAMES[] = {"n", "no", "false",
-                                                       "off"};
-    for (const dstd::StringView name : TRUE_NAMES)
-        if (dstd::ascii_iequals(text, name)) return true;
-    for (const dstd::StringView name : FALSE_NAMES)
-        if (dstd::ascii_iequals(text, name)) return false;
-    return dstd::nullopt;
+    return parse_bool(raw());
 }
 
 dstd::Optional<double> Value::as_double() const {

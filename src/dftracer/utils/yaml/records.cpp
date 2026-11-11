@@ -2,6 +2,9 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/raw_buffer.h>
+#include <dftracer/utils/yaml/document_test.h>
+#include <dftracer/utils/yaml/line_index.h>
+#include <dftracer/utils/yaml/line_value.h>
 #include <dftracer/utils/yaml/records.h>
 #include <dftracer/utils/yaml/tape.h>
 
@@ -88,6 +91,12 @@ struct RecordsImpl {
     TapeParser parser;
     std::size_t cursor = 0;
     std::size_t cursor_end = 0;
+    /// The walk of a chunk that the line index holds: the next line of the
+    /// top sequence in Seq mode, the line after the last document otherwise.
+    std::uint32_t line_cursor = 0;
+    std::uint32_t line_limit = 0;
+    /// The lines of the chunk, counted before a tape parse rewrites its text.
+    std::uint64_t chunk_lines = 0;
 
     char* chars() { return is_file ? raw.data() : owned.data(); }
     std::size_t chars_size() const {
@@ -186,8 +195,39 @@ dstd::Result<void> RecordsImpl::find_chunk_end() {
 }
 
 dstd::Result<void> RecordsImpl::start_chunk() {
-    storage.base = chars() + begin;
-    storage.size = chunk_end - begin;
+    const std::size_t bom =
+        lines_before == 0 ? bom_size(chars() + begin, chunk_end - begin) : 0;
+    storage.base = chars() + begin + bom;
+    storage.size = chunk_end - begin - bom;
+    storage.is_lines = false;
+    chunk_lines = static_cast<std::uint64_t>(
+        std::count(chars() + begin, chars() + chunk_end, '\n'));
+    if (!detail::is_force_tape()) {
+        const BuildResult built =
+            storage.lines.build(storage.base, storage.size);
+        if (built == BuildResult::Invalid) {
+            return line_problem_error(storage.lines.problem, name,
+                                      lines_before + 1);
+        }
+        if (built == BuildResult::Accepted) {
+            std::uint32_t pos = 0;
+            std::uint32_t first = 0;
+            std::uint32_t limit = 0;
+            LineAccess::next_document(&storage, pos, first, limit);
+            const LineKind kind = storage.lines.entries[first].kind;
+            const bool is_seq =
+                kind == LineKind::SeqItem || kind == LineKind::SeqOpen ||
+                kind == LineKind::SeqMap || kind == LineKind::SeqMapOpen;
+            if (mode != Mode::Seq || (is_seq && !storage.lines.has_markers)) {
+                storage.is_lines = true;
+                storage.reset_tape();
+                line_cursor = mode == Mode::Seq ? first : 0;
+                line_limit = limit;
+                chunk_loaded = true;
+                return {};
+            }
+        }
+    }
     if (auto parsed = parser.parse(storage, name, lines_before + 1); !parsed)
         return parsed;
     cursor = 0;
@@ -283,16 +323,36 @@ dstd::Result<dstd::Optional<Value>> Records::next() {
     RecordsImpl& impl = *impl_;
     for (;;) {
         if (impl.failed) return dstd::Optional<Value>{};
-        if (impl.chunk_loaded) {
+        if (impl.chunk_loaded && impl.storage.is_lines) {
+            const LineIndex& ix = impl.storage.lines;
+            if (impl.mode == Mode::Seq) {
+                if (impl.line_cursor < impl.line_limit &&
+                    ix.entries[impl.line_cursor].indent == 0) {
+                    const std::uint32_t line = impl.line_cursor;
+                    impl.line_cursor = ix.next[line];
+                    return dstd::Optional<Value>(
+                        LineAccess::element(&impl.storage, line));
+                }
+            } else {
+                std::uint32_t first = 0;
+                std::uint32_t limit = 0;
+                if (LineAccess::next_document(&impl.storage, impl.line_cursor,
+                                              first, limit))
+                    return dstd::Optional<Value>(
+                        LineAccess::container(&impl.storage, first, limit));
+            }
+            impl.lines_before += impl.chunk_lines;
+            impl.begin = impl.chunk_end;
+            impl.chunk_loaded = false;
+            impl.storage.is_lines = false;
+        } else if (impl.chunk_loaded) {
             if (impl.cursor < impl.cursor_end) {
                 const std::size_t id = impl.cursor;
                 const TapeEntry& entry = impl.storage.tape[id];
                 impl.cursor = entry.is_container() ? entry.pos : id + 1;
                 return dstd::Optional<Value>(Value(&impl.storage, id));
             }
-            impl.lines_before += static_cast<std::uint64_t>(
-                std::count(impl.chars() + impl.begin,
-                           impl.chars() + impl.chunk_end, '\n'));
+            impl.lines_before += impl.chunk_lines;
             impl.begin = impl.chunk_end;
             impl.chunk_loaded = false;
             impl.storage.reset_tape();

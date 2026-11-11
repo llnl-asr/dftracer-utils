@@ -61,6 +61,7 @@ function(dftu_exclude_vectorscan_symbols target)
 endfunction()
 
 set(DFTU_PC_PRIVATE_duql "-lsimdjson -lpcre2-8 ${DFTU_PC_VECTORSCAN} -ldftracer_utils_hwy")
+set(DFTU_PC_PRIVATE_yaml "-ldftracer_utils_hwy")
 set(DFTU_PC_PRIVATE_dataframe "-lsimdjson -ldftracer_utils_hwy_contrib -ldftracer_utils_hwy -ldftracer_utils_utf8proc_static -lzstd ${DFTU_PC_NANOARROW}")
 set(DFTU_PC_PRIVATE_trace "-lsimdjson -ldftracer_utils_zlib -ldeflate -lzstd ${DFTU_PC_NANOARROW}")
 set(DFTU_PC_PRIVATE_domains "${DFTU_PC_NANOARROW}")
@@ -1064,9 +1065,17 @@ use_precompiled_header(dftracer_utils_json_objects MIN_COUNT 1)
 set(DFTRACER_UTILS_YAML_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/yaml/document.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/yaml/escape.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/yaml/line_index.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/yaml/line_index_simd.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/yaml/line_value.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/yaml/records.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/yaml/tape_parser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/yaml/writer.cpp)
+
+# Highway per-target dispatch functions are referenced only within their TU.
+set_source_files_properties(
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/yaml/line_index_simd.cpp
+    PROPERTIES COMPILE_OPTIONS -Wno-missing-declarations)
 
 create_library(
   NAME
@@ -1102,12 +1111,19 @@ create_library(
   ${COVERAGE_COMPILE_OPTIONS}
   PKG_CONFIG_REQUIRES
   "dftracer_utils_common"
+  PKG_CONFIG_LIBS_PRIVATE
+  "${DFTU_PC_PRIVATE_yaml}"
   FIND_DEPENDENCIES
-  dftracer_utils_common)
+  dftracer_utils_common
+  STATIC_BUNDLED_PACKAGES
+  dftracer_utils_deps)
 
 foreach(variant objects shared static)
   dftu_variant_target(VARIANT_TARGET dftracer_utils_yaml ${variant})
   if(TARGET ${VARIANT_TARGET})
+    if(NOT DFTRACER_UTILS_SINGLE_LIBRARY OR variant STREQUAL "objects")
+      target_link_libraries(${VARIANT_TARGET} PRIVATE hwy)
+    endif()
     if(variant STREQUAL "objects")
       use_rapidyaml(dftracer_utils_yaml_objects)
       target_set_warnings(dftracer_utils_yaml_objects)

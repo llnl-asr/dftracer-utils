@@ -158,6 +158,14 @@ namespace indexer {
 inline constexpr const char* INDEX_STORE_REFRESH_MS_ENV =
     "DFTRACER_UTILS_INDEX_STORE_REFRESH_MS";
 inline constexpr std::uint64_t INDEX_STORE_REFRESH_MS = 1000;
+/// Compressed bytes of one range of a gzip trace that a worker of the index
+/// build inflates. 0 or unset: half the checkpoint size, at least
+/// INDEX_RANGE_MIN_BYTES. A range whose worker passes over a member that the
+/// range before reads too costs those bytes twice, so a range should be longer
+/// than the members of the trace.
+inline constexpr const char* INDEX_RANGE_BYTES_ENV =
+    "DFTRACER_UTILS_INDEX_RANGE_BYTES";
+inline constexpr std::uint64_t INDEX_RANGE_MIN_BYTES = 4 * 1024 * 1024;
 static constexpr std::size_t ZLIB_WINDOW_SIZE = 32768;
 static constexpr int ZLIB_GZIP_WINDOW_BITS = 31;    ///< 15 + 16 for gzip format
 static constexpr int ZLIB_FORMAT_WINDOW_BITS = 15;  ///< zlib format

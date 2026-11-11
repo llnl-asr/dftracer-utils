@@ -392,6 +392,12 @@ class SinkWriterVisitor
         buf_.erase(0, last_nl + 1);
         co_return dstd::Result<void>{};
     }
+    // The carried text ends where a damaged member broke, so it is no whole
+    // record; joined to the next member it would export a garbled line.
+    coro::CoroTask<dstd::Result<void>> on_line_cut(std::size_t) override {
+        buf_.clear();
+        co_return dstd::Result<void>{};
+    }
 
    private:
     trace::RecordPhase phase_of(dstd::StringView line) {

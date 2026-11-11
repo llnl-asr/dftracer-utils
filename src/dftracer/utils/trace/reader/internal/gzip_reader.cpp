@@ -128,6 +128,11 @@ std::size_t GzipReader::max_bytes() const {
     return max_bytes;
 }
 
+bool GzipReader::has_damage() const {
+    check_reader_state(is_open_, indexer_.get());
+    return indexer_->has_damage();
+}
+
 std::size_t GzipReader::line_count() const {
     check_reader_state(is_open_, indexer_.get());
     std::size_t line_count = static_cast<std::size_t>(indexer_->line_count());

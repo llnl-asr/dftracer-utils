@@ -15,6 +15,7 @@
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/json/canonical.h>
 #include <dftracer/utils/json/line.h>
+#include <dftracer/utils/json/value.h>
 #include <dftracer/utils/json/value_access.h>
 #include <dftracer/utils/trace/reader/internal/reader.h>
 #include <dftracer/utils/trace/reader/trace_reader.h>
@@ -142,6 +143,53 @@ class PaddedLines {
 // document.
 inline bool is_cropped_object(dstd::StringView line) {
     return !line.empty() && line.front() == '{' && line.back() != '}';
+}
+
+// Reads every member of `value`, so a syntax error anywhere in it marks the
+// line broken.
+inline void read_whole_value(json::Value value) {
+    switch (value.type()) {
+        case json::Value::Type::Object:
+            value.for_each_member([](dstd::StringView, json::Value member) {
+                read_whole_value(std::move(member));
+            });
+            break;
+        case json::Value::Type::Array:
+            value.for_each_element([](json::Value element) {
+                read_whole_value(std::move(element));
+            });
+            break;
+        case json::Value::Type::String:
+            value.as_string();
+            break;
+        case json::Value::Type::Int:
+            value.as_int();
+            break;
+        case json::Value::Type::Double:
+            value.as_double();
+            break;
+        case json::Value::Type::Bool:
+            value.as_bool();
+            break;
+        case json::Value::Type::Null:
+            break;
+    }
+}
+
+// Whether `line` is one JSON object that parses to its end, which the lazy
+// reads of a query do not check. A line the DOM parser refuses is read by the
+// tolerant parser the index falls back on, which keeps a number too large for
+// a double or an invalid escape.
+inline bool is_whole_record(simdjson::dom::parser& parser,
+                            json::Document& document, dstd::StringView line) {
+    const simdjson::padded_string padded(line.data(), line.size());
+    simdjson::dom::element root;
+    if (!parser.parse(padded).get(root))
+        return root.type() == simdjson::dom::element_type::OBJECT;
+    auto parsed = document.parse(line);
+    if (!parsed || parsed->type() != json::Value::Type::Object) return false;
+    read_whole_value(std::move(*parsed));
+    return !json::detail::ValueAccess::broken(*parsed);
 }
 
 inline bool is_bigint_token(dstd::StringView token) {

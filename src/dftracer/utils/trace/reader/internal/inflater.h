@@ -200,6 +200,7 @@ class ReaderInflater {
         next_read_ = 0;
         file_size_ = 0;
         exhausted_ = false;
+        failed_ = false;
     }
 
     bool is_at_end() const { return exhausted_ && member_pos_ >= member_size_; }
@@ -262,6 +263,7 @@ class ReaderInflater {
 
         bool ended = false;
         bool cut = false;
+        bool broken = false;
         while (true) {
             if (zs_.avail_in() == 0 && next_read_ < file_size_) {
                 if (comp_.size() < READ_CHUNK) comp_.resize(READ_CHUNK);
@@ -287,7 +289,11 @@ class ReaderInflater {
             }
             if (rc != fileio::compress::InflateStatus::Ok &&
                 rc != fileio::compress::InflateStatus::BufError) {
-                co_return false;
+                // What was inflated before the damage is served whole, as
+                // the index recorded it, and the failure comes with the next
+                // call, so a read that ends before it is not refused.
+                broken = true;
+                break;
             }
             if (zs_.avail_in() == 0 && next_read_ >= file_size_ &&
                 zs_.avail_out() != 0) {
@@ -306,7 +312,12 @@ class ReaderInflater {
             }
         }
 
-        if (ended) {
+        if (broken) {
+            if (filled == 0) co_return false;
+            failed_ = true;
+            end_stream();
+            comp_.clear();
+        } else if (ended) {
             comp_off_ = stream_base_ + zs_.total_in() + (stream_raw_ ? 8 : 0);
         } else if (cut) {
             while (filled > 0 && member_owned_[filled - 1] != '\n') --filled;
@@ -327,6 +338,7 @@ class ReaderInflater {
     }
 
     coro::CoroTask<bool> decode_next_member(int fd, off_t& offset) {
+        if (failed_) co_return false;
         if (stream_open_) co_return co_await decode_next_stream(fd, offset);
         if (hinted_ && std::binary_search(big_heads_.begin(), big_heads_.end(),
                                           comp_off_)) {
@@ -528,6 +540,8 @@ class ReaderInflater {
     std::uint64_t next_read_ = 0;
     std::uint64_t file_size_ = 0;
     bool exhausted_ = false;
+    // A stream hit damage after it had given text; the next decode fails.
+    bool failed_ = false;
 
     fileio::compress::GzipStreamInflater zs_;
     dstd::Vector<unsigned char> tail_;

@@ -227,6 +227,14 @@ Index storage and indexing
      - The shortest time in milliseconds between two looks for the data files
        that other processes wrote to the index store.
        ``0`` looks at each read.
+   * - ``DFTRACER_UTILS_INDEX_RANGE_BYTES``
+     - unset
+     - Compressed bytes of one range of a gzip trace that a worker of the index
+       build inflates.
+       Unset or ``0``: half the checkpoint size, at least 4 MiB.
+       A range that starts inside a member reads the end of that member a
+       second time, so a range should be longer than the members of the trace.
+       Values under 64 KiB are raised to 64 KiB.
    * - ``DFTRACER_UTILS_STORE_DIRECT_READS``
      - ``0``
      - ``1`` reads the closed data files of the index store past the page

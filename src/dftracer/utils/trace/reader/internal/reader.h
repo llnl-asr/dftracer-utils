@@ -26,6 +26,9 @@ class Reader {
     // Core metadata accessors
     virtual std::size_t max_bytes() const = 0;
     virtual std::size_t line_count() const = 0;
+    /// See @ref
+    /// dftracer::utils::trace::index::gzip::CheckpointIndexer::has_damage.
+    virtual bool has_damage() const = 0;
     virtual const dstd::String &archive_path() const = 0;
     virtual const dstd::String &index_path() const = 0;
     virtual void set_buffer_size(std::size_t size) = 0;

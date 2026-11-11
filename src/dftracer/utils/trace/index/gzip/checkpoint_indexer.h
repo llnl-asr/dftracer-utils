@@ -58,6 +58,12 @@ class CheckpointIndexer {
     virtual std::uint64_t max_bytes() const = 0;
     virtual std::uint64_t line_count() const = 0;
 
+    /// True when the file has a member that was cut or damaged, or whose
+    /// checksum fails. Its text after the damage can parse as records the
+    /// index did not count, so a reader checks that each line it serves
+    /// parses to its end.
+    virtual bool has_damage() const = 0;
+
     /// Member record (a member or a piece of one) containing `target_offset`
     /// (uncompressed). A RESTART piece also needs its `restart_window`.
     virtual bool find_member(std::size_t target_offset,

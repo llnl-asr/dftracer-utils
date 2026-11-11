@@ -66,11 +66,16 @@ struct GzipMemberSlice {
 /// Build gzip index artifacts (member table, dispatched visitor events).
 ///
 /// The inflate pass runs on `scope`'s executor in up to `ways` workers (0:
-/// the available parallelism, at most 16), each on a run of members of at
-/// least `ckpt_size / 4` uncompressed bytes. At most `ways + 2` runs are
-/// inflated ahead of the visitors, so a file holds about `2 * ways + 2` runs
-/// of plaintext. A caller that indexes several files at once divides its
-/// cores between them with `ways`.
+/// the available parallelism, at most 16). Each reads a range of compressed
+/// bytes (half of `ckpt_size`, at least 4 MiB) and finds the first member
+/// header in it, so every byte of the file is read once, and a little more
+/// where a range starts inside a member. A member longer than a range hides
+/// the headers of the ranges it spans, which are then inflated after it, one
+/// after the other. The plaintext a range holds ahead of the visitors is at
+/// most `ckpt_size / 4` (4 MiB at least), and at most `ways + 2` ranges are
+/// ahead. A member that cannot be read is skipped up to the next member
+/// header, with a warning. A caller that indexes several files at once divides
+/// its cores between them with `ways`.
 ///
 /// When `slice` is non-null, only the specified member range is
 /// processed. The caller is responsible for ensuring `slice->members`
@@ -134,6 +139,7 @@ class GzipIndexer : public CheckpointIndexer {
     std::uint64_t checkpoint_size() const override;
     std::uint64_t max_bytes() const override;
     std::uint64_t line_count() const override;
+    bool has_damage() const override;
 
     // Lookup
     bool find_member(std::size_t target_offset,

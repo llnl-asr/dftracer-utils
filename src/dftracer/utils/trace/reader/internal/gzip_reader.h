@@ -31,6 +31,7 @@ class GzipReader : public Reader {
     // Reader interface implementation
     std::size_t max_bytes() const override;
     std::size_t line_count() const override;
+    bool has_damage() const override;
     const dstd::String &archive_path() const override;
     const dstd::String &index_path() const override;
     void set_buffer_size(std::size_t size) override;

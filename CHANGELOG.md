@@ -15,6 +15,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Read each gzip trace once when it is indexed.
+  The index build no longer scans a file for member headers before it inflates it: each worker takes a range of the file (half the checkpoint size in compressed bytes, at least 4 MiB; `DFTRACER_UTILS_INDEX_RANGE_BYTES` sets it) and finds its first member header in the bytes it reads to inflate.
+  A build of 97 DFTracer traces (343 MB) read 803 MB of them before and reads 366 MB now, with the same index.
+  A range that starts inside a member reads the end of that member a second time, up to half a member per range, so a file of 2 MB members reads about 9% more than its size; members longer than a range are read once and inflated one after another.
+  The memory of a build is bounded by the plaintext of a range (a quarter of the checkpoint size, at least 4 MiB) and is no higher than before at 8, 16 and 32 MB checkpoints.
+  A member that cannot be read, or bytes that are no gzip between members, now lose only those bytes: the build warns, looks for the next member header and goes on, where it dropped the rest of the range before.
+  A read or a view of a damaged file skips the text that the damage cut, so the line count of its index can be a few lines higher than the lines a read returns.
 - Read plain block YAML (maps, sequences, quoted and plain scalars, block scalars `|` and `>`, scalars of several lines, top-level scalar documents, comments, `---` and `...` markers) through a line index built with Highway, with no rapidyaml parse.
   A parsed text holds its own bytes plus 0.82 times its size for a list of short records and 0.58 times for a deeply nested map (measured on 100 MB inputs), and a text outside that subset (flow collections that are not empty, anchors, aliases, tags, `?` keys, directives, tabs in the indent) is read by the tape reader as before.
   A leading byte order mark is skipped by both readers, so it is no longer read as part of the first key by the tape reader.

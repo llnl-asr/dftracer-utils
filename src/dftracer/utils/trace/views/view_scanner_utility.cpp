@@ -17,6 +17,7 @@
 #include <dftracer/utils/trace/reader/indexed_file_reader_utility.h>
 #include <dftracer/utils/trace/reader/internal/reader_factory.h>
 #include <dftracer/utils/trace/reader/internal/stream_config.h>
+#include <dftracer/utils/trace/reader/internal/trace_reader_shared.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -534,6 +535,9 @@ ViewScannerUtility::operator()(const ViewScannerInput& input) {
         input.fold_intern && !input.view.by_path && input.fold_capture_schema;
     LineScan scan{input, query_src, use_query, batch, pool,
                   hints, cache,     document,  parser};
+    const bool whole_lines = reader->has_damage();
+    simdjson::dom::parser whole_parser;
+    json::Document whole_document;
 
     while (!stream->done()) {
         auto read = co_await stream->read_async();
@@ -561,6 +565,17 @@ ViewScannerUtility::operator()(const ViewScannerInput& input) {
             // are the file's last line, which has none.
             if (!newline) newline = data + bytes_read;
             std::size_t line_size = newline - line_start;
+
+            if (whole_lines) {
+                const std::size_t record = record_size(line_start, line_size);
+                if (record > 0 && !trace::reader::internal::is_whole_record(
+                                      whole_parser, whole_document,
+                                      dstd::StringView(line_start, record))) {
+                    ++batch.lines_invalid;
+                    pos = (newline - data) + 1;
+                    continue;
+                }
+            }
 
             // Fast path: with no query and no metadata records, the only
             // decision is to drop "ph":"M" records and emit the rest, so a

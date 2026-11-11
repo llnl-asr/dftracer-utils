@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 // Counts the path-based stat and open calls of the process it is injected into
-// (DYLD_INSERT_LIBRARIES on macOS, LD_PRELOAD on Linux). At exit it writes
-// "<class>\t<count>\t<path>" lines to DFTRACER_UTILS_TEST_SYSCALL_LOG. fd-based
-// fstat is not counted.
+// (DYLD_INSERT_LIBRARIES on macOS, LD_PRELOAD on Linux), and the bytes that
+// read and pread return for each opened path. At exit it writes
+// "<class>\t<count>\t<path>" lines to DFTRACER_UTILS_TEST_SYSCALL_LOG, with
+// the class "bytes" for the bytes read. fd-based fstat is not counted.
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -26,7 +27,7 @@
 
 namespace {
 
-enum class CallClass { Stat, Open };
+enum class CallClass { Stat, Open, Bytes };
 
 std::atomic<bool> g_ready{false};
 thread_local bool t_in_hook = false;
@@ -66,7 +67,63 @@ void record(CallClass cls, const char* path) {
     t_in_hook = false;
 }
 
+std::map<int, std::string>& fd_paths() {
+    static auto* m = new std::map<int, std::string>();
+    return *m;
+}
+
+// The thread-local guard is not usable before the library is initialized, and
+// the process closes and reads files then, so each of these checks g_ready
+// first, in a caller that touches no thread-local.
+__attribute__((noinline)) void track_open_ready(int fd, const char* path) {
+    if (t_in_hook || path == nullptr) return;
+    t_in_hook = true;
+    {
+        std::lock_guard<std::mutex> lock(counts_mutex());
+        fd_paths()[fd] = path;
+    }
+    t_in_hook = false;
+}
+
+__attribute__((noinline)) void track_close_ready(int fd) {
+    if (t_in_hook) return;
+    t_in_hook = true;
+    {
+        std::lock_guard<std::mutex> lock(counts_mutex());
+        fd_paths().erase(fd);
+    }
+    t_in_hook = false;
+}
+
+__attribute__((noinline)) void count_bytes_ready(int fd, ssize_t n) {
+    if (t_in_hook) return;
+    t_in_hook = true;
+    {
+        std::lock_guard<std::mutex> lock(counts_mutex());
+        const auto it = fd_paths().find(fd);
+        if (it != fd_paths().end())
+            counts()[{static_cast<int>(CallClass::Bytes), it->second}] +=
+                static_cast<unsigned long>(n);
+    }
+    t_in_hook = false;
+}
+
+void track_open(int fd, const char* path) {
+    if (fd >= 0 && g_ready.load(std::memory_order_acquire))
+        track_open_ready(fd, path);
+}
+
+void track_close(int fd) {
+    if (g_ready.load(std::memory_order_acquire)) track_close_ready(fd);
+}
+
+void count_bytes(int fd, ssize_t n) {
+    if (n > 0 && g_ready.load(std::memory_order_acquire))
+        count_bytes_ready(fd, n);
+}
+
 __attribute__((constructor)) void interpose_init() {
+    fd_paths();
     counts_mutex();
     counts();
     g_ready.store(true, std::memory_order_release);
@@ -81,10 +138,11 @@ __attribute__((destructor)) void interpose_fini() {
     if (f != nullptr) {
         std::lock_guard<std::mutex> lock(counts_mutex());
         for (const auto& kv : counts()) {
+            const int cls = kv.first.first;
             std::fprintf(f, "%s\t%lu\t%s\n",
-                         kv.first.first == static_cast<int>(CallClass::Stat)
-                             ? "stat"
-                             : "open",
+                         cls == static_cast<int>(CallClass::Stat)   ? "stat"
+                         : cls == static_cast<int>(CallClass::Open) ? "open"
+                                                                    : "bytes",
                          kv.second, kv.first.second.c_str());
         }
         std::fclose(f);
@@ -139,7 +197,9 @@ static int hook_open(const char* p, int flags, ...) {
         va_end(ap);
     }
     record(CallClass::Open, p);
-    return ::open(p, flags, mode);
+    const int fd = ::open(p, flags, mode);
+    track_open(fd, p);
+    return fd;
 }
 static int hook_openat(int fd, const char* p, int flags, ...) {
     mode_t mode = 0;
@@ -150,7 +210,23 @@ static int hook_openat(int fd, const char* p, int flags, ...) {
         va_end(ap);
     }
     record(CallClass::Open, p);
-    return ::openat(fd, p, flags, mode);
+    const int opened = ::openat(fd, p, flags, mode);
+    track_open(opened, p);
+    return opened;
+}
+static ssize_t hook_pread(int fd, void* b, size_t n, off_t off) {
+    const ssize_t got = ::pread(fd, b, n, off);
+    count_bytes(fd, got);
+    return got;
+}
+static ssize_t hook_read(int fd, void* b, size_t n) {
+    const ssize_t got = ::read(fd, b, n);
+    count_bytes(fd, got);
+    return got;
+}
+static int hook_close(int fd) {
+    track_close(fd);
+    return ::close(fd);
 }
 static FILE* hook_fopen(const char* p, const char* m) {
     record(CallClass::Open, p);
@@ -167,6 +243,9 @@ DFTU_INTERPOSE(hook_faccessat, ::faccessat);
 DFTU_INTERPOSE(hook_realpath, ::realpath);
 DFTU_INTERPOSE(hook_open, ::open);
 DFTU_INTERPOSE(hook_openat, ::openat);
+DFTU_INTERPOSE(hook_pread, ::pread);
+DFTU_INTERPOSE(hook_read, ::read);
+DFTU_INTERPOSE(hook_close, ::close);
 DFTU_INTERPOSE(hook_fopen, ::fopen);
 
 }  // extern "C"
@@ -199,6 +278,9 @@ using CanonFn = char* (*)(const char*);
 using OpenFn = int (*)(const char*, int, ...);
 using OpenAtFn = int (*)(int, const char*, int, ...);
 using FopenFn = FILE* (*)(const char*, const char*);
+using PreadFn = ssize_t (*)(int, void*, size_t, off_t);
+using ReadFn = ssize_t (*)(int, void*, size_t);
+using CloseFn = int (*)(int);
 
 mode_t fetch_mode(int flags, va_list& ap) {
     if (flags & O_CREAT) return static_cast<mode_t>(va_arg(ap, int));
@@ -310,7 +392,9 @@ extern "C" char* dftu_canon(const char* p) {
         const mode_t mode = fetch_mode(flags, ap);                   \
         va_end(ap);                                                  \
         record(CallClass::Open, p);                                  \
-        return fn(p, flags, mode);                                   \
+        const int opened = fn(p, flags, mode);                       \
+        track_open(opened, p);                                       \
+        return opened;                                               \
     }
 
 #define DFTU_OPENAT_HOOK(hook, sym)                                          \
@@ -323,13 +407,46 @@ extern "C" char* dftu_canon(const char* p) {
         const mode_t mode = fetch_mode(flags, ap);                           \
         va_end(ap);                                                          \
         record(CallClass::Open, p);                                          \
-        return fn(fd, p, flags, mode);                                       \
+        const int opened = fn(fd, p, flags, mode);                           \
+        track_open(opened, p);                                               \
+        return opened;                                                       \
     }
 
 DFTU_OPEN_HOOK(dftu_open, "open")
 DFTU_OPEN_HOOK(dftu_open64, "open64")
 DFTU_OPENAT_HOOK(dftu_openat, "openat")
 DFTU_OPENAT_HOOK(dftu_openat64, "openat64")
+
+#define DFTU_PREAD_HOOK(hook, sym)                                  \
+    extern "C" ssize_t hook(int fd, void* b, size_t n,              \
+                            off_t off) __asm__(sym);                \
+    extern "C" ssize_t hook(int fd, void* b, size_t n, off_t off) { \
+        const ssize_t fail = -1;                                    \
+        DFTU_NEXT(PreadFn, sym)                                     \
+        const ssize_t got = fn(fd, b, n, off);                      \
+        count_bytes(fd, got);                                       \
+        return got;                                                 \
+    }
+
+DFTU_PREAD_HOOK(dftu_pread, "pread")
+DFTU_PREAD_HOOK(dftu_pread64, "pread64")
+
+extern "C" ssize_t dftu_read(int fd, void* b, size_t n) __asm__("read");
+extern "C" ssize_t dftu_read(int fd, void* b, size_t n) {
+    const ssize_t fail = -1;
+    DFTU_NEXT(ReadFn, "read")
+    const ssize_t got = fn(fd, b, n);
+    count_bytes(fd, got);
+    return got;
+}
+
+extern "C" int dftu_close(int fd) __asm__("close");
+extern "C" int dftu_close(int fd) {
+    const int fail = -1;
+    DFTU_NEXT(CloseFn, "close")
+    track_close(fd);
+    return fn(fd);
+}
 
 #define DFTU_FOPEN_HOOK(hook, sym)                                    \
     extern "C" FILE* hook(const char* p, const char* m) __asm__(sym); \

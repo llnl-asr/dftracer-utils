@@ -1168,6 +1168,19 @@ function(need_rapidyaml)
         "need_rapidyaml: the include of the header was not found in the release source"
     )
   endif()
+  # The double-quoted scalar scan keeps a stale line start across lines when
+  # GCC hoists the load, and then misses the closing quote. Upstream guards GCC
+  # 13 only, and GCC 12 fails too, so the guard covers every GCC.
+  set(_ryml_before "${_ryml_source}")
+  string(REPLACE "#if defined(__GNUC__) && (/*__GNUC__ == 12 || */__GNUC__ == 13)"
+                 "#if defined(__GNUC__) && !defined(__clang__)" _ryml_source
+                 "${_ryml_source}")
+  if(_ryml_source STREQUAL _ryml_before)
+    message(
+      FATAL_ERROR
+        "need_rapidyaml: the GCC guard of the double-quoted scan was not found in the release source"
+    )
+  endif()
   set(_ryml_source "#pragma GCC system_header\n${_ryml_source}")
   set(_ryml_generated ${CMAKE_BINARY_DIR}/rapidyaml/rapidyaml_impl.hpp)
   set(_ryml_current "")

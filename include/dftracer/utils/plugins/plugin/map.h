@@ -30,6 +30,7 @@ namespace detail {
 /// host cannot catch, so an exception stops here and is reported on stderr.
 template <class Fn>
 void run_guarded(Fn& fn) noexcept {
+#if defined(__cpp_exceptions)
     try {
         fn();
     } catch (const std::exception& e) {
@@ -37,6 +38,9 @@ void run_guarded(Fn& fn) noexcept {
     } catch (...) {
         std::fputs("plugin callback threw\n", stderr);
     }
+#else
+    fn();
+#endif
 }
 }  // namespace detail
 
@@ -977,14 +981,18 @@ inline int Host::trace_read(const char* path, Fn&& fn) const {
         const auto* df = static_cast<const dftu_dataframe*>(item);
         auto& st = *static_cast<State*>(ud);
         if (st.failed) return;
+#if defined(__cpp_exceptions)
         try {
+#endif
             if constexpr (std::is_invocable_v<std::decay_t<Fn>&, const Batch&>)
                 (*st.f)(Batch{df});
             else
                 (*st.f)(df);
+#if defined(__cpp_exceptions)
         } catch (...) {
             st.failed = true;
         }
+#endif
     };
     const int rc = trace_read(path, thunk, &state);
     return state.failed ? -1 : rc;

@@ -10,7 +10,6 @@ set(TRACE_TEST_SOURCES
     test_chunk_verifier.cpp
     test_trace_config.cpp
     test_chunk_extractor.cpp
-    test_event_collector.cpp
     test_index_builder.cpp
     test_metadata_collector.cpp
     test_time_metric.cpp

@@ -2,10 +2,8 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_LINES_LINE_TYPES_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_LINES_LINE_TYPES_H
 
-#include <dftracer/utils/dstd/hasher.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/utilities/hash/hasher_utility.h>
 
 #include <cstddef>
 #include <functional>
@@ -37,23 +35,5 @@ struct Line {
 };
 
 }  // namespace dftracer::utils::utilities::fileio::lines
-
-// Hash specialization for using Line in hash-based containers
-namespace dftracer::utils::dstd {
-
-template <>
-struct Hash<dftracer::utils::utilities::fileio::lines::Line> {
-    using is_avalanching = void;
-
-    std::size_t operator()(
-        const dftracer::utils::utilities::fileio::lines::Line& line) const {
-        ::dftracer::utils::utilities::hash::HasherUtility hasher;
-        hasher.update(line.content);
-        hasher.update(line.line_number);
-        return static_cast<std::size_t>(hash::splitmix64(hasher.hash().value));
-    }
-};
-
-}  // namespace dftracer::utils::dstd
 
 #endif  // DFTRACER_UTILS_UTILITIES_FILEIO_LINES_LINE_TYPES_H

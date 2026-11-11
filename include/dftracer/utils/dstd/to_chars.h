@@ -137,14 +137,6 @@ inline String int_text(I v) {
     return ec == std::errc{} ? String(buf, p) : String();
 }
 
-/// `v` as std::to_string gives it: fixed notation with six decimals.
-inline String fixed_text(double v) {
-    const int n = std::snprintf(nullptr, 0, "%f", v);
-    String out(static_cast<std::size_t>(n), '\0');
-    std::snprintf(out.data(), out.size() + 1, "%f", v);
-    return out;
-}
-
 /// Parse a double from [first, last) like std::from_chars: no leading
 /// whitespace or '+', `ptr` at the first byte not consumed, `ec` set when no
 /// number starts there. Falls back to strtod on a copy where libc++ lacks the
@@ -220,6 +212,14 @@ inline char* to_chars_fixed(char* first, char* last, double v,
         std::to_chars(first, last, v, std::chars_format::fixed, precision);
     return ec == std::errc{} ? p : nullptr;
 #endif
+}
+
+/// `v` as std::to_string gives it: fixed notation with six decimals.
+inline String fixed_text(double v) {
+    // DBL_MAX has 309 integer digits; add sign, point and six decimals.
+    char buf[320];
+    char* end = to_chars_fixed(buf, buf + sizeof(buf), v, 6);
+    return end ? String(buf, end) : String();
 }
 
 /// `v` with `precision` significant digits, as printf("%.*g") gives it: the

@@ -63,11 +63,13 @@ constexpr int BATCH_ATTEMPTS = 64;
 constexpr std::chrono::seconds TASK_LIMIT{60};
 constexpr std::chrono::seconds WAIT_LIMIT{30};
 
-// A sanitizer or coverage build makes a commit tens of times slower, so the
-// thread and batch counts of the concurrent cases shrink there. Each case
-// keeps its shape and every assertion. Only the number of commits differs.
+// A sanitizer, Valgrind or coverage build makes a commit tens of times
+// slower, so the thread and batch counts of the concurrent cases shrink there.
+// Each case keeps its shape and every assertion. Only the number of commits
+// differs.
 #if defined(__SANITIZE_THREAD__) || defined(__SANITIZE_ADDRESS__) || \
-    defined(DFTRACER_UTILS_COVERAGE_BUILD)
+    defined(DFTRACER_UTILS_COVERAGE_BUILD) ||                        \
+    defined(DFTRACER_UTILS_VALGRIND_MODE)
 constexpr bool SANITIZED = true;
 #elif defined(__has_feature)
 #if __has_feature(thread_sanitizer) || __has_feature(address_sanitizer)
@@ -175,7 +177,9 @@ bool is_busy(const dstd::Error& error) {
 
 template <class Handle>
 void await_handle(Handle& handle, std::chrono::seconds limit) {
-    REQUIRE(handle.future.wait_for(limit) == std::future_status::ready);
+    // Wait on even past the limit: the tasks use the test's writer, so
+    // leaving early frees it under them.
+    CHECK(handle.future.wait_for(limit) == std::future_status::ready);
     handle.wait().discard();
 }
 

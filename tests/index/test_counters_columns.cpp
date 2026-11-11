@@ -229,11 +229,11 @@ Blocks blocks_of(const dstd::String& gz, const dstd::String& idx) {
     const auto index_path =
         dstd::String(trace::internal::determine_index_path(gz, idx));
     const auto snapshot =
-        common::unwrap(index::plan::open_snapshot(index_path));
+        dftu_utils_test::ok(index::plan::open_snapshot(index_path));
     const auto file =
         snapshot.file(index::store::internal::get_logical_path(gz));
     REQUIRE(file.has_value());
-    common::unwrap(index::for_each_agg_chunk_columns(
+    dftu_utils_test::ok(index::for_each_agg_chunk_columns(
         snapshot, *file,
         [&](std::uint64_t, const schemas::dft::agg::ChunkColumns& block) {
             ++out.total;

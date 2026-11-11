@@ -11,6 +11,7 @@
 // Each row prints ns per item and instructions per item where the counter
 // exists. Every case checks that the consumers saw each item once.
 #include <bench_counters.h>
+#include <bench_ok.h>
 #include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
@@ -144,7 +145,7 @@ int main(int argc, char** argv) {
             const std::uint64_t instr_start =
                 dftu::bench::instructions_retired();
             const auto start = std::chrono::steady_clock::now();
-            common::unwrap(runtime.block_on(run_case(c, items, sum, seen)));
+            dftu::bench::ok(runtime.block_on(run_case(c, items, sum, seen)));
             const auto stop = std::chrono::steady_clock::now();
             const std::uint64_t instr_stop =
                 dftu::bench::instructions_retired();

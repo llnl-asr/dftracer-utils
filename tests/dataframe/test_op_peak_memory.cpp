@@ -687,8 +687,13 @@ int child_main(const dstd::String& op) {
         if (it == recipes().end()) return 2;
         plan = it->second(base).memory_budget(BUDGET);
     }
-    const std::int64_t n = dftracer::utils::common::unwrap(
-        dftracer::utils::default_runtime().submit(drain_count(plan)).get());
+    const auto drained =
+        dftracer::utils::default_runtime().submit(drain_count(plan)).get();
+    if (!drained.has_value()) {
+        std::fprintf(stderr, "%s\n", drained.error().c_str());
+        return 4;
+    }
+    const std::int64_t n = *drained;
     if (n < 0) return 3;
     std::printf("rows=%lld\n", static_cast<long long>(n));
     return 0;

@@ -9,6 +9,7 @@
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dstd/either.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -18,6 +19,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <stdexcept>
 #include <type_traits>
 #include <utility>
 
@@ -50,8 +52,7 @@ CoroTask<int> value_task(int v) { co_return v; }
 
 CoroTask<int> failing_task() {
     co_await sleep(1ms);
-    throw common::DFTUtilsException(
-        dstd::Error{dstd::Condition::Io, "planned failure"});
+    throw std::runtime_error("planned failure");
     co_return 0;
 }
 
@@ -175,9 +176,9 @@ CoroTask<int> fan(S stage, int count) {
 }
 
 // The condition of the error a task raised, or of the error it gave as a
-// value.
+// value; nullopt when the task did not fail.
 template <typename F>
-dstd::Condition condition_of(Runtime& runtime, F&& make_task) {
+dstd::Optional<dstd::Condition> condition_of(Runtime& runtime, F&& make_task) {
     using R = decltype(runtime.block_on(make_task()));
     try {
         if constexpr (std::is_void_v<R>) {
@@ -188,10 +189,10 @@ dstd::Condition condition_of(Runtime& runtime, F&& make_task) {
                 if (!result) return result.error().condition();
             }
         }
-    } catch (const common::DFTUtilsException& e) {
-        return e.condition();
+    } catch (const std::runtime_error&) {
+        return dstd::Condition::Unknown;
     }
-    return dstd::Condition::Unknown;
+    return dstd::nullopt;
 }
 
 struct Counted {
@@ -296,14 +297,15 @@ TEST_CASE("then on stages composes by kind and keeps the first name") {
 
 TEST_CASE("recover hands the error to the handler") {
     Runtime runtime(2);
-    dstd::Condition seen = dstd::Condition::Unknown;
+    dstd::String seen;
     auto handler = [&seen](dstd::Error error) {
-        seen = error.condition();
+        seen = error.c_str();
+        CHECK(error.condition() == dstd::Condition::Unknown);
         return -5;
     };
     CHECK(dftu_utils_test::ok(
               runtime.block_on(failing_task() | recover(handler))) == -5);
-    CHECK(seen == dstd::Condition::Io);
+    CHECK(seen == "planned failure");
     CHECK(dftu_utils_test::ok(runtime.block_on(
               failing_task() | recover(counting_handler))) == -1);
     g_handler_calls = 0;
@@ -382,7 +384,7 @@ TEST_CASE("limit never exceeds n and frees its permit after an error") {
     for (int round = 0; round < 3; ++round) {
         const auto condition = condition_of(
             runtime, [&] { return with_timeout(single.run(1), 2s); });
-        CHECK(condition == dstd::Condition::Io);
+        CHECK(condition == dstd::Condition::Unknown);
     }
 }
 

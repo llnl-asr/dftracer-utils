@@ -19,6 +19,7 @@
 // prints them as "over" and does not count them.
 
 #define DFTRACER_UTILS_MEMORY_PROBE_DEFINE_NEW
+#include <bench_ok.h>
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/str_format.h>
@@ -269,10 +270,10 @@ void index_build(const Paths& p) {
     index::IndexerOptions options;
     options.index_dir = p.index_dir;
     options.bloom->required = false;
-    auto indexer = dftracer::utils::common::unwrap(index::Indexer::open(
+    auto indexer = dftu::bench::ok(index::Indexer::open(
         {dstd::String(p.trace.data(), p.trace.size())}, options));
     run_scoped([&](coro::Scope& scope) -> coro::CoroTask<void> {
-        dftracer::utils::common::unwrap(co_await indexer.rebuild(scope));
+        dftu::bench::ok(co_await indexer.rebuild(scope));
     });
 }
 
@@ -282,7 +283,7 @@ coro::CoroTask<void> read_lines(dstd::String file) {
         utilities::fileio::lines::sources::async_streaming_gz_lines(file);
     std::uint64_t parsed = 0;
     while (auto next = co_await gen.next()) {
-        if (!*next) dftracer::utils::common::throw_error(next->error());
+        if (!*next) dftu::bench::fail(next->error());
         dstd::StringView l = (*next)->content;
         simdjson::dom::object o;
         if (!l.empty() && l.front() == '{' &&

@@ -128,7 +128,7 @@ coro::CoroTask<std::size_t> build_tier(dstd::String gz) {
     in.require_checkpoints = true;
     index::build::ResolverResult result;
     co_await coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-        result = common::unwrap(
+        result = dftu_utils_test::ok(
             co_await index::build::resolve_and_build_index(std::move(in)));
     });
     REQUIRE(result.failures.empty());
@@ -139,7 +139,8 @@ coro::CoroTask<index::build::ResolverResult> resolve_entries(
     index::build::ResolverInput in) {
     index::build::ResolverResult result;
     co_await coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
-        result = common::unwrap(co_await index::build::Resolver{}(scope, in));
+        result =
+            dftu_utils_test::ok(co_await index::build::Resolver{}(scope, in));
     });
     co_return result;
 }
@@ -463,7 +464,7 @@ TEST_SUITE("ViewIndexGrow") {
         const auto snapshot = dftu_utils_test::index_snapshot(
             dstd::String(determine_index_path(gz, "")));
         const auto file = dftu_utils_test::require_indexed_file(snapshot, gz);
-        const auto spans = common::unwrap(index::spans(snapshot, file));
+        const auto spans = dftu_utils_test::ok(index::spans(snapshot, file));
         std::size_t split_lines = 0;
         for (const auto& span : spans) {
             if (!span.opens_mid_line) continue;

@@ -82,15 +82,24 @@ int child_main(const dstd::String& mode, const dstd::String& gz) {
         {{AggOp::Sum, "dur", "sum_dur"}});
     static dftracer::utils::Runtime rt;
     std::int64_t rows = 0;
-    dftracer::utils::common::unwrap(rt.block_on(dftracer::utils::coro::named(
+    dstd::Optional<dstd::Error> failure;
+    const auto ran = rt.block_on(dftracer::utils::coro::named(
         "transform-memory",
         dftracer::utils::coro::with_scope(
             [&](dftracer::utils::coro::Scope&)
                 -> dftracer::utils::coro::CoroTask<void> {
                 auto df = co_await views::detail::run_collect_via_engine(*plan);
-                rows =
-                    dftracer::utils::common::unwrap(std::move(df)).num_rows();
-            }))));
+                if (!df.has_value()) {
+                    failure = df.error();
+                    co_return;
+                }
+                rows = df->num_rows();
+            })));
+    if (!ran.has_value() || failure.has_value()) {
+        std::fprintf(stderr, "%s\n",
+                     (ran.has_value() ? *failure : ran.error()).c_str());
+        return 4;
+    }
     std::printf("rows=%lld\n", static_cast<long long>(rows));
     return 0;
 }

@@ -121,7 +121,7 @@ struct Stored {
 };
 
 index::Snapshot open_index(const dstd::String& index_path) {
-    return common::unwrap(index::plan::open_snapshot(index_path));
+    return dftu_utils_test::ok(index::plan::open_snapshot(index_path));
 }
 
 index::FileRef file_of(const index::Snapshot& snapshot, dstd::StringView path) {
@@ -130,11 +130,11 @@ index::FileRef file_of(const index::Snapshot& snapshot, dstd::StringView path) {
     return std::move(*file);
 }
 
-Stored read_partials(const index::Snapshot& snapshot,
-                     const index::FileRef& file,
-                     const schemas::dft::agg::AggInternTable& dictionary) {
+dstd::Result<Stored> try_read_partials(
+    const index::Snapshot& snapshot, const index::FileRef& file,
+    const schemas::dft::agg::AggInternTable& dictionary) {
     Stored out;
-    common::unwrap(index::for_each_agg_partial(
+    auto walked = index::for_each_agg_partial(
         snapshot, file,
         [&](std::uint32_t chunk, std::uint32_t cat, std::uint32_t name,
             std::uint32_t, std::uint32_t, schemas::dft::agg::PartialKind,
@@ -148,8 +148,15 @@ Stored read_partials(const index::Snapshot& snapshot,
                           dstd::String(dictionary.intern.resolve(name))};
             out.merged.try_emplace(key).first->second.merge(*p);
             return true;
-        }));
+        });
+    if (!walked.has_value()) return walked.error();
     return out;
+}
+
+Stored read_partials(const index::Snapshot& snapshot,
+                     const index::FileRef& file,
+                     const schemas::dft::agg::AggInternTable& dictionary) {
+    return dftu_utils_test::ok(try_read_partials(snapshot, file, dictionary));
 }
 
 // A sketch answers near the rank, within its relative accuracy.
@@ -190,12 +197,12 @@ dstd::Map<dstd::String, dstd::String> agg_rows(dstd::StringView file,
     const auto snapshot = open_index(index_path);
     const auto stored_file = file_of(snapshot, file);
     auto dictionary = schemas::dft::agg::make_intern_table();
-    common::unwrap(index::agg_dictionary(snapshot, *dictionary));
+    dftu_utils_test::ok(index::agg_dictionary(snapshot, *dictionary));
     const auto text = [&](std::uint32_t id) {
         return dstd::String(dictionary->intern.resolve(id));
     };
     dstd::Map<dstd::String, dstd::String> rows;
-    common::unwrap(index::for_each_agg_partial(
+    dftu_utils_test::ok(index::for_each_agg_partial(
         snapshot, stored_file,
         [&](std::uint64_t chunk, std::uint32_t cat, std::uint32_t name,
             std::uint32_t host, std::uint32_t extra,
@@ -207,7 +214,7 @@ dstd::Map<dstd::String, dstd::String> agg_rows(dstd::StringView file,
                          dstd::String(bytes.begin(), bytes.end()));
             return true;
         }));
-    common::unwrap(index::for_each_agg_file_partial(
+    dftu_utils_test::ok(index::for_each_agg_file_partial(
         snapshot, stored_file,
         [&](std::uint64_t chunk, std::uint32_t file_id,
             schemas::dft::agg::PartialKind kind,
@@ -220,7 +227,7 @@ dstd::Map<dstd::String, dstd::String> agg_rows(dstd::StringView file,
                          dstd::String(bytes.begin(), bytes.end()));
             return true;
         }));
-    common::unwrap(index::for_each_agg_chunk_columns(
+    dftu_utils_test::ok(index::for_each_agg_chunk_columns(
         snapshot, stored_file,
         [&](std::uint64_t chunk, const schemas::dft::agg::ChunkColumns& block) {
             dstd::String value;
@@ -292,7 +299,7 @@ TEST_SUITE("AggPartialsStore") {
             trace::internal::determine_index_path(files[0], index_dir));
         const auto snapshot = open_index(index_path);
         auto dictionary = schemas::dft::agg::make_intern_table();
-        common::unwrap(index::agg_dictionary(snapshot, *dictionary));
+        dftu_utils_test::ok(index::agg_dictionary(snapshot, *dictionary));
 
         dstd::Map<Key, schemas::dft::agg::AggPartial> all;
         std::size_t stored = 0;
@@ -300,7 +307,8 @@ TEST_SUITE("AggPartialsStore") {
         for (int n = 0; n < FILES; ++n) {
             const auto stored_file = file_of(snapshot, files[n]);
             const auto members =
-                common::unwrap(index::members(snapshot, stored_file)).size();
+                dftu_utils_test::ok(index::members(snapshot, stored_file))
+                    .size();
             REQUIRE(members > 1);
 
             const auto file = read_partials(snapshot, stored_file, *dictionary);
@@ -367,11 +375,11 @@ TEST_SUITE("AggPartialsStore") {
         const auto snapshot = open_index(index_path);
         const auto file = file_of(snapshot, gz);
         auto dictionary = schemas::dft::agg::make_intern_table();
-        common::unwrap(index::agg_dictionary(snapshot, *dictionary));
+        dftu_utils_test::ok(index::agg_dictionary(snapshot, *dictionary));
         dstd::Map<dstd::String, std::uint64_t> got;
         dstd::Map<dstd::String, std::uint64_t> got_dur;
         dstd::Set<std::uint32_t> chunks;
-        common::unwrap(index::for_each_agg_file_partial(
+        dftu_utils_test::ok(index::for_each_agg_file_partial(
             snapshot, file,
             [&](std::uint64_t chunk, std::uint32_t file_id,
                 schemas::dft::agg::PartialKind kind,
@@ -409,7 +417,7 @@ TEST_SUITE("AggPartialsStore") {
         {
             const auto snapshot = open_index(index_path);
             auto dictionary = schemas::dft::agg::make_intern_table();
-            common::unwrap(index::agg_dictionary(snapshot, *dictionary));
+            dftu_utils_test::ok(index::agg_dictionary(snapshot, *dictionary));
             for (const auto& f : files) {
                 before.push_back(
                     read_partials(snapshot, file_of(snapshot, f), *dictionary)
@@ -421,10 +429,10 @@ TEST_SUITE("AggPartialsStore") {
         // An index of an earlier build: another params hash and no partials.
         // The empty copy of each file replaces its whole tier.
         {
-            auto target = common::unwrap(index::Index::open(index_path));
+            auto target = dftu_utils_test::ok(index::Index::open(index_path));
             const auto config =
-                common::unwrap(schemas::dft::agg::tier::read_config(
-                    common::unwrap(target.snapshot())));
+                dftu_utils_test::ok(schemas::dft::agg::tier::read_config(
+                    dftu_utils_test::ok(target.snapshot())));
             REQUIRE(config);
             auto old = *config;
             old.params_hash ^= 1;
@@ -459,7 +467,7 @@ TEST_SUITE("AggPartialsStore") {
         {
             const auto snapshot = open_index(index_path);
             auto dictionary = schemas::dft::agg::make_intern_table();
-            common::unwrap(index::agg_dictionary(snapshot, *dictionary));
+            dftu_utils_test::ok(index::agg_dictionary(snapshot, *dictionary));
             for (const auto& f : files)
                 CHECK(read_partials(snapshot, file_of(snapshot, f), *dictionary)
                           .count == 0);
@@ -469,7 +477,7 @@ TEST_SUITE("AggPartialsStore") {
 
         const auto rebuilt = open_index(index_path);
         auto dictionary = schemas::dft::agg::make_intern_table();
-        common::unwrap(index::agg_dictionary(rebuilt, *dictionary));
+        dftu_utils_test::ok(index::agg_dictionary(rebuilt, *dictionary));
         for (std::size_t i = 0; i < files.size(); ++i)
             CHECK(
                 read_partials(rebuilt, file_of(rebuilt, files[i]), *dictionary)
@@ -491,7 +499,7 @@ TEST_SUITE("AggPartialsStore") {
         {
             const auto snapshot = open_index(index_path);
             auto dictionary = schemas::dft::agg::make_intern_table();
-            common::unwrap(index::agg_dictionary(snapshot, *dictionary));
+            dftu_utils_test::ok(index::agg_dictionary(snapshot, *dictionary));
             for (const auto& f : files) {
                 before.push_back(
                     read_partials(snapshot, file_of(snapshot, f), *dictionary)
@@ -502,7 +510,7 @@ TEST_SUITE("AggPartialsStore") {
         // An index of an earlier build: no config record where it is kept now
         // and a partial whose key tail is the older 12 bytes.
         {
-            auto target = common::unwrap(index::Index::open(index_path));
+            auto target = dftu_utils_test::ok(index::Index::open(index_path));
             REQUIRE(default_runtime()
                         .submit(index::delete_agg_meta(target, "config"))
                         .get()
@@ -538,20 +546,22 @@ TEST_SUITE("AggPartialsStore") {
         }
         {
             const auto snapshot = open_index(index_path);
-            CHECK_FALSE(
-                common::unwrap(schemas::dft::agg::tier::read_config(snapshot)));
+            CHECK_FALSE(dftu_utils_test::ok(
+                schemas::dft::agg::tier::read_config(snapshot)));
             auto dictionary = schemas::dft::agg::make_intern_table();
-            common::unwrap(index::agg_dictionary(snapshot, *dictionary));
-            CHECK_THROWS(read_partials(snapshot, file_of(snapshot, files[0]),
-                                       *dictionary));
+            dftu_utils_test::ok(index::agg_dictionary(snapshot, *dictionary));
+            CHECK_FALSE(try_read_partials(snapshot, file_of(snapshot, files[0]),
+                                          *dictionary)
+                            .has_value());
         }
 
         build_seconds(files, index_dir);
 
         const auto rebuilt = open_index(index_path);
-        CHECK(common::unwrap(schemas::dft::agg::tier::read_config(rebuilt)));
+        CHECK(
+            dftu_utils_test::ok(schemas::dft::agg::tier::read_config(rebuilt)));
         auto dictionary = schemas::dft::agg::make_intern_table();
-        common::unwrap(index::agg_dictionary(rebuilt, *dictionary));
+        dftu_utils_test::ok(index::agg_dictionary(rebuilt, *dictionary));
         for (std::size_t i = 0; i < files.size(); ++i)
             CHECK(
                 read_partials(rebuilt, file_of(rebuilt, files[i]), *dictionary)
@@ -662,7 +672,7 @@ TEST_SUITE("AggPartialsStore") {
         build_seconds({file}, index_dir);
 
         const auto added =
-            common::unwrap(dstd::fs::read_file(dstd::PathView(tail)));
+            dftu_utils_test::ok(dstd::fs::read_file(dstd::PathView(tail)));
         REQUIRE(dstd::fs::append_file(dstd::PathView(file), added));
         build_seconds({file}, index_dir);
         const dstd::String fresh = env.dir() + "/fresh";
@@ -673,9 +683,9 @@ TEST_SUITE("AggPartialsStore") {
         const auto snapshot = open_index(index_path);
         const auto stored = file_of(snapshot, file);
         const auto span_count =
-            common::unwrap(index::spans(snapshot, stored)).size();
+            dftu_utils_test::ok(index::spans(snapshot, stored)).size();
         auto dictionary = schemas::dft::agg::make_intern_table();
-        common::unwrap(index::agg_dictionary(snapshot, *dictionary));
+        dftu_utils_test::ok(index::agg_dictionary(snapshot, *dictionary));
         const auto partials = read_partials(snapshot, stored, *dictionary);
         REQUIRE(!partials.chunks.empty());
         CHECK(*partials.chunks.rbegin() < span_count);

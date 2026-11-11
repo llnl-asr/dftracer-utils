@@ -11,6 +11,8 @@
 #include <doctest/doctest.h>
 #include <task_result.h>
 
+#include <stdexcept>
+
 using namespace dftracer::utils;
 
 using namespace dftracer::utils::coro;
@@ -212,8 +214,7 @@ Generator<int> sync_numbers(int first, int count) {
 
 Generator<int> sync_fails_after(int count) {
     for (int i = 0; i < count; ++i) co_yield i;
-    throw common::DFTUtilsException(
-        dstd::Error{dstd::Condition::Io, "planned failure"});
+    throw std::runtime_error("planned failure");
 }
 
 Generator<dstd::UniquePtr<int>> owned_numbers(int count) {
@@ -301,7 +302,7 @@ TEST_CASE("Generator - next moves a move-only item out") {
 TEST_CASE("Generator - an error reaches the reader through an operation") {
     auto stream = map(sync_fails_after(1), [](int v) { return v; });
     CHECK(stream.next().has_value());
-    CHECK_THROWS_AS(stream.next(), common::DFTUtilsException);
+    CHECK_THROWS_AS(stream.next(), std::runtime_error);
 }
 
 TEST_CASE("Generator - to_async gives the operations that need an executor") {
@@ -327,5 +328,5 @@ TEST_CASE("Generator - to_async gives the operations that need an executor") {
     CHECK(loose.size() == 50);
     CHECK_THROWS_AS(dftu_utils_test::ok(runtime.block_on(
                         collect(to_async(sync_fails_after(1))))),
-                    common::DFTUtilsException);
+                    std::runtime_error);
 }

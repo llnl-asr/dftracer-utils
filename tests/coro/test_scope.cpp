@@ -15,6 +15,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <stdexcept>
 
 using namespace dftracer::utils;
 
@@ -27,7 +28,7 @@ coro::CoroTask<void> bump(std::atomic<int>& count) {
 
 coro::CoroTask<void> fail_after(std::atomic<int>& count) {
     count.fetch_add(1, std::memory_order_relaxed);
-    throw common::DFTUtilsException(common::ErrorCode::Pipeline, "child");
+    throw std::runtime_error("child");
     co_return;
 }
 
@@ -59,7 +60,7 @@ coro::CoroTask<bool> one_fails(std::atomic<int>& count) {
     bool raised = false;
     try {
         co_await scope.join();
-    } catch (const common::DFTUtilsException&) {
+    } catch (const std::runtime_error&) {
         raised = true;
     }
     co_return raised&& scope.stop_requested();
@@ -76,7 +77,7 @@ coro::CoroTask<int> futures() {
     bool raised = false;
     try {
         co_await c;
-    } catch (const common::DFTUtilsException&) {
+    } catch (const std::runtime_error&) {
         raised = true;
     }
     co_await scope.join();
@@ -116,11 +117,11 @@ TEST_CASE("with_scope joins children when the body raises") {
     std::atomic<int> count{0};
     auto body = [&count](coro::Scope& s) -> coro::CoroTask<void> {
         for (int i = 0; i < 50; ++i) s.spawn(bump(count));
-        throw common::DFTUtilsException(common::ErrorCode::Pipeline, "body");
+        throw std::runtime_error("body");
         co_return;
     };
     CHECK_THROWS_AS(dftu_utils_test::ok(rt.block_on(coro::with_scope(body))),
-                    common::DFTUtilsException);
+                    std::runtime_error);
     CHECK(count.load() == 50);
 }
 
@@ -141,7 +142,7 @@ TEST_CASE("block_on returns the value and raises the error") {
           9);
     std::atomic<int> count{0};
     CHECK_THROWS_AS(dftu_utils_test::ok(rt.block_on(fail_after(count))),
-                    common::DFTUtilsException);
+                    std::runtime_error);
 }
 
 TEST_CASE("block_on from the only worker of a runtime does not deadlock") {
@@ -187,13 +188,12 @@ TEST_CASE(
         coro::Scope scope;
         scope.spawn(bump(count));
         scope.spawn([]() -> coro::CoroTask<void> {
-            throw common::DFTUtilsException(common::ErrorCode::Pipeline,
-                                            "before the task");
+            throw std::runtime_error("before the task");
         });
         bool raised = false;
         try {
             co_await scope.join();
-        } catch (const common::DFTUtilsException& e) {
+        } catch (const std::runtime_error& e) {
             raised = dstd::StringView(e.what()).find("before the task") !=
                      dstd::StringView::npos;
         }
@@ -209,13 +209,12 @@ TEST_CASE(
     auto run = []() -> coro::CoroTask<bool> {
         coro::Scope scope;
         auto f = scope.spawn_future([]() -> coro::CoroTask<int> {
-            throw common::DFTUtilsException(common::ErrorCode::Pipeline,
-                                            "before the task");
+            throw std::runtime_error("before the task");
         });
         bool raised = false;
         try {
             co_await f;
-        } catch (const common::DFTUtilsException&) {
+        } catch (const std::runtime_error&) {
             raised = true;
         }
         co_await scope.join();
@@ -231,10 +230,10 @@ TEST_CASE(
     std::atomic<int> count{0};
     auto body = [&count](coro::Scope& s) -> coro::CoroTask<void> {
         for (int i = 0; i < 50; ++i) s.spawn(bump(count));
-        throw common::DFTUtilsException(common::ErrorCode::Pipeline, "body");
+        throw std::runtime_error("body");
     };
     CHECK_THROWS_AS(dftu_utils_test::ok(rt.block_on(coro::with_scope(body))),
-                    common::DFTUtilsException);
+                    std::runtime_error);
     CHECK(count.load() == 50);
 }
 

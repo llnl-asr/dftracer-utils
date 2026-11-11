@@ -42,6 +42,7 @@
 //                               the expected shape)
 //   slice_bench --case NAME    (one case in this process; prints RESULT)
 
+#include <bench_ok.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/abi.h>
@@ -398,7 +399,7 @@ double repeat_op(std::size_t reps, Op op) {
 double sort_by(const Scale& s) {
     DataFrame frame = key_frame(s.op_rows, 1000);
     return repeat_op(s.sort_reps, [&] {
-        DataFrame out = dftracer::utils::common::unwrap(frame.sort_by("k"));
+        DataFrame out = dftu::bench::ok(frame.sort_by("k"));
         check(out.num_rows() == s.op_rows, "sort rows");
     });
 }
@@ -408,8 +409,7 @@ double group_by_sum(const Scale& s) {
     dftracer::utils::dstd::Vector<dataframe::GroupAgg> aggs{
         {dataframe::Agg::Sum, "v", "sum_v"}};
     return repeat_op(s.group_reps, [&] {
-        DataFrame out =
-            dftracer::utils::common::unwrap(frame.group_by("g", aggs));
+        DataFrame out = dftu::bench::ok(frame.group_by("g", aggs));
         check(out.num_rows() > 0 && out.num_rows() <= 10000, "group rows");
     });
 }
@@ -417,7 +417,7 @@ double group_by_sum(const Scale& s) {
 double unique_rows(const Scale& s) {
     DataFrame frame = key_frame(s.op_rows, s.op_rows / 4);
     return repeat_op(s.unique_reps, [&] {
-        DataFrame out = dftracer::utils::common::unwrap(frame.unique({"g"}));
+        DataFrame out = dftu::bench::ok(frame.unique({"g"}));
         check(out.num_rows() > 0 && out.num_rows() <= s.op_rows / 4,
               "unique rows");
     });
@@ -442,7 +442,7 @@ double join_inner(const Scale& s) {
     right.columns.push_back(Series::flat_i64(right_keys.data(), s.op_rows));
     right.columns.push_back(Series::flat_f64(rv.data(), s.op_rows));
     return repeat_op(s.join_reps, [&] {
-        DataFrame out = dftracer::utils::common::unwrap(left.join(
+        DataFrame out = dftu::bench::ok(left.join(
             right,
             dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>{"k"}));
         check(out.num_rows() == s.op_rows, "join rows");

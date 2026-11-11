@@ -249,8 +249,8 @@ TEST_SUITE("AggExtension") {
         }
         {
             const auto snapshot =
-                common::unwrap(index::plan::open_snapshot(index_of(gz)));
-            CHECK_FALSE(common::unwrap(
+                dftu_utils_test::ok(index::plan::open_snapshot(index_of(gz)));
+            CHECK_FALSE(dftu_utils_test::ok(
                 index::schemas::dft::agg::tier::read_config(snapshot)));
         }
         auto ix = dftu_utils_test::ok(Indexer::open(

@@ -267,9 +267,9 @@ TEST_SUITE("DFTracerIndex") {
         CHECK(out.find("Files processed: 1\n") != dstd::String::npos);
 
         index::release_root(index_path);
-        const auto snapshot = dftracer::utils::common::unwrap(
-            index::plan::open_snapshot(index_path));
-        const auto config = dftracer::utils::common::unwrap(
+        const auto snapshot =
+            dftu_utils_test::ok(index::plan::open_snapshot(index_path));
+        const auto config = dftu_utils_test::ok(
             index::schemas::dft::agg::tier::read_config(snapshot));
         REQUIRE(config);
         CHECK(config->time_interval_us ==

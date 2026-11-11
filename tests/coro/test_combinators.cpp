@@ -21,6 +21,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <stdexcept>
 #include <utility>
 
 using namespace dftracer::utils;
@@ -41,8 +42,7 @@ CoroTask<int> value_nested(int value, std::chrono::milliseconds delay) {
 
 CoroTask<int> fails_after(std::chrono::milliseconds delay) {
     co_await sleep(delay);
-    throw common::DFTUtilsException(
-        dstd::Error{dstd::Condition::Io, "planned failure"});
+    throw std::runtime_error("planned failure");
 }
 
 CoroTask<void> nothing_after(std::chrono::milliseconds delay) {
@@ -51,8 +51,7 @@ CoroTask<void> nothing_after(std::chrono::milliseconds delay) {
 
 CoroTask<void> failing_void(std::chrono::milliseconds delay) {
     co_await sleep(delay);
-    throw common::DFTUtilsException(
-        dstd::Error{dstd::Condition::Io, "planned failure"});
+    throw std::runtime_error("planned failure");
 }
 
 CoroTask<void> count_after(std::atomic<int>& finished,
@@ -204,8 +203,7 @@ TEST_CASE("retry runs until success and stops at max_attempts") {
     auto flaky = [&]() -> CoroTask<int> {
         ++calls;
         if (calls < 3) {
-            throw common::DFTUtilsException(
-                dstd::Error{dstd::Condition::Io, "flaky"});
+            throw std::runtime_error("flaky");
         }
         co_return 42;
     };
@@ -219,8 +217,7 @@ TEST_CASE("retry runs until success and stops at max_attempts") {
     int failures = 0;
     auto always = [&]() -> CoroTask<void> {
         ++failures;
-        throw common::DFTUtilsException(
-            dstd::Error{dstd::Condition::Io, "always"});
+        throw std::runtime_error("always");
         co_return;
     };
     RetryPolicy limited;
@@ -228,7 +225,7 @@ TEST_CASE("retry runs until success and stops at max_attempts") {
     limited.max_attempts = 4;
     CHECK_THROWS_AS(dftu_utils_test::ok(
                         runtime.block_on(retry(always, std::move(limited)))),
-                    common::DFTUtilsException);
+                    std::runtime_error);
     CHECK(failures == 4);
 }
 
@@ -237,7 +234,7 @@ TEST_CASE("retry obeys the predicate and never retries a stop") {
     int calls = 0;
     auto failing = [&]() -> CoroTask<int> {
         ++calls;
-        throw common::DFTUtilsException(dstd::Error{dstd::Condition::Io, "no"});
+        throw std::runtime_error("no");
         co_return 0;
     };
     RetryPolicy policy;
@@ -288,7 +285,8 @@ TEST_CASE("when_all_settled gives each outcome in task order") {
     REQUIRE(outcomes[0].has_value());
     CHECK(*outcomes[0] == 1);
     REQUIRE_FALSE(outcomes[1].has_value());
-    CHECK(outcomes[1].error().condition() == dstd::Condition::Io);
+    CHECK(outcomes[1].error().condition() == dstd::Condition::Unknown);
+    CHECK(dstd::String(outcomes[1].error().c_str()) == "planned failure");
     REQUIRE(outcomes[2].has_value());
     CHECK(*outcomes[2] == 3);
 }
@@ -322,7 +320,7 @@ TEST_CASE("first_success raises the last error when all fail") {
     tasks.push_back(fails_after(2ms));
     CHECK_THROWS_AS(
         dftu_utils_test::ok(runtime.block_on(first_success(std::move(tasks)))),
-        common::DFTUtilsException);
+        std::runtime_error);
 }
 
 TEST_CASE("first_success cancelled mid-wait cancels its tasks and joins") {
@@ -377,12 +375,11 @@ TEST_CASE("parallel_map fails fast and does not start later jobs") {
     auto job = [&](int) -> CoroTask<void> {
         started.fetch_add(1);
         co_await sleep(1ms);
-        throw common::DFTUtilsException(
-            dstd::Error{dstd::Condition::Io, "stop here"});
+        throw std::runtime_error("stop here");
     };
     CHECK_THROWS_AS(dftu_utils_test::ok(runtime.block_on(
                         parallel_map(std::move(items), job, options))),
-                    common::DFTUtilsException);
+                    std::runtime_error);
     CHECK(started.load() < 100);
 }
 
@@ -445,26 +442,25 @@ TEST_CASE("parallel_map_unordered raises a job error from the read") {
     items.push_back(1);
     auto job = [](int) -> CoroTask<int> {
         co_await sleep(1ms);
-        throw common::DFTUtilsException(
-            dstd::Error{dstd::Condition::Io, "bad job"});
+        throw std::runtime_error("bad job");
     };
-    dstd::Condition condition = dstd::Condition::Unknown;
+    dstd::String raised;
     dftu_utils_test::ok(runtime.block_on([&]() -> CoroTask<void> {
         auto stream = parallel_map_unordered(std::move(items), job);
         try {
             auto value = co_await stream.next();
             CHECK(!value);
-        } catch (const common::DFTUtilsException& e) {
-            condition = e.condition();
+        } catch (const std::runtime_error& e) {
+            raised = e.what();
         }
     }()));
-    CHECK(condition == dstd::Condition::Io);
+    CHECK(raised == "bad job");
 }
 
 TEST_CASE("a child error wakes a parked sibling and join raises that error") {
     Runtime runtime(2);
     const auto start = std::chrono::steady_clock::now();
-    dstd::Condition condition = dstd::Condition::Unknown;
+    dstd::String raised;
     try {
         dftu_utils_test::ok(
             runtime.block_on(with_scope([](Scope& scope) -> CoroTask<void> {
@@ -473,10 +469,10 @@ TEST_CASE("a child error wakes a parked sibling and join raises that error") {
                 scope.spawn(failing_void(1ms));
                 co_return;
             })));
-    } catch (const common::DFTUtilsException& e) {
-        condition = e.condition();
+    } catch (const std::runtime_error& e) {
+        raised = e.what();
     }
-    CHECK(condition == dstd::Condition::Io);
+    CHECK(raised == "planned failure");
     CHECK(std::chrono::steady_clock::now() - start < 10s);
 }
 
@@ -501,7 +497,7 @@ TEST_CASE(
     "a supervisor scope lets siblings finish and raises the first error") {
     Runtime runtime(2);
     std::atomic<int> finished{0};
-    dstd::Condition condition = dstd::Condition::Unknown;
+    dstd::String raised;
     try {
         dftu_utils_test::ok(runtime.block_on(with_scope(
             [&](Scope& scope) -> CoroTask<void> {
@@ -510,10 +506,10 @@ TEST_CASE(
                 co_return;
             },
             ScopeMode::Supervisor)));
-    } catch (const common::DFTUtilsException& e) {
-        condition = e.condition();
+    } catch (const std::runtime_error& e) {
+        raised = e.what();
     }
-    CHECK(condition == dstd::Condition::Io);
+    CHECK(raised == "planned failure");
     CHECK(finished.load() == 1);
 }
 

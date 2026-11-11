@@ -15,6 +15,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <stdexcept>
 #include <utility>
 
 using namespace dftracer::utils;
@@ -37,8 +38,7 @@ AsyncGenerator<int> slow_numbers(int first, int count,
 
 AsyncGenerator<int> fails_after(int count) {
     for (int i = 0; i < count; ++i) co_yield i;
-    throw common::DFTUtilsException(
-        dstd::Error{dstd::Condition::Io, "planned failure"});
+    throw std::runtime_error("planned failure");
 }
 
 AsyncGenerator<int> counted_numbers(std::atomic<int>* produced) {
@@ -52,8 +52,7 @@ AsyncGenerator<int> counted_numbers(std::atomic<int>* produced) {
 AsyncGenerator<int> one_then_fails(std::chrono::milliseconds delay) {
     co_yield 0;
     co_await sleep(delay);
-    throw common::DFTUtilsException(
-        dstd::Error{dstd::Condition::Io, "planned failure"});
+    throw std::runtime_error("planned failure");
 }
 
 AsyncGenerator<int> reports_closure(dstd::WeakPtr<int> closure,
@@ -159,14 +158,14 @@ TEST_CASE("merge raises a source error from the next read") {
     dstd::Vector<AsyncGenerator<int>> sources;
     sources.push_back(fails_after(2));
     sources.push_back(numbers(0, 2));
-    dstd::Condition condition = dstd::Condition::Unknown;
+    dstd::String raised;
     try {
         dftu_utils_test::ok(
             runtime.block_on(collect(merge(std::move(sources)))));
-    } catch (const common::DFTUtilsException& e) {
-        condition = e.condition();
+    } catch (const std::runtime_error& e) {
+        raised = e.what();
     }
-    CHECK(condition == dstd::Condition::Io);
+    CHECK(raised == "planned failure");
 }
 
 TEST_CASE("buffer keeps order, reads ahead and survives an early drop") {
@@ -217,7 +216,7 @@ TEST_CASE("flat_map_merge raises an inner error and takes an empty source") {
     auto failing = [](int) { return fails_after(1); };
     CHECK_THROWS_AS(dftu_utils_test::ok(runtime.block_on(
                         collect(flat_map_merge(numbers(0, 4), failing, 2)))),
-                    common::DFTUtilsException);
+                    std::runtime_error);
     auto empty_source = [](int v) { return numbers(v, 1); };
     auto none = dftu_utils_test::ok(runtime.block_on(
         collect(flat_map_merge(numbers(0, 0), empty_source, 2))));
@@ -241,7 +240,7 @@ TEST_CASE("flat_map_merge keeps its function alive for the last generators") {
 TEST_CASE("flat_map_merge reports an outer error when the channel is full") {
     Runtime runtime(2);
     auto inner = [](int v) { return numbers(v, 3); };
-    dstd::Condition condition = dstd::Condition::Unknown;
+    dstd::String raised;
     int seen = 0;
     try {
         dftu_utils_test::ok(runtime.block_on([&]() -> CoroTask<void> {
@@ -255,11 +254,11 @@ TEST_CASE("flat_map_merge reports an outer error when the channel is full") {
                 ++seen;
             }
         }()));
-    } catch (const common::DFTUtilsException& e) {
-        condition = e.condition();
+    } catch (const std::runtime_error& e) {
+        raised = e.what();
     }
     CHECK(seen == 3);
-    CHECK(condition == dstd::Condition::Io);
+    CHECK(raised == "planned failure");
 }
 
 TEST_CASE("a dropped stream stops its background sources") {

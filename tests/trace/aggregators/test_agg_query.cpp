@@ -587,13 +587,14 @@ void check_file_rows(
 }
 
 std::size_t partial_count(const Fixture& fx) {
-    auto snapshot = common::unwrap(index::plan::open_snapshot(fx.index_path));
+    auto snapshot =
+        dftu_utils_test::ok(index::plan::open_snapshot(fx.index_path));
     std::size_t n = 0;
     for (const auto& f : fx.files) {
         const auto file =
             snapshot.file(index::store::internal::get_logical_path(f));
         REQUIRE(file);
-        common::unwrap(index::for_each_agg_partial(
+        dftu_utils_test::ok(index::for_each_agg_partial(
             snapshot, *file,
             [&](std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t,
                 std::uint32_t, index::schemas::dft::agg::PartialKind,

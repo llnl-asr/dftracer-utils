@@ -23,6 +23,7 @@
 // group_by or flamegraph; a query with an arrow is not pruned, which only
 // reads one file's own columns.
 
+#include <bench_ok.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
@@ -93,17 +94,17 @@ struct Options {
 
 template <class T>
 T run(coro::CoroTask<T> t) {
-    return common::unwrap(default_runtime().submit(std::move(t)).get());
+    return dftu::bench::ok(default_runtime().submit(std::move(t)).get());
 }
 
 template <class T>
 T run(coro::CoroTask<dstd::Result<T>> t) {
-    return common::unwrap(default_runtime().submit(std::move(t)).get());
+    return dftu::bench::ok(default_runtime().submit(std::move(t)).get());
 }
 
 template <class Fn>
 void run_scoped(Fn fn) {
-    common::unwrap(
+    dftu::bench::ok(
         default_runtime().submit(coro::with_scope(std::move(fn))).wait());
 }
 
@@ -204,7 +205,7 @@ coro::CoroTask<QuerySet> sample_queries(dstd::String file) {
         std::move(file));
     int seen = 0;
     while (auto next = co_await gen.next()) {
-        if (!*next) dftracer::utils::common::throw_error(next->error());
+        if (!*next) dftu::bench::fail(next->error());
         dstd::StringView l = (*next)->content;
         while (!l.empty() && (l.back() == ',' || l.back() == ' '))
             l.remove_suffix(1);
@@ -283,7 +284,7 @@ coro::CoroTask<dstd::Map<dstd::String, dstd::String>> sample_genesis(
         std::move(file));
     int seen = 0;
     while (auto next = co_await gen.next()) {
-        if (!*next) dftracer::utils::common::throw_error(next->error());
+        if (!*next) dftu::bench::fail(next->error());
         dstd::StringView l = (*next)->content;
         simdjson::dom::object o;
         if (l.empty() || l.front() != '{' ||
@@ -406,11 +407,10 @@ Result measure(const Options& opt, const dstd::String& input,
             if (opt.aggregation_interval_us > 0)
                 options.aggregation.time_interval_us =
                     opt.aggregation_interval_us;
-            auto indexer = dftracer::utils::common::unwrap(
+            auto indexer = dftu::bench::ok(
                 dftracer::utils::index::Indexer::open(files, options));
             run_scoped([&](coro::Scope& scope) -> coro::CoroTask<void> {
-                dftracer::utils::common::unwrap(
-                    co_await indexer.rebuild(scope));
+                dftu::bench::ok(co_await indexer.rebuild(scope));
             });
         }));
     }
@@ -441,17 +441,17 @@ Result measure(const Options& opt, const dstd::String& input,
         opt.warmups, opt.runs);
 
     {
-        const auto snapshot = common::unwrap(
+        const auto snapshot = dftu::bench::ok(
             dftracer::utils::index::plan::open_snapshot(index_path));
         dstd::HashSet<dstd::String> paths;
         for (const auto& f : files) {
             const auto file = snapshot.file(
                 dftracer::utils::index::store::internal::get_logical_path(f));
             if (!file) continue;
-            if (auto meta = common::unwrap(
+            if (auto meta = dftu::bench::ok(
                     dftracer::utils::index::file_metadata(snapshot, *file)))
                 r.lines += meta->line_count;
-            for (const auto& [p, stat] : common::unwrap(
+            for (const auto& [p, stat] : dftu::bench::ok(
                      dftracer::utils::index::catalog(snapshot, *file)))
                 paths.insert(dstd::String(p));
         }
@@ -478,7 +478,7 @@ Result measure(const Options& opt, const dstd::String& input,
             dftracer::utils::index::plan::ChunkPruner pruner;
             Samples per_file;
             for (double s :
-                 timed([&] { common::unwrap(pruner.process_batch(in)); },
+                 timed([&] { dftu::bench::ok(pruner.process_batch(in)); },
                        opt.warmups, opt.runs))
                 per_file.push_back(s * 1e6 / static_cast<double>(files.size()));
             r.prune_us_per_file[key] = std::move(per_file);
@@ -526,11 +526,11 @@ Result measure(const Options& opt, const dstd::String& input,
                     .size();
             },
             opt.warmups, opt.runs);
-        const dataframe::DataFrame runs = dftracer::utils::common::unwrap(
+        const dataframe::DataFrame runs = dftu::bench::ok(
             frame.group_by(dstd::Vector<dstd::String>{"run"}).size());
         r.query_s["frame_join"] = timed(
             [&] {
-                common::unwrap(
+                dftu::bench::ok(
                     frame.join(runs, dstd::Vector<dstd::String>{"run"}));
             },
             opt.warmups, opt.runs);

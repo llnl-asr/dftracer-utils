@@ -141,21 +141,21 @@ TEST_SUITE("Schemas") {
         CHECK(files[0].schema == "generic");
 
         {
-            const auto snapshot =
-                common::unwrap(index::plan::open_snapshot(files[0].index_path));
+            const auto snapshot = dftu_utils_test::ok(
+                index::plan::open_snapshot(files[0].index_path));
             const auto file =
                 snapshot.file(index::store::internal::get_logical_path(trace));
             REQUIRE(file.has_value());
             dstd::Map<dstd::String, index::store::PathStat> cat;
             for (auto& [p, st] :
-                 common::unwrap(index::catalog(snapshot, *file)))
+                 dftu_utils_test::ok(index::catalog(snapshot, *file)))
                 cat.emplace(dstd::String(p.data(), p.size()), st);
             for (const char* p :
                  {"op", "host", "lat", "io.off", "hosts.0", "hosts.1", "ok"})
                 CHECK_MESSAGE(cat.count(p), p);
             CHECK(cat.at("op").count == 4000);
             CHECK(cat.at("ok").type == index::store::PathType::Bool);
-            const auto blooms = common::unwrap(index::paths(
+            const auto blooms = dftu_utils_test::ok(index::paths(
                 snapshot, *file, index::store::IndexExtension::Bloom));
             const auto has = [&](const char* name) {
                 return std::any_of(
@@ -167,7 +167,7 @@ TEST_SUITE("Schemas") {
             CHECK(!has("cat"));
             // Records without a metadata phase: every chunk counts none.
             const auto meta =
-                common::unwrap(index::chunk_meta(snapshot, *file));
+                dftu_utils_test::ok(index::chunk_meta(snapshot, *file));
             REQUIRE(meta.has_value());
             CHECK(!meta->empty());
             for (const auto& [chunk, m] : *meta) CHECK(m.records == 0);

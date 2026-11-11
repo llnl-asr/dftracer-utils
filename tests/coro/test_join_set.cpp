@@ -16,6 +16,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <stdexcept>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::coro;
@@ -30,8 +31,7 @@ CoroTask<int> after(std::chrono::milliseconds delay, int value) {
 
 CoroTask<int> fails_after(std::chrono::milliseconds delay) {
     co_await sleep(delay);
-    throw common::DFTUtilsException(
-        dstd::Error{dstd::Condition::Io, "planned failure"});
+    throw std::runtime_error("planned failure");
 }
 
 CoroTask<int> when_set(AsyncEvent& gate, int value) {
@@ -41,8 +41,7 @@ CoroTask<int> when_set(AsyncEvent& gate, int value) {
 
 CoroTask<int> fails_when_set(AsyncEvent& gate) {
     co_await gate.wait();
-    throw common::DFTUtilsException(
-        dstd::Error{dstd::Condition::Io, "planned failure"});
+    throw std::runtime_error("planned failure");
 }
 
 AsyncGenerator<int> numbers(int first, int count) {
@@ -100,8 +99,7 @@ struct FailsOnThree {
     static constexpr const char* NAME = "fails_on_three";
     CoroTask<int> run(int value) const {
         if (value == 3) {
-            throw common::DFTUtilsException(
-                dstd::Error{dstd::Condition::Io, "planned failure"});
+            throw std::runtime_error("planned failure");
         }
         co_return value;
     }
@@ -275,14 +273,14 @@ TEST_CASE("ordered and unordered make a stream stage within their tokens") {
 TEST_CASE("an ordered stage raises a job error and a move-only stage works") {
     Runtime runtime(4);
     auto failing = FailsOnThree{} | ordered(2);
-    dstd::Condition condition = dstd::Condition::Unknown;
+    dstd::String raised;
     try {
         dftu_utils_test::ok(
             runtime.block_on(collect(failing.run(numbers(0, 100)))));
-    } catch (const common::DFTUtilsException& e) {
-        condition = e.condition();
+    } catch (const std::runtime_error& e) {
+        raised = e.what();
     }
-    CHECK(condition == dstd::Condition::Io);
+    CHECK(raised == "planned failure");
 
     auto erased = erase(SlowFirst{}) | ordered(2);
     auto out = dftu_utils_test::ok(

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/kernels/cast.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dstd/bits.h>
 
-#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -201,12 +201,12 @@ std::int64_t cast_bool_simd(std::int32_t src, const void* sv,
             return -1;
     }
     // A float: the rows with no validity bit are the NaN rows. Count the set
-    // bits a byte at a time, and the last partial byte under its mask.
-    std::int64_t ok = 0;
+    // bits of the whole bytes, and the last partial byte under its mask.
     const std::size_t full = n >> 3;
-    for (std::size_t b = 0; b < full; ++b) ok += std::popcount(valid[b]);
+    auto ok = static_cast<std::int64_t>(
+        dftracer::utils::dstd::bits::popcount_bytes(valid, full));
     if (n & 7)
-        ok += std::popcount(
+        ok += dftracer::utils::dstd::bits::popcount_u64(
             static_cast<std::uint8_t>(valid[full] & ((1u << (n & 7)) - 1u)));
     return static_cast<std::int64_t>(n) - ok;
 }

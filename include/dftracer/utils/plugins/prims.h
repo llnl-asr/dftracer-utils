@@ -29,7 +29,17 @@ static inline int dftu_ctz_u64(uint64_t x) {
 
 /** Number of set bits in @p x. */
 static inline int dftu_popcount_u64(uint64_t x) {
+#if (defined(__x86_64__) || defined(__i386__)) && !defined(__POPCNT__)
+    /* x86 without POPCNT turns the builtin into a libgcc call. SWAR count from
+       Bit Twiddling Hacks, https://graphics.stanford.edu/~seander/bithacks.html
+       (public domain). */
+    x = x - ((x >> 1) & 0x5555555555555555ULL);
+    x = (x & 0x3333333333333333ULL) + ((x >> 2) & 0x3333333333333333ULL);
+    x = (x + (x >> 4)) & 0x0F0F0F0F0F0F0F0FULL;
+    return (int)((x * 0x0101010101010101ULL) >> 56);
+#else
     return __builtin_popcountll(x);
+#endif
 }
 
 /** Floor of log2(@p x): index of the highest set bit; 0 when @p x is 0. */

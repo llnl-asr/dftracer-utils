@@ -6,6 +6,7 @@
 #include <dftracer/utils/dataframe/kernels/elementwise.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dataframe/scalar.h>
+#include <dftracer/utils/dstd/bits.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -757,13 +758,11 @@ BufferView new_bitmap(std::int64_t n) {
     return buf;
 }
 void attach_bitmap(dftu_series* out, BufferView vbuf) {
-    // Count set bits a byte at a time with popcount. Trailing bits past
-    // `length` are always 0 (new_bitmap zeroes the buffer and only rows <
-    // length are set), so whole-byte popcount is exact.
-    std::int64_t valid = 0;
-    const std::uint8_t* b = vbuf.data();
+    // Trailing bits past `length` are always 0 (new_bitmap zeroes the buffer
+    // and only rows < length are set), so a whole-byte count is exact.
     const std::size_t nbytes = static_cast<std::size_t>((out->length + 7) / 8);
-    for (std::size_t i = 0; i < nbytes; ++i) valid += __builtin_popcount(b[i]);
+    const auto valid = static_cast<std::int64_t>(
+        dstd::bits::popcount_bytes(vbuf.data(), nbytes));
     out->validity = std::move(vbuf);
     out->null_count = out->length - valid;
 }

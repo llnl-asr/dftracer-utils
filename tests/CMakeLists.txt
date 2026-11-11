@@ -313,6 +313,7 @@ set(TEST_CPP_SOURCES
     dstd/test_xxh3.cpp
     dstd/test_fmt.cpp
     dstd/test_ascii.cpp
+    dstd/test_bits.cpp
     dstd/test_big_endian.cpp
     dstd/test_little_endian.cpp
     dstd/test_string_intern.cpp

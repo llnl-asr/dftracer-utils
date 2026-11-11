@@ -9,6 +9,7 @@
 #include <dftracer/utils/dataframe/kernels/string_ops.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dstd/ascii.h>
+#include <dftracer/utils/dstd/bits.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/hash/hex64.h>
 #include <dftracer/utils/dstd/hash_map.h>
@@ -23,7 +24,6 @@
 #include <utf8proc.h>
 
 #include <algorithm>
-#include <bit>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -1413,7 +1413,7 @@ dftu_series* cat_impl(const dftu_series* a, const dftu_series* b) {
         if (rows_here < 8)
             w &= static_cast<std::uint8_t>((1u << rows_here) - 1);
         writable(valid)[k] = w;
-        valid_rows += std::popcount(static_cast<unsigned>(w));
+        valid_rows += dstd::bits::popcount_u64(w);
     }
     out->null_count = fa.n - valid_rows;
     out->validity = out->null_count != 0 ? std::move(valid) : BufferView{};

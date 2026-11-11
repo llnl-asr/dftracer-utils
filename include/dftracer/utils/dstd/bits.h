@@ -15,7 +15,22 @@ inline int clz_u64(std::uint64_t x) { return x == 0 ? 64 : __builtin_clzll(x); }
 inline int ctz_u64(std::uint64_t x) { return x == 0 ? 64 : __builtin_ctzll(x); }
 
 /// Number of set bits in `x`.
-inline int popcount_u64(std::uint64_t x) { return __builtin_popcountll(x); }
+inline int popcount_u64(std::uint64_t x) {
+#if (defined(__x86_64__) || defined(__i386__)) && !defined(__POPCNT__)
+    // x86 without POPCNT turns the builtin into a libgcc call. SWAR count from
+    // Bit Twiddling Hacks, https://graphics.stanford.edu/~seander/bithacks.html
+    // (public domain).
+    x = x - ((x >> 1) & 0x5555555555555555ULL);
+    x = (x & 0x3333333333333333ULL) + ((x >> 2) & 0x3333333333333333ULL);
+    x = (x + (x >> 4)) & 0x0F0F0F0F0F0F0F0FULL;
+    return static_cast<int>((x * 0x0101010101010101ULL) >> 56);
+#else
+    return __builtin_popcountll(x);
+#endif
+}
+
+/// Number of set bits in the `n` bytes at `data`.
+std::size_t popcount_bytes(const std::uint8_t* data, std::size_t n);
 
 /// Floor of log2(`x`): index of the highest set bit; 0 when `x` is 0.
 inline int ilog2_u64(std::uint64_t x) {

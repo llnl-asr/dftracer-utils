@@ -4,11 +4,11 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/gzip/checkpoint_indexer.h>
-#include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
-#include <dftracer/utils/utilities/reader/error.h>
-#include <dftracer/utils/utilities/reader/internal/reader.h>
-#include <dftracer/utils/utilities/reader/internal/reader_factory.h>
+#include <dftracer/utils/trace/index/gzip/checkpoint_indexer.h>
+#include <dftracer/utils/trace/index/gzip/checkpoint_indexer_factory.h>
+#include <dftracer/utils/trace/reader/error.h>
+#include <dftracer/utils/trace/reader/internal/reader.h>
+#include <dftracer/utils/trace/reader/internal/reader_factory.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
 #include <testing_utilities.h>
@@ -18,8 +18,8 @@
 using namespace dftracer::utils;
 
 using namespace dftu_utils_test;
-using namespace dftracer::utils::index::gzip;
-using namespace dftracer::utils::utilities::reader::internal;
+using namespace dftracer::utils::trace::index::gzip;
+using namespace dftracer::utils::trace::reader::internal;
 
 dstd::String format_name(Format format);
 
@@ -77,7 +77,7 @@ TEST_CASE_TEMPLATE("Indexer creation and destruction", FormatType, GZIPFormat) {
     }
 
     SUBCASE("Invalid file path") {
-        auto created = index::gzip::CheckpointIndexerFactory::try_create(
+        auto created = trace::index::gzip::CheckpointIndexerFactory::try_create(
             "/nonexistent/file.gz", fixture.index_file(), 1024 * 1024);
         REQUIRE_FALSE(created.has_value());
         CHECK(created.error().is_code(common::ErrorCode::Indexer));

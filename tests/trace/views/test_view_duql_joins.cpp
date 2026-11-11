@@ -8,7 +8,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/trace/index/indexer.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
 #include <testing_utilities.h>
@@ -59,7 +59,7 @@ dstd::String write_records(TestEnvironment& env, const dstd::String& name,
     else
         dftu_utils_test::compress_file_to_gzip(plain, gz);
     dstd::fs::remove(plain).discard();
-    dftracer::utils::index::IndexerOptions o;
+    dftracer::utils::trace::index::IndexerOptions o;
     if (checkpoint_size) o.checkpoint_size = checkpoint_size;
     if (!extensions.empty()) {
         o.extensions.clear();
@@ -67,7 +67,7 @@ dstd::String write_records(TestEnvironment& env, const dstd::String& name,
             o.extensions.emplace_back(extension);
     }
     dftu_utils_test::ok(
-        dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+        dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
                                 {dstd::String(dstd::StringView(gz))}, o))
             .build());
     return gz;
@@ -1122,7 +1122,7 @@ TEST_SUITE("View duql joins") {
         CHECK(column(frame(view_of(gz).duql(q)), "i") ==
               dstd::Vector<dstd::String>{"0", "2", "3", "5", "6", "8"});
 
-        const dstd::String cache(dftracer::utils::index::lookups_dir(
+        const dstd::String cache(dftracer::utils::trace::index::lookups_dir(
             dstd::String(determine_index_path(gz, ""))));
         REQUIRE(dstd::fs::exists(cache).value());
         dstd::fs::remove_all(cache).has_value();
@@ -1162,7 +1162,7 @@ TEST_SUITE("View duql joins") {
             const dstd::String gz =
                 write_records(env, "d" + dstd::to_string(checkpoint), lines,
                               4096, checkpoint);
-            const dstd::String cache(dftracer::utils::index::lookups_dir(
+            const dstd::String cache(dftracer::utils::trace::index::lookups_dir(
                 dstd::String(determine_index_path(gz, ""))));
             for (int pass = 0; pass < 3; ++pass) {
                 CAPTURE(pass);

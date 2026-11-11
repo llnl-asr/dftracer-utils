@@ -3,8 +3,8 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
-#include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/plan/condition.h>
+#include <dftracer/utils/trace/index/indexer.h>
+#include <dftracer/utils/trace/index/plan/condition.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
@@ -49,7 +49,7 @@ dstd::String write_trace(TestEnvironment& env) {
                                                                16 * 1024));
     dstd::fs::remove(plain).discard();
     dftu_utils_test::ok(
-        dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+        dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
                                 {dstd::String(dstd::StringView(gz))}))
             .build());
     return gz;
@@ -113,7 +113,8 @@ TEST_SUITE("Row set arrows") {
 
         const dstd::String wide =
             R"(where fhash -> files.path like "/data/f%")";
-        static_assert(FILES > dftracer::utils::index::plan::SEMI_JOIN_CAP);
+        static_assert(FILES >
+                      dftracer::utils::trace::index::plan::SEMI_JOIN_CAP);
         CHECK(dftu_utils_test::ok(view_of(gz).duql(wide).collect().get())
                   .num_rows() == EVENTS);
     }

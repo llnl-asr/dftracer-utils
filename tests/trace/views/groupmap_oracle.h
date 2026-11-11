@@ -23,8 +23,8 @@
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/schemas/dft/agg/reserved_args.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/reserved_args.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/agg_fold.h>
 #include <dftracer/utils/trace/views/aggfold.h>
@@ -164,8 +164,10 @@ void fold_numeric_args_t(AggAccum& a, const Src& src, bool want_sketch) {
         feed("size", *sz);
     src.for_each_numeric_arg([&](dftracer::utils::dstd::StringView key,
                                  double num) {
-        if (dftracer::utils::index::schemas::dft::agg::is_reserved_arg(key) ||
-            dftracer::utils::index::schemas::dft::agg::is_preagg_suffix(key))
+        if (dftracer::utils::trace::index::schemas::dft::agg::is_reserved_arg(
+                key) ||
+            dftracer::utils::trace::index::schemas::dft::agg::is_preagg_suffix(
+                key))
             return;
         feed(key, num);
     });

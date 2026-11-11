@@ -4,14 +4,15 @@
 
 #include <Python.h>
 
-namespace dftracer::utils::index {
+namespace dftracer::utils::trace::index {
 class Index;
-}  // namespace dftracer::utils::index
+}  // namespace dftracer::utils::trace::index
 
-// Index: the native handle behind the Python Index, one C++ index::Index. Each
-// call takes its own snapshot, so it sees the commits of other processes.
+// Index: the native handle behind the Python Index, one C++
+// trace::index::Index. Each call takes its own snapshot, so it sees the commits
+// of other processes.
 typedef struct {
-    PyObject_HEAD dftracer::utils::index::Index *index;
+    PyObject_HEAD dftracer::utils::trace::index::Index *index;
 } IndexObject;
 
 extern PyTypeObject IndexType;

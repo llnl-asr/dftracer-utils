@@ -2,9 +2,9 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/domains/plugins/fold_adapter.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
-#include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/python/op_runner.h>
 #include <dftracer/utils/python/py_errors.h>
@@ -20,7 +20,7 @@ namespace {
 
 using dftracer::utils::Runtime;
 using dftracer::utils::dstd::StringIntern;
-using dftracer::utils::plugins::PluginFold;
+using domains::plugins::PluginFold;
 
 // The compose host is a real PluginFold with a do-nothing slice: the op graph
 // only needs the host's compose extension and task machinery, never a scan.

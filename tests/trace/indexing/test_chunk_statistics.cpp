@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
+#include <dftracer/utils/trace/index/schemas/dft/chunk_statistics.h>
 #include <doctest/doctest.h>
 
 #include <cmath>
 #include <limits>
 #include <string>
 
-using namespace dftracer::utils::index::schemas::dft;
+using namespace dftracer::utils::trace::index::schemas::dft;
 
 TEST_SUITE("ChunkStatistics") {
     TEST_CASE("ChunkStatistics - Single event update") {

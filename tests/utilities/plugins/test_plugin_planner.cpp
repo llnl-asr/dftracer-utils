@@ -8,13 +8,13 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/domains/plugins/plugins_internal.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
-#include <dftracer/utils/plugins/plugins_internal.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -114,7 +114,7 @@ dstd::String make_homog_trace(dftu_utils_test::TestEnvironment& env,
 
 ExportStats run_host(dstd::Vector<dftu_plugin*> plugins,
                      dstd::Vector<ViewFile> files) {
-    auto set = plugins::build_injected_plugins(std::move(plugins));
+    auto set = domains::plugins::build_injected_plugins(std::move(plugins));
     REQUIRE(set.has_value());
     View view = View::from_files(std::move(files));
     ExportStats stats;
@@ -133,18 +133,19 @@ ExportStats run_host(dstd::Vector<dftu_plugin*> plugins,
 
 TEST_SUITE("PluginPlannerUnion") {
     TEST_CASE("no plugins yields no prune") {
-        CHECK_FALSE(plugins::detail::plugin_union_prune_query({}).has_value());
+        CHECK_FALSE(
+            domains::plugins::detail::plugin_union_prune_query({}).has_value());
     }
 
     TEST_CASE("a single query is the union verbatim") {
-        auto u = plugins::detail::plugin_union_prune_query(
+        auto u = domains::plugins::detail::plugin_union_prune_query(
             qs({R"(cat == "STDIO")"}));
         REQUIRE(u.has_value());
         CHECK(u->source() == R"(cat == "STDIO")");
     }
 
     TEST_CASE("distinct queries disjoin into a real OR") {
-        auto u = plugins::detail::plugin_union_prune_query(
+        auto u = domains::plugins::detail::plugin_union_prune_query(
             qs({R"(cat == "STDIO")", R"(cat == "POSIX")"}));
         REQUIRE(u.has_value());
         // The parenthesized union must parse to a disjunction that keeps events
@@ -163,22 +164,23 @@ TEST_SUITE("PluginPlannerUnion") {
 
     TEST_CASE("identical queries collapse (no repeated term)") {
         const char* q = R"(cat == "STDIO")";
-        auto u = plugins::detail::plugin_union_prune_query(qs({q, q, q}));
+        auto u =
+            domains::plugins::detail::plugin_union_prune_query(qs({q, q, q}));
         REQUIRE(u.has_value());
         CHECK(u->source() == dstd::String(q));
     }
 
     TEST_CASE("a plugin without a plan_duql disables the prune") {
-        CHECK_FALSE(plugins::detail::plugin_union_prune_query(
+        CHECK_FALSE(domains::plugins::detail::plugin_union_prune_query(
                         qs({R"(cat == "STDIO")", nullptr}))
                         .has_value());
-        CHECK_FALSE(plugins::detail::plugin_union_prune_query(
+        CHECK_FALSE(domains::plugins::detail::plugin_union_prune_query(
                         qs({R"(cat == "STDIO")", ""}))
                         .has_value());
     }
 
     TEST_CASE("an unparseable plan_duql disables the prune") {
-        CHECK_FALSE(plugins::detail::plugin_union_prune_query(
+        CHECK_FALSE(domains::plugins::detail::plugin_union_prune_query(
                         qs({R"(cat == "STDIO")", "cat =="}))
                         .has_value());
     }
@@ -284,15 +286,15 @@ TEST_SUITE("PluginAttachHandle") {
             make_homog_trace(env, "early", "read", "POSIX", 5))};
         CountState st{nullptr};
         dftu_plugin p = make_count_plugin(&st);
-        auto set = plugins::build_injected_plugins({&p});
+        auto set = domains::plugins::build_injected_plugins({&p});
         REQUIRE(set.has_value());
 
         View base = View::from_files(files);
-        dftracer::utils::dataframe::LazyResult<plugins::PluginRun>
-            plugin_result = base.branch<plugins::PluginRun>(
+        dftracer::utils::dataframe::LazyResult<domains::plugins::PluginRun>
+            plugin_result = base.branch<domains::plugins::PluginRun>(
                 [&](trace::views::ViewSession& s) { return set->attach(s); });
         trace::views::TraceSession sess = base.session();
-        trace::views::Deferred<plugins::PluginRun> h =
+        trace::views::Deferred<domains::plugins::PluginRun> h =
             sess.collect(plugin_result);
         static_cast<void>(h->results);
     }
@@ -322,13 +324,14 @@ TEST_SUITE("PluginAttachHandle") {
 
         CountState st{R"(cat == "STDIO")"};
         dftu_plugin p = make_count_plugin(&st);
-        auto set = plugins::build_injected_plugins({&p});
+        auto set = domains::plugins::build_injected_plugins({&p});
         REQUIRE(set.has_value());
 
         View base = View::from_files(files);
         ExportStats scan{};
         auto plugin_branch = [&](trace::views::ViewSession& s) {
-            trace::views::Deferred<plugins::PluginRun> h = set->attach(s);
+            trace::views::Deferred<domains::plugins::PluginRun> h =
+                set->attach(s);
             return dstd::Function<void(const ExportStats&)>(
                 [&, h](const ExportStats& stats) mutable {
                     h.get();
@@ -371,13 +374,14 @@ TEST_SUITE("PluginAttachHandle") {
 
         CountState st{R"(cat == "STDIO")"};  // the plugin only wants STDIO
         dftu_plugin p = make_count_plugin(&st);
-        auto set = plugins::build_injected_plugins({&p});
+        auto set = domains::plugins::build_injected_plugins({&p});
         REQUIRE(set.has_value());
 
         View base = View::from_files(files);
         ExportStats scan{};
         auto plugin_branch = [&](trace::views::ViewSession& s) {
-            trace::views::Deferred<plugins::PluginRun> h = set->attach(s);
+            trace::views::Deferred<domains::plugins::PluginRun> h =
+                set->attach(s);
             return dstd::Function<void(const ExportStats&)>(
                 [&, h](const ExportStats& stats) mutable {
                     h.get();

@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/batch_ops.h>
+#include <dftracer/utils/domains/analysis/statistics/stats_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/trace/statistics/stats_view.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
 #include <testing_utilities.h>
@@ -23,10 +23,11 @@ using namespace test_view_common;
 using namespace dftracer::utils::trace;
 
 // Run a StatsView collection on a Runtime (StatsView is async - no blocking).
-static statistics::ViewStats run_stats(const statistics::StatsView& sv,
-                                       statistics::StatNeeds needs = {}) {
+static domains::analysis::statistics::ViewStats run_stats(
+    const domains::analysis::statistics::StatsView& sv,
+    domains::analysis::statistics::StatNeeds needs = {}) {
     dftracer::utils::Runtime rt;
-    statistics::ViewStats result;
+    domains::analysis::statistics::ViewStats result;
     dftu_utils_test::ok(rt.block_on(coro::named(
         "stats", coro::with_scope([&](coro::Scope&)
                                       -> dftracer::utils::coro::CoroTask<void> {
@@ -110,8 +111,9 @@ TEST_SUITE("stats via View") {
         dstd::String gz = create_mixed_trace(env, 30, 20);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        statistics::ViewStats s = run_stats(statistics::StatsView::from_file(
-            dstd::String(gz), dstd::String(idx)));
+        domains::analysis::statistics::ViewStats s =
+            run_stats(domains::analysis::statistics::StatsView::from_file(
+                dstd::String(gz), dstd::String(idx)));
 
         CHECK(s.total_events == 50);
         CHECK(s.category_counts.size() == 2);
@@ -137,10 +139,11 @@ TEST_SUITE("stats via View") {
         dstd::String gz = create_mixed_trace(env, 30, 20);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        statistics::ViewStats s = run_stats(statistics::StatsView::from_file(
-            dstd::String(gz), dstd::String(idx)));
-        dftracer::utils::index::schemas::dft::ChunkStatistics cs;
-        statistics::fill_chunk_statistics(cs, s);
+        domains::analysis::statistics::ViewStats s =
+            run_stats(domains::analysis::statistics::StatsView::from_file(
+                dstd::String(gz), dstd::String(idx)));
+        dftracer::utils::trace::index::schemas::dft::ChunkStatistics cs;
+        domains::analysis::statistics::fill_chunk_statistics(cs, s);
 
         CHECK(cs.total_events == 50);
         CHECK(cs.category_counts.size() == 2);
@@ -160,8 +163,9 @@ TEST_SUITE("stats via View") {
         dstd::String gz = create_mixed_trace(env, 30, 20);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        statistics::ViewStats cold = run_stats(statistics::StatsView::from_file(
-            dstd::String(gz), dstd::String(idx)));
+        domains::analysis::statistics::ViewStats cold =
+            run_stats(domains::analysis::statistics::StatsView::from_file(
+                dstd::String(gz), dstd::String(idx)));
 
         // Persist the rollups, then read them back.
         dftracer::utils::Runtime rt;
@@ -169,13 +173,15 @@ TEST_SUITE("stats via View") {
             "materialize",
             coro::with_scope(
                 [&](coro::Scope&) -> dftracer::utils::coro::CoroTask<void> {
-                    auto done = co_await statistics::StatsView::from_file(
-                                    dstd::String(gz), dstd::String(idx))
-                                    .materialize();
+                    auto done =
+                        co_await domains::analysis::statistics::StatsView::
+                            from_file(dstd::String(gz), dstd::String(idx))
+                                .materialize();
                     REQUIRE(done.has_value());
                 }))));
-        statistics::ViewStats warm = run_stats(statistics::StatsView::from_file(
-            dstd::String(gz), dstd::String(idx)));
+        domains::analysis::statistics::ViewStats warm =
+            run_stats(domains::analysis::statistics::StatsView::from_file(
+                dstd::String(gz), dstd::String(idx)));
 
         CHECK(warm.total_events == cold.total_events);
         CHECK(warm.category_counts.size() == cold.category_counts.size());
@@ -333,8 +339,9 @@ TEST_SUITE("stats via View") {
         dstd::fs::remove(pfw).discard();
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        statistics::ViewStats s = run_stats(statistics::StatsView::from_file(
-            dstd::String(gz), dstd::String(idx)));
+        domains::analysis::statistics::ViewStats s =
+            run_stats(domains::analysis::statistics::StatsView::from_file(
+                dstd::String(gz), dstd::String(idx)));
         dstd::Map<dstd::String, std::uint64_t> m;
         for (auto& [k, v] : s.pid_tid_counts) m[dstd::String(k)] = v;
         CHECK(m.count("1000:5000") == 1);

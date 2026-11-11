@@ -3,9 +3,9 @@
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/index/schemas/dft/agg/agg_partial_update.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
 #include <dftracer/utils/trace/agg_event_fold.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/agg_partial_update.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_fold.h>
 #include <dftracer/utils/trace/internal/utils.h>
 
 #include <algorithm>
@@ -30,7 +30,7 @@ std::size_t AggGroupHash::operator()(const AggGroup& g) const noexcept {
 void set_file_key(AggKey& key, dstd::StringView fhash,
                   dstd::StringIntern& strings) {
     if (fhash.empty()) return;
-    key.file = index::schemas::dft::agg::agg_hash_of_hex(fhash);
+    key.file = trace::index::schemas::dft::agg::agg_hash_of_hex(fhash);
     if (!dstd::hash::parse_hex64(fhash))
         key.file_text = strings.get_or_insert(fhash);
 }
@@ -118,9 +118,9 @@ std::uint32_t AggEventFolder::extra_id(const Acc& acc) {
 void AggEventFolder::add_event(
     const views::detail::FoldEvent& ev,
     const dstd::HashSet<AggGroup, AggGroupHash>* wanted) {
-    const index::schemas::dft::agg::PodAccessor acc(ev, r_.read,
-                                                    r_.read_metric_ids);
-    if (!index::schemas::dft::agg::partial_holds(acc)) return;
+    const trace::index::schemas::dft::agg::PodAccessor acc(ev, r_.read,
+                                                           r_.read_metric_ids);
+    if (!trace::index::schemas::dft::agg::partial_holds(acc)) return;
     if (ev.ts < r_.q.ts_begin || ev.ts >= r_.q.ts_end) return;
     if (!r_.pids.empty() &&
         !std::binary_search(r_.pids.begin(), r_.pids.end(), ev.pid))
@@ -139,7 +139,7 @@ void AggEventFolder::add_event(
         if (host == AGG_REJECT) return;
         extra = extra_id(acc);
     }
-    const AggKind kind = index::schemas::dft::agg::partial_kind(acc);
+    const AggKind kind = trace::index::schemas::dft::agg::partial_kind(acc);
     AggKey key;
     if (r_.q.by_file) set_file_key(key, acc.arg_string("fhash"), r_.strings);
     if (wanted != nullptr) {
@@ -163,10 +163,11 @@ void AggEventFolder::add_event(
     auto it = rows_.find(key);
     if (it == rows_.end())
         it = rows_
-                 .emplace(key, index::schemas::dft::agg::AggPartial(
+                 .emplace(key, trace::index::schemas::dft::agg::AggPartial(
                                    r_.q.config.sketch_accuracy))
                  .first;
-    index::schemas::dft::agg::fold_into_partial(it->second, acc, r_.read_cfg);
+    trace::index::schemas::dft::agg::fold_into_partial(it->second, acc,
+                                                       r_.read_cfg);
     ++stats_.events_read;
 }
 

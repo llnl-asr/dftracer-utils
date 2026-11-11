@@ -8,12 +8,12 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/build/batch_builder.h>
+#include <dftracer/utils/fileio/compress/gzip_rechunker.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/utilities/fileio/compress/gzip_rechunker.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
-#include <dftracer/utils/utilities/reader/internal/member_decode_cache.h>
-#include <dftracer/utils/utilities/reader/trace_reader.h>
+#include <dftracer/utils/trace/index/build/batch_builder.h>
+#include <dftracer/utils/trace/reader/internal/member_decode_cache.h>
+#include <dftracer/utils/trace/reader/trace_reader.h>
 #include <doctest/doctest.h>
 #include <generator_ok.h>
 #include <testing_runtime.h>
@@ -22,8 +22,7 @@
 #include <cstdint>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::index::build;
-using namespace dftracer::utils::utilities;
+using namespace dftracer::utils::trace::index::build;
 
 namespace {
 
@@ -50,10 +49,10 @@ void write_single_member(const dstd::String& path,
 std::int64_t read_line_count(const dstd::String& gz, const dstd::String& idx) {
     std::int64_t count = 0;
     dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
-        reader::TraceReader reader(
-            reader::TraceReaderConfig{dstd::String(gz), dstd::String(idx)});
-        auto gen =
-            dftu_utils_test::ok_items(reader.read_lines(reader::ReadConfig{}));
+        trace::reader::TraceReader reader(trace::reader::TraceReaderConfig{
+            dstd::String(gz), dstd::String(idx)});
+        auto gen = dftu_utils_test::ok_items(
+            reader.read_lines(trace::reader::ReadConfig{}));
         while (co_await gen.next()) ++count;
         co_return;
     });
@@ -74,7 +73,7 @@ TEST_SUITE("member_cache_integration") {
         write_single_member(src, make_trace(n));
         dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             dftu_utils_test::ok(
-                co_await utilities::fileio::compress::gzip_rechunk_to_members(
+                co_await fileio::compress::gzip_rechunk_to_members(
                     dstd::String(src), dstd::String(gz), /*member_size=*/4096,
                     /*level=*/6));
             co_return;
@@ -92,14 +91,15 @@ TEST_SUITE("member_cache_integration") {
         }
 
         // Baseline before the cache is configured (plain per-reader decode).
-        REQUIRE(reader::internal::global_member_decode_cache() == nullptr);
+        REQUIRE(trace::reader::internal::global_member_decode_cache() ==
+                nullptr);
         const std::int64_t baseline = read_line_count(gz, index_dir);
         CHECK(baseline >= n);  // n events plus the leading "[" line
 
         // Enable the process cache and read the same file concurrently.
-        reader::internal::configure_global_member_decode_cache(256ull * 1024 *
-                                                               1024);
-        auto* cache = reader::internal::global_member_decode_cache();
+        trace::reader::internal::configure_global_member_decode_cache(
+            256ull * 1024 * 1024);
+        auto* cache = trace::reader::internal::global_member_decode_cache();
         REQUIRE(cache != nullptr);
         const auto before = cache->stats();
 
@@ -112,10 +112,11 @@ TEST_SUITE("member_cache_integration") {
                 tasks.push_back(
                     [](dstd::String gzp,
                        dstd::String idxp) -> coro::CoroTask<std::int64_t> {
-                        reader::TraceReader reader(reader::TraceReaderConfig{
-                            dstd::String(gzp), dstd::String(idxp)});
+                        trace::reader::TraceReader reader(
+                            trace::reader::TraceReaderConfig{
+                                dstd::String(gzp), dstd::String(idxp)});
                         auto gen = dftu_utils_test::ok_items(
-                            reader.read_lines(reader::ReadConfig{}));
+                            reader.read_lines(trace::reader::ReadConfig{}));
                         std::int64_t c = 0;
                         while (co_await gen.next()) ++c;
                         co_return c;

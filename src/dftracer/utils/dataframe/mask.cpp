@@ -5,6 +5,7 @@
 #include <dftracer/utils/dataframe/internal/string_reader.h>
 #include <dftracer/utils/dataframe/kernels/string_ops.h>
 #include <dftracer/utils/dataframe/mask.h>
+#include <dftracer/utils/dataframe/query/vectorize.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/result.h>
@@ -13,7 +14,6 @@
 #include <dftracer/utils/duql/errc.h>
 #include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/duql/fields.h>
-#include <dftracer/utils/duql/vectorize.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -161,7 +161,7 @@ dstd::Result<Series> field_mask(const DataFrame& b,
 
 dstd::Result<Series> leaf_mask(const duql::detail::ExprLeaf& leaf,
                                const DataFrame& b) {
-    dstd::Vector<VectorColumn> cols;
+    dstd::Vector<query::VectorColumn> cols;
     dstd::Vector<const Series*> inputs;
     cols.reserve(b.columns.size());
     inputs.reserve(b.columns.size());

@@ -19,7 +19,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/builder.h>
 #include <dftracer/utils/duql/query.h>
-#include <dftracer/utils/index/plan/chunk_pruner.h>
+#include <dftracer/utils/trace/index/plan/chunk_pruner.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
@@ -220,10 +220,10 @@ TEST_SUITE("Dynamic filter pushdown") {
 
         DynamicPrune dyn_prune;
         for (const ViewFile& f : plan.files) {
-            dftracer::utils::index::plan::ChunkPrunerInput pin{
+            dftracer::utils::trace::index::plan::ChunkPrunerInput pin{
                 dstd::String(dstd::StringView(f.index_path)),
                 dstd::String(dstd::StringView(f.file_path)), narrow_query};
-            dftracer::utils::index::plan::ChunkPruner pruner;
+            dftracer::utils::trace::index::plan::ChunkPruner pruner;
             auto out = run(pruner(pin));
             REQUIRE(out.success);
             dstd::Set<std::uint64_t> keep(out.candidate_checkpoints.begin(),

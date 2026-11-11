@@ -8,7 +8,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/utilities/reader/internal/member_decode_cache.h>
+#include <dftracer/utils/trace/reader/internal/member_decode_cache.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
 #include <testing_runtime.h>
@@ -17,20 +17,19 @@
 #include <cstdint>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities;
-using Bytes = reader::internal::MemberDecodeCache::Bytes;
+using Bytes = trace::reader::internal::MemberDecodeCache::Bytes;
 
 namespace {
 
 // Producer that counts invocations and yields a few times so concurrent
 // callers pile up on the in-flight entry before it completes.
-reader::internal::MemberDecodeCache::Producer counting_producer(
+trace::reader::internal::MemberDecodeCache::Producer counting_producer(
     std::atomic<int>& calls, std::uint8_t fill, std::size_t size) {
     return [&calls, fill, size]() -> coro::CoroTask<dstd::Result<Bytes>> {
         calls.fetch_add(1, std::memory_order_relaxed);
         for (int i = 0; i < 4; ++i) co_await coro::yield();
         auto m = dstd::make_shared<
-            dftracer::utils::utilities::reader::internal::DecodedMember>();
+            dftracer::utils::trace::reader::internal::DecodedMember>();
         m->data.assign(size, fill);
         m->compressed_size = size / 2;
         co_return Bytes(m);
@@ -41,7 +40,7 @@ reader::internal::MemberDecodeCache::Producer counting_producer(
 
 TEST_SUITE("MemberDecodeCache") {
     TEST_CASE("concurrent requests for one member decode once") {
-        reader::internal::MemberDecodeCache cache(64 * 1024 * 1024);
+        trace::reader::internal::MemberDecodeCache cache(64 * 1024 * 1024);
         std::atomic<int> calls{0};
         const int n = 32;
 
@@ -72,7 +71,7 @@ TEST_SUITE("MemberDecodeCache") {
     }
 
     TEST_CASE("distinct members each decode once") {
-        reader::internal::MemberDecodeCache cache(64 * 1024 * 1024);
+        trace::reader::internal::MemberDecodeCache cache(64 * 1024 * 1024);
         std::atomic<int> calls{0};
         const int n = 8;
 
@@ -93,7 +92,7 @@ TEST_SUITE("MemberDecodeCache") {
     }
 
     TEST_CASE("repeat request hits the cache (no re-decode)") {
-        reader::internal::MemberDecodeCache cache(64 * 1024 * 1024);
+        trace::reader::internal::MemberDecodeCache cache(64 * 1024 * 1024);
         std::atomic<int> calls{0};
 
         dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
@@ -112,11 +111,11 @@ TEST_SUITE("MemberDecodeCache") {
     }
 
     TEST_CASE("a failed decode is returned and not cached") {
-        reader::internal::MemberDecodeCache cache(64 * 1024 * 1024);
+        trace::reader::internal::MemberDecodeCache cache(64 * 1024 * 1024);
         std::atomic<int> calls{0};
 
         dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
-            reader::internal::MemberDecodeCache::Producer failing =
+            trace::reader::internal::MemberDecodeCache::Producer failing =
                 [&calls]() -> coro::CoroTask<dstd::Result<Bytes>> {
                 calls.fetch_add(1, std::memory_order_relaxed);
                 co_return common::make_error(common::ErrorCode::Compression,
@@ -142,7 +141,8 @@ TEST_SUITE("MemberDecodeCache") {
     TEST_CASE("members stay while the whole cache has room") {
         // 20 members over 16 shards put two in some shard: 120 bytes, over a
         // per-shard split of 1600 bytes (100) though the total (1200) fits.
-        reader::internal::MemberDecodeCache cache(/*capacity_bytes=*/1600);
+        trace::reader::internal::MemberDecodeCache cache(
+            /*capacity_bytes=*/1600);
         std::atomic<int> calls{0};
         auto pass = [&](std::uint64_t first, std::uint64_t last) {
             dftu_utils_test::run_coro(
@@ -167,7 +167,8 @@ TEST_SUITE("MemberDecodeCache") {
         // Total budget far below the working set; spread across shards, some
         // shard fills and evicts. Each member is decoded once here (distinct
         // keys, sequential), so decodes == members and evictions > 0.
-        reader::internal::MemberDecodeCache cache(/*capacity_bytes=*/4096);
+        trace::reader::internal::MemberDecodeCache cache(
+            /*capacity_bytes=*/4096);
         std::atomic<int> calls{0};
         const int members = 400;
 

@@ -5,7 +5,7 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/index/store/root_layout.h>
+#include <dftracer/utils/trace/index/store/root_layout.h>
 #include <dftracer/utils/trace/internal/utils.h>
 
 namespace dftracer::utils::trace::internal {
@@ -46,7 +46,7 @@ dstd::String determine_index_path(dstd::CStringView cpath,
             root = dstd::PathView(path).parent().str();
         }
     }
-    return dftracer::utils::index::normalize_index_root(root);
+    return dftracer::utils::trace::index::normalize_index_root(root);
 }
 
 dstd::StringView to_lower_ascii(dstd::StringView s, dstd::String& storage) {

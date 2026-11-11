@@ -6,6 +6,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <checkpoint_indexer_helpers.h>
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/domains/analysis/comparator/comparison_aggregation.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -15,23 +16,22 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/tuple.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/gzip/gzip_indexer.h>
-#include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/plan/prune.h>
-#include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_core.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
-#include <dftracer/utils/index/store/layout.h>
-#include <dftracer/utils/index/store/root_layout.h>
-#include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
+#include <dftracer/utils/fileio/file_helpers.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/agg_query.h>
-#include <dftracer/utils/trace/comparator/comparison_aggregation.h>
+#include <dftracer/utils/trace/index/gzip/gzip_indexer.h>
+#include <dftracer/utils/trace/index/indexer.h>
+#include <dftracer/utils/trace/index/plan/prune.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/agg_store.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_config.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_core.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_intern.h>
+#include <dftracer/utils/trace/index/store/layout.h>
+#include <dftracer/utils/trace/index/store/root_layout.h>
+#include <dftracer/utils/trace/index/tables.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/fold_event.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <doctest/doctest.h>
 #include <mmix_lcg.h>
 #include <task_result.h>
@@ -102,13 +102,16 @@ class Acc {
     dstd::StringView arg_string(dstd::StringView k) const {
         return k == "fhash" ? dstd::StringView(e_.fhash) : dstd::StringView{};
     }
-    void metric_args(index::schemas::dft::agg::MetricArgs& m) const {
+    void metric_args(trace::index::schemas::dft::agg::MetricArgs& m) const {
         for (const auto& [name, v] : e_.args) {
             for (std::size_t i = 0;
-                 i < index::schemas::dft::agg::METRIC_ARG_COUNT; ++i)
-                if (name == index::schemas::dft::agg::METRIC_ARG_NAMES[i]) {
-                    m.add(static_cast<index::schemas::dft::agg::MetricArg>(i),
-                          v);
+                 i < trace::index::schemas::dft::agg::METRIC_ARG_COUNT; ++i)
+                if (name ==
+                    trace::index::schemas::dft::agg::METRIC_ARG_NAMES[i]) {
+                    m.add(
+                        static_cast<trace::index::schemas::dft::agg::MetricArg>(
+                            i),
+                        v);
                     break;
                 }
         }
@@ -128,9 +131,9 @@ std::uint64_t next(std::uint64_t& s) {
     return s >> 17;
 }
 
-index::schemas::dft::agg::AggregationConfig make_config(
+trace::index::schemas::dft::agg::AggregationConfig make_config(
     std::uint64_t interval_us) {
-    index::schemas::dft::agg::AggregationConfig cfg;
+    trace::index::schemas::dft::agg::AggregationConfig cfg;
     cfg.time_interval_us = interval_us;
     cfg.group_by_file = false;
     cfg.compute_percentiles = true;
@@ -244,7 +247,7 @@ dstd::String write_trace(const dstd::String& dir, int n,
             pfw, gz, CHECKPOINT_SIZE));
     } else {
         const dstd::String text = out.str();
-        utilities::fileio::compress::GzipMemberCompressor comp;
+        fileio::compress::GzipMemberCompressor comp;
         REQUIRE(comp.valid());
         dftu_utils_test::FileOut file(gz);
         for (std::size_t at = 0; at < text.size(); at += CHECKPOINT_SIZE) {
@@ -297,8 +300,9 @@ bool kept(const Ev& e, const Ask& a) {
 }
 
 std::uint64_t file_of(const Ev& e) {
-    return e.fhash.empty() ? 0
-                           : index::schemas::dft::agg::agg_hash_of_hex(e.fhash);
+    return e.fhash.empty()
+               ? 0
+               : trace::index::schemas::dft::agg::agg_hash_of_hex(e.fhash);
 }
 
 Key key_of(const Ev& e, const Ask& a) {
@@ -314,24 +318,25 @@ struct Truth {
     dstd::Set<std::uint64_t> pids, tids, files, pid_tids, pid_files;
     dstd::Map<std::uint64_t, dstd::Pair<std::uint64_t, std::uint64_t>> spans;
     dstd::Vector<double> dur, size, off;
-    index::schemas::dft::agg::AggregationMetrics metrics{0.01};
+    trace::index::schemas::dft::agg::AggregationMetrics metrics{0.01};
 };
 
 // A per-event aggregator, one state per group key of the query.
 dstd::Map<Key, Truth> reference(
     const dstd::Vector<Ev>& events, const Ask& ask,
-    const index::schemas::dft::agg::AggregationConfig& cfg) {
+    const trace::index::schemas::dft::agg::AggregationConfig& cfg) {
     dstd::Map<Key, Truth> out;
     for (const Ev& e : events) {
         if (!kept(e, ask)) continue;
         Truth& t = out[key_of(e, ask)];
-        index::schemas::dft::agg::oracle_event(Acc(e), t.metrics, cfg);
+        trace::index::schemas::dft::agg::oracle_event(Acc(e), t.metrics, cfg);
         t.pids.insert(e.pid);
         t.tids.insert(e.tid);
-        t.pid_tids.insert(index::schemas::dft::agg::pid_tid_id(e.pid, e.tid));
+        t.pid_tids.insert(
+            trace::index::schemas::dft::agg::pid_tid_id(e.pid, e.tid));
         if (!e.fhash.empty())
-            t.pid_files.insert(
-                index::schemas::dft::agg::pid_file_id(e.pid, file_of(e)));
+            t.pid_files.insert(trace::index::schemas::dft::agg::pid_file_id(
+                e.pid, file_of(e)));
         if (!e.fhash.empty()) t.files.insert(file_of(e));
         const std::uint64_t end =
             e.ts + (e.counter ? cfg.time_interval_us : e.dur);
@@ -383,14 +388,14 @@ double exact_rule(dstd::Vector<double> v, double q) {
     return v[lo] * (1.0 - frac) + v[lo + 1] * frac;
 }
 
-void check_quantiles(const index::schemas::dft::agg::QuantileStore& q,
+void check_quantiles(const trace::index::schemas::dft::agg::QuantileStore& q,
                      const dstd::Vector<double>& truth, const char* what) {
     INFO("quantiles of ", what);
     REQUIRE(q.count() == truth.size());
     if (truth.empty()) return;
     CHECK(q.is_exact() ==
           (truth.size() <=
-           index::schemas::dft::agg::QuantileStore::EXACT_CAPACITY));
+           trace::index::schemas::dft::agg::QuantileStore::EXACT_CAPACITY));
     dstd::Vector<double> sorted = truth;
     std::sort(sorted.begin(), sorted.end());
     const std::size_t last = sorted.size() - 1;
@@ -417,9 +422,9 @@ Key row_key(const AggQueryResult& r, const trace::AggKey& k) {
             k.window};
 }
 
-void check_group(const index::schemas::dft::agg::AggPartial& p, const Truth& t,
-                 bool quantiles) {
-    const index::schemas::dft::agg::AggregationMetrics& ref = t.metrics;
+void check_group(const trace::index::schemas::dft::agg::AggPartial& p,
+                 const Truth& t, bool quantiles) {
+    const trace::index::schemas::dft::agg::AggregationMetrics& ref = t.metrics;
 
     CHECK(p.count == ref.count);
     CHECK(p.ts == ref.ts);
@@ -473,12 +478,12 @@ dstd::UniquePtr<Fixture> build(std::uint64_t interval_us,
         fx->events.insert(fx->events.end(), events.begin(), events.end());
     }
     fx->index_dir = fx->env.dir() + "/idx_" + tag;
-    index::IndexerOptions o;
+    trace::index::IndexerOptions o;
     o.index_dir = fx->index_dir;
     o.checkpoint_size = CHECKPOINT_SIZE;
     o.parallelism = 4;
     o.aggregation = make_config(interval_us);
-    auto ix = dftu_utils_test::ok(index::Indexer::open(
+    auto ix = dftu_utils_test::ok(trace::index::Indexer::open(
         dstd::Vector<dstd::String>(fx->files.begin(), fx->files.end()), o));
     dftu_utils_test::ok(ix.build());
     fx->index_path = dstd::String(
@@ -558,16 +563,17 @@ AggQueryResult check(const Fixture& fx, const Ask& ask,
     return r;
 }
 
-dstd::Map<std::uint64_t, index::schemas::dft::agg::AggPartial> merge_by_file(
-    const AggQueryResult& r) {
-    dstd::Map<std::uint64_t, index::schemas::dft::agg::AggPartial> out;
+dstd::Map<std::uint64_t, trace::index::schemas::dft::agg::AggPartial>
+merge_by_file(const AggQueryResult& r) {
+    dstd::Map<std::uint64_t, trace::index::schemas::dft::agg::AggPartial> out;
     for (const auto& [k, p] : r.rows)
         out.try_emplace(k.file, SKETCH_ACCURACY).first->second.merge(p);
     return out;
 }
 
 void check_file_rows(
-    const dstd::Map<std::uint64_t, index::schemas::dft::agg::AggPartial>& want,
+    const dstd::Map<std::uint64_t, trace::index::schemas::dft::agg::AggPartial>&
+        want,
     const AggQueryResult& got) {
     REQUIRE(got.rows.size() == want.size());
     for (const auto& [k, p] : got.rows) {
@@ -588,16 +594,15 @@ void check_file_rows(
 
 std::size_t partial_count(const Fixture& fx) {
     auto snapshot =
-        dftu_utils_test::ok(index::plan::open_snapshot(fx.index_path));
+        dftu_utils_test::ok(trace::index::plan::open_snapshot(fx.index_path));
     std::size_t n = 0;
     for (const auto& f : fx.files) {
-        const auto file =
-            snapshot.file(index::store::internal::get_logical_path(f));
+        const auto file = snapshot.file(fileio::get_logical_path(f));
         REQUIRE(file);
-        dftu_utils_test::ok(index::for_each_agg_partial(
+        dftu_utils_test::ok(trace::index::for_each_agg_partial(
             snapshot, *file,
             [&](std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t,
-                std::uint32_t, index::schemas::dft::agg::PartialKind,
+                std::uint32_t, trace::index::schemas::dft::agg::PartialKind,
                 dstd::Span<const std::uint8_t>) {
                 ++n;
                 return true;
@@ -681,16 +686,17 @@ void check_same_stat(const dataframe::FieldStat& a,
     CHECK(near(a.cm4, b.cm4, s2 * s2, MOMENT_TOL));
 }
 
-void check_same_quantiles(const index::schemas::dft::agg::QuantileStore& a,
-                          const index::schemas::dft::agg::QuantileStore& b) {
+void check_same_quantiles(
+    const trace::index::schemas::dft::agg::QuantileStore& a,
+    const trace::index::schemas::dft::agg::QuantileStore& b) {
     REQUIRE(a.count() == b.count());
     if (a.count() == 0) return;
     for (double p : {0.0, 0.1, 0.5, 0.9, 0.99, 1.0})
         CHECK(a.quantile(p) == b.quantile(p));
 }
 
-void check_same_partial(const index::schemas::dft::agg::AggPartial& a,
-                        const index::schemas::dft::agg::AggPartial& b) {
+void check_same_partial(const trace::index::schemas::dft::agg::AggPartial& a,
+                        const trace::index::schemas::dft::agg::AggPartial& b) {
     CHECK(a.count == b.count);
     CHECK(a.ts == b.ts);
     CHECK(a.te == b.te);
@@ -771,23 +777,23 @@ TEST_SUITE("AggQuery") {
             files.push_back(write_trace(env.dir(), f, events, false));
         }
         const dstd::String index_dir = env.dir() + "/idx_cmp";
-        index::IndexerOptions o;
+        trace::index::IndexerOptions o;
         o.index_dir = index_dir;
         o.checkpoint_size = CHECKPOINT_SIZE;
         o.parallelism = 2;
-        auto ix = dftu_utils_test::ok(index::Indexer::open(
+        auto ix = dftu_utils_test::ok(trace::index::Indexer::open(
             dstd::Vector<dstd::String>(files.begin(), files.end()), o));
         dftu_utils_test::ok(ix.build());
 
-        dstd::Vector<trace::comparator::ComparisonFilter> filters;
+        dstd::Vector<domains::analysis::comparator::ComparisonFilter> filters;
         filters.emplace_back();
         dstd::StringIntern strings;
-        trace::comparator::SideAggregate side;
+        domains::analysis::comparator::SideAggregate side;
         dstd::String error;
         dftu_utils_test::ok(shared_runtime().block_on(coro::named(
             "comparator-side",
             coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-                auto r = co_await trace::comparator::aggregate_side(
+                auto r = co_await domains::analysis::comparator::aggregate_side(
                     dstd::Vector<dstd::String>(files.begin(), files.end()),
                     dstd::String(index_dir), filters, FIVE_SECONDS_US, 0,
                     strings);
@@ -819,12 +825,14 @@ TEST_SUITE("AggQuery") {
             const AggQueryResult a = run(full);
             const AggQueryResult b = run(trimmed);
             REQUIRE(a.rows.size() == b.rows.size());
-            dstd::Map<Key, const index::schemas::dft::agg::AggPartial*> by_key;
+            dstd::Map<Key, const trace::index::schemas::dft::agg::AggPartial*>
+                by_key;
             for (const auto& [k, p] : a.rows) by_key[row_key(a, k)] = &p;
             for (const auto& [k, p] : b.rows) {
                 const auto it = by_key.find(row_key(b, k));
                 REQUIRE(it != by_key.end());
-                const index::schemas::dft::agg::AggPartial& want = *it->second;
+                const trace::index::schemas::dft::agg::AggPartial& want =
+                    *it->second;
                 CHECK(p.count == want.count);
                 CHECK(p.ts == want.ts);
                 CHECK(p.te == want.te);
@@ -897,7 +905,7 @@ TEST_SUITE("AggQuery") {
                 const Key key = row_key(r, k);
                 const auto t = truth.find(key);
                 REQUIRE(t != truth.end());
-                const index::schemas::dft::agg::AggregationMetrics& ref =
+                const trace::index::schemas::dft::agg::AggregationMetrics& ref =
                     t->second.metrics;
                 CHECK(p.count == ref.count);
                 CHECK(p.duration.n == ref.duration.stat.n);
@@ -1040,15 +1048,15 @@ TEST_SUITE("AggQuery") {
         dstd::fs::remove(pfw).discard();
         fx->files.push_back(gz);
         fx->index_dir = fx->env.dir() + "/idx_mixed";
-        index::IndexerOptions o;
+        trace::index::IndexerOptions o;
         o.index_dir = fx->index_dir;
         o.checkpoint_size = CHECKPOINT_SIZE;
         o.aggregation = make_config(FIVE_SECONDS_US);
         dftu_utils_test::ok(
-            dftu_utils_test::ok(
-                index::Indexer::open(dstd::Vector<dstd::String>(
-                                         fx->files.begin(), fx->files.end()),
-                                     o))
+            dftu_utils_test::ok(trace::index::Indexer::open(
+                                    dstd::Vector<dstd::String>(
+                                        fx->files.begin(), fx->files.end()),
+                                    o))
                 .build());
         fx->index_path = dstd::String(
             trace::internal::determine_index_path(gz, fx->index_dir));
@@ -1119,22 +1127,21 @@ TEST_SUITE("AggQuery") {
     TEST_CASE("a file indexed without partials is read whole") {
         auto fx = build(FIVE_SECONDS_US, "five");
         {
-            auto opened =
-                index::Index::open(index::normalize_index_root(fx->index_path));
+            auto opened = trace::index::Index::open(
+                trace::index::normalize_index_root(fx->index_path));
             REQUIRE(opened.has_value());
             const auto snapshot = opened->snapshot();
             REQUIRE(snapshot.has_value());
-            const auto file = snapshot->file(
-                index::store::internal::get_logical_path(fx->files[0]));
+            const auto file =
+                snapshot->file(fileio::get_logical_path(fx->files[0]));
             REQUIRE(file.has_value());
-            const auto state = index::extension_state(
-                *snapshot, *file, index::store::IndexExtension::Agg);
+            const auto state = trace::index::extension_state(
+                *snapshot, *file, trace::index::store::IndexExtension::Agg);
             REQUIRE(state.has_value());
-            auto rebuilt = index::rebuild(
-                *opened,
-                index::store::internal::get_logical_path(fx->files[0]));
+            auto rebuilt = trace::index::rebuild(
+                *opened, fileio::get_logical_path(fx->files[0]));
             REQUIRE(rebuilt.has_value());
-            rebuilt->finish(index::store::IndexExtension::Agg,
+            rebuilt->finish(trace::index::store::IndexExtension::Agg,
                             state->params_hash);
             REQUIRE(
                 default_runtime().submit(rebuilt->commit()).get().has_value());
@@ -1191,20 +1198,20 @@ TEST_SUITE("AggQuery") {
         fx->files.push_back(dftu_utils_test::write_gz_trace(
             fx->env.dir() + "/one.pfw.gz", text.str()));
         fx->index_dir = fx->env.dir() + "/idx_one";
-        index::IndexerOptions o;
+        trace::index::IndexerOptions o;
         o.index_dir = fx->index_dir;
         o.checkpoint_size = std::size_t{64} << 10;
         o.aggregation = make_config(FIVE_SECONDS_US);
         dftu_utils_test::ok(
-            dftu_utils_test::ok(
-                index::Indexer::open(dstd::Vector<dstd::String>(
-                                         fx->files.begin(), fx->files.end()),
-                                     o))
+            dftu_utils_test::ok(trace::index::Indexer::open(
+                                    dstd::Vector<dstd::String>(
+                                        fx->files.begin(), fx->files.end()),
+                                    o))
                 .build());
         fx->index_path = dstd::String(
             trace::internal::determine_index_path(fx->files[0], fx->index_dir));
 
-        auto indexer = dstd::make_shared<index::gzip::GzipIndexer>(
+        auto indexer = dstd::make_shared<trace::index::gzip::GzipIndexer>(
             fx->files[0], fx->index_path, std::size_t{512} << 10, true);
         dftu_utils_test::ok(shared_runtime().block_on(coro::named(
             "reindex", coro::with_scope([&](coro::Scope&) {
@@ -1234,15 +1241,15 @@ TEST_SUITE("AggQuery") {
         fx->files.push_back(dftu_utils_test::write_gz_trace(
             fx->env.dir() + "/tiny.pfw.gz", text.str()));
         fx->index_dir = fx->env.dir() + "/idx_tiny";
-        index::IndexerOptions o;
+        trace::index::IndexerOptions o;
         o.index_dir = fx->index_dir;
         o.checkpoint_size = ONE_CHUNK;
         o.aggregation = make_config(FIVE_SECONDS_US);
         dftu_utils_test::ok(
-            dftu_utils_test::ok(
-                index::Indexer::open(dstd::Vector<dstd::String>(
-                                         fx->files.begin(), fx->files.end()),
-                                     o))
+            dftu_utils_test::ok(trace::index::Indexer::open(
+                                    dstd::Vector<dstd::String>(
+                                        fx->files.begin(), fx->files.end()),
+                                    o))
                 .build());
         fx->index_path = dstd::String(
             trace::internal::determine_index_path(fx->files[0], fx->index_dir));
@@ -1290,15 +1297,15 @@ TEST_SUITE("AggQuery") {
         fx->files.push_back(dftu_utils_test::write_gz_trace(
             fx->env.dir() + "/odd.pfw.gz", text.str()));
         fx->index_dir = fx->env.dir() + "/idx_odd";
-        index::IndexerOptions o;
+        trace::index::IndexerOptions o;
         o.index_dir = fx->index_dir;
         o.checkpoint_size = std::size_t{64} << 20;
         o.aggregation = make_config(FIVE_SECONDS_US);
         dftu_utils_test::ok(
-            dftu_utils_test::ok(
-                index::Indexer::open(dstd::Vector<dstd::String>(
-                                         fx->files.begin(), fx->files.end()),
-                                     o))
+            dftu_utils_test::ok(trace::index::Indexer::open(
+                                    dstd::Vector<dstd::String>(
+                                        fx->files.begin(), fx->files.end()),
+                                    o))
                 .build());
         fx->index_path = dstd::String(
             trace::internal::determine_index_path(fx->files[0], fx->index_dir));
@@ -1367,7 +1374,7 @@ TEST_SUITE("AggQuery") {
         q.ordered = true;
         q.workers = 1;
         const AggQueryResult serial = run(q);
-        dstd::Map<Key, const index::schemas::dft::agg::AggPartial*> want;
+        dstd::Map<Key, const trace::index::schemas::dft::agg::AggPartial*> want;
         for (const auto& [k, p] : serial.rows) want[row_key(serial, k)] = &p;
         q.workers = 0;
         for (int round = 0; round < 8; ++round) {
@@ -1417,7 +1424,7 @@ TEST_SUITE("AggQuery") {
                 return key;
             }());
             REQUIRE(b != parallel.rows.end());
-            const index::schemas::dft::agg::AggPartial& c = b->second;
+            const trace::index::schemas::dft::agg::AggPartial& c = b->second;
             CHECK(a.count == c.count);
             CHECK(a.ts == c.ts);
             CHECK(a.te == c.te);

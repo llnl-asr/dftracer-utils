@@ -36,15 +36,15 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
-#include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/plan/chunk_pruner.h>
-#include <dftracer/utils/index/plan/prune.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
-#include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
+#include <dftracer/utils/fileio/file_helpers.h>
+#include <dftracer/utils/fileio/lines/sources/async_streaming_gz_line_generator.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/indexer.h>
+#include <dftracer/utils/trace/index/plan/chunk_pruner.h>
+#include <dftracer/utils/trace/index/plan/prune.h>
+#include <dftracer/utils/trace/index/tables.h>
 #include <dftracer/utils/trace/views/view.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
-#include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
 #include <simdjson.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
@@ -201,8 +201,8 @@ coro::CoroTask<QuerySet> sample_queries(dstd::String file) {
     dstd::Map<dstd::String, int> names, cats, args;
     dstd::Vector<std::int64_t> stamps;
     simdjson::dom::parser parser;
-    auto gen = utilities::fileio::lines::sources::async_streaming_gz_lines(
-        std::move(file));
+    auto gen =
+        fileio::lines::sources::async_streaming_gz_lines(std::move(file));
     int seen = 0;
     while (auto next = co_await gen.next()) {
         if (!*next) dftu::bench::fail(next->error());
@@ -280,8 +280,8 @@ coro::CoroTask<dstd::Map<dstd::String, dstd::String>> sample_genesis(
     dstd::Map<dstd::String, dstd::Vector<double>> metrics;
     int shape = 0;  // 1 long, 2 wide
     simdjson::dom::parser parser;
-    auto gen = utilities::fileio::lines::sources::async_streaming_gz_lines(
-        std::move(file));
+    auto gen =
+        fileio::lines::sources::async_streaming_gz_lines(std::move(file));
     int seen = 0;
     while (auto next = co_await gen.next()) {
         if (!*next) dftu::bench::fail(next->error());
@@ -400,7 +400,7 @@ Result measure(const Options& opt, const dstd::String& input,
         require_ok(dstd::fs::create_directories(index_dir),
                    "create_directories");
         r.build_s.push_back(seconds([&] {
-            dftracer::utils::index::IndexerOptions options;
+            dftracer::utils::trace::index::IndexerOptions options;
             options.index_dir = index_dir;
             options.bloom->required = false;
             options.memory_budget = opt.memory_budget;
@@ -408,7 +408,7 @@ Result measure(const Options& opt, const dstd::String& input,
                 options.aggregation.time_interval_us =
                     opt.aggregation_interval_us;
             auto indexer = dftu::bench::ok(
-                dftracer::utils::index::Indexer::open(files, options));
+                dftracer::utils::trace::index::Indexer::open(files, options));
             run_scoped([&](coro::Scope& scope) -> coro::CoroTask<void> {
                 dftu::bench::ok(co_await indexer.rebuild(scope));
             });
@@ -442,17 +442,17 @@ Result measure(const Options& opt, const dstd::String& input,
 
     {
         const auto snapshot = dftu::bench::ok(
-            dftracer::utils::index::plan::open_snapshot(index_path));
+            dftracer::utils::trace::index::plan::open_snapshot(index_path));
         dstd::HashSet<dstd::String> paths;
         for (const auto& f : files) {
-            const auto file = snapshot.file(
-                dftracer::utils::index::store::internal::get_logical_path(f));
+            const auto file = snapshot.file(fileio::get_logical_path(f));
             if (!file) continue;
             if (auto meta = dftu::bench::ok(
-                    dftracer::utils::index::file_metadata(snapshot, *file)))
+                    dftracer::utils::trace::index::file_metadata(snapshot,
+                                                                 *file)))
                 r.lines += meta->line_count;
             for (const auto& [p, stat] : dftu::bench::ok(
-                     dftracer::utils::index::catalog(snapshot, *file)))
+                     dftracer::utils::trace::index::catalog(snapshot, *file)))
                 paths.insert(dstd::String(p));
         }
         r.distinct_paths = paths.size();
@@ -472,10 +472,10 @@ Result measure(const Options& opt, const dstd::String& input,
         if (text.find("->") == dstd::String::npos) {
             const auto parsed = duql::Query::from_string(text);
             if (!parsed) dftu::bench::fail(parsed.error());
-            dftracer::utils::index::plan::ChunkPrunerBatchInput in;
+            dftracer::utils::trace::index::plan::ChunkPrunerBatchInput in;
             in.index_path = index_path;
             for (const auto& f : files) in.items.push_back({f, *parsed});
-            dftracer::utils::index::plan::ChunkPruner pruner;
+            dftracer::utils::trace::index::plan::ChunkPruner pruner;
             Samples per_file;
             for (double s :
                  timed([&] { dftu::bench::ok(pruner.process_batch(in)); },
@@ -716,7 +716,7 @@ dstd::String write_smoke_trace(const dstd::String& dir) {
         lines +=
             R"(,"args":{"fname":"/data/f)" + dstd::to_string(i % 8) + "\"}}\n";
     }
-    dftracer::utils::utilities::fileio::compress::GzipMemberCompressor comp(6);
+    dftracer::utils::fileio::compress::GzipMemberCompressor comp(6);
     auto member = comp.compress_member(
         reinterpret_cast<const std::uint8_t*>(lines.data()), lines.size());
     if (!member) {

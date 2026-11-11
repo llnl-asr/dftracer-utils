@@ -6,7 +6,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/store/root_layout.h>
+#include <dftracer/utils/trace/index/store/root_layout.h>
 #include <dftracer/utils/trace/internal/index_root.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/metadata_collector_utility.h>
@@ -347,7 +347,7 @@ TEST_SUITE("MetadataCollectorRoot") {
 
         // The collector keys the root by its normalized path.
         auto root = internal::index_root(dstd::String(
-            dstd::String(index::normalize_index_root(index_path))));
+            dstd::String(trace::index::normalize_index_root(index_path))));
         // Forget what this process saw, so each check reads the index.
         {
             std::lock_guard<std::mutex> lock(root->current_mutex);

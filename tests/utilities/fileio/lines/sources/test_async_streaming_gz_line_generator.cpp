@@ -6,17 +6,16 @@
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
-#include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
+#include <dftracer/utils/fileio/lines/sources/async_streaming_gz_line_generator.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
 #include <testing_utilities.h>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities::fileio::lines::sources;
-using namespace dftracer::utils::utilities::fileio::lines;
+using namespace dftracer::utils::fileio::lines::sources;
+using namespace dftracer::utils::fileio::lines;
 using namespace dftracer::utils::coro;
-using namespace dftracer::utils::utilities;
 
 namespace {
 

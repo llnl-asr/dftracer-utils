@@ -3,11 +3,11 @@
 #include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/json/dom_form.h>
 #include <dftracer/utils/trace/event.h>
 #include <dftracer/utils/trace/time_metric_event.h>
 #include <dftracer/utils/trace/trace_config.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <simdjson.h>
 
 #include <algorithm>
@@ -43,7 +43,7 @@ bool decompress_last_member(std::FILE* in, std::int64_t fsize,
                                 (static_cast<std::uint32_t>(isz[2]) << 16) |
                                 (static_cast<std::uint32_t>(isz[3]) << 24);
 
-    utilities::fileio::compress::GzipMemberDecompressor dec;
+    fileio::compress::GzipMemberDecompressor dec;
     for (std::size_t window = INITIAL_TAIL;; window *= 4) {
         const std::size_t winlen =
             std::min<std::size_t>(window, static_cast<std::size_t>(fsize));
@@ -96,7 +96,7 @@ bool decompress_first_member(std::FILE* in, std::int64_t fsize,
         (static_cast<std::uint32_t>(buf[end - 2]) << 16) |
         (static_cast<std::uint32_t>(buf[end - 1]) << 24);
 
-    utilities::fileio::compress::GzipMemberDecompressor dec;
+    fileio::compress::GzipMemberDecompressor dec;
     auto r = dec.decompress_member(buf.data(), end, isize);
     if (r && r->size() == isize) {
         out = std::move(*r);

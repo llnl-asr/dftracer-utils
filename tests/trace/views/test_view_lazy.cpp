@@ -10,10 +10,10 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/trace/views/view_source.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
 #include <testing_utilities.h>
@@ -1693,7 +1693,7 @@ View batch_viewer(const dstd::String& dir,
                         ",\"dur\":" + dstd::to_string(1 + (n * 37) % 500) +
                         ",\"args\":{\"size\":" + dstd::to_string(n) + "}}\n";
             }
-            utilities::fileio::compress::GzipMemberCompressor c;
+            fileio::compress::GzipMemberCompressor c;
             dstd::Vector<std::uint8_t> buf(c.bound(text.size()));
             auto len =
                 c.compress(text.data(), text.size(), buf.data(), buf.size());

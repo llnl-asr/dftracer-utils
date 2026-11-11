@@ -4,10 +4,10 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/gzip/gzip_indexer.h>
-#include <dftracer/utils/utilities/fileio/compress/gzip_member_reader.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
-#include <dftracer/utils/utilities/reader/internal/inflater.h>
+#include <dftracer/utils/fileio/compress/gzip_member_reader.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
+#include <dftracer/utils/trace/index/gzip/gzip_indexer.h>
+#include <dftracer/utils/trace/reader/internal/inflater.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
 #include <testing_runtime.h>
@@ -19,7 +19,6 @@
 #include <random>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities;
 
 namespace {
 
@@ -69,7 +68,7 @@ dstd::String read_all(const dstd::String& path) {
     dstd::String out;
     bool ok = false;
     dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
-        reader::internal::ReaderInflater inf;
+        trace::reader::internal::ReaderInflater inf;
         off_t offset = 0;
         if (!co_await inf.initialize(fd, offset)) co_return;
         dstd::Vector<unsigned char> buf(1 << 20);
@@ -183,12 +182,13 @@ TEST_SUITE("ReaderInflater") {
     TEST_CASE("the index build counts one large member") {
         const auto text = hex_lines(3u << 20, 7);
         TempFile f(gzip(text));
-        dstd::Optional<index::gzip::GzipBuildArtifacts> arts;
+        dstd::Optional<trace::index::gzip::GzipBuildArtifacts> arts;
         dftu_utils_test::run_coro(
             [&](coro::Scope& scope) -> coro::CoroTask<void> {
-                index::gzip::CheckpointIndexer::VisitorList none;
-                auto built = co_await index::gzip::build_gzip_index_artifacts(
-                    f.path, 32u << 20, none, &scope);
+                trace::index::gzip::CheckpointIndexer::VisitorList none;
+                auto built =
+                    co_await trace::index::gzip::build_gzip_index_artifacts(
+                        f.path, 32u << 20, none, &scope);
                 if (built) arts = std::move(*built);
             });
         REQUIRE(arts.has_value());

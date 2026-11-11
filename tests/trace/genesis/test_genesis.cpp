@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/sketch.h>
+#include <dftracer/utils/domains/workload/genesis/genesis.h>
 #include <dftracer/utils/dstd/base64.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
@@ -9,7 +10,6 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/detail/manager.h>
-#include <dftracer/utils/trace/genesis/genesis.h>
 #include <doctest/doctest.h>
 #include <refused_lines.h>
 #include <simdjson.h>
@@ -23,7 +23,7 @@
 #include <random>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::trace::genesis;
+using namespace dftracer::utils::domains::workload::genesis;
 
 namespace {
 

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/domains/workload/replay/replay.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/utilities/replay/replay.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
@@ -42,7 +42,7 @@ class GzTraceWriter {
 };
 }  // namespace
 
-using namespace dftracer::utils::utilities::replay;
+using namespace dftracer::utils::domains::workload::replay;
 
 TEST_CASE("DFTracer Replay - Basic functionality") {
     dftracer::utils::common::logger::init();

@@ -10,7 +10,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/trace/index/indexer.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
 #include <testing_utilities.h>
@@ -263,7 +263,7 @@ View view_of_lines(TestEnvironment& env,
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
     dstd::fs::remove(pfw).discard();
     dftu_utils_test::ok(
-        dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+        dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
                                 {dstd::String(dstd::StringView(gz))}))
             .build());
     return View::from_file(
@@ -2440,7 +2440,7 @@ TEST_SUITE("View duql reshape determinism") {
                                                            member_bytes);
         dstd::fs::remove(pfw).discard();
         dftu_utils_test::ok(
-            dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+            dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
                                     {dstd::String(dstd::StringView(gz))}))
                 .build());
         return gz;
@@ -2901,7 +2901,7 @@ TEST_SUITE("View duql session") {
                                                            member_bytes);
         dstd::fs::remove(pfw).discard();
         dftu_utils_test::ok(
-            dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+            dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
                                     {dstd::String(dstd::StringView(gz))}))
                 .build());
         return gz;

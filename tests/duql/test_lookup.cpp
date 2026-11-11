@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dataframe/query/vectorize.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -13,7 +14,6 @@
 #include <dftracer/utils/duql/pipeline.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/duql/subsumption.h>
-#include <dftracer/utils/duql/vectorize.h>
 #include <dftracer/utils/json/json_value.h>
 #include <doctest/doctest.h>
 #include <duql/eval_json.h>
@@ -56,7 +56,8 @@ Query bound(const dstd::String& text) {
     REQUIRE_MESSAGE(p.has_value(), (p ? dstd::String() : p.error().format()));
     REQUIRE(p->main.filter);
     for (const TLookup* l : lookups(p->main))
-        l->slot->table = dftu_utils_test::ok(make_lookup_table(*l, runs()));
+        l->slot->table = dftu_utils_test::ok(
+            dftracer::utils::dataframe::query::make_lookup_table(*l, runs()));
     return duql::detail::QueryAccess::from_node(clone(*p->main.filter));
 }
 
@@ -105,7 +106,8 @@ TEST_CASE("an arrow's conflicting values fail in a value position") {
         {}, nullptr);
     REQUIRE(p);
     for (const TLookup* l : lookups(p->main))
-        l->slot->table = dftu_utils_test::ok(make_lookup_table(*l, f));
+        l->slot->table = dftu_utils_test::ok(
+            dftracer::utils::dataframe::query::make_lookup_table(*l, f));
     const Query q =
         duql::detail::QueryAccess::from_node(clone(*p->main.filter));
     CHECK_FALSE(lookup_failure(duql::detail::QueryAccess::root(q)));
@@ -120,7 +122,8 @@ TEST_CASE("an arrow's conflicting values fail in a value position") {
         nullptr);
     REQUIRE(any);
     for (const TLookup* l : lookups(any->main))
-        l->slot->table = dftu_utils_test::ok(make_lookup_table(*l, f));
+        l->slot->table = dftu_utils_test::ok(
+            dftracer::utils::dataframe::query::make_lookup_table(*l, f));
     CHECK(
         on_json(duql::detail::QueryAccess::from_node(clone(*any->main.filter)),
                 R"({"run":1})"));
@@ -177,7 +180,8 @@ TEST_CASE("a joined sub-query term leaves the scan filter") {
     }
     CHECK(joins.size() == 2);
     CHECK(sets.size() == 1);
-    const auto refused = make_lookup_table(*joins.front(), runs());
+    const auto refused = dftracer::utils::dataframe::query::make_lookup_table(
+        *joins.front(), runs());
     REQUIRE(!refused.has_value());
     CHECK(dftracer::utils::common::errorcode_of(refused.error()) ==
           dftracer::utils::common::ErrorCode::InvalidArgument);
@@ -206,7 +210,8 @@ TEST_CASE("a range sub-query reads the rows between the enclosing bounds") {
         const TLookup* found = nullptr;
         for (const TLookup* l : lookups(program->main)) {
             REQUIRE(l->range != RangeRead::None);
-            l->slot->table = dftu_utils_test::ok(make_lookup_table(*l, side));
+            l->slot->table = dftu_utils_test::ok(
+                dftracer::utils::dataframe::query::make_lookup_table(*l, side));
             found = l;
         }
         REQUIRE(found);
@@ -238,7 +243,8 @@ TEST_CASE("a range sub-query reads the rows between the enclosing bounds") {
         const auto [bp, bl] = lookup_of(
             dstd::fmt<"derive v = (from data | where pid == ^.pid and ts "
                       "between ^.lo and ^.hi | agg { v = {} })">(agg));
-        return dftu_utils_test::ok(lookup_column(*bl, keys, 6));
+        return dftu_utils_test::ok(
+            dftracer::utils::dataframe::query::lookup_column(*bl, keys, 6));
     };
     auto ints = [](const dataframe::Series& s) {
         dstd::Vector<dstd::String> out;
@@ -268,11 +274,13 @@ TEST_CASE("a range sub-query reads the rows between the enclosing bounds") {
     const dataframe::Series k2 = dataframe::Series::flat_i64(opid, 2);
     const dataframe::Series a2 = dataframe::Series::flat_i64(one_lo, 2);
     const dataframe::Series b2 = dataframe::Series::flat_i64(one_hi, 1);
-    CHECK(ints(dftu_utils_test::ok(lookup_column(*sl, {&k2, &a2, &b2}, 1))) ==
-          V{"5"});
+    CHECK(ints(dftu_utils_test::ok(
+              dftracer::utils::dataframe::query::lookup_column(
+                  *sl, {&k2, &a2, &b2}, 1))) == V{"5"});
     const dataframe::Series b3 = dataframe::Series::flat_i64(one_hi + 1, 1);
     const dataframe::Series a3 = dataframe::Series::flat_i64(one_lo + 1, 1);
-    const auto conflict = lookup_column(*sl, {&k2, &a3, &b3}, 1);
+    const auto conflict = dftracer::utils::dataframe::query::lookup_column(
+        *sl, {&k2, &a3, &b3}, 1);
     REQUIRE(!conflict.has_value());
     const dstd::String error(conflict.error().message());
     CHECK(error.find("rows in the range") != dstd::String::npos);

@@ -71,7 +71,7 @@ struct ScanUnit {
     // null when there was nothing to rewrite.
     dstd::SharedPtr<const duql::Query> query;
     // One per file, so the tasks of a scan load its member table once.
-    dstd::SharedPtr<index::gzip::CheckpointIndexer> indexer;
+    dstd::SharedPtr<trace::index::gzip::CheckpointIndexer> indexer;
 };
 
 // The record_schema every file of `plan` was indexed under, or is detected as
@@ -79,7 +79,7 @@ struct ScanUnit {
 // vote. When the files have none (their record_schemas differ, or an index
 // cannot be read) this is dftracer's schema, and resolve_record_schema reports
 // why. A terminal calls that first.
-const dftracer::utils::index::RecordSchema& plan_record_schema(
+const dftracer::utils::trace::index::RecordSchema& plan_record_schema(
     const ViewPlan& plan);
 
 // The error behind plan_record_schema falling back, or success when the files

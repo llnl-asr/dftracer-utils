@@ -6,8 +6,8 @@
 # object files. The shared library may define more: symbols of the static
 # libraries it bundles. Also check the libraries of ours that each shared
 # library needs: memory needs none, dstd needs only memory, common needs only
-# memory and dstd, coro needs only memory, dstd and common, io needs only memory,
-# dstd, common, coro, runtime and json, trace needs everything but utilities,
+# memory and dstd, coro needs only memory, dstd and common, fileio needs only memory,
+# dstd, common, coro, runtime and json, trace needs everything but domains,
 # and json and duql do not need runtime.
 # Library names come from the create_library NAME arguments in
 # src/CMakeLists.txt.
@@ -230,18 +230,18 @@ foreach(_name ${_names})
       set(_failed TRUE)
     endif()
   endif()
-  if(_name STREQUAL "dftracer_utils_io")
-    set(_above_io ${_needed})
-    list(REMOVE_ITEM _above_io "dftracer_utils_memory" "dftracer_utils_dstd"
+  if(_name STREQUAL "dftracer_utils_fileio")
+    set(_above_fileio ${_needed})
+    list(REMOVE_ITEM _above_fileio "dftracer_utils_memory" "dftracer_utils_dstd"
          "dftracer_utils_common" "dftracer_utils_coro" "dftracer_utils_runtime"
          "dftracer_utils_json")
-    if(_above_io)
-      message(SEND_ERROR "${_name}: needs ${_above_io}, but io needs only memory, dstd, common, coro, runtime and json")
+    if(_above_fileio)
+      message(SEND_ERROR "${_name}: needs ${_above_fileio}, but fileio needs only memory, dstd, common, coro, runtime and json")
       set(_failed TRUE)
     endif()
   endif()
-  if(_name STREQUAL "dftracer_utils_trace" AND "dftracer_utils_utilities" IN_LIST _needed)
-    message(SEND_ERROR "${_name}: needs dftracer_utils_utilities, but trace is below utilities")
+  if(_name STREQUAL "dftracer_utils_trace" AND "dftracer_utils_domains" IN_LIST _needed)
+    message(SEND_ERROR "${_name}: needs dftracer_utils_domains, but trace is below domains")
     set(_failed TRUE)
   endif()
   if((_name STREQUAL "dftracer_utils_json" OR _name STREQUAL "dftracer_utils_duql")

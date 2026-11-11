@@ -7,12 +7,12 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
-#include <dftracer/utils/index/store/root_layout.h>
-#include <dftracer/utils/index/store/shard_manifest.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/agg_query.h>
+#include <dftracer/utils/trace/index/indexer.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_config.h>
+#include <dftracer/utils/trace/index/store/root_layout.h>
+#include <dftracer/utils/trace/index/store/shard_manifest.h>
 #include <dftracer/utils/trace/views/sharded_view.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
@@ -60,13 +60,13 @@ dstd::String make_x_trace(TestEnvironment& env, const dstd::String& tag,
 // names the index root to build into, such as a shard root.
 void build_shard_index(
     const dstd::String& gz,
-    const index::schemas::dft::agg::AggregationConfig& config = {},
+    const trace::index::schemas::dft::agg::AggregationConfig& config = {},
     const dstd::String& index_dir = "") {
-    dftracer::utils::index::IndexerOptions options;
+    dftracer::utils::trace::index::IndexerOptions options;
     options.aggregation = config;
     options.index_dir = index_dir;
     dftu_utils_test::ok(
-        dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+        dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
                                 {dstd::String(dstd::StringView(gz))}, options))
             .build());
 }
@@ -74,14 +74,14 @@ void build_shard_index(
 // The trace files the root's store holds a current index for.
 dstd::Vector<dstd::String> indexed_files(
     const dstd::String& root, const dstd::Vector<dstd::String>& files) {
-    dftracer::utils::index::IndexerOptions options;
+    dftracer::utils::trace::index::IndexerOptions options;
     options.index_dir = dstd::String(dstd::StringView(root));
-    options.aggregation = index::schemas::dft::agg::AggregationConfig{};
+    options.aggregation = trace::index::schemas::dft::agg::AggregationConfig{};
     dstd::Vector<dstd::String> paths;
     for (const auto& file : files) paths.emplace_back(file);
     auto status = dftu_utils_test::ok(
-        dftu_utils_test::ok(
-            dftracer::utils::index::Indexer::open(std::move(paths), options))
+        dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                                std::move(paths), options))
             .status());
     REQUIRE(status.needs_work.empty());
     dstd::Vector<dstd::String> ready;
@@ -149,7 +149,7 @@ QueryOut run_query(const dftracer::utils::trace::AggQuery& q) {
 
 void check_merged_partials(
     const dstd::String& tag,
-    const index::schemas::dft::agg::AggregationConfig& config) {
+    const trace::index::schemas::dft::agg::AggregationConfig& config) {
     TestEnvironment env(200);
     REQUIRE(env.is_valid());
     dstd::String a = make_x_trace(env, tag + "alpha", 30, 20);
@@ -287,13 +287,14 @@ TEST_SUITE("ShardedView") {
         build_shard_index(a);
         build_shard_index(b);
 
-        index::store::IndexShardManifest manifest;
+        trace::index::store::IndexShardManifest manifest;
         manifest.format_version =
             static_cast<std::uint32_t>(DFTRACER_UTILS_INDEX_FORMAT_VERSION);
         manifest.shards.push_back({dstd::String(dstd::StringView(ia)), 1, 0});
         manifest.shards.push_back({dstd::String(dstd::StringView(ib)), 1, 0});
         dstd::String root = env.dir() + "/set";
-        dftu_utils_test::ok(index::store::write_shard_manifest(root, manifest));
+        dftu_utils_test::ok(
+            trace::index::store::write_shard_manifest(root, manifest));
 
         auto configure = [](View v) -> View {
             return v.group_by({GroupKey::cat()}).agg({{AggOp::Count, "", "n"}});
@@ -357,7 +358,7 @@ TEST_SUITE("ShardedView") {
             dstd::String(root), {dstd::String(ia), dstd::String(ib)}));
 
         auto manifest =
-            dftu_utils_test::ok(index::store::read_shard_manifest(root));
+            dftu_utils_test::ok(trace::index::store::read_shard_manifest(root));
         REQUIRE(manifest.has_value());
         CHECK(manifest->format_version ==
               static_cast<std::uint32_t>(DFTRACER_UTILS_INDEX_FORMAT_VERSION));
@@ -435,12 +436,12 @@ TEST_SUITE("ShardedView") {
                 .agg({{AggOp::SetUnion, "name", "names"}});
         };
 
-        index::store::IndexShardManifest m;
+        trace::index::store::IndexShardManifest m;
         m.format_version =
             static_cast<std::uint32_t>(DFTRACER_UTILS_INDEX_FORMAT_VERSION);
         m.shards.push_back({dstd::String(dstd::StringView(moved)), 1, 0});
         dstd::String root = env.dir() + "/set";
-        dftu_utils_test::ok(index::store::write_shard_manifest(root, m));
+        dftu_utils_test::ok(trace::index::store::write_shard_manifest(root, m));
         auto got = dftu_utils_test::ok(
             dftu_utils_test::ok(
                 views::ShardedView::from_manifest(dstd::String(root)))
@@ -463,8 +464,8 @@ TEST_SUITE("ShardedView") {
         const dstd::String root = env.dir() + "/root/.dftindex";
         dstd::Vector<dstd::String> shards;
         for (std::size_t i = 0; i < files.size(); ++i) {
-            shards.emplace_back(
-                dstd::String(dftracer::utils::index::shard_root(root, i)));
+            shards.emplace_back(dstd::String(
+                dftracer::utils::trace::index::shard_root(root, i)));
             build_shard_index(files[i], {}, shards.back());
         }
         dstd::Vector<dstd::String> shard_dirs;
@@ -472,7 +473,7 @@ TEST_SUITE("ShardedView") {
         dftu_utils_test::ok(
             views::write_shard_set(dstd::String(root), shard_dirs));
         auto manifest =
-            dftu_utils_test::ok(index::store::read_shard_manifest(root));
+            dftu_utils_test::ok(trace::index::store::read_shard_manifest(root));
         REQUIRE(manifest.has_value());
         REQUIRE(manifest->shards.size() == 3);
         CHECK(manifest->shards[0].path == "shards/0");
@@ -494,12 +495,14 @@ TEST_SUITE("ShardedView") {
 
         CHECK(dftu_utils_test::ok(
                   views::consolidate_shard_set(dstd::String(root))) == 3);
-        CHECK_FALSE(dftu_utils_test::ok(index::store::read_shard_manifest(root))
-                        .has_value());
         CHECK_FALSE(
-            dstd::fs::exists(dftracer::utils::index::shards_dir(root)).value());
-        CHECK(
-            dstd::fs::exists(dftracer::utils::index::store_dir(root)).value());
+            dftu_utils_test::ok(trace::index::store::read_shard_manifest(root))
+                .has_value());
+        CHECK_FALSE(
+            dstd::fs::exists(dftracer::utils::trace::index::shards_dir(root))
+                .value());
+        CHECK(dstd::fs::exists(dftracer::utils::trace::index::store_dir(root))
+                  .value());
         CHECK(indexed_files(root, files).size() == 3);
 
         auto got = canon(dftu_utils_test::ok(
@@ -523,8 +526,8 @@ TEST_SUITE("ShardedView") {
         const dstd::String root = env.dir() + "/root/.dftindex";
         dstd::Vector<dstd::String> shards;
         for (std::size_t i = 0; i < files.size(); ++i) {
-            shards.emplace_back(
-                dstd::String(dftracer::utils::index::shard_root(root, i)));
+            shards.emplace_back(dstd::String(
+                dftracer::utils::trace::index::shard_root(root, i)));
             build_shard_index(files[i], {}, shards.back());
         }
         dstd::Vector<dstd::String> shard_dirs;
@@ -535,7 +538,7 @@ TEST_SUITE("ShardedView") {
         // A regular file where the second shard's store belongs, so listing it
         // fails whatever user the merge runs as.
         const dstd::String store_b(
-            dftracer::utils::index::store_dir(shards[1]));
+            dftracer::utils::trace::index::store_dir(shards[1]));
         const dstd::String held = store_b + ".held";
         REQUIRE(dstd::fs::rename(store_b, held).has_value());
         {
@@ -545,13 +548,14 @@ TEST_SUITE("ShardedView") {
 
         CHECK_FALSE(
             views::consolidate_shard_set(dstd::String(root)).has_value());
-        CHECK(dftu_utils_test::ok(index::store::read_shard_manifest(root))
-                  .has_value());
+        CHECK(
+            dftu_utils_test::ok(trace::index::store::read_shard_manifest(root))
+                .has_value());
         CHECK(dstd::fs::exists(shards[0]).value());
         CHECK(dstd::fs::exists(shards[1]).value());
         std::size_t moved = 0;
         for (const auto& entry : dftu_utils_test::list_dir(
-                 dftracer::utils::index::store_dir(root))) {
+                 dftracer::utils::trace::index::store_dir(root))) {
             if (entry.path.view().extension() == ".dfs") ++moved;
         }
         CHECK(moved == 1);
@@ -561,10 +565,12 @@ TEST_SUITE("ShardedView") {
 
         CHECK(dftu_utils_test::ok(
                   views::consolidate_shard_set(dstd::String(root))) == 2);
-        CHECK_FALSE(dftu_utils_test::ok(index::store::read_shard_manifest(root))
-                        .has_value());
         CHECK_FALSE(
-            dstd::fs::exists(dftracer::utils::index::shards_dir(root)).value());
+            dftu_utils_test::ok(trace::index::store::read_shard_manifest(root))
+                .has_value());
+        CHECK_FALSE(
+            dstd::fs::exists(dftracer::utils::trace::index::shards_dir(root))
+                .value());
         CHECK(indexed_files(root, files).size() == 2);
         dftu_utils_test::expect_error(
             views::consolidate_shard_set(dstd::String(root)),
@@ -605,10 +611,12 @@ TEST_SUITE("ShardedView") {
         CHECK(n == 2);
 
         // The tiers arrive in the new root; the shards stay where they are.
-        CHECK(dftu_utils_test::ok(index::store::read_shard_manifest(root))
-                  .has_value());
-        CHECK_FALSE(dftu_utils_test::ok(index::store::read_shard_manifest(out))
-                        .has_value());
+        CHECK(
+            dftu_utils_test::ok(trace::index::store::read_shard_manifest(root))
+                .has_value());
+        CHECK_FALSE(
+            dftu_utils_test::ok(trace::index::store::read_shard_manifest(out))
+                .has_value());
 
         dstd::fs::remove(a).discard();
         dstd::fs::remove(b).discard();
@@ -630,7 +638,7 @@ TEST_SUITE("ShardedView") {
 
     // A shard built with another sketch accuracy keeps its quantiles.
     TEST_CASE("merge_shard_set keeps quantiles of a non-default accuracy") {
-        index::schemas::dft::agg::AggregationConfig config;
+        trace::index::schemas::dft::agg::AggregationConfig config;
         config.compute_percentiles = true;
         config.sketch_accuracy = 0.05;
         check_merged_partials("q", config);
@@ -658,18 +666,20 @@ TEST_SUITE("ShardedView") {
             views::ShardedView::from_manifest(dstd::String(root)),
             dftracer::utils::common::ErrorCode::InvalidArgument);
 
-        index::store::IndexShardManifest other;
+        trace::index::store::IndexShardManifest other;
         other.format_version =
             static_cast<std::uint32_t>(DFTRACER_UTILS_INDEX_FORMAT_VERSION) + 1;
-        dftu_utils_test::ok(index::store::write_shard_manifest(root, other));
+        dftu_utils_test::ok(
+            trace::index::store::write_shard_manifest(root, other));
         dftu_utils_test::expect_error(
             views::ShardedView::from_manifest(dstd::String(root)),
             dftracer::utils::common::ErrorCode::InvalidArgument);
 
-        index::store::IndexShardManifest current;
+        trace::index::store::IndexShardManifest current;
         current.format_version =
             static_cast<std::uint32_t>(DFTRACER_UTILS_INDEX_FORMAT_VERSION);
-        dftu_utils_test::ok(index::store::write_shard_manifest(root, current));
+        dftu_utils_test::ok(
+            trace::index::store::write_shard_manifest(root, current));
         CHECK(
             views::ShardedView::from_manifest(dstd::String(root)).has_value());
     }

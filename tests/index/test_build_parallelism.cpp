@@ -5,8 +5,8 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/build/batch_builder.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
@@ -39,18 +39,19 @@ dstd::String write_small_trace(const dstd::String& dir, int n) {
     return dftu_utils_test::write_gz_trace(dir + name, out);
 }
 
-index::build::IndexBuildBatchResult build_with(
+trace::index::build::IndexBuildBatchResult build_with(
     const dstd::Vector<dstd::String>& files, const dstd::String& index_dir,
     std::size_t workers) {
-    index::build::IndexBuildBatchResult result;
+    trace::index::build::IndexBuildBatchResult result;
     Runtime rt(workers);
     auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-        auto config = dstd::make_shared<index::build::IndexBuildBatchConfig>();
+        auto config =
+            dstd::make_shared<trace::index::build::IndexBuildBatchConfig>();
         config->file_paths.assign(files.begin(), files.end());
         config->index_dir = index_dir;
         config->parallelism = workers;
-        result =
-            co_await index::build::BatchBuilder::process(std::move(config));
+        result = co_await trace::index::build::BatchBuilder::process(
+            std::move(config));
     });
     dftu_utils_test::ok(rt.submit(std::move(task), "build-parallelism").wait());
     rt.shutdown();
@@ -75,12 +76,13 @@ TEST_SUITE("IndexBuildParallelism") {
         CHECK(one.metrics.max_files_in_flight == 1);
         CHECK(many.total_events == one.total_events);
 
-        auto sorted = [](dstd::Vector<index::build::IndexBuildResult> r) {
-            std::sort(r.begin(), r.end(), [](const auto& a, const auto& b) {
-                return a.file_path < b.file_path;
-            });
-            return r;
-        };
+        auto sorted =
+            [](dstd::Vector<trace::index::build::IndexBuildResult> r) {
+                std::sort(r.begin(), r.end(), [](const auto& a, const auto& b) {
+                    return a.file_path < b.file_path;
+                });
+                return r;
+            };
         const auto a = sorted(many.results);
         const auto b = sorted(one.results);
         REQUIRE(a.size() == b.size());

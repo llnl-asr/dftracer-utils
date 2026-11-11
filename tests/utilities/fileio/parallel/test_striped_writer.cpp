@@ -7,8 +7,8 @@
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/fileio/parallel/parallel_writer.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/utilities/fileio/parallel/parallel_writer.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
 #include <testing_utilities.h>
@@ -17,7 +17,7 @@
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::coro;
-using namespace dftracer::utils::utilities::fileio::parallel;
+using namespace dftracer::utils::fileio::parallel;
 
 namespace {
 

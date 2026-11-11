@@ -8,7 +8,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/record_schema.h>
+#include <dftracer/utils/trace/index/record_schema.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 
@@ -66,7 +66,7 @@ ContainmentSpec make_containment_spec(
     const dstd::String& start_field, const dstd::String& dur_field,
     const dstd::String& name_field,
     const dstd::Vector<dstd::String>& group = {},
-    const dftracer::utils::index::RecordSchema* path_schema = nullptr,
+    const dftracer::utils::trace::index::RecordSchema* path_schema = nullptr,
     double time_scale = 1.0);
 
 // Resolve one event into a row; returns false for a row with no interval.
@@ -119,7 +119,8 @@ class ContainmentFold : public Fold {
         dstd::Vector<dstd::String> partition, dstd::String start_field = "ts",
         dstd::String dur_field = "dur", dstd::String name_field = "name",
         double time_scale = 1.0, dstd::Vector<dstd::String> group = {},
-        const dftracer::utils::index::RecordSchema* path_schema = nullptr);
+        const dftracer::utils::trace::index::RecordSchema* path_schema =
+            nullptr);
 
     bool accepts(const ScanShape&) const override { return true; }
     bool needs_args() const override { return spec_.needs_args; }

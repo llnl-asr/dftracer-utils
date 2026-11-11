@@ -9,12 +9,12 @@
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/build/batch_builder.h>
-#include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
-#include <dftracer/utils/index/index.h>
-#include <dftracer/utils/index/store/root_layout.h>
+#include <dftracer/utils/trace/index/build/batch_builder.h>
+#include <dftracer/utils/trace/index/gzip/checkpoint_indexer_factory.h>
+#include <dftracer/utils/trace/index/index.h>
+#include <dftracer/utils/trace/index/store/root_layout.h>
 #include <dftracer/utils/trace/internal/utils.h>
-#include <dftracer/utils/utilities/reader/trace_reader.h>
+#include <dftracer/utils/trace/reader/trace_reader.h>
 #include <doctest/doctest.h>
 #include <generator_ok.h>
 #include <refused_lines.h>
@@ -30,8 +30,8 @@
 #include <random>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities::reader;
-using namespace dftracer::utils::index::gzip;
+using namespace dftracer::utils::trace::reader;
+using namespace dftracer::utils::trace::index::gzip;
 using namespace dftracer::utils::coro;
 using namespace dftracer::utils::trace::internal;
 using namespace dftu_utils_test;
@@ -41,7 +41,7 @@ namespace {
 // Consume AsyncGenerator<Line> into a count, materialising string copies so
 // the string_view lifetime is not a concern.
 static CoroTask<std::size_t> count_lines(
-    AsyncGenerator<dftracer::utils::utilities::fileio::lines::Line> gen) {
+    AsyncGenerator<dftracer::utils::fileio::lines::Line> gen) {
     std::size_t n = 0;
     while (auto line = co_await gen.next()) {
         ++n;
@@ -52,9 +52,7 @@ static CoroTask<std::size_t> count_lines(
 // Counts the lines of a generator of Results; an error item ends the count and
 // is the result.
 static CoroTask<dstd::Result<std::size_t>> count_lines_until_error(
-    AsyncGenerator<
-        dstd::Result<dftracer::utils::utilities::fileio::lines::Line>>
-        gen) {
+    AsyncGenerator<dstd::Result<dftracer::utils::fileio::lines::Line>> gen) {
     std::size_t n = 0;
     while (auto item = co_await gen.next()) {
         if (!item->has_value()) co_return item->error();
@@ -83,7 +81,7 @@ static CoroTask<std::size_t> count_raw_chunks(
 
 // Collect line numbers from the generator.
 static CoroTask<dstd::Vector<std::size_t>> collect_line_numbers(
-    AsyncGenerator<dftracer::utils::utilities::fileio::lines::Line> gen) {
+    AsyncGenerator<dftracer::utils::fileio::lines::Line> gen) {
     dstd::Vector<std::size_t> nums;
     while (auto line = co_await gen.next()) {
         nums.push_back(line->line_number);
@@ -92,7 +90,7 @@ static CoroTask<dstd::Vector<std::size_t>> collect_line_numbers(
 }
 
 static CoroTask<dstd::Vector<dstd::String>> collect_lines(
-    AsyncGenerator<dftracer::utils::utilities::fileio::lines::Line> gen) {
+    AsyncGenerator<dftracer::utils::fileio::lines::Line> gen) {
     dstd::Vector<dstd::String> lines;
     while (auto line = co_await gen.next()) {
         lines.emplace_back(line->content);
@@ -218,8 +216,9 @@ TEST_SUITE("TraceReader") {
         // The build's open handle is gone and the store directory stops being
         // readable.
         indexer.reset();
-        dftracer::utils::index::release_root(root);
-        const dstd::String store = dftracer::utils::index::store_dir(root);
+        dftracer::utils::trace::index::release_root(root);
+        const dstd::String store =
+            dftracer::utils::trace::index::store_dir(root);
         REQUIRE(dstd::fs::set_permissions(store, 0).has_value());
         auto restore = dstd::defer(
             [&store] { (void)dstd::fs::set_permissions(store, 0755); });

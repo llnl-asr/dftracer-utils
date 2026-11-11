@@ -7,7 +7,6 @@
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/common/memory_config.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/index/schemas/dft/agg/system_metrics.h>
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/plugins/abi_version.h>
 #include <dftracer/utils/python/batch_indexer.h>
@@ -30,6 +29,7 @@
 #include <dftracer/utils/python/task_handle.h>
 #include <dftracer/utils/python/trace_reader_iterator.h>
 #include <dftracer/utils/python/trace_viewer.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/system_metrics.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/python/arrow_stream_capsule.h>
 #endif
@@ -145,7 +145,7 @@ PyMODINIT_FUNC PyInit_dftracer_utils_ext(void) {
     // space without hardcoding it (single source of truth).
     PyModule_AddIntConstant(
         m, "NUM_SHARDS",
-        dftracer::utils::index::schemas::dft::agg::AGG_KEY_NUM_SHARDS);
+        dftracer::utils::trace::index::schemas::dft::agg::AGG_KEY_NUM_SHARDS);
     // A JIT plugin built in a source tree stamps this version, so it matches
     // the host it is loaded into.
     if (PyModule_AddIntConstant(m, "PLUGIN_ABI_VERSION",

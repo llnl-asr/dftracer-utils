@@ -10,16 +10,16 @@
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/build/batch_builder.h>
-#include <dftracer/utils/index/build/file_admission.h>
-#include <dftracer/utils/index/build/index_fold_driver.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
-#include <dftracer/utils/index/store/layout.h>
+#include <dftracer/utils/fileio/file_helpers.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/memory/detail/heap.h>
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/memory/detail/pool_access.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/build/batch_builder.h>
+#include <dftracer/utils/trace/index/build/file_admission.h>
+#include <dftracer/utils/trace/index/build/index_fold_driver.h>
+#include <dftracer/utils/trace/index/store/layout.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
@@ -32,7 +32,7 @@
 #include <utility>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::index;
+using namespace dftracer::utils::trace::index;
 
 namespace {
 
@@ -75,20 +75,22 @@ dstd::String write_trace(const dstd::String& dir, const dstd::String& name,
     return gz;
 }
 
-index::build::IndexBuildBatchResult run_build(
+trace::index::build::IndexBuildBatchResult run_build(
     const dstd::Vector<dstd::String>& files, const dstd::String& index_dir,
     std::uint64_t memory_budget, std::size_t path_budget = 0,
     std::size_t parallelism = 4) {
-    index::build::IndexBuildBatchResult out;
+    trace::index::build::IndexBuildBatchResult out;
     Runtime rt(4);
     auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-        auto config = dstd::make_shared<index::build::IndexBuildBatchConfig>();
+        auto config =
+            dstd::make_shared<trace::index::build::IndexBuildBatchConfig>();
         for (const auto& file : files) config->file_paths.emplace_back(file);
         config->index_dir = dstd::String(index_dir);
         config->parallelism = parallelism;
         config->memory_budget = memory_budget;
         config->bloom_config.path_budget = path_budget;
-        out = co_await index::build::BatchBuilder::process(std::move(config));
+        out = co_await trace::index::build::BatchBuilder::process(
+            std::move(config));
     });
     dftu_utils_test::ok(rt.submit(std::move(task), "test-build-memory").wait());
     rt.shutdown();
@@ -137,8 +139,11 @@ TEST_SUITE("IndexBuildMemory") {
         // workers.
         struct SinkLimit {
             std::size_t previous =
-                index::build::g_max_sink_bytes.exchange(std::size_t{32} << 20);
-            ~SinkLimit() { index::build::g_max_sink_bytes.store(previous); }
+                trace::index::build::g_max_sink_bytes.exchange(std::size_t{32}
+                                                               << 20);
+            ~SinkLimit() {
+                trace::index::build::g_max_sink_bytes.store(previous);
+            }
         } sink_limit;
         dstd::Vector<dstd::String> files;
         for (int i = 0; i < 4; ++i)
@@ -147,8 +152,8 @@ TEST_SUITE("IndexBuildMemory") {
         constexpr std::size_t WORKERS = 4;
         constexpr std::uint64_t HELD_QUANTUM = MIB;
         const std::uint64_t held =
-            (index::build::FileAdmission::estimate(
-                 index::build::FileAdmission::plaintext_estimate(
+            (trace::index::build::FileAdmission::estimate(
+                 trace::index::build::FileAdmission::plaintext_estimate(
                      0, dstd::fs::file_size(files[0]).value()))
                  .total +
              HELD_QUANTUM - 1) /
@@ -156,8 +161,8 @@ TEST_SUITE("IndexBuildMemory") {
         const std::uint64_t tight =
             4 * common::constants::file_admission::MIN_SINK_BYTES *
             common::constants::file_admission::SINK_BUDGET_DIVISOR;
-        const auto plan = index::build::FileAdmission::plan_sinks(
-            tight, WORKERS, index::build::g_max_sink_bytes.load());
+        const auto plan = trace::index::build::FileAdmission::plan_sinks(
+            tight, WORKERS, trace::index::build::g_max_sink_bytes.load());
         const std::uint64_t room =
             tight - plan.workers * plan.sink_bytes -
             tight / common::constants::file_admission::UNTRACKED_DIVISOR;
@@ -274,8 +279,9 @@ TEST_SUITE("IndexBuildMemory") {
 
     TEST_CASE("idle fold buffers are freed when a reservation asks for bytes") {
         Budget budget(64 * MIB);
-        index::build::FoldBufferPool buffers;
-        dstd::Vector<dstd::UniquePtr<index::build::FoldBufferPool::EventBuffer>>
+        trace::index::build::FoldBufferPool buffers;
+        dstd::Vector<
+            dstd::UniquePtr<trace::index::build::FoldBufferPool::EventBuffer>>
             out;
         for (int b = 0; b < 4; ++b) {
             out.push_back(buffers.take());
@@ -289,11 +295,12 @@ TEST_SUITE("IndexBuildMemory") {
         memory::Reservation held =
             memory::detail::PoolAccess::reserve(*hold, 32 * MIB);
         REQUIRE(held);
-        const std::uint64_t freed = index::build::g_fold_buffers_freed.load();
+        const std::uint64_t freed =
+            trace::index::build::g_fold_buffers_freed.load();
         CHECK(ask_for_budget() == memory::Status::Pending);
         auto again = buffers.take();
         CHECK(buffers.idle() == 0);
-        CHECK(index::build::g_fold_buffers_freed.load() == freed + 4);
+        CHECK(trace::index::build::g_fold_buffers_freed.load() == freed + 4);
         buffers.give(std::move(again));
         CHECK(buffers.idle() == 1);
     }
@@ -314,7 +321,8 @@ TEST_SUITE("IndexBuildMemory") {
         memory::Reservation held =
             memory::detail::PoolAccess::reserve(*hold, MIB);
         REQUIRE(held);
-        const std::uint64_t freed = index::build::g_fold_buffers_freed.load();
+        const std::uint64_t freed =
+            trace::index::build::g_fold_buffers_freed.load();
         std::atomic<bool> done{false};
         dstd::Thread asker([&] {
             while (!done.load(std::memory_order_acquire)) {
@@ -326,7 +334,7 @@ TEST_SUITE("IndexBuildMemory") {
         done.store(true, std::memory_order_release);
         asker.join();
         REQUIRE(asked.indexed == 1);
-        CHECK(index::build::g_fold_buffers_freed.load() > freed);
+        CHECK(trace::index::build::g_fold_buffers_freed.load() > freed);
         CHECK(contents(index_of(files[0], plain_dir)) ==
               contents(index_of(files[0], asked_dir)));
     }

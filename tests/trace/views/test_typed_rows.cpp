@@ -6,7 +6,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/trace/index/indexer.h>
 #include <dftracer/utils/trace/views/typed_rows.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
@@ -28,17 +28,17 @@ namespace {
 constexpr int RECORDS = 3000;
 
 struct Access {
-    index::Field<dstd::String, "op"> op;
-    index::Field<std::int64_t, "lat"> lat;
-    index::Field<dstd::Optional<std::int64_t>, "io.off"> off;
-    index::Field<dstd::Optional<index::Json>, "tags"> tags;
-    index::Field<dstd::Optional<dstd::String>, "hosts.1"> host;
+    trace::index::Field<dstd::String, "op"> op;
+    trace::index::Field<std::int64_t, "lat"> lat;
+    trace::index::Field<dstd::Optional<std::int64_t>, "io.off"> off;
+    trace::index::Field<dstd::Optional<trace::index::Json>, "tags"> tags;
+    trace::index::Field<dstd::Optional<dstd::String>, "hosts.1"> host;
 };
 
 struct Event {
-    index::Field<dstd::String, "name"> name;
-    index::Field<double, "ts"> ts;
-    index::Field<dstd::Optional<std::int64_t>, "args.size"> size;
+    trace::index::Field<dstd::String, "name"> name;
+    trace::index::Field<double, "ts"> ts;
+    trace::index::Field<dstd::Optional<std::int64_t>, "args.size"> size;
 };
 
 // Record i: op read on even i, lat i, io.off 10*i on multiples of 3, tags on
@@ -62,18 +62,18 @@ dstd::String write_access(TestEnvironment& env, const dstd::String& extra) {
                                                                16 * 1024));
     dstd::fs::remove(plain).discard();
     dftu_utils_test::ok(
-        dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+        dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
                                 {dstd::String(dstd::StringView(gz))}))
             .build());
     return gz;
 }
 
 struct Wide {
-    index::Field<std::int64_t, "k"> k;
-    index::Field<dstd::Optional<double>, "inf"> inf;
-    index::Field<dstd::Optional<std::uint64_t>, "big"> big;
-    index::Field<dstd::Optional<dstd::String>, "s"> s;
-    index::Field<dstd::Optional<index::Json>, "j"> j;
+    trace::index::Field<std::int64_t, "k"> k;
+    trace::index::Field<dstd::Optional<double>, "inf"> inf;
+    trace::index::Field<dstd::Optional<std::uint64_t>, "big"> big;
+    trace::index::Field<dstd::Optional<dstd::String>, "s"> s;
+    trace::index::Field<dstd::Optional<trace::index::Json>, "j"> j;
 };
 
 View view_of(const dstd::String& gz) {
@@ -191,7 +191,7 @@ TEST_SUITE("TypedRows") {
                                                                    1 << 20));
         dstd::fs::remove(plain).discard();
         dftu_utils_test::ok(
-            dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+            dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
                                     {dstd::String(dstd::StringView(gz))}))
                 .build());
         auto got = run(rows<Wide>(view_of(gz)));

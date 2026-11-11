@@ -14,13 +14,13 @@
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/cache/mv_store.h>
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/json/parser.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/trace/comparator/compare_view.h>
+#include <dftracer/utils/trace/index/cache/mv_store.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/time_metric.h>
+#include <dftracer/utils/trace/views/compare_view.h>
 #include <dftracer/utils/trace/views/containment_fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
@@ -193,7 +193,8 @@ Deferred<dataframe::DataFrame> ViewSession::compare(
     auto out = dstd::make_shared<dataframe::DataFrame>();
     combines_.emplace_back([out, b = baseline.value_, v = variant.value_,
                             n_key]() -> dstd::Result<void> {
-        auto compared = comparator::CompareView::compare_batches(*b, *v, n_key);
+        auto compared =
+            trace::views::CompareView::compare_batches(*b, *v, n_key);
         if (!compared) return compared.error();
         *out = std::move(*compared);
         return {};
@@ -261,7 +262,7 @@ Deferred<dataframe::DataFrame> ViewSession::collect_events(
     const double time_scale = bp.time_scale;
     const bool by_path = detail::plan_by_path(bp);
     const bool keep_metadata = detail::metadata_rows(bp);
-    const dftracer::utils::index::RecordSchema* record_schema =
+    const dftracer::utils::trace::index::RecordSchema* record_schema =
         by_path && !detail::plan_record_schema(bp).fields.empty()
             ? &detail::plan_record_schema(bp)
             : nullptr;
@@ -355,7 +356,7 @@ bool ViewSession::add_containment_branch(
     auto bufs = dstd::make_shared<
         dstd::Vector<dstd::SharedPtr<dstd::Vector<detail::ContainmentRow>>>>();
     const bool by_path = detail::plan_by_path(bp);
-    const dftracer::utils::index::RecordSchema* record_schema =
+    const dftracer::utils::trace::index::RecordSchema* record_schema =
         by_path && !detail::plan_record_schema(bp).fields.empty()
             ? &detail::plan_record_schema(bp)
             : nullptr;

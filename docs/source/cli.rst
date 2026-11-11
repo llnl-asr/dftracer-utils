@@ -11,7 +11,7 @@ Shared CLI Flags
 ----------------
 
 Most tools wire in a common set of argument schemas defined in
-``src/dftracer/utils/binaries/common_cli.h``. The flags below have identical
+``src/dftracer/utils/cli/common_cli.h``. The flags below have identical
 semantics across every binary that exposes the relevant schema and are not
 repeated in each tool's section.
 

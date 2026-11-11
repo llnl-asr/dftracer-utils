@@ -8,16 +8,16 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/build/batch_builder.h>
-#include <dftracer/utils/index/extensions/kinds/payloads.h>
-#include <dftracer/utils/index/gzip/gzip_indexer.h>
-#include <dftracer/utils/index/gzip/gzip_member_scanner.h>
-#include <dftracer/utils/index/schemas/dft/bloom_core.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
+#include <dftracer/utils/fileio/file_helpers.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/event.h>
+#include <dftracer/utils/trace/index/build/batch_builder.h>
+#include <dftracer/utils/trace/index/extensions/kinds/payloads.h>
+#include <dftracer/utils/trace/index/gzip/gzip_indexer.h>
+#include <dftracer/utils/trace/index/gzip/gzip_member_scanner.h>
+#include <dftracer/utils/trace/index/schemas/dft/bloom_core.h>
 #include <dftracer/utils/trace/internal/utils.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
 #include <index_test_helpers.h>
@@ -26,11 +26,9 @@
 #include <testing_utilities.h>
 #include <unistd.h>
 
-using namespace dftracer::utils::utilities;
-
 using namespace dftracer::utils;
-using namespace dftracer::utils::index::build;
-using namespace dftracer::utils::index::store;
+using namespace dftracer::utils::trace::index::build;
+using namespace dftracer::utils::trace::index::store;
 
 using namespace dftu_utils_test;
 
@@ -119,19 +117,19 @@ TEST_SUITE("IndexBuilder") {
         auto [gz_file, offs] = write_multi_member_gz(texts);
         const std::uint64_t fsize = dstd::fs::file_size(gz_file).value();
 
-        dstd::Vector<index::gzip::GzipMember> members(texts.size());
+        dstd::Vector<trace::index::gzip::GzipMember> members(texts.size());
         for (std::size_t i = 0; i < texts.size(); ++i) {
             members[i].c_offset = offs[i];
             members[i].c_size =
                 (i + 1 < offs.size() ? offs[i + 1] : fsize) - offs[i];
         }
 
-        dftracer::utils::index::gzip::CheckpointIndexer::VisitorList
+        dftracer::utils::trace::index::gzip::CheckpointIndexer::VisitorList
             no_visitors;
 
         std::uint64_t whole_lines = 0;
         run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
-            auto a = co_await index::gzip::build_gzip_index_artifacts(
+            auto a = co_await trace::index::gzip::build_gzip_index_artifacts(
                 gz_file, 1u << 20, no_visitors, &scope);
             REQUIRE(a.has_value());
             whole_lines = a->total_lines;
@@ -139,13 +137,14 @@ TEST_SUITE("IndexBuilder") {
 
         std::uint64_t sliced_lines = 0;
         for (std::size_t b = 0; b < members.size(); ++b) {
-            index::gzip::GzipMemberSlice slice;
+            trace::index::gzip::GzipMemberSlice slice;
             slice.members = &members;
             slice.member_begin = b;
             slice.member_end = b + 1;
             run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
-                auto a = co_await index::gzip::build_gzip_index_artifacts(
-                    gz_file, 1u << 20, no_visitors, &scope, &slice);
+                auto a =
+                    co_await trace::index::gzip::build_gzip_index_artifacts(
+                        gz_file, 1u << 20, no_visitors, &scope, &slice);
                 REQUIRE(a.has_value());
                 sliced_lines += a->total_lines;
             });
@@ -173,8 +172,7 @@ TEST_SUITE("IndexBuilder") {
             REQUIRE(dstd::fs::create_directories(dir).has_value());
             const dstd::String path = dstd::String((dir / "t.pfw.gz").str());
             const dstd::String text = dftu_lines(0, 20);
-            dftracer::utils::utilities::fileio::compress::GzipMemberCompressor
-                comp;
+            dftracer::utils::fileio::compress::GzipMemberCompressor comp;
             auto member = comp.compress_member(text.data(), text.size());
             REQUIRE(member.has_value());
             dstd::fs::write_file(
@@ -232,7 +230,7 @@ TEST_SUITE("IndexBuilder") {
         const auto snapshot = index_snapshot(result.index_path);
         const auto file = require_indexed_file(snapshot, gz_file);
 
-        auto members = index_take(index::members(snapshot, file));
+        auto members = index_take(trace::index::members(snapshot, file));
         REQUIRE(members.size() == texts.size());
 
         std::uint64_t expected_uc = 0;
@@ -275,15 +273,15 @@ TEST_SUITE("IndexBuilder") {
         auto [gz_file, c_offsets] = write_multi_member_gz(texts);
         const std::uint64_t file_size = dstd::fs::file_size(gz_file).value();
         REQUIRE(file_size >
-                2 * dftracer::utils::index::gzip::MEMBER_SCAN_WINDOW);
+                2 * dftracer::utils::trace::index::gzip::MEMBER_SCAN_WINDOW);
 
-        dstd::Vector<dftracer::utils::index::gzip::GzipMember> found;
+        dstd::Vector<dftracer::utils::trace::index::gzip::GzipMember> found;
         bool ok = false;
         auto fd_file = dstd::File::open(gz_file, {});
         REQUIRE(fd_file);
         const int fd = fd_file->native_handle();
         run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
-            ok = co_await dftracer::utils::index::gzip::
+            ok = co_await dftracer::utils::trace::index::gzip::
                 enumerate_gzip_member_candidates(fd, file_size, found);
         });
         REQUIRE(ok);
@@ -310,10 +308,10 @@ TEST_SUITE("IndexBuilder") {
         for (const std::uint64_t at : c_offsets)
             REQUIRE(::pwrite(fd, &macos, 1, static_cast<off_t>(at + 9)) == 1);
         const std::uint64_t file_size = dstd::fs::file_size(gz_file).value();
-        dstd::Vector<dftracer::utils::index::gzip::GzipMember> found;
+        dstd::Vector<dftracer::utils::trace::index::gzip::GzipMember> found;
         bool ok = false;
         run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
-            ok = co_await dftracer::utils::index::gzip::
+            ok = co_await dftracer::utils::trace::index::gzip::
                 enumerate_gzip_member_candidates(fd, file_size, found);
         });
         REQUIRE(ok);
@@ -331,8 +329,8 @@ TEST_SUITE("IndexBuilder") {
         const auto snapshot = index_snapshot(result.index_path);
         const auto file = require_indexed_file(snapshot, gz_file);
 
-        auto members = index_take(index::members(snapshot, file));
-        auto spans = index_take(index::spans(snapshot, file));
+        auto members = index_take(trace::index::members(snapshot, file));
+        auto spans = index_take(trace::index::spans(snapshot, file));
         REQUIRE(spans.size() == members.size());
         for (std::size_t i = 0; i < spans.size(); ++i) {
             CHECK(spans[i].uc_offset == members[i].uc_offset);
@@ -343,15 +341,17 @@ TEST_SUITE("IndexBuilder") {
 
         // Events are attributed to the member that holds them, so a name
         // confined to one member yields exactly that chunk.
-        auto rare_chunks = index_take(index::posting_granules(
+        auto rare_chunks = index_take(trace::index::posting_granules(
             snapshot, file, "name",
-            dftracer::utils::index::extensions::kinds::value_hash("rare")));
+            dftracer::utils::trace::index::extensions::kinds::value_hash(
+                "rare")));
         REQUIRE(rare_chunks.size() == 1);
         CHECK(rare_chunks[0] == 1);
 
-        auto common_chunks = index_take(index::posting_granules(
+        auto common_chunks = index_take(trace::index::posting_granules(
             snapshot, file, "name",
-            dftracer::utils::index::extensions::kinds::value_hash("op")));
+            dftracer::utils::trace::index::extensions::kinds::value_hash(
+                "op")));
         std::sort(common_chunks.begin(), common_chunks.end());
         REQUIRE(common_chunks.size() == 2);
         CHECK(common_chunks[0] == 0);
@@ -367,7 +367,7 @@ TEST_SUITE("IndexBuilder") {
         const auto snapshot = index_snapshot(result.index_path);
         const auto file = require_indexed_file(snapshot, gz_file);
 
-        auto members = index_take(index::members(snapshot, file));
+        auto members = index_take(trace::index::members(snapshot, file));
         REQUIRE(members.size() == 1);
         CHECK(members[0].c_offset == 0);
         CHECK(members[0].uc_offset == 0);

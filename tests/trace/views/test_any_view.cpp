@@ -5,7 +5,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/trace/index/indexer.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
@@ -40,10 +40,10 @@ dstd::String write_tagged(TestEnvironment& env, std::size_t path_budget) {
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
     dstd::fs::remove(plain).discard();
-    dftracer::utils::index::IndexerOptions o;
+    dftracer::utils::trace::index::IndexerOptions o;
     o.bloom->path_budget = path_budget;
     dftu_utils_test::ok(
-        dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+        dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
                                 {dstd::String(dstd::StringView(gz))}, o))
             .build());
     return gz;
@@ -80,8 +80,9 @@ TEST_SUITE("AnyView") {
         CHECK(stats.events_matched == 300);
         CHECK(stats.chunks_skipped > 0);
 
-        auto ix = dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
-            {dstd::String(dstd::StringView(gz))}));
+        auto ix =
+            dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                {dstd::String(dstd::StringView(gz))}));
         const auto e = dftu_utils_test::ok(ix.explain(q));
         REQUIRE(e.size() == 1);
         CHECK(e[0].read.size() < e[0].chunks);
@@ -132,8 +133,9 @@ TEST_SUITE("AnyView") {
                       view_of(gz).duql(cond).sink_json(sink).get())
                       .events_matched == want);
         }
-        auto ix = dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
-            {dstd::String(dstd::StringView(gz))}));
+        auto ix =
+            dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
+                {dstd::String(dstd::StringView(gz))}));
         const auto e =
             dftu_utils_test::ok(ix.explain(R"(any(tags, . == "absent"))"));
         REQUIRE(e.size() == 1);

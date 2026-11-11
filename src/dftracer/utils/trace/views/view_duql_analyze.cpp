@@ -3,14 +3,14 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/expr.h>
+#include <dftracer/utils/dataframe/query/vectorize.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/duql/fields.h>
 #include <dftracer/utils/duql/pattern.h>
-#include <dftracer/utils/duql/vectorize.h>
-#include <dftracer/utils/index/cache/lookup_store.h>
-#include <dftracer/utils/index/plan/condition.h>
+#include <dftracer/utils/trace/index/cache/lookup_store.h>
+#include <dftracer/utils/trace/index/plan/condition.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
 #include <dftracer/utils/trace/views/view_duql_internal.h>
@@ -727,7 +727,7 @@ dstd::Result<Pushdown> key_sets(const duql::Pipeline& p) {
             });
         if (cond && !record && t.value) {
             const dataframe::Series& values = t.frame->columns[*t.value];
-            if (auto e = duql::vectorize_condition(
+            if (auto e = dataframe::query::vectorize_condition(
                     *cond, {{".", values.data_type()}}, false)) {
                 auto evaluated = dataframe::eval(*e, {&values});
                 if (!evaluated) {
@@ -752,7 +752,7 @@ dstd::Result<Pushdown> key_sets(const duql::Pipeline& p) {
                 }
         // Past the cap the list prunes nothing, and the lookup term filters
         // the same rows without a per-record scan of the list.
-        if (arr.elements.size() > index::plan::SEMI_JOIN_CAP) return;
+        if (arr.elements.size() > trace::index::plan::SEMI_JOIN_CAP) return;
         arr.set = duql::make_in_set(arr);
         auto node = duql::detail::make_node(duql::detail::InNode{
             duql::detail::FieldNode{f.base}, std::move(arr)});
@@ -781,7 +781,7 @@ dstd::Optional<CacheKey> cache_key(const detail::ViewPlan& given,
     for (auto& f : plan.files)
         if (f.index_path.empty())
             f.index_path = internal::determine_index_path(f.file_path, "");
-    const dstd::String path = index::cache::lookup_cache_path(plan);
+    const dstd::String path = trace::index::cache::lookup_cache_path(plan);
     if (path.empty()) return dstd::nullopt;
     detail::plan_record_schema(plan);
     // A `data` side reads the View as given: its filters are part of it.
@@ -795,7 +795,7 @@ dstd::Optional<CacheKey> cache_key(const detail::ViewPlan& given,
             key += dstd::fmt<"\n{}..{}">(number_text(plan.time_range->first),
                                          number_text(plan.time_range->second));
     }
-    const auto sig = index::cache::lookup_signature(plan, key);
+    const auto sig = trace::index::cache::lookup_signature(plan, key);
     if (!sig) return dstd::nullopt;
     return CacheKey{dstd::String(path.data(), path.size()), *sig};
 }

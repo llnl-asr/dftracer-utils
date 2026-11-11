@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dataframe/query/group_fold.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/duql/group_fold.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
 
@@ -44,11 +44,11 @@ dataframe::DataFrame batch(dataframe::Series k, dataframe::Series v) {
 
 template <class... Batches>
 dataframe::DataFrame fold(dataframe::DataType key_type, Batches... bs) {
-    duql::FoldAgg a;
-    a.op = duql::FoldOp::CountDistinct;
+    dataframe::query::FoldAgg a;
+    a.op = dataframe::query::FoldOp::CountDistinct;
     a.in = 1;
     a.type = dataframe::scalar(dataframe::TypeId::Int64);
-    duql::GroupFold g({key_type}, {a});
+    dataframe::query::GroupFold g({key_type}, {a});
     (dftu_utils_test::ok(g.add(std::move(bs))), ...);
     return dftu_utils_test::ok(g.finish({"k", "d"}));
 }

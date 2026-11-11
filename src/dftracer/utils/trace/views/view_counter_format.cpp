@@ -4,8 +4,8 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/json/json_escape.h>
+#include <dftracer/utils/trace/index/record_schema.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
 #include <dftracer/utils/trace/views/view_counter_format.h>
@@ -65,11 +65,11 @@ dstd::String counter_line(
     s += "\",\"cat\":\"";
     append_json_escaped(s, cat);
     s += "\",\"pid\":";
-    s += dstd::to_string(pid.empty() ? 0
-                                     : dftracer::utils::index::entity_id(pid));
+    s += dstd::to_string(
+        pid.empty() ? 0 : dftracer::utils::trace::index::entity_id(pid));
     s += ",\"tid\":";
-    s += dstd::to_string(tid.empty() ? 0
-                                     : dftracer::utils::index::entity_id(tid));
+    s += dstd::to_string(
+        tid.empty() ? 0 : dftracer::utils::trace::index::entity_id(tid));
     s += ",\"ts\":";
     s += bucket.empty() ? "0" : bucket;
     s += ",\"ph\":";

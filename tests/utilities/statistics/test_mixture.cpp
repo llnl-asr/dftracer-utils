@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/domains/workload/dlio/distributions.h>
+#include <dftracer/utils/domains/workload/dlio/mixture.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/utilities/dlio/distributions.h>
-#include <dftracer/utils/utilities/dlio/mixture.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
 
@@ -12,7 +12,7 @@
 #include <variant>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities::dlio;
+using namespace dftracer::utils::domains::workload::dlio;
 
 namespace {
 

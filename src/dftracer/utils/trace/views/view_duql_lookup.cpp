@@ -2,16 +2,16 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dataframe/query/overlap.h>
+#include <dftracer/utils/dataframe/query/vectorize.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/duql/overlap.h>
 #include <dftracer/utils/duql/pipeline.h>
-#include <dftracer/utils/duql/vectorize.h>
-#include <dftracer/utils/index/cache/lookup_store.h>
+#include <dftracer/utils/trace/index/cache/lookup_store.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_duql_internal.h>
@@ -28,10 +28,10 @@ dstd::Result<bool> Applier::cached(std::size_t i) const {
     if (ctx_.sides->stored[i]) return true;
     const auto& key = ctx_.sides->keys[i];
     if (!key) return false;
-    const auto db = index::cache::open_lookup_db(
-        key->path, index::cache::CacheStore::Mode::ReadOnly);
+    const auto db = trace::index::cache::open_lookup_db(
+        key->path, trace::index::cache::CacheStore::Mode::ReadOnly);
     if (!db) return false;
-    return index::cache::lookup_exists(*db, key->sig);
+    return trace::index::cache::lookup_exists(*db, key->sig);
 }
 
 dstd::Result<dataframe::LazyFrame> Applier::side_plan(std::size_t i,
@@ -106,7 +106,7 @@ Status Applier::stage(const duql::PipelineLookup& l) {
     const bool inner = l.kind == duql::syntax::LookupKind::Inner;
     const auto* into = std::get_if<duql::PipelineNest>(&l.mode);
     const bool nest = into != nullptr;
-    dstd::Vector<duql::VectorColumn> next = cols_;
+    dstd::Vector<dataframe::query::VectorColumn> next = cols_;
     dstd::Vector<dstd::String> added;
     auto shown = [&](const dstd::String& n) {
         return index(n) &&
@@ -403,7 +403,7 @@ Status Applier::overlap_lookup(
 
     const bool nest = !o.into.empty();
     SideValues values;
-    dstd::Vector<duql::VectorColumn> next = cols_;
+    dstd::Vector<dataframe::query::VectorColumn> next = cols_;
     if (nest) {
         if (index(o.into))
             return refuse<
@@ -458,8 +458,8 @@ Status Applier::overlap_lookup(
             side.names = (*held)->names;
             for (const auto& c : (*held)->columns)
                 side.columns.push_back(c.share());
-            side = duql::flat_frame(std::move(side));
-            rows = duql::flat_frame(std::move(rows));
+            side = dataframe::query::flat_frame(std::move(side));
+            rows = dataframe::query::flat_frame(std::move(rows));
             auto find = [](const dataframe::DataFrame& f,
                            const dstd::String& n) -> const dataframe::Series* {
                 for (std::size_t i = 0; i < f.names.size(); ++i)
@@ -475,8 +475,8 @@ Status Applier::overlap_lookup(
                         common::ErrorCode::InvalidArgument, n);
                 return s->share();
             };
-            duql::OverlapColumns mine;
-            duql::OverlapColumns theirs;
+            dataframe::query::OverlapColumns mine;
+            dataframe::query::OverlapColumns theirs;
             for (const auto& n : left) {
                 auto s = take(rows, n);
                 if (!s) return s.error();
@@ -501,9 +501,9 @@ Status Applier::overlap_lookup(
             if (!their_length) return their_length.error();
             theirs.duration = std::move(*their_length);
             theirs.scale = scale;
-            auto matched = duql::overlap_matches(mine, theirs);
+            auto matched = dataframe::query::overlap_matches(mine, theirs);
             if (!matched) return matched.error();
-            const duql::OverlapMatches& m = *matched;
+            const dataframe::query::OverlapMatches& m = *matched;
 
             dataframe::DataFrame out;
             out.names = rows.names;
@@ -575,8 +575,9 @@ dstd::Result<dataframe::DataType> Applier::unify(const dstd::String& name,
                                dataframe::type_name(b.id));
 }
 
-View Applier::align(View v, const dstd::Vector<duql::VectorColumn>& cols,
-                    const dstd::Vector<duql::VectorColumn>& want) {
+View Applier::align(View v,
+                    const dstd::Vector<dataframe::query::VectorColumn>& cols,
+                    const dstd::Vector<dataframe::query::VectorColumn>& want) {
     auto at = [&](const dstd::String& n) -> dstd::Optional<std::size_t> {
         for (std::size_t i = 0; i < cols.size(); ++i)
             if (cols[i].name == n) return i;
@@ -616,7 +617,7 @@ Status Applier::stage(const duql::PipelineUnion& u) {
     lines.insert(lines.begin() + static_cast<std::ptrdiff_t>(first_line),
                  dstd::fmt<"union from {}:">(
                      input_text(u.other->input, ctx_.sides->program)));
-    dstd::Vector<duql::VectorColumn> want;
+    dstd::Vector<dataframe::query::VectorColumn> want;
     for (const auto& c : cols_) want.push_back({c.name, c.type});
     for (const auto& c : other.cols) {
         auto it = std::find_if(want.begin(), want.end(),

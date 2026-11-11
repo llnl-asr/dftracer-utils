@@ -10,15 +10,15 @@
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
-#include <dftracer/utils/index/gzip/checkpoint_indexer.h>
+#include <dftracer/utils/trace/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/utilities/arrow/arrow_export.h>
-#include <dftracer/utils/utilities/arrow/column_builder.h>
+#include <dftracer/utils/trace/arrow/arrow_export.h>
+#include <dftracer/utils/trace/arrow/column_builder.h>
 #endif
 
 #include <cstddef>
@@ -29,14 +29,15 @@ namespace dftracer::utils::trace::views {
 struct ViewScannerInput {
     dstd::String file_path;
     dstd::String index_path;
-    std::size_t checkpoint_size = dftracer::utils::index::gzip::
+    std::size_t checkpoint_size = dftracer::utils::trace::index::gzip::
         CheckpointIndexer::DEFAULT_CHECKPOINT_SIZE;
     std::size_t start_byte = 0;
     std::size_t end_byte = 0;
     std::uint64_t checkpoint_idx = 0;
     /// Reads through this indexer when set. Tasks over one file share it, so
     /// its member table loads once.
-    dstd::SharedPtr<dftracer::utils::index::gzip::CheckpointIndexer> indexer;
+    dstd::SharedPtr<dftracer::utils::trace::index::gzip::CheckpointIndexer>
+        indexer;
     std::size_t batch_size = 4 * 1024 * 1024;  // IO buffer size
     std::size_t event_batch_size = 10000;      // events per batch
     ViewDefinition view;
@@ -114,9 +115,9 @@ struct ViewScannerBatch {
     std::uint64_t values_unconverted = 0;
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-    dstd::Result<utilities::arrow::ArrowExportResult> to_arrow() const;
-    dstd::Result<utilities::arrow::ArrowExportResult> to_arrow(
-        utilities::arrow::RecordBatchBuilder& builder) const;
+    dstd::Result<trace::arrow::ArrowExportResult> to_arrow() const;
+    dstd::Result<trace::arrow::ArrowExportResult> to_arrow(
+        trace::arrow::RecordBatchBuilder& builder) const;
 #endif
 };
 

@@ -5,12 +5,12 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/domains/plugins/plugins.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/plugins/plugins.h>
+#include <dftracer/utils/trace/index/indexer.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
@@ -48,8 +48,8 @@ dstd::String write_records(dftu_utils_test::TestEnvironment& env,
     return gz;
 }
 
-plugins::Plugins load(const dstd::String& config = "") {
-    auto builder = plugins::Plugins::builder();
+domains::plugins::Plugins load(const dstd::String& config = "") {
+    auto builder = domains::plugins::Plugins::builder();
     if (config.empty())
         builder.add(INDEX_MINMAX_PLUGIN_PATH);
     else
@@ -59,23 +59,23 @@ plugins::Plugins load(const dstd::String& config = "") {
     return std::move(*set);
 }
 
-index::Indexer open(const dstd::String& gz) {
-    index::IndexerOptions o;
+trace::index::Indexer open(const dstd::String& gz) {
+    trace::index::IndexerOptions o;
     o.extensions = {};
     return dftu_utils_test::ok(
-        index::Indexer::open({dstd::String(dstd::StringView(gz))}, o));
+        trace::index::Indexer::open({dstd::String(dstd::StringView(gz))}, o));
 }
 
-dstd::Optional<dftracer::utils::index::ExtensionEntry> entry(
-    const index::Indexer& ix) {
+dstd::Optional<dftracer::utils::trace::index::ExtensionEntry> entry(
+    const trace::index::Indexer& ix) {
     const auto manifest = dftu_utils_test::ok(ix.manifest());
     for (const auto& e : manifest.at(0).extensions)
         if (e.name == EXT) return e;
     return dstd::nullopt;
 }
 
-const dftracer::utils::index::ExtensionPrune* pruned(
-    const index::FileExplain& f) {
+const dftracer::utils::trace::index::ExtensionPrune* pruned(
+    const trace::index::FileExplain& f) {
     for (const auto& e : f.extensions)
         if (e.name == EXT) return &e;
     return nullptr;
@@ -100,7 +100,7 @@ TEST_CASE("a plugin extension builds, prunes and survives being absent") {
     const dstd::String q = "v > 2990";
     std::uint64_t chunks = 0;
     {
-        plugins::Plugins set = load();
+        domains::plugins::Plugins set = load();
         auto ix = open(gz);
         dftu_utils_test::ok(ix.build());
         const auto e = entry(ix);
@@ -138,7 +138,7 @@ TEST_CASE("a file indexed without the plugin needs work once it is loaded") {
     dftu_utils_test::TestEnvironment env(10);
     const auto gz = write_records(env, "b");
     dftu_utils_test::ok(open(gz).build());
-    plugins::Plugins set = load();
+    domains::plugins::Plugins set = load();
     auto ix = open(gz);
     CHECK(dftu_utils_test::ok(ix.status()).needs_work.size() == 1);
     dftu_utils_test::ok(ix.build());
@@ -151,10 +151,10 @@ TEST_CASE("another extension version makes the data stale") {
     dftu_utils_test::TestEnvironment env(10);
     const auto gz = write_records(env, "c");
     {
-        plugins::Plugins set = load();
+        domains::plugins::Plugins set = load();
         dftu_utils_test::ok(open(gz).build());
     }
-    plugins::Plugins set = load(R"({"version": 2})");
+    domains::plugins::Plugins set = load(R"({"version": 2})");
     auto ix = open(gz);
     REQUIRE(entry(ix));
     CHECK_FALSE(entry(ix)->current);
@@ -165,7 +165,7 @@ TEST_CASE("another extension version makes the data stale") {
 TEST_CASE("drop and rebuild a plugin extension by name") {
     dftu_utils_test::TestEnvironment env(10);
     const auto gz = write_records(env, "d");
-    plugins::Plugins set = load();
+    domains::plugins::Plugins set = load();
     auto ix = open(gz);
     dftu_utils_test::ok(ix.build());
     dftu_utils_test::ok(ix.drop_extension(dstd::String(EXT)));
@@ -178,7 +178,8 @@ TEST_CASE("drop and rebuild a plugin extension by name") {
 }
 
 TEST_CASE("a second registration of the same name fails to load") {
-    plugins::Plugins set = load();
-    CHECK_FALSE(
-        plugins::Plugins::builder().add(INDEX_MINMAX_PLUGIN_PATH).build());
+    domains::plugins::Plugins set = load();
+    CHECK_FALSE(domains::plugins::Plugins::builder()
+                    .add(INDEX_MINMAX_PLUGIN_PATH)
+                    .build());
 }

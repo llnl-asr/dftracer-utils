@@ -9,26 +9,26 @@
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
-#include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
-#include <dftracer/utils/index/index.h>
-#include <dftracer/utils/index/plan/prune.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
-#include <dftracer/utils/index/store/root_layout.h>
-#include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/fileio/file_helpers.h>
+#include <dftracer/utils/fileio/hash/hasher_utility.h>
 #include <dftracer/utils/json/line.h>
+#include <dftracer/utils/trace/index/gzip/checkpoint_indexer_factory.h>
+#include <dftracer/utils/trace/index/index.h>
+#include <dftracer/utils/trace/index/plan/prune.h>
+#include <dftracer/utils/trace/index/store/root_layout.h>
+#include <dftracer/utils/trace/index/tables.h>
 #include <dftracer/utils/trace/internal/index_root.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/metadata_collector_utility.h>
-#include <dftracer/utils/utilities/fileio/indexed_file_reader_utility.h>
-#include <dftracer/utils/utilities/fileio/lines/streaming_line_reader.h>
-#include <dftracer/utils/utilities/hash/hasher_utility.h>
+#include <dftracer/utils/trace/reader/indexed_file_reader_utility.h>
+#include <dftracer/utils/trace/reader/streaming_line_reader.h>
 
 #include <cinttypes>
 #include <mutex>
 
 namespace dftracer::utils::trace {
 
-using namespace utilities::fileio::lines;
+using namespace fileio::lines;
 
 coro::CoroTask<MetadataCollectorUtilityOutput>
 MetadataCollectorUtility::operator()(
@@ -55,7 +55,7 @@ MetadataCollectorUtility::operator()(
             internal::determine_index_path(file_path, "");
     } else {
         modified_input.index_path =
-            dftracer::utils::index::normalize_index_root(
+            dftracer::utils::trace::index::normalize_index_root(
                 modified_input.index_path);
     }
     meta.index_path = modified_input.index_path;
@@ -69,25 +69,26 @@ namespace {
 dstd::Optional<internal::IndexedFile> fresh_index_record(
     const dstd::String& index_path, const dstd::String& file,
     const dftracer::utils::common::InputFileStat& st, bool& is_prefix) {
-    auto snapshot = index::plan::open_snapshot(index_path);
+    auto snapshot = trace::index::plan::open_snapshot(index_path);
     if (!snapshot) {
         DFTRACER_UTILS_LOG_DEBUG("Index of {} unreadable ({})", file,
                                  snapshot.error().message());
         return dstd::nullopt;
     }
-    const auto logical = index::store::internal::get_logical_path(file);
+    const auto logical = fileio::get_logical_path(file);
     const bool is_current =
-        snapshot->freshness(
-            logical, index::SourceStat{static_cast<std::uint64_t>(st.mtime),
-                                       st.size}) == index::Freshness::Current;
+        snapshot->freshness(logical,
+                            trace::index::SourceStat{
+                                static_cast<std::uint64_t>(st.mtime),
+                                st.size}) == trace::index::Freshness::Current;
     const auto ref = snapshot->file(logical);
     if (!ref) return dstd::nullopt;
     // A clean append keeps its index, which stops at the verified end. A
     // full rebuild here would read the member still being written.
-    if (!is_current &&
-        !index::is_append_of(dstd::StringView(file), st.size, ref->stat()))
+    if (!is_current && !trace::index::is_append_of(dstd::StringView(file),
+                                                   st.size, ref->stat()))
         return dstd::nullopt;
-    const auto meta = index::file_metadata(*snapshot, *ref);
+    const auto meta = trace::index::file_metadata(*snapshot, *ref);
     if (!meta) {
         DFTRACER_UTILS_LOG_DEBUG("Index of {} unreadable ({})", file,
                                  meta.error().message());
@@ -96,7 +97,7 @@ dstd::Optional<internal::IndexedFile> fresh_index_record(
     if (!*meta || (*meta)->checkpoint_size == 0) return dstd::nullopt;
     if (!is_current && ((*meta)->truncated || (*meta)->has_open_line))
         return dstd::nullopt;
-    const auto members = index::members(*snapshot, *ref);
+    const auto members = trace::index::members(*snapshot, *ref);
     if (!members) {
         DFTRACER_UTILS_LOG_DEBUG("Index of {} unreadable ({})", file,
                                  members.error().message());
@@ -115,9 +116,8 @@ dstd::Optional<internal::IndexedFile> fresh_index_record(
 coro::CoroTask<dstd::Result<void>> read_metadata(
     const MetadataCollectorUtilityInput& input,
     MetadataCollectorUtilityOutput& meta) {
-    meta.format =
-        dftracer::utils::index::gzip::CheckpointIndexerFactory::detect_format(
-            input.file_path);
+    meta.format = dftracer::utils::trace::index::gzip::
+        CheckpointIndexerFactory::detect_format(input.file_path);
     dftracer::utils::common::InputFileStat input_stat;
     if (!dftracer::utils::common::stat_input(input.file_path, input_stat))
         co_return common::make_error<"cannot stat {}">(common::ErrorCode::Io,
@@ -130,8 +130,8 @@ coro::CoroTask<dstd::Result<void>> read_metadata(
                                                         input_stat.size};
     const dstd::String& file_key = input.file_path;
 
-    using dftracer::utils::index::gzip::CheckpointIndexer;
-    using dftracer::utils::index::gzip::CheckpointIndexerFactory;
+    using dftracer::utils::trace::index::gzip::CheckpointIndexer;
+    using dftracer::utils::trace::index::gzip::CheckpointIndexerFactory;
     auto take = [&](const CheckpointIndexer& indexer)
         -> dstd::Result<internal::IndexedFile> {
         if (auto loaded = indexer.load(); !loaded) return loaded.error();
@@ -161,7 +161,7 @@ coro::CoroTask<dstd::Result<void>> read_metadata(
         co_await root->gate.acquire(1);
         const internal::RootPermit reading(*root, 1);
         if (common::input_exists(
-                dftracer::utils::index::store_of(input.index_path))) {
+                dftracer::utils::trace::index::store_of(input.index_path))) {
             // A same-size fill of a hole keeps this stat, so a record of a
             // prefix is not kept past this read.
             bool is_prefix = false;
@@ -182,15 +182,15 @@ coro::CoroTask<dstd::Result<void>> read_metadata(
         if (!input.force_rebuild) seen = known();
         if (!seen) {
             meta.has_index = common::input_exists(
-                dftracer::utils::index::store_of(input.index_path));
+                dftracer::utils::trace::index::store_of(input.index_path));
             dstd::SharedPtr<CheckpointIndexer> indexer;
             const bool rebuild = !meta.has_index || input.force_rebuild;
             if (rebuild && input.force_rebuild && meta.has_index) {
                 DFTRACER_UTILS_LOG_DEBUG("Removing existing index: {}",
                                          input.index_path);
-                dftracer::utils::index::release_root(input.index_path);
+                dftracer::utils::trace::index::release_root(input.index_path);
                 const dstd::String store =
-                    dftracer::utils::index::store_of(input.index_path);
+                    dftracer::utils::trace::index::store_of(input.index_path);
                 auto removed = dstd::fs::remove_all(dstd::PathView(store));
                 if (!removed) co_return removed.error();
                 common::forget_input(store);
@@ -235,10 +235,10 @@ coro::CoroTask<dstd::Result<void>> read_metadata(
     if (input.compute_hash) {
         std::size_t content_hash = 0;
         std::size_t actual_valid_events = 0;
-        utilities::hash::HasherUtility hasher;
+        fileio::hash::HasherUtility hasher;
         {
-            auto line_gen = StreamingLineReader::read_async(
-                StreamingLineReaderConfig()
+            auto line_gen = reader::StreamingLineReader::read_async(
+                reader::StreamingLineReaderConfig()
                     .with_file(input.file_path)
                     .with_index(input.index_path)
                     .with_line_range(1, total_lines));

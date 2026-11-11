@@ -10,12 +10,12 @@
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/build/batch_builder.h>
-#include <dftracer/utils/index/build/file_admission.h>
-#include <dftracer/utils/index/build/index_fold_driver.h>
-#include <dftracer/utils/index/build/parse_gate.h>
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/build/batch_builder.h>
+#include <dftracer/utils/trace/index/build/file_admission.h>
+#include <dftracer/utils/trace/index/build/index_fold_driver.h>
+#include <dftracer/utils/trace/index/build/parse_gate.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
@@ -85,21 +85,22 @@ dstd::String big_trace(const dstd::String& dir, const dstd::String& stem,
     return dftu_utils_test::write_gz_trace(dir + "/" + stem + ".pfw.gz", out);
 }
 
-index::build::IndexBuildBatchResult build_with(
+trace::index::build::IndexBuildBatchResult build_with(
     const dstd::Vector<dstd::String>& files, const dstd::String& index_dir,
     std::size_t workers, std::uint64_t budget) {
-    index::build::IndexBuildBatchResult result;
+    trace::index::build::IndexBuildBatchResult result;
     const dstd::String staging = index_dir + ".staging";
     auto counter = dstd::make_shared<std::atomic<std::size_t>>(0);
     Runtime rt(workers);
     auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-        auto config = dstd::make_shared<index::build::IndexBuildBatchConfig>();
+        auto config =
+            dstd::make_shared<trace::index::build::IndexBuildBatchConfig>();
         for (const auto& file : files) config->file_paths.emplace_back(file);
         config->index_dir = dstd::String(index_dir);
         config->parallelism = workers;
         config->memory_budget = budget;
-        result =
-            co_await index::build::BatchBuilder::process(std::move(config));
+        result = co_await trace::index::build::BatchBuilder::process(
+            std::move(config));
     });
     dftu_utils_test::ok(rt.submit(std::move(task), "design-a").wait());
     rt.shutdown();
@@ -173,11 +174,12 @@ TEST_SUITE("DesignA") {
         for (int i = 0; i < SMALL_FILES; ++i)
             files.push_back(small_trace(env.dir(), i));
 
-        const auto limit = index::build::g_max_sink_bytes.exchange(SINK_LIMIT);
+        const auto limit =
+            trace::index::build::g_max_sink_bytes.exchange(SINK_LIMIT);
         const auto few = peak_of_build(files, env.dir() + "/idx2", 2, BUDGET);
         const auto many =
             peak_of_build(files, env.dir() + "/idx16", 16, BUDGET);
-        index::build::g_max_sink_bytes.store(limit);
+        trace::index::build::g_max_sink_bytes.store(limit);
         MESSAGE("peak live bytes: 2 workers "
                 << few.bytes << " (" << few.in_flight
                 << " files at once), 16 workers " << many.bytes << " ("
@@ -193,7 +195,7 @@ TEST_SUITE("DesignA") {
         constexpr std::size_t WORKERS = 8;
         // With one file in flight the gate grants a slot and the bytes for
         // every other worker, and no more.
-        index::build::ParseGate gate(nullptr, WORKERS);
+        trace::index::build::ParseGate gate(nullptr, WORKERS);
         gate.file_in();
         REQUIRE(gate.spare_workers());
         std::size_t pieces = 0;
@@ -205,7 +207,7 @@ TEST_SUITE("DesignA") {
         CHECK_FALSE(gate.try_slot());
         for (std::size_t i = 0; i < pieces; ++i) gate.give_slot();
 
-        index::build::ParseGate busy(nullptr, WORKERS);
+        trace::index::build::ParseGate busy(nullptr, WORKERS);
         for (std::size_t i = 0; i < WORKERS; ++i) busy.file_in();
         CHECK_FALSE(busy.spare_workers());
     }
@@ -213,10 +215,10 @@ TEST_SUITE("DesignA") {
     TEST_CASE(
         "a file's plaintext estimate is one function for index and view") {
         constexpr std::uint64_t PACKED = 3 << 20;
-        CHECK(index::build::FileAdmission::plaintext_estimate(0, PACKED) ==
-              PACKED * common::constants::file_admission::
-                           PLAINTEXT_PER_COMPRESSED_BYTE);
-        CHECK(index::build::FileAdmission::plaintext_estimate(
+        CHECK(trace::index::build::FileAdmission::plaintext_estimate(
+                  0, PACKED) == PACKED * common::constants::file_admission::
+                                             PLAINTEXT_PER_COMPRESSED_BYTE);
+        CHECK(trace::index::build::FileAdmission::plaintext_estimate(
                   50 << 20, PACKED) == (std::uint64_t{50} << 20));
     }
 
@@ -226,18 +228,18 @@ TEST_SUITE("DesignA") {
         dstd::Vector<dstd::String> files;
         files.push_back(big_trace(env.dir(), "big", BIG_LINES, 0));
 
-        index::build::g_probe_parse.store(false);
-        index::build::g_max_parse_in_flight.store(0);
+        trace::index::build::g_probe_parse.store(false);
+        trace::index::build::g_max_parse_in_flight.store(0);
         const auto off = build_with(files, env.dir() + "/off", 4, 0);
         REQUIRE(off.indexed == 1);
-        CHECK(index::build::g_max_parse_in_flight.load() == 0);
+        CHECK(trace::index::build::g_max_parse_in_flight.load() == 0);
 
-        index::build::g_probe_parse.store(true);
+        trace::index::build::g_probe_parse.store(true);
         const auto on = build_with(files, env.dir() + "/on", 4, 0);
-        index::build::g_probe_parse.store(false);
+        trace::index::build::g_probe_parse.store(false);
         REQUIRE(on.indexed == 1);
-        CHECK(index::build::g_max_parse_in_flight.load() >= 1);
-        CHECK(index::build::g_max_parse_in_flight.load() <= 5);
+        CHECK(trace::index::build::g_max_parse_in_flight.load() >= 1);
+        CHECK(trace::index::build::g_max_parse_in_flight.load() <= 5);
     }
 
     TEST_CASE("a parallel build equals a one worker build byte for byte") {
@@ -248,20 +250,20 @@ TEST_SUITE("DesignA") {
         files.push_back(big_trace(env.dir(), "a", LINES, 1));
         files.push_back(small_trace(env.dir(), 0));
 
-        index::build::g_probe_intern_order.store(true);
-        index::build::g_intern_order_digest.store(0);
+        trace::index::build::g_probe_intern_order.store(true);
+        trace::index::build::g_intern_order_digest.store(0);
         const auto one = build_with(files, env.dir() + "/idx1", 1, 0);
         REQUIRE(one.indexed == files.size());
-        const auto order = index::build::g_intern_order_digest.load();
+        const auto order = trace::index::build::g_intern_order_digest.load();
         const auto expect = dump_index(files[0], env.dir() + "/idx1");
         for (int run = 0; run < 3; ++run) {
             const auto dir = env.dir() + "/idx_par" + dstd::to_string(run);
-            index::build::g_intern_order_digest.store(0);
+            trace::index::build::g_intern_order_digest.store(0);
             const auto many = build_with(files, dir, WORKERS, 0);
             REQUIRE(many.indexed == files.size());
             check_same(expect, dump_index(files[0], dir), "8 workers");
-            CHECK(index::build::g_intern_order_digest.load() == order);
+            CHECK(trace::index::build::g_intern_order_digest.load() == order);
         }
-        index::build::g_probe_intern_order.store(false);
+        trace::index::build::g_probe_intern_order.store(false);
     }
 }

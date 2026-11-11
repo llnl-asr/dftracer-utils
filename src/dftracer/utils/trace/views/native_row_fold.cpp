@@ -15,11 +15,11 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/schemas/dft/agg/reserved_args.h>
 #include <dftracer/utils/json/canonical.h>
 #include <dftracer/utils/json/dom_form.h>
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/json/record_parser.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/reserved_args.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/agg_fold.h>
 #include <dftracer/utils/trace/views/arg_type.h>
@@ -1401,8 +1401,8 @@ build_dyn_numeric_columns(EventRows evs,
         PodSource src(ev, intern);
         if (derived_size_t(src)) names.insert("size");
         src.for_each_numeric_arg([&](dstd::StringView key, double) {
-            if (index::schemas::dft::agg::is_reserved_arg(key) ||
-                index::schemas::dft::agg::is_preagg_suffix(key))
+            if (trace::index::schemas::dft::agg::is_reserved_arg(key) ||
+                trace::index::schemas::dft::agg::is_preagg_suffix(key))
                 return;
             names.insert(dstd::String(key));
         });

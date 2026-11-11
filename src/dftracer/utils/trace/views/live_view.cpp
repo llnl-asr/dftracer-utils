@@ -11,15 +11,15 @@
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/build/new_members.h>
-#include <dftracer/utils/index/build/resolve_and_build.h>
-#include <dftracer/utils/index/index.h>
-#include <dftracer/utils/index/plan/prune.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
-#include <dftracer/utils/index/store/root_layout.h>
-#include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/fileio/file_helpers.h>
 #include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/build/new_members.h>
+#include <dftracer/utils/trace/index/build/resolve_and_build.h>
+#include <dftracer/utils/trace/index/index.h>
+#include <dftracer/utils/trace/index/plan/prune.h>
+#include <dftracer/utils/trace/index/store/root_layout.h>
+#include <dftracer/utils/trace/index/tables.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/live_view.h>
 #include <dftracer/utils/trace/views/view_plan.h>
@@ -74,7 +74,8 @@ dstd::Result<dstd::Vector<dstd::String>> files_of(
 /// from, so a later refresh cannot show it rows past the pin.
 View pinned_view(
     dstd::Vector<ViewFile> files,
-    const dstd::Vector<dstd::SharedPtr<const index::Snapshot>>& snapshots) {
+    const dstd::Vector<dstd::SharedPtr<const trace::index::Snapshot>>&
+        snapshots) {
     auto plan = dstd::make_shared<detail::ViewPlan>(
         *detail::scan::from_files(std::move(files)));
     for (std::size_t i = 0; i < plan->files.size(); ++i) {
@@ -98,7 +99,7 @@ dstd::Result<View> LiveView::snapshot() {
     dstd::Vector<PinnedFile> refreshed = std::move(*fresh_files);
     if (refreshed.empty()) return View();
     dstd::Vector<ViewFile> pinned;
-    dstd::Vector<dstd::SharedPtr<const index::Snapshot>> snapshots;
+    dstd::Vector<dstd::SharedPtr<const trace::index::Snapshot>> snapshots;
     pinned.reserve(refreshed.size());
     snapshots.reserve(refreshed.size());
     for (PinnedFile& p : refreshed) {
@@ -113,19 +114,19 @@ dstd::Result<dstd::Optional<View>> LiveView::new_rows() {
     if (!fresh_files) return fresh_files.error();
     dstd::Vector<PinnedFile> refreshed = std::move(*fresh_files);
     dstd::Vector<ViewFile> fresh;
-    dstd::Vector<dstd::SharedPtr<const index::Snapshot>> snapshots;
+    dstd::Vector<dstd::SharedPtr<const trace::index::Snapshot>> snapshots;
     for (PinnedFile& p : refreshed) {
         if (p.has_open_line) continue;
         ViewFile& f = p.file;
         const auto seen = returned_.find(f.file_path);
         if (seen != returned_.end()) {
-            index::SourceStat stored;
+            trace::index::SourceStat stored;
             stored.size = seen->second.c_end;
             stored.hash = seen->second.hash;
             const bool is_same = f.pinned_c_end == seen->second.c_end &&
                                  p.hash == seen->second.hash;
             if (is_same) continue;
-            if (index::is_append_of(f.file_path, f.pinned_c_end, stored))
+            if (trace::index::is_append_of(f.file_path, f.pinned_c_end, stored))
                 f.pinned_uc_begin = seen->second.uc_end;
         }
         returned_.insert_or_assign(
@@ -150,16 +151,16 @@ dstd::Result<dstd::Vector<LiveView::PinnedFile>> LiveView::refresh() {
                                                         files[i]);
     }
 
-    index::build::ResolveAndBuildInput in;
+    trace::index::build::ResolveAndBuildInput in;
     for (const auto& f : files) in.files.emplace_back(f);
     in.index_dir = index_path_;
     in.require_checkpoints = true;
     in.whole_members = true;
-    index::build::ResolverResult built;
+    trace::index::build::ResolverResult built;
     if (!files.empty()) {
-        auto resolved = default_runtime().block_on(
-            coro::named("live_view_snapshot",
-                        index::build::resolve_and_build_index(std::move(in))));
+        auto resolved = default_runtime().block_on(coro::named(
+            "live_view_snapshot",
+            trace::index::build::resolve_and_build_index(std::move(in))));
         if (!resolved) return resolved.error();
         built = std::move(*resolved);
     }
@@ -181,7 +182,7 @@ dstd::Result<dstd::Vector<LiveView::PinnedFile>> LiveView::refresh() {
     dstd::Vector<PinnedFile> pinned;
     pinned.reserve(files.size());
     dstd::Vector<
-        dstd::Pair<dstd::String, dstd::SharedPtr<const index::Snapshot>>>
+        dstd::Pair<dstd::String, dstd::SharedPtr<const trace::index::Snapshot>>>
         opened;
     for (std::size_t i = 0; i < files.size(); ++i) {
         const dstd::String& path = files[i];
@@ -193,34 +194,33 @@ dstd::Result<dstd::Vector<LiveView::PinnedFile>> LiveView::refresh() {
         std::size_t members = 0;
         std::uint64_t hash = 0;
         bool has_open_line = false;
-        dstd::SharedPtr<const index::Snapshot> held;
-        if (common::input_exists(index::store_of(root))) {
+        dstd::SharedPtr<const trace::index::Snapshot> held;
+        if (common::input_exists(trace::index::store_of(root))) {
             for (const auto& [r, s] : opened)
                 if (r == root) held = s;
             if (!held) {
-                auto taken = index::plan::open_snapshot(root);
+                auto taken = trace::index::plan::open_snapshot(root);
                 if (!taken) return taken.error();
-                held =
-                    dstd::make_shared<const index::Snapshot>(std::move(*taken));
+                held = dstd::make_shared<const trace::index::Snapshot>(
+                    std::move(*taken));
                 opened.emplace_back(root, held);
             }
-            const index::Snapshot& snap = *held;
-            const auto ref =
-                snap.file(index::store::internal::get_logical_path(path));
+            const trace::index::Snapshot& snap = *held;
+            const auto ref = snap.file(fileio::get_logical_path(path));
             // A record of old bytes that a new file replaced holds no rows of
             // this one until a member of it is whole.
-            if (ref &&
-                (stats[i].size == ref->stat().size ||
-                 index::is_append_of(path, stats[i].size, ref->stat()))) {
+            if (ref && (stats[i].size == ref->stat().size ||
+                        trace::index::is_append_of(path, stats[i].size,
+                                                   ref->stat()))) {
                 st.verified_bytes = ref->stat().size;
                 hash = ref->stat().hash;
-                const auto meta = index::file_metadata(snap, *ref);
+                const auto meta = trace::index::file_metadata(snap, *ref);
                 if (!meta) return meta.error();
                 if (*meta) {
                     uc_end = (*meta)->max_bytes;
                     has_open_line = (*meta)->has_open_line;
                 }
-                const auto listed_members = index::members(snap, *ref);
+                const auto listed_members = trace::index::members(snap, *ref);
                 if (!listed_members) return listed_members.error();
                 members = listed_members->size();
             }
@@ -230,7 +230,7 @@ dstd::Result<dstd::Vector<LiveView::PinnedFile>> LiveView::refresh() {
             st.state = LiveFileState::Tail;
             auto file = dstd::File::open(dstd::PathView(path), {});
             if (!file) return file.error();
-            auto scan = index::build::find_member_after_hole(
+            auto scan = trace::index::build::find_member_after_hole(
                 file->native_handle(), st.verified_bytes, stats[i].size);
             auto searched = default_runtime().block_on(std::move(scan));
             if (!searched) return searched.error();

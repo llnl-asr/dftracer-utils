@@ -3,8 +3,8 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/fileio/file_helpers.h>
+#include <dftracer/utils/trace/index/extensions/scalable_bloom_filter.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 #include <dftracer/utils/trace/views/view_planner_utility.h>
 #include <doctest/doctest.h>
@@ -13,7 +13,7 @@
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::views;
-using namespace dftracer::utils::index::extensions;
+using namespace dftracer::utils::trace::index::extensions;
 
 // Helper: create a .idx with 4 checkpoints
 // Checkpoint layout:
@@ -64,8 +64,8 @@ static void populate_test_idx(const dstd::String& index_path,
             cat_bloom.entry_count());
 
         const auto m = static_cast<std::uint64_t>(ckpt);
-        dftracer::utils::index::put_gzip_member(
-            writer, dftracer::utils::index::gzip::GzipMemberRecord{
+        dftracer::utils::trace::index::put_gzip_member(
+            writer, dftracer::utils::trace::index::gzip::GzipMemberRecord{
                         .member_idx = m,
                         .c_offset = m * 5000,
                         .c_size = 5000,
@@ -84,10 +84,10 @@ static void populate_test_idx(const dstd::String& index_path,
     dftu_utils_test::put_file_bloom(writer, "cat", cat_blob,
                                     file_cat_bloom.entry_count());
 
-    dftracer::utils::index::put_path(
-        writer, index::store::IndexExtension::Bloom, "name");
-    dftracer::utils::index::put_path(
-        writer, index::store::IndexExtension::Bloom, "cat");
+    dftracer::utils::trace::index::put_path(
+        writer, trace::index::store::IndexExtension::Bloom, "name");
+    dftracer::utils::trace::index::put_path(
+        writer, trace::index::store::IndexExtension::Bloom, "cat");
     dftu_utils_test::mark_built(writer);
     dftu_utils_test::commit_test_build(writer);
 }
@@ -286,8 +286,8 @@ TEST_SUITE("ViewPlannerUtility") {
                                             fhash_bloom.entry_count());
             dftu_utils_test::put_chunk_bloom(writer, 0, "fhash", blob,
                                              fhash_bloom.entry_count());
-            dftracer::utils::index::put_path(
-                writer, index::store::IndexExtension::Bloom, "fhash");
+            dftracer::utils::trace::index::put_path(
+                writer, trace::index::store::IndexExtension::Bloom, "fhash");
             dftu_utils_test::mark_built(writer);
             dftu_utils_test::commit_test_build(writer);
         }

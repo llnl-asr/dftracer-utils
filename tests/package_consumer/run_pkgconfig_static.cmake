@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 # Links a program against the static archives of the installed tree, with the
-# libraries pkg-config reports for dftracer_utils_utilities_static, and runs it.
+# libraries pkg-config reports for dftracer_utils_domains_static, and runs it.
 # Each -l<name> that has an archive in the install becomes that archive, so the
 # shared libraries beside it do not stand in for a missing Requires entry.
 find_program(PKG_CONFIG NAMES pkg-config pkgconf)
@@ -11,12 +11,12 @@ endif()
 set(ENV{PKG_CONFIG_PATH} "${PREFIX}/lib/pkgconfig:${PREFIX}/lib64/pkgconfig")
 execute_process(
   COMMAND "${PKG_CONFIG}" "--define-variable=prefix=${PREFIX}" --static --libs
-          --cflags dftracer_utils_utilities_static
+          --cflags dftracer_utils_domains_static
   OUTPUT_VARIABLE flags
   OUTPUT_STRIP_TRAILING_WHITESPACE
   RESULT_VARIABLE rc)
 if(rc)
-  message(FATAL_ERROR "pkg-config does not find dftracer_utils_utilities_static: ${rc}")
+  message(FATAL_ERROR "pkg-config does not find dftracer_utils_domains_static: ${rc}")
 endif()
 separate_arguments(flags NATIVE_COMMAND "${flags}")
 # Each -l<name> with an archive in the install becomes that archive, in the

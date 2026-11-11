@@ -71,13 +71,16 @@ add_test(NAME schema_class_bad_member
 set_tests_properties(
   schema_class_bad_member
   PROPERTIES PASS_REGULAR_EXPRESSION
-             "schema class members must be index::Field"
+             "schema class members must be trace::index::Field"
              RESOURCE_LOCK build_tree)
 set_tests_properties(c_abi_guard PROPERTIES RESOURCE_LOCK build_tree)
 
 add_test(NAME index_layers
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_index_layers.cmake)
+add_test(NAME library_folders
+         COMMAND ${CMAKE_COMMAND} -DCOMPILE_COMMANDS=${CMAKE_BINARY_DIR}/compile_commands.json -P
+                 ${CMAKE_SOURCE_DIR}/cmake/scripts/check_library_folders.cmake)
 add_test(NAME runtime_layers
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_runtime_layers.cmake)
@@ -113,7 +116,7 @@ elseif(DFTRACER_UTILS_BUILD_SHARED)
 endif()
 if(DFTRACER_UTILS_BUILD_SHARED)
   set(CODEC_EXPORT_LIBS)
-  foreach(lib memory dstd common runtime store io json duql dataframe trace utilities)
+  foreach(lib memory dstd common runtime store fileio json duql dataframe trace domains)
     dftu_variant_target(_target dftracer_utils_${lib} shared)
     if(TARGET ${_target})
       list(APPEND CODEC_EXPORT_LIBS $<TARGET_FILE:${_target}>)
@@ -148,16 +151,16 @@ add_test(
     "bad=$(grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/' \"$0/include/dftracer/utils/coro\" \"$0/src/dftracer/utils/coro\" | grep -vE '<dftracer/utils/(coro|common|dstd|memory)/'); if [ -n \"$bad\" ]; then echo \"include from coro/ into a module above it:\"; echo \"$bad\"; exit 1; fi"
     ${CMAKE_SOURCE_DIR})
 add_test(
-  NAME io_no_upward
+  NAME fileio_no_upward
   COMMAND
     sh -c
-    [=[files=$( { for d in utilities/fileio utilities/hash utilities/text utilities/serialization; do find "$0/include/dftracer/utils/$d" "$0/src/dftracer/utils/$d" -type f 2>/dev/null; done | grep -vE '/(indexed_[a-z_]*|async_indexed_[a-z_]*|file_process_types|streaming_line_reader)\.(h|cpp)$'; ls "$0"/src/dftracer/utils/index/store/internal/helpers.*; } ); bad=$(grep -nE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/' $files | grep -vE '<dftracer/utils/(memory|dstd|common|coro|runtime|json)/|<dftracer/utils/utilities/(hash|text|serialization|fileio)/|<dftracer/utils/index/store/internal/helpers\.h>'; grep -nE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/utilities/fileio/([a-z_/]*/)?(indexed_|async_indexed_|file_process_types|streaming_line_reader)' $files); if [ -n "$bad" ]; then echo "include from io into a module above it:"; echo "$bad"; exit 1; fi]=]
+    [=[bad=$(grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/' "$0/src/dftracer/utils/fileio" | grep -vE '<dftracer/utils/(memory|dstd|common|coro|runtime|json|fileio)/'); if [ -n "$bad" ]; then echo "include from fileio into a library above it:"; echo "$bad"; exit 1; fi]=]
     ${CMAKE_SOURCE_DIR})
 add_test(
   NAME trace_no_upward
   COMMAND
     sh -c
-    [=[files=$( { find "$0/include/dftracer/utils/index" "$0/include/dftracer/utils/trace" "$0/src/dftracer/utils/index" "$0/src/dftracer/utils/trace/views" "$0/src/dftracer/utils/trace/internal" "$0/src/dftracer/utils/utilities/reader" "$0/src/dftracer/utils/utilities/arrow" -type f; find "$0/src/dftracer/utils/trace" -maxdepth 1 -type f \( -name 'agg_*' -o -name 'event.h' -o -name 'event_id.h' -o -name 'metadata_collector_utility.*' -o -name 'parse_inflated.h' -o -name 'schema.h' -o -name 'time_metric_event.h' -o -name 'trace_config.cpp' \); ls "$0"/src/dftracer/utils/trace/comparator/compare_view.h; find "$0/src/dftracer/utils/utilities/fileio" -type f \( -name 'indexed_*' -o -name 'async_indexed_*' -o -name 'file_process_types.h' -o -name 'streaming_line_reader.h' \); } ); bad=$(grep -nE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/(server|plugins|trace/(genesis|statistics|provenance|comparator|chunk_extractor_utility|chunk_verifier_utility)|utilities/(replay|dlio|host_ops|trace_gen))' $files | grep -vE '<dftracer/utils/(plugins/abi/|plugins/arrow_abi\.h|trace/comparator/compare_view\.h)'); if [ -n "$bad" ]; then echo "include from trace into a part of utilities:"; echo "$bad"; exit 1; fi]=]
+    [=[bad=$(grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/(domains|cli|plugins)/' "$0/include/dftracer/utils/trace" "$0/src/dftracer/utils/trace" | grep -vE '<dftracer/utils/plugins/(abi/|arrow_abi\.h)'); if [ -n "$bad" ]; then echo "include from trace into a library above it:"; echo "$bad"; exit 1; fi]=]
     ${CMAKE_SOURCE_DIR})
 add_test(
   NAME spdx_headers
@@ -987,7 +990,7 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
       COMMAND
         ${CMAKE_COMMAND}
         -DPKG_CONFIG_PATH=${TEST_INSTALL_PREFIX}/lib/pkgconfig:${TEST_INSTALL_PREFIX}/lib64/pkgconfig:${TEST_INSTALL_PREFIX}/lib/${CMAKE_LIBRARY_ARCHITECTURE}/pkgconfig
-        -DLIBRARY_NAME=dftracer_utils_io
+        -DLIBRARY_NAME=dftracer_utils_fileio
         -DTEST_TYPE=pkgconfig -P
         ${CMAKE_CURRENT_SOURCE_DIR}/test_package_discovery.cmake)
 
@@ -1001,13 +1004,13 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
         -DTEST_TYPE=pkgconfig -P
         ${CMAKE_CURRENT_SOURCE_DIR}/test_package_discovery.cmake)
 
-    # Test utilities library
+    # Test domains library
     add_test(
-      NAME test_pkgconfig_discovery_utilities
+      NAME test_pkgconfig_discovery_domains
       COMMAND
         ${CMAKE_COMMAND}
         -DPKG_CONFIG_PATH=${TEST_INSTALL_PREFIX}/lib/pkgconfig:${TEST_INSTALL_PREFIX}/lib64/pkgconfig:${TEST_INSTALL_PREFIX}/lib/${CMAKE_LIBRARY_ARCHITECTURE}/pkgconfig
-        -DLIBRARY_NAME=dftracer_utils_utilities
+        -DLIBRARY_NAME=dftracer_utils_domains
         -DTEST_TYPE=pkgconfig -P
         ${CMAKE_CURRENT_SOURCE_DIR}/test_package_discovery.cmake)
   endif()
@@ -1086,7 +1089,7 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
       NAME test_cmake_discovery_io
       COMMAND
         ${CMAKE_COMMAND} -DCMAKE_PREFIX_PATH=${TEST_INSTALL_PREFIX}
-        -DLIBRARY_NAME=dftracer_utils_io
+        -DLIBRARY_NAME=dftracer_utils_fileio
         -DTEST_TYPE=cmake -P
         ${CMAKE_CURRENT_SOURCE_DIR}/test_package_discovery.cmake)
 
@@ -1099,12 +1102,12 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
         -DTEST_TYPE=cmake -P
         ${CMAKE_CURRENT_SOURCE_DIR}/test_package_discovery.cmake)
 
-    # Test utilities library
+    # Test domains library
     add_test(
-      NAME test_cmake_discovery_utilities
+      NAME test_cmake_discovery_domains
       COMMAND
         ${CMAKE_COMMAND} -DCMAKE_PREFIX_PATH=${TEST_INSTALL_PREFIX}
-        -DLIBRARY_NAME=dftracer_utils_utilities
+        -DLIBRARY_NAME=dftracer_utils_domains
         -DTEST_TYPE=cmake -P
         ${CMAKE_CURRENT_SOURCE_DIR}/test_package_discovery.cmake)
   endif()
@@ -1195,14 +1198,14 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
       test_pkgconfig_discovery_store
       test_pkgconfig_discovery_io
       test_pkgconfig_discovery_trace
-      test_pkgconfig_discovery_utilities
+      test_pkgconfig_discovery_domains
       test_cmake_discovery_common
       test_cmake_discovery_coro
       test_cmake_discovery_runtime
       test_cmake_discovery_store
       test_cmake_discovery_io
       test_cmake_discovery_trace
-      test_cmake_discovery_utilities)
+      test_cmake_discovery_domains)
   endif()
 
   if(NOT DFTRACER_UTILS_SINGLE_LIBRARY AND DFTRACER_UTILS_BUILD_STATIC)
@@ -1224,7 +1227,7 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
   foreach(VARIANT IN LISTS PACKAGE_TEST_VARIANTS)
     if(NOT DFTRACER_UTILS_SINGLE_LIBRARY)
       foreach(LIBRARY dftracer_utils_memory dftracer_utils_dstd dftracer_utils_common dftracer_utils_coro
-                      dftracer_utils_runtime dftracer_utils_store dftracer_utils_io dftracer_utils_trace dftracer_utils_utilities)
+                      dftracer_utils_runtime dftracer_utils_store dftracer_utils_fileio dftracer_utils_trace dftracer_utils_domains)
         add_target_alias_test(test_target_${LIBRARY}_${VARIANT}
                               "${LIBRARY}::${VARIANT}")
         list(APPEND PACKAGE_DISCOVERY_TESTS test_target_${LIBRARY}_${VARIANT})

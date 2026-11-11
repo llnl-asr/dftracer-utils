@@ -7,8 +7,8 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/macros.h>
-#include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/record_schema.h>
+#include <dftracer/utils/trace/index/indexer.h>
+#include <dftracer/utils/trace/index/record_schema.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
 #include <testing_utilities.h>
@@ -34,9 +34,10 @@ dstd::String write_records(TestEnvironment& env, const dstd::String& name,
     const dstd::String gz = plain + ".gz";
     dftu_utils_test::compress_file_to_gzip(plain, gz);
     dstd::fs::remove(plain).discard();
-    dftu_utils_test::ok(dftu_utils_test::ok(index::Indexer::open({dstd::String(
-                                                dstd::StringView(gz))}))
-                            .build());
+    dftu_utils_test::ok(
+        dftu_utils_test::ok(
+            trace::index::Indexer::open({dstd::String(dstd::StringView(gz))}))
+            .build());
     return gz;
 }
 
@@ -294,7 +295,7 @@ TEST_SUITE("View duql sources") {
     }
 
     TEST_CASE("pipeline macros from a source and a file") {
-        dftu_utils_test::ok_ref(index::register_schema(R"(
+        dftu_utils_test::ok_ref(trace::index::register_schema(R"(
 id: weblog2
 fields:
   status: {type: int}
@@ -302,7 +303,7 @@ fields:
 source: |
   def worst(n) = sort -status | where status > n
 )",
-                                                       "test"));
+                                                              "test"));
         TestEnvironment env(10);
         const View w =
             view_of(write_records(env, "w2",
@@ -334,7 +335,7 @@ source: |
     }
 
     TEST_CASE("a user schema's source") {
-        dftu_utils_test::ok_ref(index::register_schema(R"(
+        dftu_utils_test::ok_ref(trace::index::register_schema(R"(
 id: weblog
 fields:
   status: {type: int}
@@ -343,7 +344,7 @@ source: |
   slow = where request_time > 1;
   def failed = status >= 500
 )",
-                                                       "test"));
+                                                              "test"));
         TestEnvironment env(10);
         const View v =
             view_of(write_records(env, "w",
@@ -358,24 +359,24 @@ source: |
 
     TEST_CASE("sources that do not compile reject registration") {
         CHECK(error_of([] {
-                  return index::register_schema(
+                  return trace::index::register_schema(
                       "id: bad1\nsource: \"slow = where x >\"", "test");
               }).find("bad1") != dstd::String::npos);
         CHECK(error_of([] {
-                  return index::register_schema(
+                  return trace::index::register_schema(
                       "id: bad2\nsource: \"data = where x > 1 | take 1\"",
                       "test");
               }).find("'data' must be one 'where'") != dstd::String::npos);
         CHECK(error_of([] {
-                  return index::register_schema(
+                  return trace::index::register_schema(
                       "id: bad3\nsource: \"all = where x\"", "test");
               }).find("'all' is every record") != dstd::String::npos);
     }
 
     TEST_CASE("only a source with args_fallback reads bare names under args") {
-        CHECK(dftu_utils_test::ok_ref(index::get_schema("dftracer"))
+        CHECK(dftu_utils_test::ok_ref(trace::index::get_schema("dftracer"))
                   .args_fallback);
-        CHECK_FALSE(dftu_utils_test::ok_ref(index::get_schema("generic"))
+        CHECK_FALSE(dftu_utils_test::ok_ref(trace::index::get_schema("generic"))
                         .args_fallback);
         TestEnvironment env(10);
         const View d = view_of(write_records(env, "t", dftracer_lines()));

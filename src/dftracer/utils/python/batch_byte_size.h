@@ -9,7 +9,7 @@
 #include <cstddef>
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/utilities/arrow/arrow_export.h>
+#include <dftracer/utils/trace/arrow/arrow_export.h>
 #endif
 
 namespace dftracer::utils::python {
@@ -40,7 +40,7 @@ inline std::size_t arrow_array_byte_size(const ArrowArray *arr) {
 }
 
 inline std::size_t byte_size(
-    const dftracer::utils::utilities::arrow::ArrowExportResult &b) {
+    const dftracer::utils::trace::arrow::ArrowExportResult &b) {
     return arrow_array_byte_size(b.array());
 }
 

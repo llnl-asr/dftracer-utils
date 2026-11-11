@@ -6,8 +6,8 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/utilities/reader/trace_reader.h>
+#include <dftracer/utils/trace/index/indexer.h>
+#include <dftracer/utils/trace/reader/trace_reader.h>
 #include <doctest/doctest.h>
 #include <generator_ok.h>
 #include <simdjson.h>
@@ -98,7 +98,7 @@ dstd::String write_trace(TestEnvironment& env) {
     REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, gz));
     dstd::fs::remove(plain).discard();
     dftu_utils_test::ok(
-        dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+        dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
                                 {dstd::String(dstd::StringView(gz))}))
             .build());
     return gz;
@@ -129,14 +129,14 @@ View view_of(const dstd::String& gz, const char* filter) {
 }
 
 coro::CoroTask<Names> reader_lines(
-    coro::AsyncGenerator<utilities::fileio::lines::Line> gen) {
+    coro::AsyncGenerator<fileio::lines::Line> gen) {
     Names out;
     while (auto line = co_await gen.next()) out.insert(name_of(line->content));
     co_return out;
 }
 
 coro::CoroTask<Names> reader_json(
-    coro::AsyncGenerator<utilities::reader::JsonLine> gen) {
+    coro::AsyncGenerator<trace::reader::JsonLine> gen) {
     Names out;
     while (auto opt = co_await gen.next())
         if (auto v = opt->parser->get_string("name")) out.emplace(*v);
@@ -180,9 +180,8 @@ TEST_SUITE("duql paths") {
     TEST_CASE("every path selects the records the three-valued rule keeps") {
         TestEnvironment env(10);
         const dstd::String gz = write_trace(env);
-        utilities::reader::TraceReader tr(
-            {.file_path = dstd::String(gz),
-             .index_dir = dstd::String(env.dir())});
+        trace::reader::TraceReader tr({.file_path = dstd::String(gz),
+                                       .index_dir = dstd::String(env.dir())});
         REQUIRE(tr.has_index());
 
         for (const auto& c : cases()) {
@@ -209,7 +208,7 @@ TEST_SUITE("duql paths") {
             for (const auto& line : sink.lines()) sunk.insert(name_of(line));
             CHECK(sunk == c.expected);
 
-            utilities::reader::ReadConfig rc;
+            trace::reader::ReadConfig rc;
             rc.query = c.filter;
             CHECK(run(reader_lines(dftu_utils_test::ok_items(
                       tr.read_lines(rc)))) == c.expected);
@@ -282,12 +281,11 @@ TEST_SUITE("duql paths") {
         REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, gz));
         dstd::fs::remove(plain).discard();
         dftu_utils_test::ok(
-            dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+            dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
                                     {dstd::String(dstd::StringView(gz))}))
                 .build());
-        utilities::reader::TraceReader tr(
-            {.file_path = dstd::String(gz),
-             .index_dir = dstd::String(env.dir())});
+        trace::reader::TraceReader tr({.file_path = dstd::String(gz),
+                                       .index_dir = dstd::String(env.dir())});
         REQUIRE(tr.has_index());
 
         dataframe::DataFrame frame;
@@ -313,7 +311,7 @@ TEST_SUITE("duql paths") {
             Names sunk;
             for (const auto& line : sink.lines()) sunk.insert(name_of(line));
             CHECK(sunk == c.expected);
-            utilities::reader::ReadConfig rc;
+            trace::reader::ReadConfig rc;
             rc.query = c.filter;
             CHECK(run(reader_lines(dftu_utils_test::ok_items(
                       tr.read_lines(rc)))) == c.expected);
@@ -340,7 +338,7 @@ TEST_SUITE("duql paths") {
         REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, gz));
         dstd::fs::remove(plain).discard();
         dftu_utils_test::ok(
-            dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+            dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
                                     {dstd::String(dstd::StringView(gz))}))
                 .build());
         CHECK(names_of(run(view_of(gz, "exists(tags)").collect())) ==

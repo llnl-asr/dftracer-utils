@@ -8,6 +8,7 @@
 #include <dftracer/utils/dataframe/join.h>
 #include <dftracer/utils/dataframe/kernels/filter.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dataframe/query/vectorize.h>
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/hash/hash_combine.h>
@@ -16,7 +17,6 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/duql/vectorize.h>
 
 #include <algorithm>
 #include <atomic>
@@ -60,7 +60,7 @@ bool value_key(dstd::String& out, const dstd::Vector<Series>& keys,
                std::int64_t r) {
     out.clear();
     for (const Series& k : keys)
-        if (!duql::append_cell_key(out, k, r)) return false;
+        if (!dataframe::query::append_cell_key(out, k, r)) return false;
     return true;
 }
 
@@ -789,8 +789,8 @@ dstd::Vector<std::int64_t> HashJoin::conflicts(bool typed) const {
         std::int64_t& slot = out[static_cast<std::size_t>(head)];
         if (slot >= 0) return;
         for (const std::size_t c : values)
-            if (!duql::same_cell(right_.columns[c], head, right_.columns[c],
-                                 r)) {
+            if (!dataframe::query::same_cell(right_.columns[c], head,
+                                             right_.columns[c], r)) {
                 slot = static_cast<std::int64_t>(c);
                 return;
             }

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/domains/analysis/statistics/detail_stats_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/trace/statistics/detail_stats_view.h>
 #include <doctest/doctest.h>
 #include <refused_lines.h>
 #include <task_result.h>
@@ -21,11 +21,11 @@ using namespace dftu_utils_test;
 using namespace test_view_common;
 using namespace dftracer::utils::trace;
 
-static statistics::DetailedStatistics run_detail(
-    const statistics::DetailStatsView& sv,
-    const statistics::DetailNeeds& needs) {
+static domains::analysis::statistics::DetailedStatistics run_detail(
+    const domains::analysis::statistics::DetailStatsView& sv,
+    const domains::analysis::statistics::DetailNeeds& needs) {
     dftracer::utils::Runtime rt;
-    statistics::DetailedStatistics result;
+    domains::analysis::statistics::DetailedStatistics result;
     dftu_utils_test::ok(rt.block_on(dftracer::utils::coro::named(
         "detail", dftracer::utils::coro::with_scope(
                       [&](dftracer::utils::coro::Scope&)
@@ -47,11 +47,11 @@ TEST_SUITE("detail stats via View") {
         dstd::String gz = create_mixed_trace(env, 30, 20);  // 50 events
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
-        statistics::DetailNeeds needs;                      // no group-by
-        statistics::DetailedStatistics d =
-            run_detail(statistics::DetailStatsView::from_file(
-                           dstd::String(gz), dstd::String(idx)),
-                       needs);
+        domains::analysis::statistics::DetailNeeds needs;   // no group-by
+        domains::analysis::statistics::DetailedStatistics d = run_detail(
+            domains::analysis::statistics::DetailStatsView::from_file(
+                dstd::String(gz), dstd::String(idx)),
+            needs);
 
         CHECK(d.events_scanned == 50);
         CHECK(d.duration.count() == 50);
@@ -79,12 +79,12 @@ TEST_SUITE("detail stats via View") {
         const dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         dstd::Vector<dstd::String> group_by{"name"};
-        statistics::DetailNeeds needs;
+        domains::analysis::statistics::DetailNeeds needs;
         needs.group_by = &group_by;
-        statistics::DetailedStatistics d =
-            run_detail(statistics::DetailStatsView::from_file(
-                           dstd::String(gz), dstd::String(idx)),
-                       needs);
+        domains::analysis::statistics::DetailedStatistics d = run_detail(
+            domains::analysis::statistics::DetailStatsView::from_file(
+                dstd::String(gz), dstd::String(idx)),
+            needs);
 
         CHECK(d.events_scanned == 8);
         CHECK(d.duration.count() == 5);
@@ -115,12 +115,12 @@ TEST_SUITE("detail stats via View") {
         const dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         dstd::Vector<dstd::String> group_by{"name"};
-        statistics::DetailNeeds needs;
+        domains::analysis::statistics::DetailNeeds needs;
         needs.group_by = &group_by;
-        statistics::DetailedStatistics d =
-            run_detail(statistics::DetailStatsView::from_file(
-                           dstd::String(gz), dstd::String(idx)),
-                       needs);
+        domains::analysis::statistics::DetailedStatistics d = run_detail(
+            domains::analysis::statistics::DetailStatsView::from_file(
+                dstd::String(gz), dstd::String(idx)),
+            needs);
 
         CHECK(d.events_scanned == 5 + dftu_utils_test::REFUSED_KINDS);
         CHECK(d.duration.count() == 5 + dftu_utils_test::REFUSED_KINDS);
@@ -137,12 +137,12 @@ TEST_SUITE("detail stats via View") {
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
 
         dstd::Vector<dstd::String> group_by{"name"};
-        statistics::DetailNeeds needs;
+        domains::analysis::statistics::DetailNeeds needs;
         needs.group_by = &group_by;
-        statistics::DetailedStatistics d =
-            run_detail(statistics::DetailStatsView::from_file(
-                           dstd::String(gz), dstd::String(idx)),
-                       needs);
+        domains::analysis::statistics::DetailedStatistics d = run_detail(
+            domains::analysis::statistics::DetailStatsView::from_file(
+                dstd::String(gz), dstd::String(idx)),
+            needs);
 
         CHECK(d.grouped_duration.size() == 2);  // read, fwrite
         std::uint64_t total = 0;
@@ -160,13 +160,13 @@ TEST_SUITE("detail stats via View") {
 
         dstd::Vector<dstd::String> group_by{"cat"};
         dstd::Vector<dstd::String> filter_names{"read"};
-        statistics::DetailNeeds needs;
+        domains::analysis::statistics::DetailNeeds needs;
         needs.group_by = &group_by;
         needs.filter_names = &filter_names;
-        statistics::DetailedStatistics d =
-            run_detail(statistics::DetailStatsView::from_file(
-                           dstd::String(gz), dstd::String(idx)),
-                       needs);
+        domains::analysis::statistics::DetailedStatistics d = run_detail(
+            domains::analysis::statistics::DetailStatsView::from_file(
+                dstd::String(gz), dstd::String(idx)),
+            needs);
 
         CHECK(d.events_scanned == 30);  // only POSIX "read"
         CHECK(d.grouped_duration.size() == 1);

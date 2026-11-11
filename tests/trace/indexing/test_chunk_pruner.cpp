@@ -4,19 +4,19 @@
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/extensions/chunk_dimension_stats.h>
-#include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
-#include <dftracer/utils/index/plan/chunk_pruner.h>
-#include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/fileio/file_helpers.h>
+#include <dftracer/utils/trace/index/extensions/chunk_dimension_stats.h>
+#include <dftracer/utils/trace/index/extensions/scalable_bloom_filter.h>
+#include <dftracer/utils/trace/index/plan/chunk_pruner.h>
+#include <dftracer/utils/trace/index/schemas/dft/chunk_statistics.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
 #include <task_result.h>
 #include <testing_utilities.h>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::index::extensions;
-using namespace dftracer::utils::index::plan;
+using namespace dftracer::utils::trace::index::extensions;
+using namespace dftracer::utils::trace::index::plan;
 
 // `members` replaces the base member of the same index, or adds a new one.
 // `name_file_bloom` adds the file-level "name" bloom that the tier-0 file skip
@@ -24,7 +24,7 @@ using namespace dftracer::utils::index::plan;
 // a file without blooms must stay unpruned.
 static void populate_test_idx(
     const dstd::String& index_path, const dstd::String& file_path,
-    const dstd::Vector<index::gzip::GzipMemberRecord>& members = {},
+    const dstd::Vector<trace::index::gzip::GzipMemberRecord>& members = {},
     bool name_file_bloom = false) {
     auto index = dftu_utils_test::open_test_index(index_path);
     auto writer = dftu_utils_test::register_test_file(
@@ -53,8 +53,8 @@ static void populate_test_idx(
         dftu_utils_test::put_dimension_stats(writer, 0, dur_ds, 2);
 
         for (const char* path : {"cat", "name", "dur"})
-            dftracer::utils::index::put_path(
-                writer, index::store::IndexExtension::Bloom, path);
+            dftracer::utils::trace::index::put_path(
+                writer, trace::index::store::IndexExtension::Bloom, path);
     }
 
     {
@@ -104,12 +104,13 @@ static void populate_test_idx(
     }
     // Two data events per chunk, one line each, so the statistics describe
     // every record and all-match proofs (NOT) are allowed.
-    dstd::Vector<index::gzip::GzipMemberRecord> all;
+    dstd::Vector<trace::index::gzip::GzipMemberRecord> all;
     for (std::uint64_t ckpt = 0; ckpt < 3; ++ckpt) {
-        dftracer::utils::index::schemas::dft::ChunkStatistics stats;
+        dftracer::utils::trace::index::schemas::dft::ChunkStatistics stats;
         stats.total_events = 2;
-        dftracer::utils::index::put_chunk_statistics(writer, ckpt, stats);
-        all.push_back(index::gzip::GzipMemberRecord{
+        dftracer::utils::trace::index::put_chunk_statistics(writer, ckpt,
+                                                            stats);
+        all.push_back(trace::index::gzip::GzipMemberRecord{
             .member_idx = ckpt,
             .c_offset = ckpt * 100,
             .c_size = 100,
@@ -126,7 +127,7 @@ static void populate_test_idx(
             all.push_back(member);
     }
     for (const auto& member : all)
-        dftracer::utils::index::put_gzip_member(writer, member);
+        dftracer::utils::trace::index::put_gzip_member(writer, member);
 
     if (name_file_bloom) {
         ScalableBloomFilter bloom(1024, 0.01);
@@ -302,7 +303,7 @@ TEST_SUITE("ChunkPruner") {
         // Chunk 1 holds a third line (a metadata record, say) that has no
         // cat, so `not cat == "STDIO"` may match it.
         populate_test_idx(index_path, file_path,
-                          {index::gzip::GzipMemberRecord{
+                          {trace::index::gzip::GzipMemberRecord{
                               .member_idx = 1,
                               .c_offset = 100,
                               .c_size = 100,
@@ -327,7 +328,7 @@ TEST_SUITE("ChunkPruner") {
         // Member 3 holds only metadata records, so the index has no
         // statistics or bloom rows for it.
         populate_test_idx(index_path, file_path,
-                          {index::gzip::GzipMemberRecord{
+                          {trace::index::gzip::GzipMemberRecord{
                               .member_idx = 3,
                               .c_offset = 300,
                               .c_size = 100,

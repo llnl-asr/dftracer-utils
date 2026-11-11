@@ -9,11 +9,11 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
-#include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
-#include <dftracer/utils/index/store/root_layout.h>
+#include <dftracer/utils/fileio/file_helpers.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/schemas/dft/chunk_statistics.h>
+#include <dftracer/utils/trace/index/store/root_layout.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>

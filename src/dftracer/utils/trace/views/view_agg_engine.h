@@ -16,9 +16,9 @@
 // global) View aggregation runs through the dataframe engine's streaming
 // group_by. run_collect_via_engine itself is declared (as a friend of View) in
 // view.h; this header adds the finalize/prepare helpers.
-namespace dftracer::utils::index::plan {
+namespace dftracer::utils::trace::index::plan {
 class GroupResolver;
-}  // namespace dftracer::utils::index::plan
+}  // namespace dftracer::utils::trace::index::plan
 
 namespace dftracer::utils::trace::views::detail {
 
@@ -135,7 +135,7 @@ dstd::Result<AggInputSpec> make_agg_input_spec(const ViewPlan& plan);
 dstd::Result<dftracer::utils::dataframe::DataFrame> build_agg_input_frame(
     const dstd::Vector<FoldEvent>& events,
     const dftracer::utils::dstd::StringIntern& intern, const AggInputSpec& spec,
-    const dftracer::utils::index::plan::GroupResolver* resolver);
+    const dftracer::utils::trace::index::plan::GroupResolver* resolver);
 
 /// The base trace field a group-agg value column name reduces over, inverting
 /// the scaled-column rename make_agg_input_spec applies (SCALED_{TS,DUR,TE} map

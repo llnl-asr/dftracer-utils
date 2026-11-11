@@ -27,17 +27,17 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/domains/workload/genesis/genesis.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
+#include <dftracer/utils/fileio/lines/sources/async_streaming_gz_line_generator.h>
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/trace/genesis/genesis.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
-#include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
+#include <dftracer/utils/trace/index/indexer.h>
 #include <memory_probe.h>
 #include <memory_workloads.h>
 #include <simdjson.h>
@@ -267,10 +267,10 @@ void spill_cycle(const Sizes& s) {
 
 void index_build(const Paths& p) {
     require_ok(dstd::fs::create_directories(p.index_dir), "create_directories");
-    index::IndexerOptions options;
+    trace::index::IndexerOptions options;
     options.index_dir = p.index_dir;
     options.bloom->required = false;
-    auto indexer = dftu::bench::ok(index::Indexer::open(
+    auto indexer = dftu::bench::ok(trace::index::Indexer::open(
         {dstd::String(p.trace.data(), p.trace.size())}, options));
     run_scoped([&](coro::Scope& scope) -> coro::CoroTask<void> {
         dftu::bench::ok(co_await indexer.rebuild(scope));
@@ -279,8 +279,7 @@ void index_build(const Paths& p) {
 
 coro::CoroTask<void> read_lines(dstd::String file) {
     simdjson::dom::parser parser;
-    auto gen =
-        utilities::fileio::lines::sources::async_streaming_gz_lines(file);
+    auto gen = fileio::lines::sources::async_streaming_gz_lines(file);
     std::uint64_t parsed = 0;
     while (auto next = co_await gen.next()) {
         if (!*next) dftu::bench::fail(next->error());

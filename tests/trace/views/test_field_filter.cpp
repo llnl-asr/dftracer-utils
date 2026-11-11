@@ -2,7 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/trace/index/indexer.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
 #include <testing_utilities.h>
@@ -67,7 +67,7 @@ TEST_SUITE("View unified F filter") {
                                                                    16 * 1024));
         dstd::fs::remove(plain).discard();
         dftu_utils_test::ok(
-            dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+            dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
                                     {dstd::String(dstd::StringView(gz))}))
                 .build());
         const dstd::String idx = dstd::String(determine_index_path(gz, ""));

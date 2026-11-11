@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/domains/server/trace_index.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
-#include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/server/trace_index.h>
+#include <dftracer/utils/trace/index/indexer.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
 #include <testing_utilities.h>
@@ -14,7 +14,7 @@
 #include <atomic>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::server;
+using namespace dftracer::utils::domains::server;
 
 /// Helper: create a DFTracer gzip file with .pfw.gz extension
 /// (TraceIndex scans for .pfw and .pfw.gz patterns).
@@ -196,10 +196,10 @@ TEST_CASE("TraceIndex - genesis output resolves run keys through runs") {
                 dstd::to_string(i) + R"(","depth":1,"count":2})" + "\n";
     const dstd::String gz = env.dir() + "/genesis.pfw.gz";
     dftu_utils_test::write_gz_trace(gz, text);
-    dftracer::utils::index::IndexerOptions o;
+    dftracer::utils::trace::index::IndexerOptions o;
     o.index_dir = env.dir();
     dftu_utils_test::ok(
-        dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+        dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
                                 {dstd::String(dstd::StringView(gz))}, o))
             .build());
 

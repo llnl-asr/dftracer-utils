@@ -25,9 +25,9 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/views/view.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 
 #include <algorithm>
 #include <chrono>
@@ -78,7 +78,7 @@ T run(coro::CoroTask<dstd::Result<T>> t) {
 void write_trace(const dstd::String& gz, std::int64_t events,
                  std::uint64_t seed) {
     require_ok(dstd::fs::write_file(gz, {}), "write_file");
-    utilities::fileio::compress::GzipMemberCompressor comp(6);
+    fileio::compress::GzipMemberCompressor comp(6);
     const char* names[] = {"read", "write", "open", "close", "fread", "fwrite"};
     const char* cats[] = {"POSIX", "POSIX", "POSIX", "POSIX", "STDIO", "STDIO"};
     std::mt19937_64 rng(seed);

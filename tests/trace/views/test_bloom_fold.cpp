@@ -7,17 +7,17 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/build/index_fold_driver.h>
-#include <dftracer/utils/index/build/resolve_and_build.h>
-#include <dftracer/utils/index/extensions/bloom_fold.h>
-#include <dftracer/utils/index/extensions/rowset_fold.h>
-#include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
-#include <dftracer/utils/index/index.h>
-#include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/index/source.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
-#include <dftracer/utils/index/store/root_layout.h>
-#include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/fileio/file_helpers.h>
+#include <dftracer/utils/trace/index/build/index_fold_driver.h>
+#include <dftracer/utils/trace/index/build/resolve_and_build.h>
+#include <dftracer/utils/trace/index/extensions/bloom_fold.h>
+#include <dftracer/utils/trace/index/extensions/rowset_fold.h>
+#include <dftracer/utils/trace/index/extensions/scalable_bloom_filter.h>
+#include <dftracer/utils/trace/index/index.h>
+#include <dftracer/utils/trace/index/record_schema.h>
+#include <dftracer/utils/trace/index/source.h>
+#include <dftracer/utils/trace/index/store/root_layout.h>
+#include <dftracer/utils/trace/index/tables.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <doctest/doctest.h>
@@ -44,8 +44,8 @@ using namespace dftu_utils_test;
 using namespace test_view_common;
 
 using namespace dftracer::utils::trace::views::detail;
-using namespace dftracer::utils::index::build;
-using namespace dftracer::utils::index::extensions;
+using namespace dftracer::utils::trace::index::build;
+using namespace dftracer::utils::trace::index::extensions;
 
 namespace {
 
@@ -81,25 +81,27 @@ dstd::String create_bloom_trace(TestEnvironment& env, int n,
 }
 
 // A FileBuild for the indexed file `logical_path` of the index at `index_path`.
-dftracer::utils::index::FileBuild rebuild_file(const dstd::String& index_path,
-                                               dstd::StringView logical_path) {
-    auto index = dftracer::utils::index::Index::open(
-        dftracer::utils::index::normalize_index_root(index_path));
+dftracer::utils::trace::index::FileBuild rebuild_file(
+    const dstd::String& index_path, dstd::StringView logical_path) {
+    auto index = dftracer::utils::trace::index::Index::open(
+        dftracer::utils::trace::index::normalize_index_root(index_path));
     REQUIRE(index);
-    auto build = dftracer::utils::index::rebuild(
+    auto build = dftracer::utils::trace::index::rebuild(
         *index, dstd::StringView(logical_path.data(), logical_path.size()));
     REQUIRE(build);
     return std::move(*build);
 }
 
-bool file_bloom_contains(const dftracer::utils::index::Snapshot& snapshot,
-                         const dftracer::utils::index::FileRef& file,
-                         dstd::StringView dim, dstd::StringView value) {
-    auto fb = dftu_utils_test::index_take(dftracer::utils::index::path_file(
-        snapshot, file, dftracer::utils::index::store::IndexExtension::Bloom,
-        dim));
+bool file_bloom_contains(
+    const dftracer::utils::trace::index::Snapshot& snapshot,
+    const dftracer::utils::trace::index::FileRef& file, dstd::StringView dim,
+    dstd::StringView value) {
+    auto fb =
+        dftu_utils_test::index_take(dftracer::utils::trace::index::path_file(
+            snapshot, file,
+            dftracer::utils::trace::index::store::IndexExtension::Bloom, dim));
     REQUIRE(fb.has_value());
-    auto bloom = dftracer::utils::index::extensions::kinds::decode_bloom(
+    auto bloom = dftracer::utils::trace::index::extensions::kinds::decode_bloom(
         dstd::StringView(fb->data(), fb->size()));
     REQUIRE(bloom.has_value());
     return bloom->possibly_contains(value);
@@ -110,17 +112,19 @@ dstd::String padded(dstd::String s) {
     return s;
 }
 
-dstd::Vector<dftracer::utils::index::IndexedRowSet> dftracer_rowsets() {
-    return dftracer::utils::index::indexed_rowsets(dftu_utils_test::ok_ref(
-        dftracer::utils::index::get_schema("dftracer")));
+dstd::Vector<dftracer::utils::trace::index::IndexedRowSet> dftracer_rowsets() {
+    return dftracer::utils::trace::index::indexed_rowsets(
+        dftu_utils_test::ok_ref(
+            dftracer::utils::trace::index::get_schema("dftracer")));
 }
 
 // The path the stored `files` row set of `file` gives for `fhash`, or "".
-dstd::String stored_path(const dftracer::utils::index::Snapshot& snapshot,
-                         const dftracer::utils::index::FileRef& file,
-                         dstd::StringView fhash) {
+dstd::String stored_path(
+    const dftracer::utils::trace::index::Snapshot& snapshot,
+    const dftracer::utils::trace::index::FileRef& file,
+    dstd::StringView fhash) {
     const auto bytes = dftu_utils_test::index_take(
-        dftracer::utils::index::rowset(snapshot, file, "files"));
+        dftracer::utils::trace::index::rowset(snapshot, file, "files"));
     if (!bytes) return {};
     const auto f = dftracer::utils::dataframe::frame_from_native(
         dstd::StringView(bytes->data(), bytes->size()));
@@ -136,9 +140,9 @@ dstd::String stored_path(const dftracer::utils::index::Snapshot& snapshot,
 // Members copy, and starts the build the fold writes into. The build must
 // exist before the fold spills: its commit publishes the record the tier
 // hangs off.
-dftracer::utils::index::FileBuild start_build(const dstd::String& root) {
-    auto index = dftracer::utils::index::Index::open(
-        dftracer::utils::index::normalize_index_root(root));
+dftracer::utils::trace::index::FileBuild start_build(const dstd::String& root) {
+    auto index = dftracer::utils::trace::index::Index::open(
+        dftracer::utils::trace::index::normalize_index_root(root));
     REQUIRE(index);
     auto registered = dftu_utils_test::register_test_file(*index, "f.pfw.gz");
     dftu_utils_test::commit_test_build(registered);
@@ -206,9 +210,10 @@ TEST_SUITE("BloomFold") {
             const auto file = snapshot.file("f.pfw.gz");
             REQUIRE(file.has_value());
             CHECK_FALSE(dftu_utils_test::pruning_tier_current(snapshot, *file));
-            CHECK(dftu_utils_test::index_take(
-                      dftracer::utils::index::chunk_stats(snapshot, *file))
-                      .empty());
+            CHECK(
+                dftu_utils_test::index_take(
+                    dftracer::utils::trace::index::chunk_stats(snapshot, *file))
+                    .empty());
         }
 
         const dstd::String kept = env.dir() + "/kept";
@@ -241,7 +246,7 @@ TEST_SUITE("BloomFold") {
             const auto file = snapshot.file("f.pfw.gz");
             REQUIRE(file.has_value());
             return dftu_utils_test::index_take(
-                dftracer::utils::index::chunk_stats(snapshot, *file));
+                dftracer::utils::trace::index::chunk_stats(snapshot, *file));
         };
         const auto spilled = chunks(kept);
         const auto held = chunks(memory);
@@ -284,13 +289,14 @@ TEST_SUITE("BloomFold") {
         CHECK(file_bloom_contains(snapshot, file, "hhash", "hh1"));
 
         auto name_chunks =
-            dftu_utils_test::index_take(dftracer::utils::index::granules(
+            dftu_utils_test::index_take(dftracer::utils::trace::index::granules(
                 snapshot, file,
-                dftracer::utils::index::store::IndexExtension::Bloom, "name"));
+                dftracer::utils::trace::index::store::IndexExtension::Bloom,
+                "name"));
         REQUIRE(name_chunks.size() > 1);
         for (const auto& [chunk, bytes] : name_chunks) {
             auto bloom =
-                dftracer::utils::index::extensions::kinds::decode_bloom(
+                dftracer::utils::trace::index::extensions::kinds::decode_bloom(
                     dstd::StringView(bytes.data(), bytes.size()));
             REQUIRE(bloom.has_value());
             CHECK(bloom->entry_count() <= 2);
@@ -400,8 +406,7 @@ TEST_SUITE("BloomFold") {
         dict.seal_unit(unit);
 
         {
-            const auto logical =
-                dftracer::utils::index::store::internal::get_logical_path(gz);
+            const auto logical = fileio::get_logical_path(gz);
             auto build = rebuild_file(index_path, logical);
             dftu_utils_test::ok(bloom.write(build));
             dftu_utils_test::ok(dict.write(build));
@@ -457,8 +462,7 @@ TEST_SUITE("BloomFold") {
         drv.seal();
 
         {
-            const auto logical =
-                dftracer::utils::index::store::internal::get_logical_path(gz);
+            const auto logical = fileio::get_logical_path(gz);
             auto build = rebuild_file(index_path, logical);
             dftu_utils_test::ok(bloom.write(build));
             dftu_utils_test::ok(dict.write(build));
@@ -554,38 +558,41 @@ TEST_SUITE("BloomFold") {
 
 TEST_SUITE("BloomCore") {
     TEST_CASE("merging a chunk's states keeps numeric min and max") {
-        index::schemas::dft::BloomCore::ChunkIndexerConfig config;
-        index::schemas::dft::BloomCore::ChunkState a, b;
-        index::schemas::dft::BloomCore::init_chunk_state(a, config, {});
-        index::schemas::dft::BloomCore::init_chunk_state(b, config, {});
-        index::schemas::dft::BloomCore::EventCache cache_a;
-        index::schemas::dft::BloomCore::EventCache cache_b;
-        index::schemas::dft::BloomCore::observe_data(
+        trace::index::schemas::dft::BloomCore::ChunkIndexerConfig config;
+        trace::index::schemas::dft::BloomCore::ChunkState a, b;
+        trace::index::schemas::dft::BloomCore::init_chunk_state(a, config, {});
+        trace::index::schemas::dft::BloomCore::init_chunk_state(b, config, {});
+        trace::index::schemas::dft::BloomCore::EventCache cache_a;
+        trace::index::schemas::dft::BloomCore::EventCache cache_b;
+        trace::index::schemas::dft::BloomCore::observe_data(
             a, cache_a, 0, 1, "read", "POSIX", 9, 1, 9, 9, true, "", "", "");
-        index::schemas::dft::BloomCore::observe_data(
+        trace::index::schemas::dft::BloomCore::observe_data(
             b, cache_b, 0, 1, "read", "POSIX", 10, 1, 10, 10, true, "", "", "");
-        index::schemas::dft::BloomCore::merge_chunk_state(a, b);
+        trace::index::schemas::dft::BloomCore::merge_chunk_state(a, b);
         const auto& ts =
-            a.fixed_dim_stats[index::schemas::dft::BloomCore::FdTs];
+            a.fixed_dim_stats[trace::index::schemas::dft::BloomCore::FdTs];
         CHECK(ts.min_value == "9");
         CHECK(ts.max_value == "10");
     }
 
     TEST_CASE("an extra dimension keeps min and max in its own type") {
-        index::schemas::dft::BloomCore::ChunkIndexerConfig config;
-        index::schemas::dft::BloomCore::ChunkState c;
-        index::schemas::dft::BloomCore::init_chunk_state(
+        trace::index::schemas::dft::BloomCore::ChunkIndexerConfig config;
+        trace::index::schemas::dft::BloomCore::ChunkState c;
+        trace::index::schemas::dft::BloomCore::init_chunk_state(
             c, config, {"size", "mode", "mix"});
-        index::schemas::dft::BloomCore::observe_extra(c, 0, std::int64_t{9});
-        index::schemas::dft::BloomCore::observe_extra(c, 0, std::int64_t{10});
-        index::schemas::dft::BloomCore::observe_extra(c, 0, 2.5);
-        index::schemas::dft::BloomCore::observe_extra(c, 1,
-                                                      dstd::StringView("rw"));
-        index::schemas::dft::BloomCore::observe_extra(c, 1,
-                                                      dstd::StringView("r"));
-        index::schemas::dft::BloomCore::observe_extra(c, 2, std::int64_t{1});
-        index::schemas::dft::BloomCore::observe_extra(c, 2,
-                                                      dstd::StringView("x"));
+        trace::index::schemas::dft::BloomCore::observe_extra(c, 0,
+                                                             std::int64_t{9});
+        trace::index::schemas::dft::BloomCore::observe_extra(c, 0,
+                                                             std::int64_t{10});
+        trace::index::schemas::dft::BloomCore::observe_extra(c, 0, 2.5);
+        trace::index::schemas::dft::BloomCore::observe_extra(
+            c, 1, dstd::StringView("rw"));
+        trace::index::schemas::dft::BloomCore::observe_extra(
+            c, 1, dstd::StringView("r"));
+        trace::index::schemas::dft::BloomCore::observe_extra(c, 2,
+                                                             std::int64_t{1});
+        trace::index::schemas::dft::BloomCore::observe_extra(
+            c, 2, dstd::StringView("x"));
 
         const auto& size = c.extra_dim_stats[0];
         CHECK(size.value_type == "double");
@@ -606,18 +613,21 @@ TEST_SUITE("BloomCore") {
     }
 
     TEST_CASE("merging an extra dimension joins its types") {
-        index::schemas::dft::BloomCore::ChunkIndexerConfig config;
-        index::schemas::dft::BloomCore::ChunkState a, b, c;
+        trace::index::schemas::dft::BloomCore::ChunkIndexerConfig config;
+        trace::index::schemas::dft::BloomCore::ChunkState a, b, c;
         for (auto* s : {&a, &b, &c})
-            index::schemas::dft::BloomCore::init_chunk_state(*s, config, {"n"});
-        index::schemas::dft::BloomCore::observe_extra(a, 0, std::int64_t{9});
-        index::schemas::dft::BloomCore::observe_extra(b, 0, std::int64_t{10});
-        index::schemas::dft::BloomCore::merge_chunk_state(a, b);
+            trace::index::schemas::dft::BloomCore::init_chunk_state(*s, config,
+                                                                    {"n"});
+        trace::index::schemas::dft::BloomCore::observe_extra(a, 0,
+                                                             std::int64_t{9});
+        trace::index::schemas::dft::BloomCore::observe_extra(b, 0,
+                                                             std::int64_t{10});
+        trace::index::schemas::dft::BloomCore::merge_chunk_state(a, b);
         CHECK(a.extra_dim_stats[0].min_value == "9");
         CHECK(a.extra_dim_stats[0].max_value == "10");
-        index::schemas::dft::BloomCore::observe_extra(c, 0,
-                                                      dstd::StringView("x"));
-        index::schemas::dft::BloomCore::merge_chunk_state(a, c);
+        trace::index::schemas::dft::BloomCore::observe_extra(
+            c, 0, dstd::StringView("x"));
+        trace::index::schemas::dft::BloomCore::merge_chunk_state(a, c);
         CHECK(a.extra_dim_stats[0].value_type == "mixed");
         CHECK(a.extra_dim_stats[0].min_value.empty());
     }
@@ -648,7 +658,7 @@ TEST_SUITE("BloomFold - auto fields") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         dstd::String gz = create_auto_trace(env);
-        dftracer::utils::index::build::ResolveAndBuildInput input;
+        dftracer::utils::trace::index::build::ResolveAndBuildInput input;
         input.files = {dstd::String(dstd::StringView(gz))};
         input.require_bloom = true;
         input.bloom_config.extra_dimensions.clear();
@@ -657,25 +667,27 @@ TEST_SUITE("BloomFold - auto fields") {
         dstd::String index_path;
         dftu_utils_test::run_coro([&](dftracer::utils::coro::Scope&)
                                       -> dftracer::utils::coro::CoroTask<void> {
-            auto res =
-                co_await dftracer::utils::index::build::resolve_and_build_index(
-                    input);
+            auto res = co_await dftracer::utils::trace::index::build::
+                resolve_and_build_index(input);
             if (res) index_path = res->index_path;
         });
         const auto snapshot = dftu_utils_test::index_snapshot(index_path);
         const auto file = dftu_utils_test::require_indexed_file(snapshot, gz);
-        auto dims = dftu_utils_test::index_take(dftracer::utils::index::paths(
-            snapshot, file, index::store::IndexExtension::Zonemap));
+        auto dims =
+            dftu_utils_test::index_take(dftracer::utils::trace::index::paths(
+                snapshot, file, trace::index::store::IndexExtension::Zonemap));
         for (auto d : {"size", "mode", "fname"})
             CHECK(std::find(dims.begin(), dims.end(), d) != dims.end());
 
         auto size =
-            dftu_utils_test::index_take(dftracer::utils::index::granules(
-                snapshot, file, index::store::IndexExtension::Zonemap, "size"));
+            dftu_utils_test::index_take(dftracer::utils::trace::index::granules(
+                snapshot, file, trace::index::store::IndexExtension::Zonemap,
+                "size"));
         REQUIRE(size.size() >= 2);
         for (const auto& [chunk, bytes] : size) {
-            auto zone = dftracer::utils::index::extensions::kinds::decode_zone(
-                dstd::StringView(bytes.data(), bytes.size()));
+            auto zone =
+                dftracer::utils::trace::index::extensions::kinds::decode_zone(
+                    dstd::StringView(bytes.data(), bytes.size()));
             REQUIRE(zone.has_value());
             CHECK(zone->value_type == "int");
             CHECK_FALSE(zone->min.empty());
@@ -700,10 +712,11 @@ TEST_CASE("numeric bounds keep the min and max text of the text path") {
         ChunkDimensionStats typed;
         text_path.value_type.clear();
         typed.value_type.clear();
-        index::schemas::dft::BloomCore::NumericBounds bounds;
+        trace::index::schemas::dft::BloomCore::NumericBounds bounds;
         for (double v : values) {
-            index::schemas::dft::BloomCore::observe_value(text_path, v);
-            index::schemas::dft::BloomCore::observe_value(typed, bounds, v);
+            trace::index::schemas::dft::BloomCore::observe_value(text_path, v);
+            trace::index::schemas::dft::BloomCore::observe_value(typed, bounds,
+                                                                 v);
         }
         CHECK(typed.min_value == text_path.min_value);
         CHECK(typed.max_value == text_path.max_value);
@@ -716,7 +729,7 @@ TEST_CASE("numeric bounds keep the min and max text of the text path") {
         ChunkDimensionStats typed;
         text_path.value_type.clear();
         typed.value_type.clear();
-        index::schemas::dft::BloomCore::NumericBounds bounds;
+        trace::index::schemas::dft::BloomCore::NumericBounds bounds;
         for (int i = 0; i < 300; ++i) {
             // Doubles that print to the same 6 decimals, integers, a
             // double between two integers, and the odd non-finite value.
@@ -724,26 +737,36 @@ TEST_CASE("numeric bounds keep the min and max text of the text path") {
             if (kind < 3) {
                 const double base = std::floor(real(rng) * 1e3) / 1e3;
                 const double v = base + static_cast<double>(rng() % 5) * 1e-7;
-                index::schemas::dft::BloomCore::observe_value(text_path, v);
-                index::schemas::dft::BloomCore::observe_value(typed, bounds, v);
+                trace::index::schemas::dft::BloomCore::observe_value(text_path,
+                                                                     v);
+                trace::index::schemas::dft::BloomCore::observe_value(typed,
+                                                                     bounds, v);
             } else if (kind < 5) {
                 const auto v = static_cast<std::int64_t>(rng() % 2001) - 1000;
-                index::schemas::dft::BloomCore::observe_value(text_path, v);
-                index::schemas::dft::BloomCore::observe_value(typed, bounds, v);
+                trace::index::schemas::dft::BloomCore::observe_value(text_path,
+                                                                     v);
+                trace::index::schemas::dft::BloomCore::observe_value(typed,
+                                                                     bounds, v);
             } else if (kind < 6) {
                 const auto v = static_cast<std::uint64_t>(rng() % 1000);
-                index::schemas::dft::BloomCore::observe_value(text_path, v);
-                index::schemas::dft::BloomCore::observe_value(typed, bounds, v);
+                trace::index::schemas::dft::BloomCore::observe_value(text_path,
+                                                                     v);
+                trace::index::schemas::dft::BloomCore::observe_value(typed,
+                                                                     bounds, v);
             } else if (kind < 7) {
                 const double v = static_cast<double>(rng() % 2001) - 1000.5;
-                index::schemas::dft::BloomCore::observe_value(text_path, v);
-                index::schemas::dft::BloomCore::observe_value(typed, bounds, v);
+                trace::index::schemas::dft::BloomCore::observe_value(text_path,
+                                                                     v);
+                trace::index::schemas::dft::BloomCore::observe_value(typed,
+                                                                     bounds, v);
             } else if (round % 10 == 0) {
                 const double v = rng() % 2
                                      ? std::numeric_limits<double>::infinity()
                                      : std::nan("");
-                index::schemas::dft::BloomCore::observe_value(text_path, v);
-                index::schemas::dft::BloomCore::observe_value(typed, bounds, v);
+                trace::index::schemas::dft::BloomCore::observe_value(text_path,
+                                                                     v);
+                trace::index::schemas::dft::BloomCore::observe_value(typed,
+                                                                     bounds, v);
             }
             REQUIRE(typed.value_type == text_path.value_type);
             REQUIRE(typed.present == text_path.present);

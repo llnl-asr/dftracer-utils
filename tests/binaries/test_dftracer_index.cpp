@@ -5,11 +5,11 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/index.h>
-#include <dftracer/utils/index/index_internal.h>
-#include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/plan/prune.h>
-#include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
+#include <dftracer/utils/trace/index/index.h>
+#include <dftracer/utils/trace/index/index_internal.h>
+#include <dftracer/utils/trace/index/indexer.h>
+#include <dftracer/utils/trace/index/plan/prune.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <doctest/doctest.h>
 #include <sys/wait.h>
@@ -247,11 +247,11 @@ TEST_SUITE("DFTracerIndex") {
         REQUIRE(env.is_valid());
         const auto f = create_pfw_gz(env, 100, 0);
         REQUIRE(!f.empty());
-        index::IndexerOptions o;
+        trace::index::IndexerOptions o;
         o.aggregation.time_interval_us = 5'000'000;
         dftu_utils_test::ok(
-            dftu_utils_test::ok(
-                index::Indexer::open({dstd::String(dstd::StringView(f))}, o))
+            dftu_utils_test::ok(trace::index::Indexer::open(
+                                    {dstd::String(dstd::StringView(f))}, o))
                 .build());
 
         const auto index_path = dstd::String(
@@ -266,14 +266,14 @@ TEST_SUITE("DFTracerIndex") {
               dstd::String::npos);
         CHECK(out.find("Files processed: 1\n") != dstd::String::npos);
 
-        index::release_root(index_path);
+        trace::index::release_root(index_path);
         const auto snapshot =
-            dftu_utils_test::ok(index::plan::open_snapshot(index_path));
+            dftu_utils_test::ok(trace::index::plan::open_snapshot(index_path));
         const auto config = dftu_utils_test::ok(
-            index::schemas::dft::agg::tier::read_config(snapshot));
+            trace::index::schemas::dft::agg::tier::read_config(snapshot));
         REQUIRE(config);
         CHECK(config->time_interval_us ==
-              index::schemas::dft::agg::standard_aggregation_config()
+              trace::index::schemas::dft::agg::standard_aggregation_config()
                   .time_interval_us);
     }
 

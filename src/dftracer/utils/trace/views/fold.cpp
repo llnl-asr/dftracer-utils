@@ -16,12 +16,12 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/numbers.h>
-#include <dftracer/utils/index/event_cost.h>
-#include <dftracer/utils/index/store/file.h>
 #include <dftracer/utils/json/canonical.h>
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/json/value.h>
 #include <dftracer/utils/json/value_access.h>
+#include <dftracer/utils/trace/index/event_cost.h>
+#include <dftracer/utils/trace/index/store/file.h>
 #include <dftracer/utils/trace/internal/parse_walks.h>
 #include <dftracer/utils/trace/views/event_source.h>
 #include <dftracer/utils/trace/views/fold.h>
@@ -90,14 +90,14 @@ std::uint32_t intern_string(Ids& ids, simdjson::dom::element val) {
 std::uint32_t intern_leaf_path(dftracer::utils::dstd::StringIntern& intern,
                                dstd::StringView path) {
 #if DFTRACER_UTILS_TEST_PROBES
-    dftracer::utils::index::event_cost::g_leaf_path_interns.fetch_add(
+    dftracer::utils::trace::index::event_cost::g_leaf_path_interns.fetch_add(
         1, std::memory_order_relaxed);
 #endif
     return intern.get_or_insert(path);
 }
 
 std::uint8_t leaf_type_tag(simdjson::dom::element v) {
-    using dftracer::utils::index::store::PathType;
+    using dftracer::utils::trace::index::store::PathType;
     using T = simdjson::dom::element_type;
     PathType t = PathType::NullValue;
     switch (v.type()) {
@@ -814,7 +814,7 @@ void append_leaf_arg(ArenaVec<FoldEvent::Arg>& into,
 
 // The PathType of `leaf`, as leaf_type_tag gives it for the DOM element.
 std::uint8_t leaf_tag(const Leaf& leaf) {
-    using dftracer::utils::index::store::PathType;
+    using dftracer::utils::trace::index::store::PathType;
     PathType t = PathType::NullValue;
     switch (leaf.kind) {
         case Leaf::Kind::String:
@@ -843,7 +843,7 @@ std::uint8_t leaf_tag(const Leaf& leaf) {
 }
 
 std::uint8_t container_tag(OnDemandType type) {
-    using dftracer::utils::index::store::PathType;
+    using dftracer::utils::trace::index::store::PathType;
     return static_cast<std::uint8_t>(
         type == OnDemandType::object ? PathType::Object : PathType::Array);
 }
@@ -852,7 +852,7 @@ std::uint8_t container_tag(OnDemandType type) {
 // element; false on a read error. A container is not read, a string is not
 // decoded.
 bool value_tag(OnDemandValue& v, OnDemandType type, std::uint8_t& tag) {
-    using dftracer::utils::index::store::PathType;
+    using dftracer::utils::trace::index::store::PathType;
     switch (type) {
         case OnDemandType::object:
         case OnDemandType::array:
@@ -1869,7 +1869,7 @@ class OnDemandReader {
     // `tag` is the PathType the DOM gives the number.
     bool read_number_arg(std::uint32_t key_id, OnDemandValue& v, Ids& ids,
                          std::uint8_t& tag) {
-        using dftracer::utils::index::store::PathType;
+        using dftracer::utils::trace::index::store::PathType;
         // A failed get_uint64 leaves the value unread for the general path.
         std::uint64_t plain;
         if (!v.get_uint64().get(plain)) {
@@ -1921,7 +1921,7 @@ class OnDemandReader {
     // of the leaf.
     bool read_scalar(std::uint32_t key_id, OnDemandValue& v, OnDemandType type,
                      Ids& ids, std::uint8_t& tag) {
-        using dftracer::utils::index::store::PathType;
+        using dftracer::utils::trace::index::store::PathType;
         switch (type) {
             case OnDemandType::string: {
                 dstd::StringView text;
@@ -2043,9 +2043,10 @@ struct LeafDecode {
     bool schema;
     const dstd::Vector<dstd::String>* paths;
     std::size_t left;
-    const dftracer::utils::index::RecordSchema* record_schema;
+    const dftracer::utils::trace::index::RecordSchema* record_schema;
     // With `paths`, the declared field at each path (null when undeclared).
-    const dstd::Vector<const dftracer::utils::index::FieldSpec*>* path_fields;
+    const dstd::Vector<const dftracer::utils::trace::index::FieldSpec*>*
+        path_fields;
     // Whether a json field can be decoded, so objects and arrays are checked.
     bool json;
     std::size_t max_children;
@@ -2058,7 +2059,7 @@ struct LeafDecode {
 
     // The declared field at `path`, found at `pos` in `paths` when set, or
     // remembered by the leaf's path id in `hints`.
-    const dftracer::utils::index::FieldSpec* field(
+    const dftracer::utils::trace::index::FieldSpec* field(
         const dstd::String& path, std::size_t pos,
         std::uint32_t id = dftracer::utils::dstd::StringIntern::NO_ID) const {
         if (path_fields) return (*path_fields)[pos];
@@ -2168,8 +2169,8 @@ void append_leaf_canonical(dstd::String& out, const Leaf& leaf) {
 // type and the value reads as null. Role fields also set the event's time and
 // duration in microseconds, its pid (entity), tid (lane) and name; a time may
 // also be ISO-8601 text.
-void bind_leaf(const dftracer::utils::index::FieldSpec& f, std::uint32_t id,
-               const Leaf& v, LeafDecode& d) {
+void bind_leaf(const dftracer::utils::trace::index::FieldSpec& f,
+               std::uint32_t id, const Leaf& v, LeafDecode& d) {
     using K = Leaf::Kind;
     Ids ids = d.ids();
     const bool numeric =
@@ -2180,9 +2181,10 @@ void bind_leaf(const dftracer::utils::index::FieldSpec& f, std::uint32_t id,
               : v.kind == K::Uint ? static_cast<double>(v.u)
                                   : v.d;
     dstd::Optional<duql::Number> text_num;
-    if (v.kind == K::String &&
-        (f.type == index::FieldType::Int || f.type == index::FieldType::Float ||
-         f.role == index::Role::Time || f.role == index::Role::Duration))
+    if (v.kind == K::String && (f.type == trace::index::FieldType::Int ||
+                                f.type == trace::index::FieldType::Float ||
+                                f.role == trace::index::Role::Time ||
+                                f.role == trace::index::Role::Duration))
         text_num = duql::parse_number(v.text);
     auto keep = [&] { append_leaf_arg(d.ev.args, d.ev.specials, id, v, ids); };
     // A null in the record is null in every type.
@@ -2195,23 +2197,23 @@ void bind_leaf(const dftracer::utils::index::FieldSpec& f, std::uint32_t id,
             d.ev.args.emplace_back(id, *i);
         else if (const auto* u = std::get_if<std::uint64_t>(&n))
             d.ev.args.emplace_back(id, *u);
-        else if (auto whole = index::whole_int64(std::get<double>(n)))
+        else if (auto whole = trace::index::whole_int64(std::get<double>(n)))
             d.ev.args.emplace_back(id, *whole);
         else
             return false;
         return true;
     };
     // An ISO-8601 time is its microseconds once decoded.
-    if (f.role == index::Role::Time && f.type == index::FieldType::String &&
-        v.kind == K::String) {
-        if (const auto us = index::iso8601_micros(v.text)) {
+    if (f.role == trace::index::Role::Time &&
+        f.type == trace::index::FieldType::String && v.kind == K::String) {
+        if (const auto us = trace::index::iso8601_micros(v.text)) {
             d.ev.args.emplace_back(id, *us);
             if (*us >= 0) d.ev.ts = static_cast<std::uint64_t>(*us);
         }
         return;
     }
     switch (f.type) {
-        case index::FieldType::String:
+        case trace::index::FieldType::String:
             if (v.kind == K::String || v.kind == K::Null) {
                 keep();
             } else {
@@ -2220,11 +2222,11 @@ void bind_leaf(const dftracer::utils::index::FieldSpec& f, std::uint32_t id,
                 d.ev.args.emplace_back(id, ids.get_or_insert(text));
             }
             break;
-        case index::FieldType::Bool:
+        case trace::index::FieldType::Bool:
             if (v.kind != K::Bool) return unconverted();
             keep();
             break;
-        case index::FieldType::Float:
+        case trace::index::FieldType::Float:
             if (numeric) {
                 d.ev.args.emplace_back(id, *num);
             } else if (text_num) {
@@ -2235,13 +2237,13 @@ void bind_leaf(const dftracer::utils::index::FieldSpec& f, std::uint32_t id,
                 return unconverted();
             }
             break;
-        case index::FieldType::Json: {
+        case trace::index::FieldType::Json: {
             dstd::String text;
             append_leaf_canonical(text, v);
             d.ev.args.emplace_back(id, ids.get_or_insert(text));
             return;
         }
-        case index::FieldType::Int:
+        case trace::index::FieldType::Int:
             if (v.kind == K::Int || v.kind == K::Uint) {
                 keep();
             } else if (const auto n = v.kind == K::Double
@@ -2260,22 +2262,24 @@ void bind_leaf(const dftracer::utils::index::FieldSpec& f, std::uint32_t id,
                          *text_num);
     dstd::Optional<double> micros;
     if (num)
-        micros = index::micros_per(f.unit.value_or(index::TimeUnit::Us)) * *num;
+        micros = trace::index::micros_per(
+                     f.unit.value_or(trace::index::TimeUnit::Us)) *
+                 *num;
     switch (f.role) {
-        case index::Role::None:
+        case trace::index::Role::None:
             break;
-        case index::Role::Time:
+        case trace::index::Role::Time:
             if (micros && *micros >= 0)
                 d.ev.ts = static_cast<std::uint64_t>(std::llround(*micros));
             break;
-        case index::Role::Duration:
+        case trace::index::Role::Duration:
             if (micros && *micros >= 0) {
                 d.ev.dur = static_cast<std::uint64_t>(std::llround(*micros));
                 d.ev.has_dur = true;
             }
             break;
-        case index::Role::Entity:
-        case index::Role::Lane: {
+        case trace::index::Role::Entity:
+        case trace::index::Role::Lane: {
             if (d.ev.args.empty() || d.ev.args.back().first != id) break;
             const auto& value = d.ev.args.back().second;
             std::uint64_t lane = 0;
@@ -2285,11 +2289,11 @@ void bind_leaf(const dftracer::utils::index::FieldSpec& f, std::uint32_t id,
                 lane = *u;
             else if (const auto* sid = std::get_if<std::uint32_t>(&value))
                 lane = static_cast<std::uint64_t>(
-                    index::entity_id(d.intern.resolve(*sid)));
-            (f.role == index::Role::Entity ? d.ev.pid : d.ev.tid) = lane;
+                    trace::index::entity_id(d.intern.resolve(*sid)));
+            (f.role == trace::index::Role::Entity ? d.ev.pid : d.ev.tid) = lane;
             break;
         }
-        case index::Role::Name:
+        case trace::index::Role::Name:
             if (!d.ev.args.empty() && d.ev.args.back().first == id)
                 if (const auto* sid =
                         std::get_if<std::uint32_t>(&d.ev.args.back().second))
@@ -2317,7 +2321,7 @@ void capture_json(const dstd::String& path, simdjson::dom::element v,
         pos = *at;
     }
     const auto* f = d.field(path, pos);
-    if (!f || f->type != dftracer::utils::index::FieldType::Json) return;
+    if (!f || f->type != dftracer::utils::trace::index::FieldType::Json) return;
     if (d.paths) --d.left;
     dstd::String text;
     dftracer::utils::json::append_canonical_json(text, v);
@@ -2437,16 +2441,18 @@ void decode_leaves(dstd::String& path, simdjson::dom::element v,
 LeafDecode make_leaf_decode(
     FoldEvent& ev, dftracer::utils::dstd::StringIntern& intern,
     bool capture_schema, const dstd::Vector<dstd::String>* paths,
-    const dftracer::utils::index::RecordSchema* record_schema,
-    const dstd::Vector<const dftracer::utils::index::FieldSpec*>* path_fields,
+    const dftracer::utils::trace::index::RecordSchema* record_schema,
+    const dstd::Vector<const dftracer::utils::trace::index::FieldSpec*>*
+        path_fields,
     std::size_t max_children, DecodeHints* hints, bool skip_never_indexed,
     dftracer::utils::dstd::InternCache* cache) {
     const auto* fields = paths ? path_fields : nullptr;
     bool json = record_schema && record_schema->has_json;
     if (json && fields)
         json = std::any_of(fields->begin(), fields->end(),
-                           [](const index::FieldSpec* f) {
-                               return f && f->type == index::FieldType::Json;
+                           [](const trace::index::FieldSpec* f) {
+                               return f &&
+                                      f->type == trace::index::FieldType::Json;
                            });
     return LeafDecode{intern,
                       ev,
@@ -2586,7 +2592,8 @@ class PathReader {
             pos = *at;
         }
         const auto* f = d_.field(path_, pos);
-        if (!f || f->type != dftracer::utils::index::FieldType::Json) return;
+        if (!f || f->type != dftracer::utils::trace::index::FieldType::Json)
+            return;
         if (d_.paths) --d_.left;
         const dstd::String text = canonical_text(start);
         const std::uint32_t id = ids_.get_or_insert(path_);
@@ -2599,7 +2606,7 @@ class PathReader {
     // An array or object past max_children, or below the depth limit: one
     // leaf of its canonical text, or of its text as written when `raw`.
     bool collapse(const char* start, bool is_array, bool raw = false) {
-        using dftracer::utils::index::store::PathType;
+        using dftracer::utils::trace::index::store::PathType;
         const std::uint32_t id = ids_.get_or_insert(path_);
         // A declared json field already holds its text.
         if (!d_.ev.args.empty() && d_.ev.args.back().first == id) return true;
@@ -2619,7 +2626,7 @@ class PathReader {
 
     // An empty array or object at a decoded path, for filters.
     void note_empty(bool is_array) {
-        using dftracer::utils::index::store::PathType;
+        using dftracer::utils::trace::index::store::PathType;
         if (path_.empty() || (d_.paths && !position(*d_.paths, path_))) return;
         const std::uint32_t id = ids_.get_or_insert(path_);
         if (d_.schema)
@@ -2679,8 +2686,9 @@ void decode_record_into(
     FoldEvent& ev, simdjson::dom::element root,
     dftracer::utils::dstd::StringIntern& intern, bool capture_schema,
     const dstd::Vector<dstd::String>* paths,
-    const dftracer::utils::index::RecordSchema* record_schema,
-    const dstd::Vector<const dftracer::utils::index::FieldSpec*>* path_fields,
+    const dftracer::utils::trace::index::RecordSchema* record_schema,
+    const dstd::Vector<const dftracer::utils::trace::index::FieldSpec*>*
+        path_fields,
     std::size_t max_children, DecodeHints* hints, bool skip_never_indexed) {
     reset_fold_event(ev);
     ev.phase = RecordPhase::Complete;
@@ -2700,8 +2708,9 @@ void decode_record_into(
     FoldEvent& ev, json::Value& record,
     dftracer::utils::dstd::StringIntern& intern, bool capture_schema,
     const dstd::Vector<dstd::String>* paths,
-    const dftracer::utils::index::RecordSchema* record_schema,
-    const dstd::Vector<const dftracer::utils::index::FieldSpec*>* path_fields,
+    const dftracer::utils::trace::index::RecordSchema* record_schema,
+    const dstd::Vector<const dftracer::utils::trace::index::FieldSpec*>*
+        path_fields,
     std::size_t max_children, DecodeHints* hints, bool skip_never_indexed,
     dftracer::utils::dstd::InternCache* cache) {
     reset_fold_event(ev);

@@ -13,10 +13,10 @@
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/cache/rollup_store.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/trace/comparator/compare_view.h>
+#include <dftracer/utils/trace/index/cache/rollup_store.h>
 #include <dftracer/utils/trace/views/aggfold.h>
+#include <dftracer/utils/trace/views/compare_view.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>

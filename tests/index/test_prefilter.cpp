@@ -5,8 +5,8 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
-#include <dftracer/utils/index/plan/prefilter.h>
-#include <dftracer/utils/index/plan/prefilter_kernel.h>
+#include <dftracer/utils/trace/index/plan/prefilter.h>
+#include <dftracer/utils/trace/index/plan/prefilter_kernel.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
 #include <task_result.h>
@@ -15,7 +15,7 @@
 #include <initializer_list>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::index;
+using namespace dftracer::utils::trace::index;
 
 using Clauses = dstd::Vector<dstd::Vector<dstd::String>>;
 

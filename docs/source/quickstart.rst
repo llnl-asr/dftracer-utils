@@ -381,14 +381,14 @@ C Quick Start
 -------------
 
 C programs build the index with the indexer C ABI
-(``dftracer/utils/index/abi.h``) and read events through the View C ABI
+(``dftracer/utils/trace/index/abi.h``) and read events through the View C ABI
 (``dftracer/utils/trace/views/abi.h``). Every returned handle is owned by the
 caller and freed with its ``_free`` call.
 
 .. code-block:: c
 
    #include <dftracer/utils/dataframe/abi.h>
-   #include <dftracer/utils/index/abi.h>
+   #include <dftracer/utils/trace/index/abi.h>
    #include <dftracer/utils/duql/abi.h>
    #include <dftracer/utils/trace/views/abi.h>
    #include <inttypes.h>

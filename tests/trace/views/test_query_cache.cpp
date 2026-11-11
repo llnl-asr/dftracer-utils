@@ -9,8 +9,8 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/cache/rollup_store.h>
 #include <dftracer/utils/store/store.h>
+#include <dftracer/utils/trace/index/cache/rollup_store.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <task_result.h>
 #include <testing_utilities.h>
@@ -35,28 +35,29 @@ dstd::String cache_of(const dstd::String& gz) {
 }
 
 dstd::String rollups_of(const dstd::String& gz) {
-    return dstd::String(dftracer::utils::index::rollups_dir(cache_of(gz)));
+    return dstd::String(
+        dftracer::utils::trace::index::rollups_dir(cache_of(gz)));
 }
 
 dstd::String views_of(const dstd::String& gz) {
-    return dstd::String(dftracer::utils::index::views_dir(cache_of(gz)));
+    return dstd::String(dftracer::utils::trace::index::views_dir(cache_of(gz)));
 }
 
 // Signatures in the rollup store, from its usage records.
 dstd::Vector<std::uint64_t> rollup_sigs(const dstd::String& gz) {
     dstd::Vector<std::uint64_t> out;
-    auto db = dftracer::utils::index::cache::open_rollup_db(
+    auto db = dftracer::utils::trace::index::cache::open_rollup_db(
         rollups_of(gz),
-        dftracer::utils::index::cache::CacheStore::Mode::ReadOnly);
+        dftracer::utils::trace::index::cache::CacheStore::Mode::ReadOnly);
     for (const auto& u : dftu_utils_test::ok(db->usage())) out.push_back(u.sig);
     return out;
 }
 
 std::uint64_t rollup_bytes(const dstd::String& gz) {
     std::uint64_t total = 0;
-    auto db = dftracer::utils::index::cache::open_rollup_db(
+    auto db = dftracer::utils::trace::index::cache::open_rollup_db(
         rollups_of(gz),
-        dftracer::utils::index::cache::CacheStore::Mode::ReadOnly);
+        dftracer::utils::trace::index::cache::CacheStore::Mode::ReadOnly);
     for (const auto& u : dftu_utils_test::ok(db->usage())) total += u.bytes;
     return total;
 }
@@ -98,8 +99,8 @@ TEST_SUITE("QueryCache") {
         TestEnvironment env(200);
         const auto gz = indexed_trace(env);
         dftu_utils_test::ok(by_cat(gz, "dur >= 0").materialize().get());
-        CHECK(
-            dftracer::utils::index::cache::CacheStore::exists(rollups_of(gz)));
+        CHECK(dftracer::utils::trace::index::cache::CacheStore::exists(
+            rollups_of(gz)));
         CHECK(rollup_sigs(gz).size() == 1);
         CHECK_FALSE(dstd::fs::exists(dstd::Path(cache_of(gz)).view().parent() /
                                      ".dftindex-cache")

@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
+#include <dftracer/utils/dataframe/query/vectorize.h>
 #include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -11,11 +12,10 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/fields.h>
 #include <dftracer/utils/duql/pipeline.h>
-#include <dftracer/utils/duql/vectorize.h>
-#include <dftracer/utils/index/plan/rowsets.h>
-#include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/index/source.h>
 #include <dftracer/utils/memory/budget.h>
+#include <dftracer/utils/trace/index/plan/rowsets.h>
+#include <dftracer/utils/trace/index/record_schema.h>
+#include <dftracer/utils/trace/index/source.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_duql_internal.h>
@@ -32,10 +32,11 @@ namespace dftracer::utils::trace::views {
 
 namespace duql_detail {
 
-Applier::Applier(View v, const index::RecordSchema& schema, const Ctx& ctx,
-                 Reads reads, dstd::SharedPtr<const detail::BuildStep> step,
-                 dstd::Vector<std::size_t> collected, bool main,
-                 dstd::Optional<dstd::Vector<duql::VectorColumn>> frame)
+Applier::Applier(
+    View v, const trace::index::RecordSchema& schema, const Ctx& ctx,
+    Reads reads, dstd::SharedPtr<const detail::BuildStep> step,
+    dstd::Vector<std::size_t> collected, bool main,
+    dstd::Optional<dstd::Vector<dataframe::query::VectorColumn>> frame)
     : collected_(std::move(collected)),
       main_(main),
       v_(std::move(v)),
@@ -105,7 +106,7 @@ bool Applier::is_array(const dstd::String& field) const {
 
 bool Applier::is_json(dstd::StringView name) const {
     for (const auto& spec : schema_.fields)
-        if (spec.type == index::FieldType::Json &&
+        if (spec.type == trace::index::FieldType::Json &&
             (name == spec.name || name == spec.path ||
              (schema_.args_fallback && name.starts_with("args.") &&
               name.substr(5) == spec.name)))
@@ -132,7 +133,7 @@ dstd::Result<Built> build(const Ctx& ctx, const duql::Pipeline& p, bool table,
     View v = ctx.input(p.input);
     if (auto kept = v.status(); !kept) return kept.error();
     if (ordered && p.input.kind != duql::InputKind::Side) v = ctx.order(v);
-    dstd::Optional<dstd::Vector<duql::VectorColumn>> side_cols;
+    dstd::Optional<dstd::Vector<dataframe::query::VectorColumn>> side_cols;
     if (p.input.kind == duql::InputKind::Side) {
         const std::size_t i = p.input.side;
         side_cols = ctx.sides->columns[i];
@@ -218,7 +219,7 @@ dstd::Result<Built> build(const Ctx& ctx, const duql::Pipeline& p, bool table,
     };
     Reads fields = referenced_fields(
         p.stages, adds,
-        ctx.schema(v).decoder == dftracer::utils::index::Decoder::Path);
+        ctx.schema(v).decoder == dftracer::utils::trace::index::Decoder::Path);
     if (!p.scan_select.empty()) {
         lines.push_back(dstd::fmt<"scan select: {}">(joined(p.scan_select)));
         dstd::Vector<dstd::String> select;
@@ -245,12 +246,12 @@ dstd::Result<Built> build(const Ctx& ctx, const duql::Pipeline& p, bool table,
         fields.fields.clear();
     }
     if (p.stages.empty() && !table) {
-        dstd::Vector<duql::VectorColumn> cols;
+        dstd::Vector<dataframe::query::VectorColumn> cols;
         for (const auto& f : v.output_schema().fields)
             cols.push_back({dstd::String(f.name), f.type});
         return Built{std::move(v), std::move(cols)};
     }
-    const index::RecordSchema& schema = ctx.schema(v);
+    const trace::index::RecordSchema& schema = ctx.schema(v);
     Applier a(std::move(v), schema, ctx, std::move(fields), step, reads, main,
               std::move(side_cols));
     if (auto kept = a.status(); !kept) return kept.error();
@@ -261,7 +262,7 @@ dstd::Result<Built> build(const Ctx& ctx, const duql::Pipeline& p, bool table,
     if (auto done = a.finish_columns(); !done) return done.error();
     if (auto kept = a.status(); !kept) return kept.error();
     for (auto& l : a.lines) lines.push_back(std::move(l));
-    dstd::Vector<duql::VectorColumn> cols = a.columns();
+    dstd::Vector<dataframe::query::VectorColumn> cols = a.columns();
     return Built{std::move(a).take(), std::move(cols)};
 }
 
@@ -283,9 +284,10 @@ dstd::Result<dstd::Pair<View, dstd::Vector<dstd::String>>> View::duql_plan(
     if (auto kept = lf_.status(); !kept) return kept.error();
     if (auto resolved = detail::resolve_record_schema(*plan_); !resolved)
         return resolved.error();
-    const index::RecordSchema& schema = detail::plan_record_schema(*plan_);
+    const trace::index::RecordSchema& schema =
+        detail::plan_record_schema(*plan_);
     Ctx ctx;
-    ctx.roles = index::duql_roles(schema);
+    ctx.roles = trace::index::duql_roles(schema);
     const duql::PluginCatalog plugins = registry_plugins();
     // The lookup keeps its own error and hands duql a plain one, which
     // replaces the compile error when the lookup is what failed.
@@ -363,7 +365,7 @@ dstd::Result<dstd::Pair<View, dstd::Vector<dstd::String>>> View::duql_plan(
         }
         return *this;
     };
-    ctx.schema = [](const View& v) -> const index::RecordSchema& {
+    ctx.schema = [](const View& v) -> const trace::index::RecordSchema& {
         return detail::plan_record_schema(*v.plan_);
     };
     Sides& sides = *ctx.sides;
@@ -411,8 +413,8 @@ dstd::Result<dstd::Pair<View, dstd::Vector<dstd::String>>> View::duql_plan(
                          : dstd::String(dstd::StringView(f.index_path))});
             const auto past = detail::is_past_pin(*plan_);
             if (!past.has_value()) return past.error();
-            sides.stored[i] =
-                !*past && index::plan::has_stored_rowsets(sides.files[i]);
+            sides.stored[i] = !*past && trace::index::plan::has_stored_rowsets(
+                                            sides.files[i]);
         }
         sides.views[i] = std::move(b.view);
         sides.columns[i] = std::move(b.cols);
@@ -421,7 +423,7 @@ dstd::Result<dstd::Pair<View, dstd::Vector<dstd::String>>> View::duql_plan(
         // its distinct rows for a key set, else the first TYPE_PROBE_ROWS, so
         // a joined side stays uncapped.
         if (std::any_of(sides.columns[i].begin(), sides.columns[i].end(),
-                        [](const duql::VectorColumn& c) {
+                        [](const dataframe::query::VectorColumn& c) {
                             return c.type.id == dataframe::TypeId::Unknown;
                         })) {
             const bool table =

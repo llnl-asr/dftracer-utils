@@ -8,11 +8,11 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 #include <dftracer/utils/trace/views/view_scanner_utility.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <doctest/doctest.h>
 #include <generator_ok.h>
 #include <task_result.h>
@@ -142,7 +142,7 @@ static dstd::String write_newline_split_trace(TestEnvironment& env,
     const dstd::String gz = env.dir() + "/split_line.pfw.gz";
     dftu_utils_test::FileOut out(gz);
     for (const auto* text : {&first, &second}) {
-        dftracer::utils::utilities::fileio::compress::GzipMemberCompressor comp;
+        dftracer::utils::fileio::compress::GzipMemberCompressor comp;
         auto member = comp.compress_member(text->data(), text->size());
         REQUIRE(member.has_value());
         out.write(reinterpret_cast<const char*>(member->data()),

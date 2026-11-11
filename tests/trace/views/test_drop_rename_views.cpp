@@ -5,8 +5,8 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/fileio/file_helpers.h>
+#include <dftracer/utils/trace/index/indexer.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
@@ -85,7 +85,7 @@ View query_indexed(const dstd::String& gz, const dstd::String& schema) {
 
 View full_index(const dstd::String& gz, const dstd::String& schema) {
     dftu_utils_test::ok(
-        dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+        dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
                                 {dstd::String(dstd::StringView(gz))}))
             .build());
     return View::from_file(
@@ -149,9 +149,9 @@ bool has_catalog(const dstd::String& gz) {
         const auto snapshot = dftu_utils_test::index_snapshot(
             dstd::String(determine_index_path(gz, "")));
         const auto file = dftu_utils_test::find_indexed_file(snapshot, gz);
-        return file &&
-               dftracer::utils::index::extension_current(
-                   snapshot, *file, index::store::IndexExtension::Catalog);
+        return file && dftracer::utils::trace::index::extension_current(
+                           snapshot, *file,
+                           trace::index::store::IndexExtension::Catalog);
     } catch (...) {
         return false;
     }

@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_metrics.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_metrics.h>
 #include <doctest/doctest.h>
 
 #include <cmath>
 
 using namespace dftracer::utils;
 
-using namespace dftracer::utils::index::schemas::dft::agg;
+using namespace dftracer::utils::trace::index::schemas::dft::agg;
 
 TEST_SUITE("MetricStats") {
     TEST_CASE("MetricStats - Single value") {

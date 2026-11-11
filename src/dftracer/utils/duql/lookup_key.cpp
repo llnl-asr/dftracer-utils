@@ -164,13 +164,14 @@ dstd::Optional<DuqlError> lookup_failure(const detail::QueryNode& node) {
 
 namespace {
 
-int kind_of(const Ordered& v) {
+int kind_of(const duql::Ordered& v) {
     return v.index() < 3 ? 0 : static_cast<int>(v.index()) - 2;
 }
 
-RangeIndex::Node combine(const RangeIndex& ix, RangeRead read,
-                         const RangeIndex::Node& a, const RangeIndex::Node& b) {
-    RangeIndex::Node out;
+duql::RangeIndex::Node combine(const duql::RangeIndex& ix, RangeRead read,
+                               const duql::RangeIndex::Node& a,
+                               const duql::RangeIndex::Node& b) {
+    duql::RangeIndex::Node out;
     out.isum = a.isum + b.isum;
     out.fsum = a.fsum + b.fsum;
     out.count = a.count + b.count;
@@ -178,8 +179,8 @@ RangeIndex::Node combine(const RangeIndex& ix, RangeRead read,
         out.best = a.best < 0 ? b.best : a.best;
     } else {
         const int c =
-            compare_ordered(*ix.args[static_cast<std::size_t>(a.best)],
-                            *ix.args[static_cast<std::size_t>(b.best)]);
+            duql::compare_ordered(*ix.args[static_cast<std::size_t>(a.best)],
+                                  *ix.args[static_cast<std::size_t>(b.best)]);
         out.best = (read == RangeRead::Min ? c <= 0 : c >= 0) ? a.best : b.best;
     }
     return out;
@@ -187,25 +188,27 @@ RangeIndex::Node combine(const RangeIndex& ix, RangeRead read,
 
 // The first position of [first, last) whose value is not before `v` (or,
 // with `after`, is after it) in the order of compare_ordered.
-std::int64_t position(const RangeIndex& ix, std::int64_t first,
-                      std::int64_t last, const Ordered& v, bool after) {
+std::int64_t position(const duql::RangeIndex& ix, std::int64_t first,
+                      std::int64_t last, const duql::Ordered& v, bool after) {
     const auto begin = ix.values.begin();
-    auto it = after ? std::upper_bound(begin + first, begin + last, v,
-                                       [](const Ordered& x, const Ordered& y) {
-                                           return compare_ordered(x, y) < 0;
-                                       })
-                    : std::lower_bound(begin + first, begin + last, v,
-                                       [](const Ordered& x, const Ordered& y) {
-                                           return compare_ordered(x, y) < 0;
-                                       });
+    auto it = after ? std::upper_bound(
+                          begin + first, begin + last, v,
+                          [](const duql::Ordered& x, const duql::Ordered& y) {
+                              return duql::compare_ordered(x, y) < 0;
+                          })
+                    : std::lower_bound(
+                          begin + first, begin + last, v,
+                          [](const duql::Ordered& x, const duql::Ordered& y) {
+                              return duql::compare_ordered(x, y) < 0;
+                          });
     return it - begin;
 }
 
 // The positions of [first, last) of the kind of `v`.
-dstd::Pair<std::int64_t, std::int64_t> kind_range(const RangeIndex& ix,
+dstd::Pair<std::int64_t, std::int64_t> kind_range(const duql::RangeIndex& ix,
                                                   std::int64_t first,
                                                   std::int64_t last,
-                                                  const Ordered& v) {
+                                                  const duql::Ordered& v) {
     const auto begin = ix.values.begin();
     const int k = kind_of(v);
     const auto r = std::equal_range(
@@ -224,7 +227,7 @@ void range_fail(const TLookup& l, const dstd::String& why) {
 
 }  // namespace
 
-int compare_ordered(const Ordered& a, const Ordered& b) {
+int compare_ordered(const duql::Ordered& a, const duql::Ordered& b) {
     const int ka = kind_of(a);
     const int kb = kind_of(b);
     if (ka != kb) return ka < kb ? -1 : 1;
@@ -247,12 +250,12 @@ int compare_ordered(const Ordered& a, const Ordered& b) {
 }
 
 void build_range_tree(RangeIndex& ix, RangeRead read,
-                      const dstd::Vector<RangeIndex::Node>& leaves) {
+                      const dstd::Vector<duql::RangeIndex::Node>& leaves) {
     ix.tree.assign(2 * leaves.size(), {});
     for (const auto& [key, span] : ix.keys) {
         const auto [b, e] = span;
         const std::int64_t m = e - b;
-        RangeIndex::Node* t = ix.tree.data() + 2 * b;
+        duql::RangeIndex::Node* t = ix.tree.data() + 2 * b;
         for (std::int64_t i = 0; i < m; ++i)
             t[m + i] = leaves[static_cast<std::size_t>(b + i)];
         for (std::int64_t i = m - 1; i > 0; --i)
@@ -260,18 +263,18 @@ void build_range_tree(RangeIndex& ix, RangeRead read,
     }
 }
 
-RangeAnswer range_answer(const TLookup& l, const LookupTable& table,
-                         dstd::StringView key,
-                         const dstd::Optional<Ordered>& low,
-                         const dstd::Optional<Ordered>& high) {
-    RangeAnswer out;
+duql::RangeAnswer range_answer(const TLookup& l, const LookupTable& table,
+                               dstd::StringView key,
+                               const dstd::Optional<duql::Ordered>& low,
+                               const dstd::Optional<duql::Ordered>& high) {
+    duql::RangeAnswer out;
     const RangeRead read = l.range;
     if (read == RangeRead::Count || read == RangeRead::CountValues ||
         read == RangeRead::CountIf)
         out.number = Number{std::int64_t{0}};
     if ((l.low && !low) || (l.high && !high)) return out;
     if (low && high && kind_of(*low) != kind_of(*high)) return out;
-    const RangeIndex& ix = *table.range;
+    const duql::RangeIndex& ix = *table.range;
     const auto it = ix.keys.find(key);
     if (it == ix.keys.end()) return out;
     const auto [first, last] = it->second;
@@ -296,8 +299,8 @@ RangeAnswer range_answer(const TLookup& l, const LookupTable& table,
         return out;
     }
     const std::int64_t m = last - first;
-    const RangeIndex::Node* t = ix.tree.data() + 2 * first;
-    RangeIndex::Node acc;
+    const duql::RangeIndex::Node* t = ix.tree.data() + 2 * first;
+    duql::RangeIndex::Node acc;
     for (std::int64_t a = lo - first + m, b = hi - first + m; a < b;
          a >>= 1, b >>= 1) {
         if (a & 1) acc = combine(ix, read, acc, t[a++]);

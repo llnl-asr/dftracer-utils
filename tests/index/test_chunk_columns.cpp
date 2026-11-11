@@ -9,16 +9,16 @@
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/index.h>
-#include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/plan/prune.h>
-#include <dftracer/utils/index/schemas/dft/agg/agg_partial.h>
-#include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
-#include <dftracer/utils/index/schemas/dft/agg/chunk_columns.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
-#include <dftracer/utils/index/store/layout.h>
-#include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/fileio/file_helpers.h>
+#include <dftracer/utils/trace/index/index.h>
+#include <dftracer/utils/trace/index/indexer.h>
+#include <dftracer/utils/trace/index/plan/prune.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/agg_partial.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/agg_store.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_config.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/chunk_columns.h>
+#include <dftracer/utils/trace/index/store/layout.h>
+#include <dftracer/utils/trace/index/tables.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/sharded_view.h>
 #include <doctest/doctest.h>
@@ -35,7 +35,7 @@
 #include <utility>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::index;
+using namespace dftracer::utils::trace::index;
 
 namespace {
 
@@ -485,12 +485,12 @@ struct Decoded {
     dstd::Vector<std::uint64_t> chunks;
 };
 
-Decoded read_and_check(const index::Snapshot& snapshot,
-                       const index::FileRef& file,
+Decoded read_and_check(const trace::index::Snapshot& snapshot,
+                       const trace::index::FileRef& file,
                        const dstd::Vector<Row>& rows) {
     Decoded out;
     std::size_t at = 0;
-    auto scanned = index::for_each_agg_chunk_columns(
+    auto scanned = trace::index::for_each_agg_chunk_columns(
         snapshot, file,
         [&](std::uint64_t chunk, const schemas::dft::agg::ChunkColumns& block) {
             ++out.blocks;
@@ -519,15 +519,15 @@ Decoded read_and_check(const index::Snapshot& snapshot,
     return out;
 }
 
-index::Snapshot open_index(const dstd::String& index_path) {
-    auto snapshot = index::plan::open_snapshot(index_path);
+trace::index::Snapshot open_index(const dstd::String& index_path) {
+    auto snapshot = trace::index::plan::open_snapshot(index_path);
     REQUIRE_MESSAGE(snapshot.has_value(), "the index opens");
     return std::move(*snapshot);
 }
 
-index::FileRef file_of(const index::Snapshot& snapshot,
-                       const dstd::String& path) {
-    auto file = snapshot.file(index::store::internal::get_logical_path(path));
+trace::index::FileRef file_of(const trace::index::Snapshot& snapshot,
+                              const dstd::String& path) {
+    auto file = snapshot.file(fileio::get_logical_path(path));
     REQUIRE_MESSAGE(file.has_value(), "the file is in the index");
     return std::move(*file);
 }
@@ -591,9 +591,9 @@ dstd::Vector<dstd::Pair<std::uint64_t, std::uint64_t>> first_values(
 }
 
 dstd::Map<std::uint64_t, dstd::Vector<ColumnShape>> columns_of(
-    const index::Snapshot& snapshot, const index::FileRef& file) {
+    const trace::index::Snapshot& snapshot, const trace::index::FileRef& file) {
     dstd::Map<std::uint64_t, dstd::Vector<ColumnShape>> out;
-    auto scanned = index::for_each_agg_chunk_columns(
+    auto scanned = trace::index::for_each_agg_chunk_columns(
         snapshot, file,
         [&](std::uint64_t chunk, const schemas::dft::agg::ChunkColumns& block) {
             dstd::Vector<ColumnShape> shapes;
@@ -878,7 +878,7 @@ TEST_SUITE("ChunkColumns") {
         const auto decoded = read_and_check(snapshot, file, rows);
         CHECK(decoded.blocks > 1);
         CHECK(decoded.rows == rows.size());
-        const auto stored_members = index::members(snapshot, file);
+        const auto stored_members = trace::index::members(snapshot, file);
         REQUIRE(stored_members.has_value());
         CHECK(stored_members->size() >= decoded.blocks);
     }
@@ -913,7 +913,7 @@ TEST_SUITE("ChunkColumns") {
         std::uint64_t first_chunk = 0;
         dstd::Vector<std::uint32_t> first_file;
         dstd::Vector<dstd::String> first_texts;
-        const auto scanned = index::for_each_agg_chunk_columns(
+        const auto scanned = trace::index::for_each_agg_chunk_columns(
             snapshot, file,
             [&](std::uint64_t chunk,
                 const schemas::dft::agg::ChunkColumns& block) {
@@ -943,13 +943,13 @@ TEST_SUITE("ChunkColumns") {
         CHECK(texts.count("0123456789abcdef") == 1);
         CHECK(texts.count("") == 1);
 
-        auto one = index::agg_chunk_columns(snapshot, file, first_chunk);
+        auto one = trace::index::agg_chunk_columns(snapshot, file, first_chunk);
         REQUIRE(one.has_value());
         REQUIRE((*one).has_value());
         CHECK((*one)->chunk == first_chunk);
         CHECK((*one)->file == first_file);
         CHECK((*one)->texts == first_texts);
-        auto absent = index::agg_chunk_columns(snapshot, file, 1000);
+        auto absent = trace::index::agg_chunk_columns(snapshot, file, 1000);
         REQUIRE(absent.has_value());
         CHECK_FALSE((*absent).has_value());
     }
@@ -1018,7 +1018,7 @@ TEST_SUITE("ChunkColumns") {
         const auto file = file_of(snapshot, gz);
         std::size_t at = 0;
         std::size_t blocks = 0;
-        const auto scanned = index::for_each_agg_chunk_columns(
+        const auto scanned = trace::index::for_each_agg_chunk_columns(
             snapshot, file,
             [&](std::uint64_t chunk,
                 const schemas::dft::agg::ChunkColumns& block) {
@@ -1058,20 +1058,22 @@ TEST_SUITE("ChunkColumns") {
             REQUIRE_FALSE(record.key.empty());
             const dstd::StringView value = record.value;
             const auto kind = static_cast<std::uint8_t>(record.key[0]);
-            if (kind == index::store::layout::agg_kind::COLUMNS) {
+            if (kind == trace::index::store::layout::agg_kind::COLUMNS) {
                 const auto decoded =
                     schemas::dft::agg::decode_chunk_columns(span_of(value));
                 REQUIRE_MESSAGE(decoded.has_value(), record.key);
                 ++blocks;
-            } else if (kind == index::store::layout::agg_kind::PARTIAL ||
-                       kind == index::store::layout::agg_kind::FILE_PARTIAL) {
+            } else if (kind == trace::index::store::layout::agg_kind::PARTIAL ||
+                       kind == trace::index::store::layout::agg_kind::
+                                   FILE_PARTIAL) {
                 REQUIRE(
                     schemas::dft::agg::AggPartial::deserialize(span_of(value))
                         .has_value());
                 ++partials;
             } else {
-                CHECK_MESSAGE(kind == index::store::layout::agg_kind::DICT,
-                              record.key);
+                CHECK_MESSAGE(
+                    kind == trace::index::store::layout::agg_kind::DICT,
+                    record.key);
             }
         }
         CHECK(blocks > 0);

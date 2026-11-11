@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/domains/workload/dlio/trace_loader.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
+#include <dftracer/utils/trace/index/indexer.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/trace/internal/utils.h>
-#include <dftracer/utils/utilities/dlio/trace_loader.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
 #include <testing_utilities.h>
@@ -17,7 +17,6 @@
 #include <cstdint>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities;
 
 namespace {
 
@@ -80,26 +79,27 @@ TEST_SUITE("dlio trace loader") {
         for (int i = 0; i < FILES; ++i)
             files.emplace_back(write_rank(env.dir(), i, dur_sum));
 
-        index::schemas::dft::agg::AggregationConfig config;
+        trace::index::schemas::dft::agg::AggregationConfig config;
         config.time_interval_us = 5'000'000;
         config.compute_statistics = true;
         config.compute_percentiles = true;
 
-        index::IndexerOptions o;
+        trace::index::IndexerOptions o;
         o.index_dir = env.dir() + "/idx";
         o.checkpoint_size = CHECKPOINT_SIZE;
         o.parallelism = 2;
         o.aggregation = config;
         dstd::Vector<dstd::String> paths;
         for (const auto& f : files) paths.emplace_back(f);
-        auto ix = dftu_utils_test::ok(index::Indexer::open(
+        auto ix = dftu_utils_test::ok(trace::index::Indexer::open(
             dstd::Vector<dstd::String>(paths.begin(), paths.end()), o));
         dftu_utils_test::ok(ix.build());
         const dstd::String index_path = dstd::String(
             trace::internal::determine_index_path(paths[0], o.index_dir));
 
-        const dlio::AggregatedTraces a = dftu_utils_test::ok(
-            dlio::load_aggregated_traces(index_path, files, config));
+        const domains::workload::dlio::AggregatedTraces a =
+            dftu_utils_test::ok(domains::workload::dlio::load_aggregated_traces(
+                index_path, files, config));
         REQUIRE(a.any_data);
         CHECK(a.chunks_reread == 0);
         CHECK(a.quantiles_available);
@@ -109,8 +109,9 @@ TEST_SUITE("dlio trace loader") {
         CHECK(a.trace_fetch_block_metrics.accumulated_time ==
               doctest::Approx(static_cast<double>(dur_sum) * 1e-6));
 
-        const dlio::AggregatedTraces b = dftu_utils_test::ok(
-            dlio::load_aggregated_traces(index_path, files, config));
+        const domains::workload::dlio::AggregatedTraces b =
+            dftu_utils_test::ok(domains::workload::dlio::load_aggregated_traces(
+                index_path, files, config));
         CHECK(a.computation_times == b.computation_times);
         CHECK(a.preprocess_times == b.preprocess_times);
     }

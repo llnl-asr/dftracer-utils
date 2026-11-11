@@ -3,10 +3,10 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/gzip/gzip_member_record.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
+#include <dftracer/utils/trace/index/gzip/gzip_member_record.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/trace/views/view_scan.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
 #include <testing_utilities.h>
@@ -65,7 +65,7 @@ Trace make_trace() {
 }
 
 void append_member(dstd::Vector<std::uint8_t>& out, const dstd::String& text) {
-    utilities::fileio::compress::GzipMemberCompressor c;
+    fileio::compress::GzipMemberCompressor c;
     dstd::Vector<std::uint8_t> buf(c.bound(text.size()));
     auto n = c.compress(text.data(), text.size(), buf.data(), buf.size());
     REQUIRE(n.has_value());
@@ -113,7 +113,7 @@ Indexed make_indexed(TestEnvironment& env, const Trace& t,
     return r;
 }
 
-dstd::Vector<dftracer::utils::index::gzip::GzipMemberRecord> members(
+dstd::Vector<dftracer::utils::trace::index::gzip::GzipMemberRecord> members(
     const Indexed& x) {
     return dftu_utils_test::indexed_members(x.idx, x.gz);
 }
@@ -147,13 +147,14 @@ TEST_SUITE("RestartScan") {
         const Fixture& fx = fixture();
         const auto pieces = members(fx.one);
         REQUIRE(pieces.size() > 3);
-        CHECK(pieces[0].kind == index::gzip::GzipRecordKind::Head);
+        CHECK(pieces[0].kind == trace::index::gzip::GzipRecordKind::Head);
         for (std::size_t i = 1; i < pieces.size(); ++i)
-            CHECK(pieces[i].kind == index::gzip::GzipRecordKind::Restart);
+            CHECK(pieces[i].kind ==
+                  trace::index::gzip::GzipRecordKind::Restart);
         const auto multi = members(fx.many);
         REQUIRE(multi.size() > 3);
         for (const auto& m : multi)
-            CHECK(m.kind == index::gzip::GzipRecordKind::Member);
+            CHECK(m.kind == trace::index::gzip::GzipRecordKind::Member);
 
         const auto a = dftu_utils_test::ok(
             View::from_files({fx.one.file()}).collect().get());

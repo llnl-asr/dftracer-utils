@@ -10,12 +10,12 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/fileio/file_helpers.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/indexer.h>
 #include <dftracer/utils/trace/internal/utils.h>
+#include <dftracer/utils/trace/reader/trace_reader.h>
 #include <dftracer/utils/trace/views/view.h>
-#include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
 #include <generator_ok.h>
 #include <index_test_helpers.h>
@@ -32,7 +32,7 @@
 #include <iterator>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::index;
+using namespace dftracer::utils::trace::index;
 
 namespace {
 
@@ -347,7 +347,7 @@ TEST_SUITE("Indexer") {
     TEST_CASE("the indexing guide example runs") {
         dftu_utils_test::TestEnvironment env(10);
         const auto trace = env.create_dft_test_gzip_file(20);
-        using namespace dftracer::utils::index;
+        using namespace dftracer::utils::trace::index;
 
         IndexerOptions options;
         options.bloom->fields = {"io.off"};
@@ -432,12 +432,12 @@ Indexed indexed(const dstd::String& trace) {
     const auto file = dftu_utils_test::require_indexed_file(snapshot, trace);
     Indexed r;
     const auto meta = dftu_utils_test::index_take(
-        dftracer::utils::index::file_metadata(snapshot, file));
+        dftracer::utils::trace::index::file_metadata(snapshot, file));
     REQUIRE(meta.has_value());
     r.lines = meta->line_count;
     r.truncated = meta->truncated;
     auto members = dftu_utils_test::index_take(
-        dftracer::utils::index::members(snapshot, file));
+        dftracer::utils::trace::index::members(snapshot, file));
     r.members = members.size();
     if (!members.empty())
         r.members_end = members.back().c_offset + members.back().c_size;
@@ -613,7 +613,7 @@ TEST_SUITE("Truncated") {
 
         const auto count_lines = [](const dstd::String& path)
             -> dftracer::utils::coro::CoroTask<std::size_t> {
-            dftracer::utils::utilities::reader::TraceReader reader(
+            dftracer::utils::trace::reader::TraceReader reader(
                 {.file_path = dstd::String(path)});
             auto gen = dftu_utils_test::ok_items(reader.read_lines());
             std::size_t n = 0;

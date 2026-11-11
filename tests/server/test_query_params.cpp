@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/server/router.h>
+#include <dftracer/utils/domains/server/router.h>
 #include <doctest/doctest.h>
 
 #include <string>
 
-using namespace dftracer::utils::server;
+using namespace dftracer::utils::domains::server;
 
 // ============================================================================
 // Parsing

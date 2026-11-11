@@ -1,0 +1,241 @@
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/domains/analysis/comparator/comparison_utility.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+
+#include <algorithm>
+#include <cmath>
+
+namespace dftracer::utils::domains::analysis::comparator {
+
+namespace {
+
+using KeySet = dstd::HashSet<GroupKey, GroupKeyHash>;
+
+// Sorts `v` first, so the mean does not depend on the order the values came
+// in.
+double vec_mean(dstd::Vector<double>& v) {
+    if (v.empty()) return 0.0;
+    std::sort(v.begin(), v.end());
+    double sum = 0.0;
+    for (double x : v) sum += x;
+    return sum / static_cast<double>(v.size());
+}
+
+// Empty cat_filter merges every entry; otherwise only entries with that cat.
+CollapsedMetrics merge_collapsed(const CollapsedMap& cm,
+                                 const dstd::StringIntern& intern,
+                                 dstd::StringView cat_filter = "") {
+    CollapsedMetrics total;
+    dstd::Vector<double> counts, dur_means, size_means, xfers, bws;
+    // Merged in the order of the group texts: a hash map's order depends on
+    // the ids, and the order of the merges moves the floating point sums.
+    dstd::Vector<const CollapsedMap::value_type*> entries;
+    entries.reserve(cm.size());
+    for (const auto& e : cm) {
+        if (!cat_filter.empty() && e.first.cat(intern) != cat_filter) continue;
+        entries.push_back(&e);
+    }
+    std::sort(
+        entries.begin(), entries.end(), [&](const auto* a, const auto* b) {
+            const auto ca = a->first.cat(intern), cb = b->first.cat(intern);
+            if (ca != cb) return ca < cb;
+            return a->first.name(intern) < b->first.name(intern);
+        });
+    for (const auto* e : entries) {
+        const CollapsedMetrics& entry = e->second;
+        total.merged.merge(entry.merged);
+        counts.push_back(entry.count_mean);
+        dur_means.push_back(entry.dur_mean_of_means);
+        size_means.push_back(entry.size_mean_of_means);
+        // Only ops that actually transfer contribute to xfer/bw means.
+        if (entry.xfer_mean > 0.0) xfers.push_back(entry.xfer_mean);
+        if (entry.bw_mean > 0.0) bws.push_back(entry.bw_mean);
+    }
+    total.window_count = dur_means.size();
+    total.count_mean = vec_mean(counts);
+    total.dur_mean_of_means = vec_mean(dur_means);
+    total.size_mean_of_means = vec_mean(size_means);
+    total.xfer_mean = vec_mean(xfers);
+    total.bw_mean = vec_mean(bws);
+    return total;
+}
+
+CollapsedMetrics merge_all(const CollapsedMap& cm,
+                           const dstd::StringIntern& intern) {
+    return merge_collapsed(cm, intern);
+}
+
+CollapsedMetrics merge_by_cat(const CollapsedMap& cm,
+                              const dstd::StringIntern& intern,
+                              dstd::StringView cat) {
+    return merge_collapsed(cm, intern, cat);
+}
+
+double worst_regression(const dstd::Vector<MetricComparison>& metrics) {
+    double worst = 0.0;
+    for (const auto& mc : metrics) {
+        if (mc.is_regression) {
+            double abs_pct = std::abs(mc.pct_change);
+            if (abs_pct > worst) worst = abs_pct;
+        }
+    }
+    return worst;
+}
+
+GroupComparison make_group(dstd::StringView label,
+                           const CollapsedMetrics& base_cm,
+                           const CollapsedMetrics& var_cm, bool base_present,
+                           bool var_present,
+                           const dstd::Vector<dstd::String>& metrics,
+                           const dstd::Vector<double>& percentiles) {
+    GroupComparison gc;
+    gc.label = label;
+    gc.baseline_present = base_present;
+    gc.variant_present = var_present;
+    gc.metrics = compare_metrics(base_cm, var_cm, metrics, percentiles);
+    gc.worst_pct_change = worst_regression(gc.metrics);
+    return gc;
+}
+
+}  // namespace
+
+// One GroupComparison per (cat, name), grouped by cat.
+static dstd::Map<dstd::StringView, dstd::Vector<GroupComparison>>
+build_per_cat_groups(const CollapsedMap& base_collapsed,
+                     const CollapsedMap& var_collapsed,
+                     const dstd::StringIntern& intern,
+                     const dstd::Vector<dstd::String>& metrics,
+                     const dstd::Vector<double>& percentiles) {
+    static const CollapsedMetrics EMPTY{};
+
+    KeySet all_keys;
+    all_keys.reserve(base_collapsed.size() + var_collapsed.size());
+    for (const auto& [k, _] : base_collapsed) all_keys.insert(k);
+    for (const auto& [k, _] : var_collapsed) all_keys.insert(k);
+
+    dstd::Map<dstd::StringView, dstd::Vector<GroupComparison>> by_cat;
+
+    for (const auto& key : all_keys) {
+        auto base_it = base_collapsed.find(key);
+        auto var_it = var_collapsed.find(key);
+
+        const CollapsedMetrics& base_cm =
+            (base_it != base_collapsed.end()) ? base_it->second : EMPTY;
+        const CollapsedMetrics& var_cm =
+            (var_it != var_collapsed.end()) ? var_it->second : EMPTY;
+
+        GroupComparison gc = make_group(
+            key.name(intern), base_cm, var_cm, base_it != base_collapsed.end(),
+            var_it != var_collapsed.end(), metrics, percentiles);
+
+        by_cat[key.cat(intern)].push_back(std::move(gc));
+    }
+
+    return by_cat;
+}
+
+void ComparisonUtility::sort_by_regression(
+    dstd::Vector<GroupComparison>& groups) const {
+    std::sort(groups.begin(), groups.end(),
+              [](const GroupComparison& a, const GroupComparison& b) {
+                  if (a.worst_pct_change != b.worst_pct_change)
+                      return a.worst_pct_change > b.worst_pct_change;
+                  return a.label < b.label;
+              });
+}
+
+void ComparisonUtility::apply_threshold(dstd::Vector<GroupComparison>& groups,
+                                        double threshold_pct) const {
+    if (threshold_pct <= 0.0) return;
+
+    auto it =
+        std::remove_if(groups.begin(), groups.end(),
+                       [threshold_pct](const GroupComparison& g) {
+                           for (const auto& mc : g.metrics) {
+                               if (std::abs(mc.pct_change) >= threshold_pct)
+                                   return false;
+                           }
+                           return true;
+                       });
+    groups.erase(it, groups.end());
+}
+
+NodeResult ComparisonUtility::build_result_tree(
+    const ComparisonNode& node,
+    const dstd::Vector<ComparisonVisitorPair>& visitors,
+    const dstd::StringIntern& intern, std::size_t& visitor_index) const {
+    const ComparisonVisitorPair& pair = visitors[visitor_index++];
+    const CollapsedMap& base_collapsed = *pair.baseline;
+    const CollapsedMap& var_collapsed = *pair.variant;
+
+    const auto& metrics = pair.node.resolved_metrics;
+    const auto& percentiles = pair.node.resolved_percentiles;
+
+    CollapsedMetrics base_total = merge_all(base_collapsed, intern);
+    CollapsedMetrics var_total = merge_all(var_collapsed, intern);
+
+    NodeResult result;
+    result.name = node.name;
+    result.composed_query = node.composed_query;
+    result.group_by = node.group_by;
+    result.groups = {};  // Detail lives in children.
+
+    result.summary.label = "";
+    result.summary.baseline_present = !base_collapsed.empty();
+    result.summary.variant_present = !var_collapsed.empty();
+    result.summary.metrics =
+        compare_metrics(base_total, var_total, metrics, percentiles);
+    result.summary.worst_pct_change = worst_regression(result.summary.metrics);
+
+    auto by_cat = build_per_cat_groups(base_collapsed, var_collapsed, intern,
+                                       metrics, percentiles);
+
+    for (auto& [cat, cat_groups] : by_cat) {
+        NodeResult child;
+        child.name = cat;
+        child.composed_query = node.composed_query;
+        child.group_by = node.group_by;
+
+        CollapsedMetrics base_cat = merge_by_cat(base_collapsed, intern, cat);
+        CollapsedMetrics var_cat = merge_by_cat(var_collapsed, intern, cat);
+
+        child.summary.label = "";
+        child.summary.baseline_present =
+            base_cat.merged.count > 0 || base_cat.window_count > 0;
+        child.summary.variant_present =
+            var_cat.merged.count > 0 || var_cat.window_count > 0;
+        child.summary.metrics =
+            compare_metrics(base_cat, var_cat, metrics, percentiles);
+        child.summary.worst_pct_change =
+            worst_regression(child.summary.metrics);
+
+        sort_by_regression(cat_groups);
+        apply_threshold(cat_groups, node.resolved_threshold_pct);
+        child.groups = std::move(cat_groups);
+
+        result.children.push_back(std::move(child));
+    }
+
+    for (const auto& cfg_child : node.children) {
+        result.children.push_back(
+            build_result_tree(cfg_child, visitors, intern, visitor_index));
+    }
+
+    return result;
+}
+
+coro::CoroTask<dstd::Result<ComparisonUtilityOutput>>
+ComparisonUtility::operator()(const ComparisonUtilityInput& input) {
+    DFTRACER_UTILS_TRACE_SCOPE("compare");
+    ComparisonUtilityOutput output;
+    std::size_t visitor_index = 0;
+    output.result = build_result_tree(input.root_node, input.visitors,
+                                      *input.strings, visitor_index);
+    co_return output;
+}
+
+}  // namespace dftracer::utils::domains::analysis::comparator

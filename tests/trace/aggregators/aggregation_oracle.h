@@ -7,9 +7,9 @@
 // partials must merge to what it gives.
 
 #include <dftracer/utils/dataframe/distinct_sketch.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_core.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_metrics.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_config.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_core.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_metrics.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -18,7 +18,7 @@
 #include <string>
 #include <string_view>
 
-namespace dftracer::utils::index::schemas::dft::agg {
+namespace dftracer::utils::trace::index::schemas::dft::agg {
 
 struct AggregationMetrics {
     std::uint64_t count = 0;
@@ -101,6 +101,6 @@ void oracle_event(const Acc& acc, AggregationMetrics& entry,
     accumulate_event_metrics(acc, cfg, sink);
 }
 
-}  // namespace dftracer::utils::index::schemas::dft::agg
+}  // namespace dftracer::utils::trace::index::schemas::dft::agg
 
 #endif  // DFTRACER_UTILS_TESTS_AGGREGATION_ORACLE_H

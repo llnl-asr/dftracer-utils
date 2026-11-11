@@ -131,7 +131,8 @@ class EngineAggFold : public Fold {
     RecordPhase phase_target_;
     bool keep_metadata_;
     bool apply_query_ = false;
-    const dftracer::utils::index::plan::GroupResolver* resolver_ = nullptr;
+    const dftracer::utils::trace::index::plan::GroupResolver* resolver_ =
+        nullptr;
     dftracer::utils::dataframe::AggStatePtr state_;
     duql::ValueMap qmap_;
 };

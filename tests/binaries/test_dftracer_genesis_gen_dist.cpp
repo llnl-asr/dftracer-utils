@@ -5,7 +5,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/trace/index/indexer.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
@@ -241,10 +241,10 @@ TEST_CASE("records carry the run id and resolve run keys through the index") {
     }
     REQUIRE(records > 0);
 
-    index::IndexerOptions o;
+    trace::index::IndexerOptions o;
     o.index_dir = d.str();
     auto indexer = dftu_utils_test::ok(
-        index::Indexer::open({dstd::String(dstd::StringView(out))}, o));
+        trace::index::Indexer::open({dstd::String(dstd::StringView(out))}, o));
     dftu_utils_test::ok(indexer.build());
     REQUIRE(dftu_utils_test::ok(indexer.files()).size() == 1);
     CHECK(dftu_utils_test::ok(indexer.files())[0].schema == "genesis");
@@ -312,10 +312,10 @@ TEST_CASE("a dftracer trace is still detected as dftracer") {
         trace, R"({"id":1,"name":"read","cat":"POSIX","pid":1,"tid":1,)"
                R"("ts":1,"dur":5,"ph":"X"})"
                "\n");
-    index::IndexerOptions o;
+    trace::index::IndexerOptions o;
     o.index_dir = d.str();
-    auto indexer = dftu_utils_test::ok(
-        index::Indexer::open({dstd::String(dstd::StringView(trace))}, o));
+    auto indexer = dftu_utils_test::ok(trace::index::Indexer::open(
+        {dstd::String(dstd::StringView(trace))}, o));
     dftu_utils_test::ok(indexer.build());
     REQUIRE(dftu_utils_test::ok(indexer.files()).size() == 1);
     CHECK(dftu_utils_test::ok(indexer.files())[0].schema == "dftracer");

@@ -7,11 +7,11 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/gzip/gzip_indexer.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/memory/detail/heap.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
-#include <dftracer/utils/utilities/reader/internal/gzip_reader.h>
-#include <dftracer/utils/utilities/reader/internal/stream_config.h>
+#include <dftracer/utils/trace/index/gzip/gzip_indexer.h>
+#include <dftracer/utils/trace/reader/internal/gzip_reader.h>
+#include <dftracer/utils/trace/reader/internal/stream_config.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
 #include <testing_runtime.h>
@@ -22,7 +22,6 @@
 #include <cstring>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities;
 
 namespace {
 
@@ -70,7 +69,7 @@ TEST_SUITE("sigill_regression") {
         REQUIRE(f != nullptr);
         REQUIRE(std::fwrite(comp.data(), 1, comp.size(), f) == comp.size());
         std::fclose(f);
-        auto indexer = dstd::make_shared<index::gzip::GzipIndexer>(
+        auto indexer = dstd::make_shared<trace::index::gzip::GzipIndexer>(
             dstd::String(dstd::StringView(gz_path)),
             dstd::String(dstd::StringView(dir.file("idx"))), 1u << 20, true);
         dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
@@ -82,11 +81,12 @@ TEST_SUITE("sigill_regression") {
 
         dirty_frame_pool();
 
-        reader::internal::GzipReader reader(indexer);
+        trace::reader::internal::GzipReader reader(indexer);
         auto stream = dftu_utils_test::ok(reader.stream(
-            reader::internal::StreamConfig()
-                .stream_type(reader::internal::StreamType::MultiLinesBytes)
-                .range_type(reader::internal::RangeType::ByteRange)
+            trace::reader::internal::StreamConfig()
+                .stream_type(
+                    trace::reader::internal::StreamType::MultiLinesBytes)
+                .range_type(trace::reader::internal::RangeType::ByteRange)
                 .from(start)
                 .to(reader.max_bytes())));
         dstd::String out;

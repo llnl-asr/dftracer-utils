@@ -8,10 +8,10 @@
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/to_chars.h>
-#include <dftracer/utils/index/cache/lookup_store.h>
-#include <dftracer/utils/index/plan/rowsets.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/cache/lookup_store.h>
+#include <dftracer/utils/trace/index/plan/rowsets.h>
 #include <dftracer/utils/trace/views/view_duql_internal.h>
 
 #include <algorithm>
@@ -67,14 +67,14 @@ struct LookupCaps {
 // The rows the lookup cache holds under `key`; a cache that cannot be read
 // holds none.
 dstd::Optional<dataframe::DataFrame> cached_rows(const CacheKey& key) {
-    const auto db = index::cache::open_lookup_db(
-        key.path, index::cache::CacheStore::Mode::ReadOnly);
+    const auto db = trace::index::cache::open_lookup_db(
+        key.path, trace::index::cache::CacheStore::Mode::ReadOnly);
     if (!db) return dstd::nullopt;
-    auto bytes = index::cache::read_lookup(*db, key.sig);
+    auto bytes = trace::index::cache::read_lookup(*db, key.sig);
     if (!bytes || !*bytes) return dstd::nullopt;
     auto cached = dataframe::frame_from_native(**bytes);
     if (!cached) return dstd::nullopt;
-    return duql::flat_frame(std::move(*cached));
+    return dataframe::query::flat_frame(std::move(*cached));
 }
 
 dstd::Result<dstd::String> native_bytes(
@@ -91,12 +91,12 @@ dstd::Result<dstd::String> native_bytes(
 void persist(const CacheKey& key,
              const dstd::Vector<dataframe::DataFrame>& parts) {
     if (parts.empty()) return;
-    const auto db = index::cache::open_lookup_db(
-        key.path, index::cache::CacheStore::Mode::ReadWrite);
+    const auto db = trace::index::cache::open_lookup_db(
+        key.path, trace::index::cache::CacheStore::Mode::ReadWrite);
     if (!db) return;
     const auto bytes = native_bytes(parts);
     if (!bytes) return;
-    (void)index::cache::persist_lookup(*db, key.sig, *bytes);
+    (void)trace::index::cache::persist_lookup(*db, key.sig, *bytes);
 }
 
 }  // namespace
@@ -166,7 +166,7 @@ dstd::Result<Pushdown> Sides::prepare(const duql::Pipeline& p) {
             if (l->slot->table) continue;
             const auto& rows =
                 frames_[l->side] ? frames_[l->side] : key_frames_[l->side];
-            auto table = duql::make_lookup_table(*l, rows);
+            auto table = dataframe::query::make_lookup_table(*l, rows);
             if (!table) return table.error();
             l->slot->table = std::move(*table);
         }
@@ -199,13 +199,15 @@ dstd::Result<dstd::SharedPtr<const dataframe::DataFrame>> Sides::distinct(
                 auto f = co_await gen.next();
                 if (!f) break;
                 if (!*f) co_return f->error();
-                dataframe::DataFrame part = duql::flat_frame(std::move(**f));
+                dataframe::DataFrame part =
+                    dataframe::query::flat_frame(std::move(**f));
                 dstd::Vector<std::int64_t> take;
                 for (std::int64_t r = 0; r < part.num_rows(); ++r) {
                     row_key.clear();
                     bool keyed = true;
                     for (const auto& c : part.columns)
-                        keyed = keyed && duql::append_cell_key(row_key, c, r);
+                        keyed = keyed && dataframe::query::append_cell_key(
+                                             row_key, c, r);
                     if (!keyed || !seen.insert(row_key).second) continue;
                     take.push_back(r);
                     bytes += row_key.size() + sizeof(dstd::String);
@@ -215,7 +217,7 @@ dstd::Result<dstd::SharedPtr<const dataframe::DataFrame>> Sides::distinct(
                 kept.names = part.names;
                 for (const auto& c : part.columns)
                     kept.columns.push_back(c.take(take));
-                bytes += duql::frame_bytes(kept);
+                bytes += dataframe::query::frame_bytes(kept);
                 if (bytes > budget)
                     co_return refuse<
                         "'{}' holds more distinct rows than the memory "
@@ -254,13 +256,16 @@ dstd::Result<dstd::SharedPtr<const dataframe::DataFrame>> Sides::run(
     const auto limit = static_cast<std::int64_t>(std::min<std::uint64_t>(
         caps.rows, std::numeric_limits<std::int64_t>::max() - 1));
     if (stored[i])
-        if (auto f = index::plan::stored_rowset(files[i], name)) {
+        if (auto f = trace::index::plan::stored_rowset(files[i], name)) {
             if (auto ok = caps.check_rows(
                     name, static_cast<std::uint64_t>(f->num_rows()));
                 !ok)
                 return ok.error();
-            dataframe::DataFrame flat = duql::flat_frame(std::move(*f));
-            if (auto ok = caps.check_bytes(name, duql::frame_bytes(flat)); !ok)
+            dataframe::DataFrame flat =
+                dataframe::query::flat_frame(std::move(*f));
+            if (auto ok =
+                    caps.check_bytes(name, dataframe::query::frame_bytes(flat));
+                !ok)
                 return ok.error();
             return dstd::make_shared<const dataframe::DataFrame>(
                 std::move(flat));
@@ -278,8 +283,8 @@ dstd::Result<dstd::SharedPtr<const dataframe::DataFrame>> Sides::run(
             caps.check_rows(name, static_cast<std::uint64_t>(f.num_rows()));
         !ok)
         return ok.error();
-    f = duql::flat_frame(std::move(f));
-    if (auto ok = caps.check_bytes(name, duql::frame_bytes(f)); !ok)
+    f = dataframe::query::flat_frame(std::move(f));
+    if (auto ok = caps.check_bytes(name, dataframe::query::frame_bytes(f)); !ok)
         return ok.error();
     if (keys[i]) {
         auto selected = f.select(f.names);
@@ -418,8 +423,8 @@ dstd::SharedPtr<const dataframe::detail::Tap> side_tap(
             dataframe::DataFrame part;
             part.names = f.names;
             for (const auto& c : f.columns) part.columns.push_back(c.share());
-            part = duql::flat_frame(std::move(part));
-            state->bytes += duql::frame_bytes(part);
+            part = dataframe::query::flat_frame(std::move(part));
+            state->bytes += dataframe::query::frame_bytes(part);
             if (caps.over(state->rows, state->bytes)) {
                 state->over = true;
                 state->parts.clear();
@@ -439,13 +444,13 @@ dstd::SharedPtr<const dataframe::detail::Tap> side_tap(
 
 dstd::Result<dstd::String> cache_state(const dstd::Optional<CacheKey>& key) {
     if (!key) return dstd::String("not cached");
-    const auto db = index::cache::open_lookup_db(
-        key->path, index::cache::CacheStore::Mode::ReadOnly);
+    const auto db = trace::index::cache::open_lookup_db(
+        key->path, trace::index::cache::CacheStore::Mode::ReadOnly);
     if (!db) return dstd::String("not cached");
-    const auto exists = index::cache::lookup_exists(*db, key->sig);
+    const auto exists = trace::index::cache::lookup_exists(*db, key->sig);
     if (!exists.has_value()) return exists.error();
     if (!*exists) return dstd::String("not cached");
-    if (const auto bytes = index::cache::read_lookup(*db, key->sig);
+    if (const auto bytes = trace::index::cache::read_lookup(*db, key->sig);
         bytes && *bytes)
         if (auto f = dataframe::frame_from_native(**bytes))
             return dstd::fmt<"cached, {} rows">(f->num_rows());

@@ -20,9 +20,9 @@
 #include <atomic>
 #include <cstdint>
 
-namespace dftracer::utils::index::plan {
+namespace dftracer::utils::trace::index::plan {
 class GroupResolver;
-}  // namespace dftracer::utils::index::plan
+}  // namespace dftracer::utils::trace::index::plan
 
 namespace dftracer::utils::trace::views::detail {
 

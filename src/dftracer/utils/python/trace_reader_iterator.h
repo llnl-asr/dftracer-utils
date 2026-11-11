@@ -10,10 +10,10 @@
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/dstd/future.h>
 #include <dftracer/utils/dstd/memory.h>
-#include <dftracer/utils/utilities/arrow/arrow_export.h>
+#include <dftracer/utils/trace/arrow/arrow_export.h>
 
 typedef struct {
-    PyObject_HEAD dftracer::utils::utilities::arrow::ArrowExportResult *result;
+    PyObject_HEAD dftracer::utils::trace::arrow::ArrowExportResult *result;
 } ArrowBatchCapsuleObject;
 
 extern PyTypeObject ArrowBatchCapsuleType;
@@ -28,7 +28,7 @@ enum class IteratorMode {
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 struct ArrowIteratorState {
-    using BatchType = dftracer::utils::utilities::arrow::ArrowExportResult;
+    using BatchType = dftracer::utils::trace::arrow::ArrowExportResult;
     dftracer::utils::dstd::SharedPtr<dftracer::utils::coro::Channel<BatchType>>
         channel;
     std::mutex error_mtx;

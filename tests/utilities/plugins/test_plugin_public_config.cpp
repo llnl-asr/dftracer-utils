@@ -9,11 +9,11 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/domains/plugins/plugins.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
-#include <dftracer/utils/plugins/plugins.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -55,7 +55,7 @@ ViewFile make_trace(dftu_utils_test::TestEnvironment& env) {
 TEST_CASE(
     "add(path, json) builds config from only the public header and the "
     "plugin receives it") {
-    auto set = plugins::Plugins::builder()
+    auto set = domains::plugins::Plugins::builder()
                    .add(CONFIG_KEYS_PLUGIN_PATH,
                         dstd::String(R"({"label": "rows", "stride": 3})"))
                    .build();
@@ -66,7 +66,7 @@ TEST_CASE(
     dftu_utils_test::TestEnvironment env(0);
     REQUIRE(env.is_valid());
     View view = View::from_files({make_trace(env)});
-    plugins::PluginRun run =
+    domains::plugins::PluginRun run =
         test_plugin_common::run_set(*set, view, "public-config");
 
     // rows = NUM_EVENTS * stride; a wrong stride (the config default is 1)
@@ -77,7 +77,8 @@ TEST_CASE(
 }
 
 TEST_CASE("add(path, json) fails at build(), not at add()") {
-    plugins::Plugins::Builder builder = plugins::Plugins::builder();
+    domains::plugins::Plugins::Builder builder =
+        domains::plugins::Plugins::builder();
     REQUIRE_NOTHROW(
         builder.add(CONFIG_KEYS_PLUGIN_PATH, dstd::String("{not json")));
 

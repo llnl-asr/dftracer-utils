@@ -7,7 +7,7 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/plan/view_resolver.h>
+#include <dftracer/utils/trace/index/plan/view_resolver.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 
@@ -60,21 +60,21 @@ const AggSchema& ensure_schema(const ViewPlan& plan);
 
 // The row set column a file, host or rank group key relabels its key with;
 // nullopt for any other key.
-dstd::Optional<dftracer::utils::index::plan::GroupResolver::Column>
+dstd::Optional<dftracer::utils::trace::index::plan::GroupResolver::Column>
 resolver_column(GroupKey::Kind kind);
 
 // Lazily build (and cache on the plan) the resolver over the source's
 // `files`, `hosts` and `ranks` row sets; null when the plan has no file,
 // host or rank group key.
-const dftracer::utils::index::plan::GroupResolver* ensure_resolver(
+const dftracer::utils::trace::index::plan::GroupResolver* ensure_resolver(
     const ViewPlan& plan);
 
 // Resolve one group value from its stored key to the name for `gk`
 // (FilePath/FileName/HostName/Rank); returns `key` unchanged for other
 // kinds.
 dstd::String resolve_group_value(
-    const dftracer::utils::index::plan::GroupResolver& r, const GroupKey& gk,
-    const dstd::String& key);
+    const dftracer::utils::trace::index::plan::GroupResolver& r,
+    const GroupKey& gk, const dstd::String& key);
 
 // Apply `gk`'s value transform to an already-resolved group value. Coarsens
 // the grain, so both the scan and the tier must call it or the same query

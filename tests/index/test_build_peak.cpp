@@ -7,10 +7,10 @@
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/open_extent.h>
+#include <dftracer/utils/trace/index/build/batch_builder.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
 #include <testing_utilities.h>
@@ -59,17 +59,17 @@ std::size_t peak_live(const dstd::Vector<dstd::String>& files,
         }
     });
     const auto base = memory::detail::Manager::get().stats().live;
-    index::build::IndexBuildBatchResult result;
+    trace::index::build::IndexBuildBatchResult result;
     {
         Runtime rt(1);
         auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
             auto config =
-                dstd::make_shared<index::build::IndexBuildBatchConfig>();
+                dstd::make_shared<trace::index::build::IndexBuildBatchConfig>();
             config->file_paths.assign(files.begin(), files.end());
             config->index_dir = index_dir;
             config->parallelism = 1;
-            result =
-                co_await index::build::BatchBuilder::process(std::move(config));
+            result = co_await trace::index::build::BatchBuilder::process(
+                std::move(config));
         });
         dftu_utils_test::ok(rt.submit(std::move(task), "build-peak").wait());
         rt.shutdown();

@@ -1,0 +1,31 @@
+// SPDX-License-Identifier: MIT
+#ifndef DFTRACER_UTILS_TRACE_READER_INTERNAL_STRING_LINE_PROCESSOR_H
+#define DFTRACER_UTILS_TRACE_READER_INTERNAL_STRING_LINE_PROCESSOR_H
+
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/trace/reader/internal/line_processor.h>
+
+namespace dftracer::utils::trace::reader::internal {
+class StringLineProcessor : public LineProcessor {
+   private:
+    dstd::String& result_;
+
+   public:
+    explicit StringLineProcessor(dstd::String& result) : result_(result) {}
+
+    coro::CoroTask<bool> process(const char* data,
+                                 std::size_t length) override {
+        result_.append(data, length);
+        result_.append(1, '\n');
+        co_return true;
+    }
+
+    void begin(std::size_t start_line, std::size_t end_line) override {
+        std::size_t estimated_lines = end_line - start_line + 1;
+        result_.reserve(estimated_lines * 100);
+    }
+};
+
+}  // namespace dftracer::utils::trace::reader::internal
+
+#endif  // DFTRACER_UTILS_TRACE_READER_INTERNAL_STRING_LINE_PROCESSOR_H

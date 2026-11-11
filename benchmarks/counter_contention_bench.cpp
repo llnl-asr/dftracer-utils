@@ -38,13 +38,13 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/domains/workload/genesis/genesis.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/trace/genesis/genesis.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <memory_probe.h>
 #include <memory_workloads.h>
 

@@ -21,9 +21,9 @@ static variant (``src/CMakeLists.txt``), aggregated behind
 - ``dftracer_utils_store`` is the key-value store engine: data files, the
   writer and its committer, and the snapshot that reads them. It links only
   the runtime and knows nothing about traces.
-- ``dftracer_utils_io`` is the file I/O layer: gzip readers and writers,
-  the parallel writers, hashing, directory scanning and text filters. It
-  links the runtime and the JSON library and knows nothing about traces.
+- ``dftracer_utils_fileio`` is the file format layer: gzip readers and
+  writers, line streams, the parallel writers and hashing. It links the
+  runtime and the JSON library and knows nothing about traces.
 - ``dftracer_utils_json`` is the simdjson-backed JSON layer: parsing and
   the JSON value type.
 - ``dftracer_utils_duql`` is the duql filter language: the predicate IR, the string
@@ -31,17 +31,22 @@ static variant (``src/CMakeLists.txt``), aggregated behind
 - ``dftracer_utils_dataframe`` is the columnar SIMD engine: ``Series`` /
   ``DataFrame``, the Highway kernels, and the Arrow bridge. It also holds the
   duql parts that call the dataframe (``vectorize``, ``lookup``, ``overlap``
-  and ``group_fold``), so it links ``dftracer_utils_duql``.
+  and ``group_fold``) in ``dataframe/query/``, so it links ``dftracer_utils_duql``.
 - ``dftracer_utils_trace`` is the trace layer: the index (build, plan, cache,
   schemas), the views and folds, the trace reader and the Arrow interchange.
-  It links every library above it and never includes the parts of
-  ``dftracer_utils_utilities``.
-- ``dftracer_utils_utilities`` depends on the libraries above and
-  holds the top domain logic: comparison, statistics, genesis, plugins, the
-  server, DLIO, and replay.
+  It links every library above it and never includes ``dftracer_utils_domains``.
+- ``dftracer_utils_domains`` depends on the libraries above and holds the
+  work done with traces: analysis (comparator, statistics, provenance),
+  workload (genesis, DLIO, replay, fake traces), the server and the plugin host.
+
+Each library keeps its sources in one folder of the same name under
+``src/dftracer/utils/``, and the namespace follows the folder: the comparator
+sits in ``domains/analysis/comparator/`` and in the namespace
+``dftracer::utils::domains::analysis::comparator``. The CTest check
+``library_folders`` fails when a source sits outside the folder of its library.
 
 The dependency runs one way, down this list. Nothing in ``runtime`` knows what
-a DFTracer event looks like; nothing in ``trace`` or ``utilities`` reimplements scheduling,
+a DFTracer event looks like; nothing in ``trace`` or ``domains`` reimplements scheduling,
 I/O, JSON parsing, or the columnar kernels. This split is why the coroutine
 runtime can be reasoned about (and tested) on its own, and why domain code
 never has to touch a raw file descriptor or worry about which io backend is
@@ -52,12 +57,12 @@ active.
    graph TB
        Runtime["dftracer_utils_runtime<br/>runtime, coro, io, pipeline"]
        Store["dftracer_utils_store<br/>key-value store engine"]
-       Io["dftracer_utils_io<br/>file I/O, gzip, hashing"]
+       Io["dftracer_utils_fileio<br/>gzip, line streams, writers"]
        Json["dftracer_utils_json<br/>simdjson-backed parsing"]
        Query["dftracer_utils_duql<br/>predicate IR, evaluator"]
        DF["dftracer_utils_dataframe<br/>Series/DataFrame, SIMD kernels"]
        Trace["dftracer_utils_trace<br/>index, views, trace reader"]
-       Util["dftracer_utils_utilities<br/>comparator, plugins, server"]
+       Util["dftracer_utils_domains<br/>analysis, workload, server"]
        Store --> Runtime
        Io --> Runtime
        Io --> Json
@@ -76,14 +81,14 @@ active.
 
 The domain logic itself is grouped by what it does rather than by a shared
 base class: readers and the fused scan under ``trace/``, the index under
-``index/`` (in layers: ``store`` for index storage, ``gzip`` for
+``trace/index/`` (in layers: ``store`` for index storage, ``gzip`` for
 checkpoints, ``extensions`` for blooms, dimension stats and stored row sets,
 ``schemas/dft`` for the dftracer-specific statistics and aggregation,
 then ``build``, ``plan`` for pruning and ``cache`` for rollups; a CTest check
 keeps each layer from including a higher one), comparison under
-``trace/comparator``, the columnar engine under
+``domains/analysis/comparator``, the columnar engine under
 ``dataframe/``, the duql filter language under ``duql/``, and the plugin C ABI under
-``plugins/``. See :doc:`fused-scan`, :doc:`indexing-and-pushdown`, and
+``plugins/`` in ``include/`` and the plugin host under ``domains/plugins/``. See :doc:`fused-scan`, :doc:`indexing-and-pushdown`, and
 :doc:`dataframe-model` for each of those in turn.
 
 From trace file to result

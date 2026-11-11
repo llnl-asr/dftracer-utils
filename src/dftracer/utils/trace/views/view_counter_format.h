@@ -16,7 +16,8 @@ namespace dftracer::utils::trace::views::detail {
 
 // One aggregate group -> one ph="C" counter event JSON line. `keys` aligns to
 // `group_cols` (nullopt for a null key), `values` to `value_cols`. The group
-// columns `entity_col` and `lane_col` give pid and tid, as index::entity_id.
+// columns `entity_col` and `lane_col` give pid and tid, as
+// trace::index::entity_id.
 dstd::String counter_line(
     const dstd::Vector<dstd::String>& group_cols,
     const dstd::Vector<dstd::Optional<dstd::String>>& keys,

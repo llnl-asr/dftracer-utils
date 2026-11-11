@@ -17,25 +17,25 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/duql/query.h>
-#include <dftracer/utils/index/gzip/member.h>
-#include <dftracer/utils/index/index.h>
-#include <dftracer/utils/index/plan/prune.h>
-#include <dftracer/utils/index/schemas/dft/agg/agg_partial_update.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
-#include <dftracer/utils/index/store/file.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
-#include <dftracer/utils/index/store/layout.h>
-#include <dftracer/utils/index/store/root_layout.h>
-#include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/fileio/file_helpers.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/trace/agg_event_fold.h>
 #include <dftracer/utils/trace/agg_query.h>
+#include <dftracer/utils/trace/index/gzip/member.h>
+#include <dftracer/utils/trace/index/index.h>
+#include <dftracer/utils/trace/index/plan/prune.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/agg_partial_update.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_config.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_fold.h>
+#include <dftracer/utils/trace/index/store/file.h>
+#include <dftracer/utils/trace/index/store/layout.h>
+#include <dftracer/utils/trace/index/store/root_layout.h>
+#include <dftracer/utils/trace/index/tables.h>
 #include <dftracer/utils/trace/parse_inflated.h>
+#include <dftracer/utils/trace/reader/file_process_types.h>
+#include <dftracer/utils/trace/reader/indexed_file_reader_utility.h>
+#include <dftracer/utils/trace/reader/internal/stream_config.h>
 #include <dftracer/utils/trace/views/fold_event.h>
-#include <dftracer/utils/utilities/fileio/file_process_types.h>
-#include <dftracer/utils/utilities/fileio/indexed_file_reader_utility.h>
-#include <dftracer/utils/utilities/reader/internal/stream_config.h>
 
 #include <algorithm>
 #include <array>
@@ -66,21 +66,21 @@ struct Source {
     /// Opens the root. The error is that of the snapshot that cannot be
     /// opened.
     dstd::Result<void> open(const AggQuerySource& s) {
-        if (path.empty() ||
-            !dftracer::utils::common::input_exists(index::store_of(path)))
+        if (path.empty() || !dftracer::utils::common::input_exists(
+                                trace::index::store_of(path)))
             return {};
         if (s.snapshot) {
             snapshot.emplace(*s.snapshot);
             return {};
         }
-        auto opened = index::plan::open_snapshot(path);
+        auto opened = trace::index::plan::open_snapshot(path);
         if (!opened) return opened.error();
         snapshot.emplace(std::move(*opened));
         return {};
     }
 
     dstd::String path;
-    dstd::Optional<index::Snapshot> snapshot;
+    dstd::Optional<trace::index::Snapshot> snapshot;
     std::uint64_t params_hash;
 };
 
@@ -89,7 +89,7 @@ struct Source {
 struct ChunkJob {
     std::uint32_t chunk = 0;
     /// The file the chunk belongs to, absent when the index does not hold it.
-    dstd::Optional<index::FileRef> file;
+    dstd::Optional<trace::index::FileRef> file;
     bool all = false;
     /// The file has no chunk table, so chunk 0 is the whole of it.
     bool whole_file = false;
@@ -177,7 +177,7 @@ class Runner {
     coro::CoroTask<void> file_task(std::size_t source, std::size_t file,
                                    std::size_t seq);
     coro::CoroTask<void> chunk_task(Source* source, const dstd::String* path,
-                                    const index::gzip::ChunkSpan* span,
+                                    const trace::index::gzip::ChunkSpan* span,
                                     const ChunkJob* job, std::size_t seq,
                                     std::size_t sub,
                                     std::atomic<std::size_t>* dropped);
@@ -208,15 +208,15 @@ class Task {
     /// with the chunk table of the file.
     coro::CoroTask<dstd::Result<void>> scan_file(
         const dstd::String& path, dstd::Vector<ChunkJob>& jobs,
-        dstd::Vector<index::gzip::ChunkSpan>& spans);
+        dstd::Vector<trace::index::gzip::ChunkSpan>& spans);
 
     coro::CoroTask<dstd::Result<void>> trace_jobs(
         const dstd::String& path, dstd::Vector<ChunkJob>& jobs,
-        dstd::Vector<index::gzip::ChunkSpan>& spans);
+        dstd::Vector<trace::index::gzip::ChunkSpan>& spans);
 
     coro::CoroTask<dstd::Result<void>> read_chunk(
-        const dstd::String& path, const index::gzip::ChunkSpan& span,
-        const ChunkJob& job, const index::gzip::ChunkSpan* spans);
+        const dstd::String& path, const trace::index::gzip::ChunkSpan& span,
+        const ChunkJob& job, const trace::index::gzip::ChunkSpan* spans);
 
    private:
     struct Reread {
@@ -248,7 +248,7 @@ class Task {
         return dstd::StringView(at->second.data(), at->second.size());
     }
 
-    PidFit pid_fit(const index::schemas::dft::agg::AggPartial& p) const {
+    PidFit pid_fit(const trace::index::schemas::dft::agg::AggPartial& p) const {
         if (r_.rules.pids.empty()) return PidFit::All;
         if (!p.pids.is_exact()) return PidFit::Mixed;
         const auto ids = p.pids.ids();
@@ -263,7 +263,7 @@ class Task {
     }
 
     static bool quantiles_missing(
-        const index::schemas::dft::agg::AggPartial& p) {
+        const trace::index::schemas::dft::agg::AggPartial& p) {
         return (p.duration_values != 0 && p.duration_q.count() == 0) ||
                (p.size_values != 0 && p.size_q.count() == 0) ||
                (p.offset_values != 0 && p.offset_q.count() == 0);
@@ -282,21 +282,23 @@ class Task {
                       dstd::Span<const std::uint8_t> bytes);
     /// The group of a per-file partial.
     AggGroup file_group(std::uint32_t file_id, AggKind kind);
-    bool bins_answer(const index::schemas::dft::agg::AggPartial& p) const;
-    void take_bins(const index::schemas::dft::agg::AggPartial& p, AggKey key);
+    bool bins_answer(
+        const trace::index::schemas::dft::agg::AggPartial& p) const;
+    void take_bins(const trace::index::schemas::dft::agg::AggPartial& p,
+                   AggKey key);
 
     coro::CoroTask<dstd::Result<void>> whole_file_chunks(
-        const dstd::String& path, const index::FileRef* file,
+        const dstd::String& path, const trace::index::FileRef* file,
         std::size_t chunk_count, dstd::Vector<ChunkJob>& jobs);
 
     // The head of a line that a member boundary cut: the bytes before `chunk`
     // that follow the last newline.
     coro::CoroTask<dstd::Result<dstd::String>> tail_before(
         const dstd::String& path, std::uint32_t chunk,
-        const index::gzip::ChunkSpan* spans);
+        const trace::index::gzip::ChunkSpan* spans);
 
     coro::CoroTask<
-        dstd::Result<dstd::SharedPtr<utilities::reader::internal::Reader>>>
+        dstd::Result<dstd::SharedPtr<trace::reader::internal::Reader>>>
     open_reader(const dstd::String& path);
 
     void parse_lines_of(dstd::String& pending, std::uint32_t chunk,
@@ -316,11 +318,12 @@ class Task {
     dstd::SharedPtr<dstd::String> buf_ = dstd::make_shared<dstd::String>();
 };
 
-void trim_row(index::schemas::dft::agg::AggPartial& p, const AggKeep& keep) {
-    const auto drop = [](index::schemas::dft::agg::DistinctIds& ids,
+void trim_row(trace::index::schemas::dft::agg::AggPartial& p,
+              const AggKeep& keep) {
+    const auto drop = [](trace::index::schemas::dft::agg::DistinctIds& ids,
                          bool kept) {
         if (!kept && !ids.empty())
-            ids = index::schemas::dft::agg::DistinctIds();
+            ids = trace::index::schemas::dft::agg::DistinctIds();
     };
     drop(p.pids, keep.pids);
     drop(p.tids, keep.tids);
@@ -330,7 +333,7 @@ void trim_row(index::schemas::dft::agg::AggPartial& p, const AggKeep& keep) {
     if (!keep.pid_spans) p.pid_spans.clear();
     if (!keep.offset) {
         p.offset = {};
-        p.offset_q = index::schemas::dft::agg::QuantileStore(p.accuracy);
+        p.offset_q = trace::index::schemas::dft::agg::QuantileStore(p.accuracy);
         p.offset_values = 0;
     }
 }
@@ -347,7 +350,7 @@ void Runner::Stripe::add(const dstd::Vector<Row*>& part) {
 
 void Runner::Stripe::add_sums(const dstd::Vector<Row*>& part) {
     for (Row* row : part) {
-        const index::schemas::dft::agg::AggPartial& p = row->second;
+        const trace::index::schemas::dft::agg::AggPartial& p = row->second;
         AggSums one{p.count, p.duration, p.size};
         auto it = sums.find(row->first);
         if (it == sums.end())
@@ -379,7 +382,8 @@ void Runner::Stripe::drain(bool offset) {
             merged.size.merge(order[at].second->size);
             if (offset) merged.offset.merge(order[at].second->offset);
         }
-        index::schemas::dft::agg::AggPartial& p = (rows.begin() + row)->second;
+        trace::index::schemas::dft::agg::AggPartial& p =
+            (rows.begin() + row)->second;
         p.duration = merged.duration;
         p.size = merged.size;
         if (offset) p.offset = merged.offset;
@@ -539,7 +543,7 @@ coro::CoroTask<void> Runner::file_task(std::size_t source, std::size_t file,
     Source& src = *sources[source];
     const dstd::String path(rules.q.sources[source].files[file]);
     dstd::Vector<ChunkJob> jobs;
-    dstd::Vector<index::gzip::ChunkSpan> spans;
+    dstd::Vector<trace::index::gzip::ChunkSpan> spans;
     {
         co_await permits->acquire(1);
         Permit permit(*permits);
@@ -574,18 +578,16 @@ coro::CoroTask<void> Runner::file_task(std::size_t source, std::size_t file,
                                 path, dropped.load());
 }
 
-coro::CoroTask<void> Runner::chunk_task(Source* source,
-                                        const dstd::String* path,
-                                        const index::gzip::ChunkSpan* spans,
-                                        const ChunkJob* job, std::size_t seq,
-                                        std::size_t sub,
-                                        std::atomic<std::size_t>* dropped) {
+coro::CoroTask<void> Runner::chunk_task(
+    Source* source, const dstd::String* path,
+    const trace::index::gzip::ChunkSpan* spans, const ChunkJob* job,
+    std::size_t seq, std::size_t sub, std::atomic<std::size_t>* dropped) {
     co_await permits->acquire(1);
     Permit permit(*permits);
     if (is_failed() || cancelled()) co_return;
     Task task(*this, *source);
-    const index::gzip::ChunkSpan whole_file;
-    const index::gzip::ChunkSpan& span =
+    const trace::index::gzip::ChunkSpan whole_file;
+    const trace::index::gzip::ChunkSpan& span =
         job->whole_file ? whole_file : spans[job->chunk];
     auto chunk_read = co_await task.read_chunk(*path, span, *job, spans);
     if (!chunk_read) {
@@ -599,31 +601,32 @@ coro::CoroTask<void> Runner::chunk_task(Source* source,
 
 coro::CoroTask<dstd::Result<void>> Task::scan_file(
     const dstd::String& path, dstd::Vector<ChunkJob>& jobs,
-    dstd::Vector<index::gzip::ChunkSpan>& spans) {
+    dstd::Vector<trace::index::gzip::ChunkSpan>& spans) {
     if (!src_.snapshot)
         co_return common::make_error<
             "aggregation query: {} is not an open index">(
             common::ErrorCode::NotFound, src_.path);
-    const auto file =
-        src_.snapshot->file(index::store::internal::get_logical_path(path));
+    const auto file = src_.snapshot->file(fileio::get_logical_path(path));
     if (!file)
         co_return common::make_error<
             "aggregation query: {} is not in the index {}">(
             common::ErrorCode::NotFound, path, src_.path);
     ++stats.files;
-    auto listed = index::spans(*src_.snapshot, *file);
+    auto listed = trace::index::spans(*src_.snapshot, *file);
     if (!listed) co_return listed.error();
     spans = std::move(*listed);
 
     const bool usable =
-        src_.snapshot->extension(*file, index::store::IndexExtension::Agg,
-                                 src_.params_hash) == index::Freshness::Current;
+        src_.snapshot->extension(
+            *file, trace::index::store::IndexExtension::Agg,
+            src_.params_hash) == trace::index::Freshness::Current;
 
     std::size_t seen = 0;
     if (usable && r_.rules.file_rows) {
-        auto texts = index::agg_file_texts(*src_.snapshot, *file, texts_);
+        auto texts =
+            trace::index::agg_file_texts(*src_.snapshot, *file, texts_);
         if (!texts) co_return texts.error();
-        auto walked = index::for_each_agg_file_partial(
+        auto walked = trace::index::for_each_agg_file_partial(
             *src_.snapshot, *file,
             [&](std::uint32_t chunk, std::uint32_t file_id, AggKind kind,
                 dstd::Span<const std::uint8_t> bytes) {
@@ -635,9 +638,10 @@ coro::CoroTask<dstd::Result<void>> Task::scan_file(
         if (!walked) co_return walked.error();
         if (failure_) co_return *failure_;
     } else if (usable) {
-        auto texts = index::agg_file_texts(*src_.snapshot, *file, texts_);
+        auto texts =
+            trace::index::agg_file_texts(*src_.snapshot, *file, texts_);
         if (!texts) co_return texts.error();
-        auto walked = index::for_each_agg_partial(
+        auto walked = trace::index::for_each_agg_partial(
             *src_.snapshot, *file,
             [&](std::uint32_t chunk, std::uint32_t cat_root,
                 std::uint32_t name_root, std::uint32_t host_root,
@@ -706,16 +710,15 @@ coro::CoroTask<dstd::Result<void>> Task::scan_file(
 
 coro::CoroTask<dstd::Result<void>> Task::trace_jobs(
     const dstd::String& path, dstd::Vector<ChunkJob>& jobs,
-    dstd::Vector<index::gzip::ChunkSpan>& spans) {
+    dstd::Vector<trace::index::gzip::ChunkSpan>& spans) {
     ++stats.files;
-    dstd::Optional<index::FileRef> file;
+    dstd::Optional<trace::index::FileRef> file;
     if (src_.snapshot) {
-        if (auto found = src_.snapshot->file(
-                index::store::internal::get_logical_path(path)))
+        if (auto found = src_.snapshot->file(fileio::get_logical_path(path)))
             file = std::move(*found);
     }
     if (file) {
-        auto listed = index::spans(*src_.snapshot, *file);
+        auto listed = trace::index::spans(*src_.snapshot, *file);
         if (!listed) co_return listed.error();
         spans = std::move(*listed);
     }
@@ -726,17 +729,17 @@ coro::CoroTask<dstd::Result<void>> Task::trace_jobs(
         jobs.push_back(std::move(job));
         co_return dstd::Result<void>{};
     }
-    const index::FileRef* held = file ? &*file : nullptr;
+    const trace::index::FileRef* held = file ? &*file : nullptr;
     co_return co_await whole_file_chunks(path, held, spans.size(), jobs);
 }
 
 coro::CoroTask<dstd::Result<void>> Task::whole_file_chunks(
-    const dstd::String& path, const index::FileRef* file,
+    const dstd::String& path, const trace::index::FileRef* file,
     std::size_t chunk_count, dstd::Vector<ChunkJob>& jobs) {
     dstd::Vector<std::uint64_t> chunks;
     bool pruned_to_list = false;
     if (r_.has_time && src_.snapshot) {
-        index::plan::PruneRequest request;
+        trace::index::plan::PruneRequest request;
         request.index_path = src_.path;
         request.file_path = path;
         request.snapshot = &*src_.snapshot;
@@ -747,7 +750,8 @@ coro::CoroTask<dstd::Result<void>> Task::whole_file_chunks(
                                 : static_cast<double>(r_.rules.q.ts_end));
         request.chunk_count = chunk_count;
         request.by_start = true;
-        auto pruned = co_await index::plan::prune_file(std::move(request));
+        auto pruned =
+            co_await trace::index::plan::prune_file(std::move(request));
         if (!pruned) co_return pruned.error();
         if (!pruned->file_may_match) co_return dstd::Result<void>{};
         if (!pruned->all_chunks) {
@@ -772,7 +776,7 @@ AggGroup Task::file_group(std::uint32_t file_id, AggKind kind) {
     auto it = file_keys_.find(file_id);
     if (it == file_keys_.end()) {
         AggKey key;
-        if (file_id != index::store::layout::agg_kind::NO_FILE)
+        if (file_id != trace::index::store::layout::agg_kind::NO_FILE)
             set_file_key(key, text_of(file_id), r_.rules.strings);
         it = file_keys_.emplace(file_id, key).first;
     }
@@ -792,7 +796,7 @@ void Task::take_partial(std::uint32_t chunk, const AggGroup& group,
         queue_reread(chunk, group);
         return;
     }
-    index::schemas::dft::agg::AggPartial::Fields keep;
+    trace::index::schemas::dft::agg::AggPartial::Fields keep;
     keep.quantiles = r_.rules.q.quantiles && !r_.reread_only;
     keep.bins = r_.rules.q.sums_only && !r_.reread_only;
     const AggKeep& kept = r_.rules.q.keep;
@@ -803,7 +807,7 @@ void Task::take_partial(std::uint32_t chunk, const AggGroup& group,
     keep.pid_files = kept.pid_files;
     keep.pids = kept.pids || r_.rules.q.by_pid || !r_.rules.pids.empty();
     keep.tids = kept.tids || r_.rules.q.by_tid;
-    auto parsed = index::schemas::dft::agg::AggPartial::deserialize(
+    auto parsed = trace::index::schemas::dft::agg::AggPartial::deserialize(
         dstd::Span<const std::uint8_t>(bytes.data(), bytes.size()),
         r_.rules.q.config.sketch_accuracy, keep);
     if (!parsed) {
@@ -812,7 +816,7 @@ void Task::take_partial(std::uint32_t chunk, const AggGroup& group,
                                    "aggregation partial: malformed record");
         return;
     }
-    index::schemas::dft::agg::AggPartial& p = *parsed;
+    trace::index::schemas::dft::agg::AggPartial& p = *parsed;
     if (p.count == 0) {
         ++stats.partials_pruned;
         return;
@@ -885,14 +889,15 @@ void Task::take_partial(std::uint32_t chunk, const AggGroup& group,
         it->second.merge(p);
 }
 
-bool Task::bins_answer(const index::schemas::dft::agg::AggPartial& p) const {
+bool Task::bins_answer(
+    const trace::index::schemas::dft::agg::AggPartial& p) const {
     if (!r_.rules.q.sums_only || r_.rules.q.quantiles) return false;
     if (p.bin_interval == 0 || p.bins.empty()) return false;
     return r_.rules.q.window_us == 0 ||
            r_.rules.q.window_us % p.bin_interval == 0;
 }
 
-void Task::take_bins(const index::schemas::dft::agg::AggPartial& p,
+void Task::take_bins(const trace::index::schemas::dft::agg::AggPartial& p,
                      AggKey key) {
     const auto stat_of = [](std::uint64_t n, std::uint64_t sum) {
         dataframe::FieldStat s;
@@ -903,7 +908,7 @@ void Task::take_bins(const index::schemas::dft::agg::AggPartial& p,
         s.esum = std::bit_cast<std::int64_t>(sum);
         return s;
     };
-    for (const index::schemas::dft::agg::TimeBin& b : p.bins) {
+    for (const trace::index::schemas::dft::agg::TimeBin& b : p.bins) {
         if (r_.rules.q.by_pid) key.pid = b.pid;
         if (r_.rules.q.by_tid) key.tid = b.tid;
         if (r_.rules.q.window_us != 0)
@@ -911,10 +916,10 @@ void Task::take_bins(const index::schemas::dft::agg::AggPartial& p,
                          r_.rules.q.window_us;
         auto it = rows.find(key);
         if (it == rows.end())
-            it = rows.emplace(key, index::schemas::dft::agg::AggPartial(
+            it = rows.emplace(key, trace::index::schemas::dft::agg::AggPartial(
                                        r_.rules.q.config.sketch_accuracy))
                      .first;
-        index::schemas::dft::agg::AggPartial& row = it->second;
+        trace::index::schemas::dft::agg::AggPartial& row = it->second;
         row.count += b.count;
         row.duration.merge(stat_of(b.duration_n, b.duration_sum));
         row.size.merge(stat_of(b.size_n, b.size_sum));
@@ -924,29 +929,27 @@ void Task::take_bins(const index::schemas::dft::agg::AggPartial& p,
     ++stats.partials_binned;
 }
 
-coro::CoroTask<
-    dstd::Result<dstd::SharedPtr<utilities::reader::internal::Reader>>>
+coro::CoroTask<dstd::Result<dstd::SharedPtr<trace::reader::internal::Reader>>>
 Task::open_reader(const dstd::String& path) {
     auto input =
-        utilities::fileio::IndexedReadInput::from_file(path).with_index(
-            src_.path);
-    utilities::fileio::IndexedFileReaderUtility utility;
+        trace::reader::IndexedReadInput::from_file(path).with_index(src_.path);
+    trace::reader::IndexedFileReaderUtility utility;
     auto opened = co_await utility(input);
     co_return opened;
 }
 
 coro::CoroTask<dstd::Result<dstd::String>> Task::tail_before(
     const dstd::String& path, std::uint32_t chunk,
-    const index::gzip::ChunkSpan* spans) {
+    const trace::index::gzip::ChunkSpan* spans) {
     auto opened = co_await open_reader(path);
     if (!opened) co_return opened.error();
     auto reader = std::move(*opened);
     dstd::String tail;
     for (std::uint32_t k = chunk; k-- > 0;) {
         auto streamed = reader->stream(
-            utilities::reader::internal::StreamConfig()
-                .stream_type(utilities::reader::internal::StreamType::Bytes)
-                .range_type(utilities::reader::internal::RangeType::ByteRange)
+            trace::reader::internal::StreamConfig()
+                .stream_type(trace::reader::internal::StreamType::Bytes)
+                .range_type(trace::reader::internal::RangeType::ByteRange)
                 .buffer_size(STREAM_BUFFER_BYTES)
                 .from(spans[k].uc_offset)
                 .to(spans[k].uc_offset + spans[k].uc_size));
@@ -1016,8 +1019,8 @@ void Task::parse_lines_of(dstd::String& pending, std::uint32_t chunk,
 }
 
 coro::CoroTask<dstd::Result<void>> Task::read_chunk(
-    const dstd::String& path, const index::gzip::ChunkSpan& span,
-    const ChunkJob& job, const index::gzip::ChunkSpan* spans) {
+    const dstd::String& path, const trace::index::gzip::ChunkSpan& span,
+    const ChunkJob& job, const trace::index::gzip::ChunkSpan* spans) {
     ++stats.chunks_reread;
     dstd::HashSet<AggGroup, AggGroupHash> wanted;
     if (!job.all) wanted.insert(job.groups.begin(), job.groups.end());
@@ -1032,9 +1035,9 @@ coro::CoroTask<dstd::Result<void>> Task::read_chunk(
         job.whole_file ? reader->max_bytes() : span.uc_offset + span.uc_size;
     if (from >= to) co_return dstd::Result<void>{};
     auto streamed = reader->stream(
-        utilities::reader::internal::StreamConfig()
-            .stream_type(utilities::reader::internal::StreamType::Bytes)
-            .range_type(utilities::reader::internal::RangeType::ByteRange)
+        trace::reader::internal::StreamConfig()
+            .stream_type(trace::reader::internal::StreamType::Bytes)
+            .range_type(trace::reader::internal::RangeType::ByteRange)
             .buffer_size(STREAM_BUFFER_BYTES)
             .from(from)
             .to(to));

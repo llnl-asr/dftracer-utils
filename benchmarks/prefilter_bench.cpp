@@ -13,7 +13,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
-#include <dftracer/utils/index/plan/prefilter.h>
+#include <dftracer/utils/trace/index/plan/prefilter.h>
 
 #include <algorithm>
 #include <chrono>
@@ -24,7 +24,7 @@
 
 using namespace dftracer::utils;
 
-using dftracer::utils::index::plan::Prefilter;
+using dftracer::utils::trace::index::plan::Prefilter;
 
 namespace {
 

@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <arpa/inet.h>
+#include <dftracer/utils/domains/server/trace_index.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
-#include <dftracer/utils/server/trace_index.h>
 #include <doctest/doctest.h>
 #include <netinet/in.h>
 #include <signal.h>
@@ -1099,8 +1099,9 @@ TEST_CASE("DFTracer Server - untimed pages of many records") {
     constexpr std::size_t NAME_BYTES = 8192;
     const dstd::String name(NAME_BYTES, 'k');
     constexpr int PAST_LIMIT =
-        static_cast<int>(dftracer::utils::server::VIZ_RESULT_CACHE_BYTES / 16 /
-                         NAME_BYTES) +
+        static_cast<int>(
+            dftracer::utils::domains::server::VIZ_RESULT_CACHE_BYTES / 16 /
+            NAME_BYTES) +
         1;
     for (const int UNTIMED : {300, PAST_LIMIT}) {
         CAPTURE(UNTIMED);

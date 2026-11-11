@@ -5,9 +5,9 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/domains/plugins/fold_adapter.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/plugins/abi.h>
-#include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/runtime/runtime.h>
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
 // arrow_abi.
@@ -50,8 +50,8 @@ struct HostFixture {
     dstd::StringIntern intern;
     dftu_plugin* plugin =
         dftracer::utils::plugins::make_plugin<TrivialSlice>(nullptr);
-    dstd::UniquePtr<plugins::PluginFold> fold =
-        dstd::make_unique<plugins::PluginFold>(plugin, intern);
+    dstd::UniquePtr<domains::plugins::PluginFold> fold =
+        dstd::make_unique<domains::plugins::PluginFold>(plugin, intern);
     dftu_plugin_host& host() { return fold->host(); }
     dftu_str intern_str(const char* s) {
         return host().intern(host().h, s,
@@ -266,7 +266,7 @@ TEST_CASE("plugin cxx: Batch view iterates typed Events") {
         // fold must be destroyed (it calls plugin_->destroy_slice) before
         // p->destroy frees the plugin's own storage, which the vtable pointed
         // to by `p` lives inside of.
-        plugins::PluginFold fold(p, intern);
+        domains::plugins::PluginFold fold(p, intern);
 
         const std::uint32_t N = 3;
         dstd::Vector<trace::views::detail::FoldEvent> evs(N);
@@ -317,7 +317,7 @@ TEST_CASE("plugin cxx: Event args expose typed values and dotted lookup") {
         // fold must be destroyed (it calls plugin_->destroy_slice) before
         // p->destroy frees the plugin's own storage, which the vtable pointed
         // to by `p` lives inside of.
-        plugins::PluginFold fold(p, intern);
+        domains::plugins::PluginFold fold(p, intern);
 
         trace::views::detail::FoldEvent fe;
         fe.pid = 7;
@@ -474,7 +474,7 @@ TEST_CASE("plugin cxx: Host::agg merges a count and an argmax across slices") {
     dstd::StringIntern intern;
     dftu_plugin p = make_agg_facade_plugin();
     plugins::NamedResultRegistry named;
-    plugins::PluginFold master(&p, intern, nullptr, &named);
+    domains::plugins::PluginFold master(&p, intern, nullptr, &named);
 
     // Merged counts: pid 1 -> 3, pid 2 -> 2. Argmax tid by duration: pid 1 at
     // dur 30 -> tid 300; pid 2 at dur 50 -> tid 500.
@@ -483,7 +483,7 @@ TEST_CASE("plugin cxx: Host::agg merges a count and an argmax across slices") {
         {evt(1, 20, 200), evt(2, 50, 500)}};
     for (const auto& evs : slices) {
         auto slice = master.slice();
-        auto* pf = static_cast<plugins::PluginFold*>(slice.get());
+        auto* pf = static_cast<domains::plugins::PluginFold*>(slice.get());
         trace::views::detail::ScanUnit unit;
         dftu_utils_test::ok(pf->step(trace::views::detail::FoldBatch{
             dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}}));

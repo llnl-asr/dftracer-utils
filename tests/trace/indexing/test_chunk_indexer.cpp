@@ -3,7 +3,7 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/index/build/chunk_indexer.h>
+#include <dftracer/utils/trace/index/build/chunk_indexer.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
 #include <testing_utilities.h>
@@ -11,7 +11,7 @@
 #include <fstream>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::index::build;
+using namespace dftracer::utils::trace::index::build;
 
 // Helper to create a test trace file (plain text), then compress to gzip.
 // Returns the .gz path and the uncompressed size.

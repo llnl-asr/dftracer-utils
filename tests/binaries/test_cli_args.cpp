@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/binaries/cli_args.h>
+#include <dftracer/utils/cli/cli_args.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
@@ -25,10 +25,9 @@ struct Options {
     double millis = 0;
 };
 
-binaries::ParseOutcome run(Options& o,
-                           const dstd::Vector<dstd::StringView>& args,
-                           bool require_input = false) {
-    binaries::ArgParser p("tool", "1.2.3", "A test tool.");
+cli::ParseOutcome run(Options& o, const dstd::Vector<dstd::StringView>& args,
+                      bool require_input = false) {
+    cli::ArgParser p("tool", "1.2.3", "A test tool.");
     auto& in = p.positional(o.inputs, "PATH", "Files or folders");
     if (require_input) in.at_least_one();
     p.option(o.output, {"-o", "--output"}, "Output file");
@@ -194,7 +193,7 @@ TEST_CASE("number defaults print in printf %g form in the help") {
     double small = 0.5;
     double big = 1e20;
     double precise = 0.123456789;
-    binaries::ArgParser p("tool", "1.2.3", "A test tool.");
+    cli::ArgParser p("tool", "1.2.3", "A test tool.");
     p.option(small, {"--small"}, "Small");
     p.option(big, {"--big"}, "Big");
     p.option(precise, {"--precise"}, "Precise");
@@ -207,7 +206,7 @@ TEST_CASE("number defaults print in printf %g form in the help") {
 TEST_CASE("a bad default ends the process" * doctest::skip()) {
     fresh_process::announce_abort();
     std::size_t chunk = 0;
-    binaries::ArgParser p("tool", "1.2.3", "A test tool.");
+    cli::ArgParser p("tool", "1.2.3", "A test tool.");
     p.bytes(chunk, {"--chunk"}, "Chunk size", "lots");
 }
 

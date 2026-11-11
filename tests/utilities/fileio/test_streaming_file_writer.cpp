@@ -12,14 +12,14 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/utilities/fileio/streaming_file_writer_utility.h>
+#include <dftracer/utils/fileio/streaming_file_writer_utility.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
 #include <testing_utilities.h>
 
 using namespace dftracer::utils;
 
-using namespace dftracer::utils::utilities::fileio;
+using namespace dftracer::utils::fileio;
 using namespace dftu_utils_test;
 
 TEST_CASE("StreamingFileWriterUtility - Basic Operations") {

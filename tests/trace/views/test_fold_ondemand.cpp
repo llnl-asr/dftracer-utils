@@ -324,7 +324,7 @@ PathRead read_path_on_demand(json::Document& doc, StringView line,
     if (!value) return out;
     out.parsed = true;
     const auto* schema = o.typed ? &path_schema() : nullptr;
-    dstd::Vector<const index::FieldSpec*> fields;
+    dstd::Vector<const trace::index::FieldSpec*> fields;
     for (const String& path : o.paths)
         fields.push_back(schema ? schema->field_at(path) : nullptr);
     decode_record_into(ev, *value, intern, o.capture_schema,

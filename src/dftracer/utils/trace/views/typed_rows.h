@@ -8,11 +8,11 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/schema_class.h>
 #include <dftracer/utils/json/canonical.h>
 #include <dftracer/utils/json/value.h>
 #include <dftracer/utils/json/value_access.h>
 #include <dftracer/utils/json/value_path.h>
+#include <dftracer/utils/trace/index/schema_class.h>
 #include <dftracer/utils/trace/views/view.h>
 
 #include <charconv>
@@ -55,7 +55,7 @@ bool convert(json::Value& e, V& out) {
         }
         const auto d = e.as_double();
         if (!d) return false;
-        const auto whole = index::whole_int64(*d);
+        const auto whole = trace::index::whole_int64(*d);
         if (!whole || !std::in_range<V>(*whole)) return false;
         out = static_cast<V>(*whole);
         return true;
@@ -70,7 +70,7 @@ bool convert(json::Value& e, V& out) {
         out.assign(*s);
         return true;
     } else {
-        static_assert(std::same_as<V, index::Json>);
+        static_assert(std::same_as<V, trace::index::Json>);
         out.text = json::canonical_json_text(e.raw());
         return true;
     }
@@ -78,12 +78,12 @@ bool convert(json::Value& e, V& out) {
 
 template <typename F>
 struct FieldRead;
-template <typename T, index::FixedString PATH, typename... Options>
-struct FieldRead<index::Field<T, PATH, Options...>> {
+template <typename T, trace::index::FixedString PATH, typename... Options>
+struct FieldRead<trace::index::Field<T, PATH, Options...>> {
     static void read(json::Value& root, T& out) {
         auto fill = [&out](json::Value& e) {
-            if constexpr (index::detail::Unwrap<T>::OPTIONAL) {
-                typename index::detail::Unwrap<T>::type v{};
+            if constexpr (trace::index::detail::Unwrap<T>::OPTIONAL) {
+                typename trace::index::detail::Unwrap<T>::type v{};
                 if (!convert(e, v)) return false;
                 out = std::move(v);
             } else {
@@ -102,8 +102,8 @@ struct MemberFill {
     json::Value& root;
     template <typename U>
     operator U() const {
-        static_assert(index::detail::IsField<U>::value,
-                      "schema class members must be index::Field<...>");
+        static_assert(trace::index::detail::IsField<U>::value,
+                      "schema class members must be trace::index::Field<...>");
         U f{};
         FieldRead<U>::read(root, f.value);
         return f;
@@ -122,7 +122,7 @@ T decode(json::Value& root, std::index_sequence<I...>) {
 
 }  // namespace detail::typed_rows
 
-/// Decodes one record into schema class `T` (see index::schema_spec). A
+/// Decodes one record into schema class `T` (see trace::index::schema_spec). A
 /// missing value, or one that does not convert to the member's type, leaves
 /// the member at its default (empty for an optional member). Reads `record`
 /// on demand; when a read hits a syntax error the record is marked broken
@@ -130,7 +130,8 @@ T decode(json::Value& root, std::index_sequence<I...>) {
 template <typename T>
 T decode_row(json::Value& record) {
     return detail::typed_rows::decode<T>(
-        record, std::make_index_sequence<index::detail::member_count<T>()>{});
+        record,
+        std::make_index_sequence<trace::index::detail::member_count<T>()>{});
 }
 
 /// The records `view` selects (its filters, pruning, time window and phase,

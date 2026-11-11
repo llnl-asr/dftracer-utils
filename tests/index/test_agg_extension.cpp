@@ -11,17 +11,17 @@
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/build/corrupt_index.h>
-#include <dftracer/utils/index/index.h>
-#include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/plan/prune.h>
-#include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
-#include <dftracer/utils/index/store/layout.h>
-#include <dftracer/utils/index/store/root_layout.h>
-#include <dftracer/utils/index/store/store_layout.h>
-#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/store/store.h>
+#include <dftracer/utils/trace/index/build/corrupt_index.h>
+#include <dftracer/utils/trace/index/index.h>
+#include <dftracer/utils/trace/index/indexer.h>
+#include <dftracer/utils/trace/index/plan/prune.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/agg_store.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_config.h>
+#include <dftracer/utils/trace/index/store/layout.h>
+#include <dftracer/utils/trace/index/store/root_layout.h>
+#include <dftracer/utils/trace/index/store/store_layout.h>
+#include <dftracer/utils/trace/index/tables.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
@@ -34,7 +34,7 @@
 #include <cstdint>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::index;
+using namespace dftracer::utils::trace::index;
 
 namespace {
 
@@ -116,27 +116,32 @@ void plant_sentinel(const dstd::String& trace) {
     const auto opened = dftu_utils_test::open_test_index(index_of(trace));
     const auto snapshot = dftu_utils_test::index_take(opened.snapshot());
     const auto file = dftu_utils_test::require_indexed_file(snapshot, trace);
-    const auto state = index::extension_state(
-        snapshot, file, index::store::IndexExtension::Bloom);
+    const auto state = trace::index::extension_state(
+        snapshot, file, trace::index::store::IndexExtension::Bloom);
     REQUIRE(state.has_value());
     auto build = dftu_utils_test::rebuild_test_file(opened, trace);
-    for (const auto& path : dftu_utils_test::index_take(index::paths(
-             snapshot, file, index::store::IndexExtension::Bloom))) {
-        index::put_path(build, index::store::IndexExtension::Bloom, path);
+    for (const auto& path : dftu_utils_test::index_take(trace::index::paths(
+             snapshot, file, trace::index::store::IndexExtension::Bloom))) {
+        trace::index::put_path(
+            build, trace::index::store::IndexExtension::Bloom, path);
         for (const auto& [granule, payload] :
-             dftu_utils_test::index_take(index::granules(
-                 snapshot, file, index::store::IndexExtension::Bloom, path)))
-            index::put_path_granule(build, index::store::IndexExtension::Bloom,
-                                    path, granule, payload);
-        const auto whole = dftu_utils_test::index_take(index::path_file(
-            snapshot, file, index::store::IndexExtension::Bloom, path));
+             dftu_utils_test::index_take(trace::index::granules(
+                 snapshot, file, trace::index::store::IndexExtension::Bloom,
+                 path)))
+            trace::index::put_path_granule(
+                build, trace::index::store::IndexExtension::Bloom, path,
+                granule, payload);
+        const auto whole = dftu_utils_test::index_take(trace::index::path_file(
+            snapshot, file, trace::index::store::IndexExtension::Bloom, path));
         if (whole)
-            index::put_path_file(build, index::store::IndexExtension::Bloom,
-                                 path, *whole);
+            trace::index::put_path_file(
+                build, trace::index::store::IndexExtension::Bloom, path,
+                *whole);
     }
-    index::put_path_granule(build, index::store::IndexExtension::Bloom,
-                            SENTINEL, 0, "x");
-    build.finish(index::store::IndexExtension::Bloom, state->params_hash);
+    trace::index::put_path_granule(
+        build, trace::index::store::IndexExtension::Bloom, SENTINEL, 0, "x");
+    build.finish(trace::index::store::IndexExtension::Bloom,
+                 state->params_hash);
     dftu_utils_test::commit_test_build(build);
 }
 
@@ -144,13 +149,14 @@ bool has_sentinel(const dstd::String& trace) {
     const auto snapshot = dftu_utils_test::index_snapshot(index_of(trace));
     const auto file = dftu_utils_test::require_indexed_file(snapshot, trace);
     return !dftu_utils_test::index_take(
-                index::granules(snapshot, file,
-                                index::store::IndexExtension::Bloom, SENTINEL))
+                trace::index::granules(
+                    snapshot, file, trace::index::store::IndexExtension::Bloom,
+                    SENTINEL))
                 .empty();
 }
 
-dstd::Optional<index::ExtensionEntry> agg_entry(const Indexer& ix,
-                                                const dstd::String& trace) {
+dstd::Optional<trace::index::ExtensionEntry> agg_entry(
+    const Indexer& ix, const dstd::String& trace) {
     const auto manifest = dftu_utils_test::ok(ix.manifest());
     for (const auto& f : manifest)
         if (dstd::StringView(f.path) == dstd::StringView(trace))
@@ -217,19 +223,21 @@ TEST_SUITE("AggExtension") {
         {
             // A value that does not decode as a config reads as absent.
             auto store = dftracer::utils::store::Store::open(
-                index::normalize_index_root(index_of(gz)) + "/store");
+                trace::index::normalize_index_root(index_of(gz)) + "/store");
             REQUIRE(store.has_value());
             dftracer::utils::store::NamespaceSpec spec;
             const auto name =
-                index::store::store_layout::agg_meta_namespace_name("config");
+                trace::index::store::store_layout::agg_meta_namespace_name(
+                    "config");
             spec.name.assign(name.data(), name.size());
             auto ns = store->ns(spec);
             REQUIRE(ns.has_value());
             const dftracer::utils::store::ScopeKey scope =
                 dftracer::utils::store::ScopeKey::root();
             const dstd::String key =
-                dstd::String(1, static_cast<char>(
-                                    index::store::layout::agg_kind::META)) +
+                dstd::String(1,
+                             static_cast<char>(
+                                 trace::index::store::layout::agg_kind::META)) +
                 "config";
             dftracer::utils::store::Batch batch =
                 store->building_batch(*ns, scope);
@@ -248,10 +256,10 @@ TEST_SUITE("AggExtension") {
                         .has_value());
         }
         {
-            const auto snapshot =
-                dftu_utils_test::ok(index::plan::open_snapshot(index_of(gz)));
+            const auto snapshot = dftu_utils_test::ok(
+                trace::index::plan::open_snapshot(index_of(gz)));
             CHECK_FALSE(dftu_utils_test::ok(
-                index::schemas::dft::agg::tier::read_config(snapshot)));
+                trace::index::schemas::dft::agg::tier::read_config(snapshot)));
         }
         auto ix = dftu_utils_test::ok(Indexer::open(
             {dstd::String(dstd::StringView(gz))}, with_aggregation(1'000'000)));
@@ -263,7 +271,7 @@ TEST_SUITE("AggExtension") {
     }
 
     TEST_CASE("the message for a corrupt index names the directories") {
-        const auto once = index::build::corrupt_index_message(
+        const auto once = trace::index::build::corrupt_index_message(
             {"/data/a/.dftindex", "/data/b/.dftindex"}, "Corruption: x", false);
         CHECK(once.find("/data/a/.dftindex") != dstd::String::npos);
         CHECK(once.find("/data/b/.dftindex") != dstd::String::npos);
@@ -271,7 +279,7 @@ TEST_SUITE("AggExtension") {
         CHECK(once.find("did not repair") == dstd::String::npos);
         CHECK(once.find("delete that directory and build the index again") !=
               dstd::String::npos);
-        const auto twice = index::build::corrupt_index_message(
+        const auto twice = trace::index::build::corrupt_index_message(
             {"/data/a/.dftindex"}, "Corruption: y", true);
         CHECK(twice.find("clearing its aggregation tier did not repair it") !=
               dstd::String::npos);
@@ -379,8 +387,8 @@ TEST_SUITE("AggExtension") {
             const auto key = dftu_utils_test::index_key(b);
             const dstd::StringView target(key.data(), key.size());
             REQUIRE(default_runtime()
-                        .submit(index::remove_extension(
-                            opened, index::store::IndexExtension::Agg,
+                        .submit(trace::index::remove_extension(
+                            opened, trace::index::store::IndexExtension::Agg,
                             {&target, 1}))
                         .get()
                         .has_value());

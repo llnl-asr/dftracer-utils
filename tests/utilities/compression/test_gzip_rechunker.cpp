@@ -8,9 +8,9 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/utilities/fileio/compress/gzip_member_reader.h>
-#include <dftracer/utils/utilities/fileio/compress/gzip_rechunker.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
+#include <dftracer/utils/fileio/compress/gzip_member_reader.h>
+#include <dftracer/utils/fileio/compress/gzip_rechunker.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -18,7 +18,6 @@
 #include <testing_utilities.h>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities;
 
 namespace {
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/domains/analysis/statistics/detailed_statistics.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/trace/statistics/detailed_statistics.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
 
@@ -9,7 +9,7 @@
 
 using namespace dftracer::utils;
 
-using namespace dftracer::utils::trace::statistics;
+using namespace dftracer::utils::domains::analysis::statistics;
 
 TEST_SUITE("DistributionStats") {
     TEST_CASE("update and count") {

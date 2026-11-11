@@ -5,14 +5,14 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/index.h>
-#include <dftracer/utils/index/plan/prune.h>
-#include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
-#include <dftracer/utils/index/schemas/dft/agg/chunk_columns.h>
-#include <dftracer/utils/index/schemas/dft/agg/system_metrics.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
-#include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/fileio/file_helpers.h>
+#include <dftracer/utils/trace/index/index.h>
+#include <dftracer/utils/trace/index/plan/prune.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/agg_store.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_config.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/chunk_columns.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/system_metrics.h>
+#include <dftracer/utils/trace/index/tables.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 #include <dftracer/utils/trace/views/view_system_collect.h>
@@ -41,7 +41,7 @@ bool is_hash_arg(dstd::StringView path) {
 
 // The plan's time_bucket and group_by do not apply here, as the counters keep
 // their own (host, name, time_bucket) grain.
-dstd::Optional<index::Snapshot> covering_index(const ViewPlan& plan) {
+dstd::Optional<trace::index::Snapshot> covering_index(const ViewPlan& plan) {
     const auto past_pin = is_past_pin(plan);
     if (plan.files.empty() || !past_pin.has_value() || *past_pin)
         return dstd::nullopt;
@@ -51,22 +51,22 @@ dstd::Optional<index::Snapshot> covering_index(const ViewPlan& plan) {
     // it.
     auto snapshot = snapshot_of(plan, index_path);
     if (!snapshot) return dstd::nullopt;
-    const auto config = index::schemas::dft::agg::tier::read_config(*snapshot);
+    const auto config =
+        trace::index::schemas::dft::agg::tier::read_config(*snapshot);
     if (!config || !*config) return dstd::nullopt;
     const auto files = snapshot->files();
     if (!files) return dstd::nullopt;
     dstd::HashSet<dstd::String> current;
     for (const auto& file : *files) {
-        if (snapshot->extension(file, index::store::IndexExtension::Agg,
+        if (snapshot->extension(file, trace::index::store::IndexExtension::Agg,
                                 (*config)->params_hash) ==
-            index::Freshness::Current)
+            trace::index::Freshness::Current)
             current.emplace(file.path().data(), file.path().size());
     }
     if (current.size() != plan.files.size()) return dstd::nullopt;
     for (const auto& f : plan.files) {
         if (f.index_path != index_path) return dstd::nullopt;
-        const dstd::String logical =
-            index::store::internal::get_logical_path(f.file_path);
+        const dstd::String logical = fileio::get_logical_path(f.file_path);
         if (current.find(dstd::StringView(logical)) == current.end())
             return dstd::nullopt;
     }
@@ -94,30 +94,32 @@ struct GroupKeyLess {
 };
 
 using Groups =
-    dstd::Map<GroupKey, index::schemas::dft::agg::SystemAggregationMetrics,
+    dstd::Map<GroupKey,
+              trace::index::schemas::dft::agg::SystemAggregationMetrics,
               GroupKeyLess>;
 
-bool holds_row(const index::schemas::dft::agg::ChunkColumn& column,
+bool holds_row(const trace::index::schemas::dft::agg::ChunkColumn& column,
                std::uint64_t row) {
     return std::binary_search(column.rows.begin(), column.rows.end(), row);
 }
 
-double value_of(const index::schemas::dft::agg::ChunkColumn& column,
+double value_of(const trace::index::schemas::dft::agg::ChunkColumn& column,
                 std::size_t at) {
     switch (column.kind) {
-        case index::schemas::dft::agg::ColumnKind::Int64:
+        case trace::index::schemas::dft::agg::ColumnKind::Int64:
             return static_cast<double>(column.int64_at(at));
-        case index::schemas::dft::agg::ColumnKind::Uint64:
+        case trace::index::schemas::dft::agg::ColumnKind::Uint64:
             return static_cast<double>(column.uint64_at(at));
-        case index::schemas::dft::agg::ColumnKind::Double:
+        case trace::index::schemas::dft::agg::ColumnKind::Double:
             return column.double_at(at);
     }
     return 0.0;
 }
 
 // end() when the column does not hold the row.
-std::size_t row_index(const index::schemas::dft::agg::ChunkColumn& column,
-                      std::uint64_t row) {
+std::size_t row_index(
+    const trace::index::schemas::dft::agg::ChunkColumn& column,
+    std::uint64_t row) {
     const auto it =
         std::lower_bound(column.rows.begin(), column.rows.end(), row);
     if (it == column.rows.end() || *it != row) return column.bits.size();
@@ -126,29 +128,32 @@ std::size_t row_index(const index::schemas::dft::agg::ChunkColumn& column,
 
 // Fills `out` with the group of a sys counter row, false for any other row.
 bool counter_group(
-    const index::schemas::dft::agg::ChunkColumns& block, std::uint64_t r,
-    const index::schemas::dft::agg::AggregationConfig& cfg, GroupKey& out,
-    index::schemas::dft::agg::SystemAggregationMetrics& out_metrics) {
+    const trace::index::schemas::dft::agg::ChunkColumns& block, std::uint64_t r,
+    const trace::index::schemas::dft::agg::AggregationConfig& cfg,
+    GroupKey& out,
+    trace::index::schemas::dft::agg::SystemAggregationMetrics& out_metrics) {
     if (block.phase[r] !=
         static_cast<std::uint8_t>(trace::RecordPhase::Counter))
         return false;
     const dstd::String& cat = block.texts[block.cat[r]];
     if (dstd::StringView(cat) != SYS_CATEGORY) return false;
-    for (const index::schemas::dft::agg::ChunkColumn& column : block.columns) {
+    for (const trace::index::schemas::dft::agg::ChunkColumn& column :
+         block.columns) {
         if (holds_row(column, r) && is_preagg_count(block.texts[column.path]))
             return false;
     }
     const dstd::String& host = block.texts[block.host[r]];
     const dstd::String& name = block.texts[block.name[r]];
     const std::uint64_t bucket =
-        index::schemas::dft::agg::compute_time_bucket(block.ts[r], cfg);
+        trace::index::schemas::dft::agg::compute_time_bucket(block.ts[r], cfg);
     out.host = host;
     out.name = name;
     out.time_bucket = bucket;
-    out.shard = index::schemas::dft::agg::system_shard(host, name);
+    out.shard = trace::index::schemas::dft::agg::system_shard(host, name);
     out_metrics.count += 1;
     out_metrics.update_timestamp(block.ts[r]);
-    for (const index::schemas::dft::agg::ChunkColumn& column : block.columns) {
+    for (const trace::index::schemas::dft::agg::ChunkColumn& column :
+         block.columns) {
         const std::size_t at = row_index(column, r);
         if (at == column.bits.size()) continue;
         const dstd::StringView path = block.texts[column.path];
@@ -163,9 +168,9 @@ bool counter_group(
 dataframe::DataFrame build_counters_frame(const Groups& groups, int shard_begin,
                                           int shard_end) {
     const std::int64_t begin = shard_begin;
-    const std::int64_t end = shard_end <= 0
-                                 ? index::schemas::dft::agg::AGG_KEY_NUM_SHARDS
-                                 : shard_end;
+    const std::int64_t end =
+        shard_end <= 0 ? trace::index::schemas::dft::agg::AGG_KEY_NUM_SHARDS
+                       : shard_end;
     const auto kept = [&](const GroupKey& key) {
         return static_cast<std::int64_t>(key.shard) >= begin &&
                static_cast<std::int64_t>(key.shard) < end;
@@ -233,25 +238,26 @@ dstd::Result<bool> system_collect(const ViewPlan& plan,
     auto index = covering_index(plan);
     if (!index) return false;
     if (shard_end <= 0)
-        shard_end = index::schemas::dft::agg::AGG_KEY_NUM_SHARDS;
-    const auto stored = index::schemas::dft::agg::tier::read_config(*index);
+        shard_end = trace::index::schemas::dft::agg::AGG_KEY_NUM_SHARDS;
+    const auto stored =
+        trace::index::schemas::dft::agg::tier::read_config(*index);
     if (!stored) return stored.error();
     if (!*stored) return false;
-    index::schemas::dft::agg::AggregationConfig cfg;
+    trace::index::schemas::dft::agg::AggregationConfig cfg;
     cfg.time_interval_us = (*stored)->time_interval_us;
 
     Groups groups;
     for (const auto& f : plan.files) {
-        const auto file =
-            index->file(index::store::internal::get_logical_path(f.file_path));
+        const auto file = index->file(fileio::get_logical_path(f.file_path));
         if (!file) return false;
-        const auto walked = index::for_each_agg_chunk_columns(
+        const auto walked = trace::index::for_each_agg_chunk_columns(
             *index, *file,
             [&](std::uint64_t,
-                const index::schemas::dft::agg::ChunkColumns& block) {
+                const trace::index::schemas::dft::agg::ChunkColumns& block) {
                 for (std::uint64_t r = 0; r < block.rows; ++r) {
                     GroupKey key;
-                    index::schemas::dft::agg::SystemAggregationMetrics metrics;
+                    trace::index::schemas::dft::agg::SystemAggregationMetrics
+                        metrics;
                     if (!counter_group(block, r, cfg, key, metrics)) continue;
                     auto it = groups.find(key);
                     if (it == groups.end())

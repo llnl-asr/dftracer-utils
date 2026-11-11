@@ -11,10 +11,10 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/tuple.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/gzip/checkpoint_indexer.h>
-#include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
-#include <dftracer/utils/utilities/reader/internal/reader.h>
-#include <dftracer/utils/utilities/reader/internal/reader_factory.h>
+#include <dftracer/utils/trace/index/gzip/checkpoint_indexer.h>
+#include <dftracer/utils/trace/index/gzip/checkpoint_indexer_factory.h>
+#include <dftracer/utils/trace/reader/internal/reader.h>
+#include <dftracer/utils/trace/reader/internal/reader_factory.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
 #include <testing_utilities.h>
@@ -32,8 +32,8 @@
 #include <tuple>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::index::gzip;
-using namespace dftracer::utils::utilities::reader::internal;
+using namespace dftracer::utils::trace::index::gzip;
+using namespace dftracer::utils::trace::reader::internal;
 using namespace dftu_utils_test;
 
 std::size_t count_json_lines(const dstd::String& content);

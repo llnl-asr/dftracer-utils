@@ -5,10 +5,10 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/extensions/rowset_fold.h>
-#include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/index/source.h>
+#include <dftracer/utils/trace/index/extensions/rowset_fold.h>
+#include <dftracer/utils/trace/index/indexer.h>
+#include <dftracer/utils/trace/index/record_schema.h>
+#include <dftracer/utils/trace/index/source.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
@@ -25,7 +25,7 @@ using namespace dftu_utils_test;
 using namespace test_view_common;
 
 using namespace dftracer::utils::trace::views::detail;
-using namespace dftracer::utils::index::extensions;
+using namespace dftracer::utils::trace::index::extensions;
 
 namespace {
 
@@ -84,8 +84,8 @@ dstd::String write_trace(TestEnvironment& env,
     dstd::fs::remove(pfw).discard();
     if (build)
         dftu_utils_test::ok(
-            dftu_utils_test::ok(
-                index::Indexer::open({dstd::String(dstd::StringView(gz))}))
+            dftu_utils_test::ok(trace::index::Indexer::open(
+                                    {dstd::String(dstd::StringView(gz))}))
                 .build());
     return gz;
 }
@@ -129,30 +129,30 @@ bool interned(const dstd::StringIntern& intern, dstd::StringView text) {
 TEST_SUITE("RowSetFold") {
     TEST_CASE("the built-in sources index their lookup row sets") {
         dstd::Vector<dstd::String> names;
-        for (const auto& r : index::indexed_rowsets(
-                 dftu_utils_test::ok_ref(index::get_schema("dftracer"))))
+        for (const auto& r : trace::index::indexed_rowsets(
+                 dftu_utils_test::ok_ref(trace::index::get_schema("dftracer"))))
             names.emplace_back(r.name);
         CHECK(names ==
               dstd::Vector<dstd::String>{"files", "hosts", "strings", "ranks"});
         names.clear();
-        for (const auto& r : index::indexed_rowsets(
-                 dftu_utils_test::ok_ref(index::get_schema("genesis"))))
+        for (const auto& r : trace::index::indexed_rowsets(
+                 dftu_utils_test::ok_ref(trace::index::get_schema("genesis"))))
             names.emplace_back(r.name);
         CHECK(names.back() == "runs");
-        CHECK(index::indexed_rowsets(
-                  dftu_utils_test::ok_ref(index::get_schema("generic")))
+        CHECK(trace::index::indexed_rowsets(
+                  dftu_utils_test::ok_ref(trace::index::get_schema("generic")))
                   .empty());
     }
 
     TEST_CASE("a row set that aggregates or reads another is not indexed") {
-        const auto& s = dftu_utils_test::ok_ref(index::register_schema(
+        const auto& s = dftu_utils_test::ok_ref(trace::index::register_schema(
             "id: rs_mixed\nsource: |\n"
             "  big = where x > 1 | select x, y;\n"
             "  counts = where x > 1 | group y { n = count() };\n"
             "  keyed = where y in (from big | select y)\n",
             "test"));
         dstd::Vector<dstd::String> names;
-        for (const auto& r : index::indexed_rowsets(s))
+        for (const auto& r : trace::index::indexed_rowsets(s))
             names.emplace_back(r.name);
         CHECK(names == dstd::Vector<dstd::String>{"big"});
     }
@@ -161,7 +161,7 @@ TEST_SUITE("RowSetFold") {
         TestEnvironment env(10);
         const dstd::String gz = write_trace(env, trace_lines());
         const auto ixr = dftu_utils_test::ok(
-            index::Indexer::open({dstd::String(dstd::StringView(gz))}));
+            trace::index::Indexer::open({dstd::String(dstd::StringView(gz))}));
         const View v = View::from_file(
             dstd::String(gz),
             dstd::String(dstd::String(determine_index_path(gz, ""))));
@@ -191,7 +191,7 @@ TEST_SUITE("RowSetFold") {
                 R"({"gtype":"func","run":"ab","path":"main;f","ts":1,"depth":1,"count":2})");
         const dstd::String gz = write_trace(env, lines);
         const auto ixr = dftu_utils_test::ok(
-            index::Indexer::open({dstd::String(dstd::StringView(gz))}));
+            trace::index::Indexer::open({dstd::String(dstd::StringView(gz))}));
         const View v = View::from_file(
             dstd::String(gz),
             dstd::String(dstd::String(determine_index_path(gz, ""))));
@@ -230,8 +230,9 @@ TEST_SUITE("RowSetFold") {
         auto lines = trace_lines();
         lines.push_back(lines[0]);
         auto events = fold_events_of(lines, intern);
-        RowSetFold fold(intern, index::indexed_rowsets(dftu_utils_test::ok_ref(
-                                    index::get_schema("dftracer"))));
+        RowSetFold fold(intern,
+                        trace::index::indexed_rowsets(dftu_utils_test::ok_ref(
+                            trace::index::get_schema("dftracer"))));
         ScanUnit unit;
         unit.file_path = "x";
         for (int i = 0; i < 2; ++i) {
@@ -246,8 +247,8 @@ TEST_SUITE("RowSetFold") {
         dstd::StringIntern intern;
         auto events = fold_events_of(trace_lines(), intern);
         RowSetFold fold(intern,
-                        index::indexed_rowsets(dftu_utils_test::ok_ref(
-                            index::get_schema("dftracer"))),
+                        trace::index::indexed_rowsets(dftu_utils_test::ok_ref(
+                            trace::index::get_schema("dftracer"))),
                         16);
         ScanUnit unit;
         unit.file_path = "x";
@@ -261,8 +262,9 @@ TEST_SUITE("RowSetFold") {
     TEST_CASE("a dropped unit leaves no rows") {
         dstd::StringIntern intern;
         auto events = fold_events_of(trace_lines(), intern);
-        RowSetFold fold(intern, index::indexed_rowsets(dftu_utils_test::ok_ref(
-                                    index::get_schema("dftracer"))));
+        RowSetFold fold(intern,
+                        trace::index::indexed_rowsets(dftu_utils_test::ok_ref(
+                            trace::index::get_schema("dftracer"))));
         ScanUnit unit;
         unit.file_path = "x";
         dftu_utils_test::ok(
@@ -280,7 +282,7 @@ TEST_SUITE("RowSetFold") {
             R"({"gtype":"func","run":"ab","path":"main;f","ts":1,)"
             R"("dur":{"sketch":"UNIQUE_SKETCH_BLOB","count":2}})";
         const auto& genesis =
-            dftu_utils_test::ok_ref(index::get_schema("genesis"));
+            dftu_utils_test::ok_ref(trace::index::get_schema("genesis"));
         for (const bool skip : {true, false}) {
             CAPTURE(skip);
             dstd::StringIntern intern;
@@ -314,7 +316,7 @@ TEST_SUITE("RowSetFold") {
                 dstd::to_string(i) + R"(","count":2}})");
         const dstd::String gz = write_trace(env, lines);
         const auto ixr = dftu_utils_test::ok(
-            index::Indexer::open({dstd::String(dstd::StringView(gz))}));
+            trace::index::Indexer::open({dstd::String(dstd::StringView(gz))}));
         const View v = View::from_file(
             dstd::String(gz),
             dstd::String(dstd::String(determine_index_path(gz, ""))));

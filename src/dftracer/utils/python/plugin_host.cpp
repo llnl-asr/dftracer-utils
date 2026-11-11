@@ -4,13 +4,12 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/domains/plugins/config.h>
+#include <dftracer/utils/domains/plugins/plugins.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/index/build/resolve_and_build.h>
-#include <dftracer/utils/plugins/config.h>
-#include <dftracer/utils/plugins/plugins.h>
 #include <dftracer/utils/plugins/result_registry.h>
 #include <dftracer/utils/python/plugin_host.h>
 #include <dftracer/utils/python/py_dict_helpers.h>
@@ -23,6 +22,7 @@
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/build/resolve_and_build.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 // Unconditional: the native-frame result path (OwnedDataFrame) needs the
@@ -55,16 +55,16 @@ using namespace dftracer::utils;
 namespace {
 
 using dftracer::utils::Runtime;
-using dftracer::utils::plugins::ConfigTree;
 using dftracer::utils::plugins::NamedResult;
 using dftracer::utils::plugins::NamedResultRegistry;
 using dftracer::utils::plugins::OwnedArrow;
 using dftracer::utils::plugins::OwnedDataFrame;
 using dftracer::utils::plugins::OwnedLazyFrame;
-using dftracer::utils::plugins::PluginRun;
-using dftracer::utils::plugins::Plugins;
 using dftracer::utils::python::parse_seq;
 using dftracer::utils::python::parse_string_seq;
+using domains::plugins::ConfigTree;
+using domains::plugins::PluginRun;
+using domains::plugins::Plugins;
 
 }  // namespace
 
@@ -146,7 +146,7 @@ coro::CoroTask<void> run_host_scan(
         dftracer::utils::dstd::String index_dir_arg{
             dftracer::utils::dstd::StringView(index_dir)};
         dftracer::utils::python::py_unwrap(
-            co_await dftracer::utils::index::build::ensure_indexes_fresh(
+            co_await dftracer::utils::trace::index::build::ensure_indexes_fresh(
                 "", std::move(to_check), std::move(index_dir_arg)));
     }
 
@@ -219,8 +219,7 @@ PyObject* result_to_py(NamedResult& result) {
     ArrowSchemaMove(&owned->schema, schema.get());
     ArrowArrayMove(&owned->array, array.get());
     return dftracer::utils::python::arrow_result_to_table(
-        utilities::arrow::ArrowExportResult(std::move(schema),
-                                            std::move(array)));
+        trace::arrow::ArrowExportResult(std::move(schema), std::move(array)));
 #else
     PyErr_SetString(PyExc_RuntimeError,
                     "plugin emitted an Arrow result but the extension was "
@@ -441,8 +440,8 @@ PyObject* dftracer::utils::python::plugin_host_results_dict(PyObject* host) {
     return results_to_dict(state_of((PluginHostObject*)host));
 }
 
-const dftracer::utils::plugins::Plugins*
-dftracer::utils::python::plugin_host_plugins(PyObject* host) {
+const domains::plugins::Plugins* dftracer::utils::python::plugin_host_plugins(
+    PyObject* host) {
     if (!PyObject_TypeCheck(host, &PluginHostType)) {
         PyErr_SetString(PyExc_TypeError, "expected a Plugins instance");
         return nullptr;

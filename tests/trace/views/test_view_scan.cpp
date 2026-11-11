@@ -10,10 +10,10 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/fileio/file_helpers.h>
+#include <dftracer/utils/fileio/gzip_line_writer.h>
+#include <dftracer/utils/trace/index/indexer.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
-#include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
 #include <testing_utilities.h>
@@ -212,7 +212,7 @@ TEST_SUITE("View") {
         dstd::String gz = create_multimember_trace(env, n, 512);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
         dftu_utils_test::ok(
-            dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+            dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
                                     {dstd::String(dstd::StringView(gz))}))
                 .build());
 
@@ -366,12 +366,12 @@ TEST_SUITE("View") {
                                 .get());
 
         dstd::Vector<dstd::String> parts_a, parts_b;
-        for (int i = 0; dstd::fs::exists(utilities::fileio::gzip_part_path(
-                                             opts.output_path, i, true))
-                            .value();
+        for (int i = 0;
+             dstd::fs::exists(fileio::gzip_part_path(opts.output_path, i, true))
+                 .value();
              ++i) {
             parts_a.emplace_back(
-                utilities::fileio::gzip_part_path(opts.output_path, i, true));
+                fileio::gzip_part_path(opts.output_path, i, true));
             parts_b.push_back(
                 dir_b + "/" +
                 dstd::String(dstd::PathView(parts_a.back()).filename()));
@@ -938,7 +938,7 @@ View dict_trace(TestEnvironment& env) {
     REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
     dstd::fs::remove(pfw).has_value();
     dftu_utils_test::ok(
-        dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+        dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
                                 {dstd::String(dstd::StringView(gz))}))
             .build());
     return View::from_file(

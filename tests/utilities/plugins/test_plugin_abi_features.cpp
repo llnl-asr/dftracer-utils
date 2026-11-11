@@ -5,9 +5,9 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/domains/plugins/config.h>
+#include <dftracer/utils/domains/plugins/fold_adapter.h>
 #include <dftracer/utils/dstd/string_intern.h>
-#include <dftracer/utils/plugins/config.h>
-#include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/runtime/runtime.h>
 
@@ -16,13 +16,13 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/domains/plugins/compose.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/plugins/compose.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
@@ -146,8 +146,8 @@ dftracer::utils::plugins::Task compose_all(dftracer::utils::plugins::Host h,
     const dftu_svc_coro* c = coro_ext(h);
     ::dftu_task* a = c->spawn(h.raw()->h, inc_fn, ran);
     ::dftu_task* b = c->spawn(h.raw()->h, inc_fn, ran);
-    co_await (dftracer::utils::plugins::compose(h.raw(), a) &&
-              dftracer::utils::plugins::compose(h.raw(), b));
+    co_await (domains::plugins::compose(h.raw(), a) &&
+              domains::plugins::compose(h.raw(), b));
 }
 
 dftracer::utils::plugins::Task compose_any(dftracer::utils::plugins::Host h,
@@ -155,15 +155,15 @@ dftracer::utils::plugins::Task compose_any(dftracer::utils::plugins::Host h,
     const dftu_svc_coro* c = coro_ext(h);
     ::dftu_task* a = c->spawn(h.raw()->h, inc_fn, ran);
     ::dftu_task* b = c->spawn(h.raw()->h, inc_fn, ran);
-    co_await (dftracer::utils::plugins::compose(h.raw(), a) ||
-              dftracer::utils::plugins::compose(h.raw(), b));
+    co_await (domains::plugins::compose(h.raw(), a) ||
+              domains::plugins::compose(h.raw(), b));
 }
 
 dftracer::utils::plugins::Task compose_map(dftracer::utils::plugins::Host h,
                                            std::atomic<int>* ran) {
     const dftu_svc_coro* c = coro_ext(h);
     dstd::Vector<int> items = {0, 1, 2, 3};
-    co_await dftracer::utils::plugins::map(
+    co_await domains::plugins::map(
         h.raw(), items, [&](int) { return c->spawn(h.raw()->h, inc_fn, ran); });
 }
 
@@ -206,20 +206,20 @@ dftracer::utils::plugins::Task op_pipe(dftracer::utils::plugins::Host h,
 // mismatched one is not (this is the value over the raw runtime null check).
 template <class A, class B>
 concept Pipeable = requires(A a, B b) { a | b; };
-using OpII = dftracer::utils::plugins::Op<std::int64_t, std::int64_t>;
-using OpDD = dftracer::utils::plugins::Op<double, double>;
+using OpII = domains::plugins::Op<std::int64_t, std::int64_t>;
+using OpDD = domains::plugins::Op<double, double>;
 static_assert(Pipeable<OpII, OpII>, "i64->i64 | i64->i64 must pipe");
 static_assert(!Pipeable<OpII, OpDD>, "i64->i64 | f64->f64 must not pipe");
 
 dftracer::utils::plugins::Task typed_pipe(dftracer::utils::plugins::Host h,
                                           std::int64_t* result) {
-    OpII a = dftracer::utils::plugins::make_op<std::int64_t, std::int64_t>(
+    OpII a = domains::plugins::make_op<std::int64_t, std::int64_t>(
         h, [](std::int64_t x) { return x * 2; });
-    OpII b = dftracer::utils::plugins::make_op<std::int64_t, std::int64_t>(
+    OpII b = domains::plugins::make_op<std::int64_t, std::int64_t>(
         h, [](std::int64_t x) { return x + 10; });
     std::int64_t in = 5, out = 0;
     int rc = -1;
-    co_await dftracer::utils::plugins::run(a | b, in, out, rc);
+    co_await domains::plugins::run(a | b, in, out, rc);
     *result = (rc == 0) ? out : -1;
 }
 
@@ -229,12 +229,12 @@ dftracer::utils::plugins::Task typed_pipe(dftracer::utils::plugins::Host h,
 // input (the caller keeps `src`), `b` consumes the intermediate.
 dftracer::utils::plugins::Task series_pipe(dftracer::utils::plugins::Host h,
                                            dftu_series** result) {
-    using SOp = dftracer::utils::plugins::Op<dftu_series*, dftu_series*>;
+    using SOp = domains::plugins::Op<dftu_series*, dftu_series*>;
     std::int64_t vals[4] = {1, 2, 3, 4};
     dftu_series* src = dftu_series_new_flat(DFTU_TYPE_INT64, vals, 4, nullptr);
-    SOp a = dftracer::utils::plugins::make_op<dftu_series*, dftu_series*>(
+    SOp a = domains::plugins::make_op<dftu_series*, dftu_series*>(
         h, [](dftu_series* s) { return dftu_series_add(s, s); });
-    SOp b = dftracer::utils::plugins::make_op<dftu_series*, dftu_series*>(
+    SOp b = domains::plugins::make_op<dftu_series*, dftu_series*>(
         h, [](dftu_series* s) {
             dftu_series* r = dftu_series_add(s, s);
             dftu_series_free(s);
@@ -242,7 +242,7 @@ dftracer::utils::plugins::Task series_pipe(dftracer::utils::plugins::Host h,
         });
     dftu_series* out = nullptr;
     int rc = -1;
-    co_await dftracer::utils::plugins::run(a | b, src, out, rc);
+    co_await domains::plugins::run(a | b, src, out, rc);
     dftu_series_free(src);
     *result = (rc == 0) ? out : nullptr;
 }
@@ -288,10 +288,11 @@ template <class Slice>
 struct FoldFixture {
     dstd::StringIntern intern;
     dftu_plugin* plugin;
-    dstd::UniquePtr<plugins::PluginFold> fold;
+    dstd::UniquePtr<domains::plugins::PluginFold> fold;
     explicit FoldFixture(const dftu_value* config)
         : plugin(dftracer::utils::plugins::make_plugin<Slice>(config)),
-          fold(dstd::make_unique<plugins::PluginFold>(plugin, intern)) {}
+          fold(dstd::make_unique<domains::plugins::PluginFold>(plugin,
+                                                               intern)) {}
     dftu_plugin_host& host() { return fold->host(); }
     ~FoldFixture() {
         fold.reset();
@@ -380,7 +381,7 @@ TEST_CASE("plugin ABI: on_batch hands the batch as columns") {
     p.on_batch = col_on_batch;
 
     dstd::StringIntern intern;
-    plugins::PluginFold fold(&p, intern);
+    domains::plugins::PluginFold fold(&p, intern);
     dstd::Vector<trace::views::detail::FoldEvent> evs = {
         make_event(intern, "f", "h"), make_event(intern, "f", "h"),
         make_event(intern, "f", "h")};
@@ -402,9 +403,9 @@ TEST_CASE("plugin ABI: config tree reads scalars, nested, array, and default") {
             .discard();
     }
 
-    auto loaded = plugins::ConfigTree::from_json_file(path);
+    auto loaded = domains::plugins::ConfigTree::from_json_file(path);
     REQUIRE(loaded.has_value());
-    plugins::ConfigTree tree = std::move(*loaded);
+    domains::plugins::ConfigTree tree = std::move(*loaded);
     dftu_plugin* p =
         dftracer::utils::plugins::make_plugin<ConfigSlice>(tree.root());
     auto* slice = static_cast<ConfigSlice*>(p->make_slice(p->self));
@@ -525,7 +526,7 @@ TEST_CASE("plugin ABI: duql_matches reads a non-flat number column") {
 TEST_CASE("plugin ABI: plan_duql on fhash delivers only matching events") {
     SUBCASE("fhash predicate keeps every match, drops the rest") {
         g_count = CountState{};
-        plugins::ConfigTree tree;
+        domains::plugins::ConfigTree tree;
         tree.set("duql", "fhash == \"fhAAA\"");
         FoldFixture<CountSlice> fx(tree.root());
 
@@ -549,7 +550,7 @@ TEST_CASE("plugin ABI: plan_duql on fhash delivers only matching events") {
 
     SUBCASE("hhash predicate routes on a non cat/name field too") {
         g_count = CountState{};
-        plugins::ConfigTree tree;
+        domains::plugins::ConfigTree tree;
         tree.set("duql", "hhash == \"hhZ\"");
         FoldFixture<CountSlice> fx(tree.root());
 
@@ -759,12 +760,10 @@ TEST_CASE("plugin ABI: typed compose Op pipes real values") {
 
 TEST_CASE(
     "plugin ABI: a column rides the compose pipe as a DFTU_T_SERIES value") {
-    static_assert(
-        dftracer::utils::plugins::type_tag<dftu_series*>() == DFTU_T_SERIES,
-        "a dftu_series* handle tags as DFTU_T_SERIES");
-    static_assert(
-        dftracer::utils::plugins::type_tag<dftu_dataframe*>() == DFTU_T_TABLE,
-        "a dftu_dataframe* handle tags as DFTU_T_TABLE");
+    static_assert(domains::plugins::type_tag<dftu_series*>() == DFTU_T_SERIES,
+                  "a dftu_series* handle tags as DFTU_T_SERIES");
+    static_assert(domains::plugins::type_tag<dftu_dataframe*>() == DFTU_T_TABLE,
+                  "a dftu_dataframe* handle tags as DFTU_T_TABLE");
     FoldFixture<CountSlice> fx(nullptr);
     dftu_plugin_host& host = fx.host();
 

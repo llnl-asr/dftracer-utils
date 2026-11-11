@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/domains/analysis/statistics/statistics_query_utility.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/trace/statistics/statistics_query_utility.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
 #include <task_result.h>
 
 using namespace dftracer::utils;
 
-using namespace dftracer::utils::trace::statistics;
+using namespace dftracer::utils::domains::analysis::statistics;
 
 static TraceStatistics make_test_stats() {
     TraceStatistics ts;

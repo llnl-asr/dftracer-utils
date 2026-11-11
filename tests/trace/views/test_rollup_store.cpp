@@ -8,7 +8,7 @@
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/cache/rollup_store.h>
+#include <dftracer/utils/trace/index/cache/rollup_store.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
 #include <testing_utilities.h>
@@ -18,7 +18,7 @@
 using namespace dftracer::utils;
 
 using namespace dftracer::utils::trace::views::detail;
-using namespace dftracer::utils::index::cache;
+using namespace dftracer::utils::trace::index::cache;
 
 namespace {
 

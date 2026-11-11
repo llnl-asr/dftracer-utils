@@ -9,8 +9,8 @@
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/json/json.h>
 #include <dftracer/utils/trace/internal/utils.h>
+#include <dftracer/utils/trace/reader/trace_reader.h>
 #include <dftracer/utils/trace/views/view_scan.h>
-#include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
 #include <duql/eval_json.h>
 #include <generator_ok.h>
@@ -222,8 +222,8 @@ ViewCounts view_counts(const dstd::String& gz, const duql::Query& q) {
 
 std::size_t reader_count(dstd::StringView gz, const dstd::String& text) {
     auto run = [&]() -> dftracer::utils::coro::CoroTask<std::size_t> {
-        utilities::reader::TraceReader r({.file_path = dstd::String(gz)});
-        utilities::reader::ReadConfig cfg;
+        trace::reader::TraceReader r({.file_path = dstd::String(gz)});
+        trace::reader::ReadConfig cfg;
         cfg.query = text;
         cfg.buffer_size = READ_BUFFER_BYTES;
         auto gen = dftu_utils_test::ok_items(r.read_json(cfg));

@@ -1,0 +1,673 @@
+// SPDX-License-Identifier: MIT
+#include <dftracer/utils/cli/common_cli.h>
+#include <dftracer/utils/common/archive_format.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/common/timer.h>
+#include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/fileio/file_helpers.h>
+#include <dftracer/utils/trace/index/build/batch_builder.h>
+#include <dftracer/utils/trace/index/build/resolve_and_build.h>
+#include <dftracer/utils/trace/index/build/resolver.h>
+#include <dftracer/utils/trace/index/gzip/checkpoint_indexer.h>
+#include <dftracer/utils/trace/index/gzip/checkpoint_indexer_factory.h>
+#include <dftracer/utils/trace/index/index.h>
+#include <dftracer/utils/trace/index/plan/prune.h>
+#include <dftracer/utils/trace/index/schemas/dft/merged_statistics.h>
+#include <dftracer/utils/trace/index/store/root_layout.h>
+#include <dftracer/utils/trace/index/tables.h>
+#include <dftracer/utils/trace/internal/utils.h>
+#include <dftracer/utils/trace/metadata_collector_utility.h>
+
+#include <mutex>
+
+using namespace dftracer::utils;
+using namespace dftracer::utils::trace;
+using namespace dftracer::utils::trace::index::build;
+using dftracer::utils::trace::index::build::BatchBuilder;
+using dftracer::utils::trace::index::build::IndexBuildBatchConfig;
+using dftracer::utils::trace::index::gzip::CheckpointIndexerFactory;
+using dftracer::utils::trace::index::store::IndexExtension;
+
+class InfoArgParse : public cli::ArgParse {
+   public:
+    cli::InputArgs inputs{
+        cli::DirMode::DefaultEmpty,
+        "Compressed files to inspect (GZIP, TAR.GZ) or a folder of them"};
+    cli::RuntimeArgs runtime_args;
+    cli::IndexingArgs indexing;
+
+    dstd::StringView report = "summary";
+
+    explicit InfoArgParse(cli::ArgParser& p) : ArgParse(p) {
+        indexing.index_dir_help =
+            "Directory to store index files (default: system temp directory)";
+        schema(inputs, runtime_args, indexing);
+    }
+
+   protected:
+    void register_args() override {
+        parser().option(report, {"--report"},
+                        "Report type: summary (aggregate all files, default) "
+                        "or detailed (per-file output)");
+    }
+};
+
+static dstd::String format_size(std::uint64_t bytes) {
+    return common::human_bytes(static_cast<double>(bytes), "", 2);
+}
+
+struct RootInfoSummary {
+    std::size_t file_count = 0;
+    std::uint64_t total_events = 0;
+    std::uint64_t total_lines = 0;
+    std::uint64_t total_uncompressed = 0;
+};
+
+static coro::CoroTask<dstd::Result<dstd::SharedPtr<RootInfoSummary>>>
+load_root_info_summary(dstd::String index_path) {
+    auto result = dstd::make_shared<RootInfoSummary>();
+
+    auto snapshot = trace::index::plan::open_snapshot(index_path);
+    if (!snapshot) co_return snapshot.error();
+    auto listed = snapshot->files();
+    if (!listed) co_return listed.error();
+    result->file_count = listed->size();
+    for (const auto& file : *listed) {
+        auto summary = trace::index::scalar_stats(*snapshot, file);
+        if (!summary) co_return summary.error();
+        if (*summary) result->total_events += (*summary)->stats.total_events;
+        auto meta = trace::index::file_metadata(*snapshot, file);
+        if (!meta) co_return meta.error();
+        if (*meta) {
+            result->total_lines += (*meta)->line_count;
+            result->total_uncompressed += (*meta)->max_bytes;
+        }
+    }
+    co_return result;
+}
+
+// Files of `index_path` in path order, with the ones whose pruning tier is
+// current added to `group`.
+static dstd::Result<void> load_cached_files(dstd::StringView index_path,
+                                            dstd::Vector<dstd::String>& files,
+                                            dstd::Vector<ResolvedFile>& group) {
+    auto snapshot = trace::index::plan::open_snapshot(index_path);
+    if (!snapshot) return snapshot.error();
+    auto listed = snapshot->files();
+    if (!listed) return listed.error();
+    files.reserve(listed->size());
+    group.reserve(listed->size());
+    std::size_t fi = 0;
+    for (const auto& file : *listed) {
+        files.emplace_back(file.path());
+        if (trace::index::extension_current(*snapshot, file,
+                                            IndexExtension::Stats))
+            group.push_back(ResolvedFile{fi, files.back(), {}});
+        ++fi;
+    }
+    return {};
+}
+
+static dstd::Result<dstd::Vector<MetadataCollectorUtilityOutput>>
+process_index_group_info_sync(dstd::String index_path,
+                              dstd::Vector<ResolvedFile> entries) {
+    auto opened = trace::index::plan::open_snapshot(index_path);
+    if (!opened) return opened.error();
+    const auto& snapshot = *opened;
+
+    dstd::Vector<MetadataCollectorUtilityOutput> results;
+    results.reserve(entries.size());
+
+    for (const auto& entry : entries) {
+        MetadataCollectorUtilityOutput meta;
+        meta.file_path.assign(entry.file_path.data(), entry.file_path.size());
+        meta.index_path.assign(index_path.data(), index_path.size());
+        meta.has_index = true;
+        meta.index_valid = true;
+
+        const auto file =
+            snapshot.file(fileio::get_logical_path(entry.file_path));
+        auto metadata_result =
+            file ? trace::index::file_metadata(snapshot, *file)
+                 : dstd::Result<
+                       dstd::Optional<trace::index::store::FileMetadataResult>>(
+                       dstd::nullopt);
+        if (!metadata_result) return metadata_result.error();
+        const auto& metadata = *metadata_result;
+        if (!metadata) {
+            meta.success = false;
+            meta.error_message = "No file metadata found in shared index";
+            results.push_back(std::move(meta));
+            continue;
+        }
+
+        meta.format = CheckpointIndexerFactory::detect_format(entry.file_path);
+        meta.compressed_size = 0;
+        meta.checkpoint_size = metadata->checkpoint_size;
+        meta.line_count = metadata->line_count;
+        meta.uncompressed_size = metadata->max_bytes;
+        meta.size_mb =
+            static_cast<double>(meta.uncompressed_size) / (1024.0 * 1024.0);
+        meta.start_line = 1;
+        meta.end_line = meta.line_count;
+
+        if (meta.checkpoint_size > 0 && meta.uncompressed_size > 0) {
+            meta.checkpoint_count =
+                (meta.uncompressed_size + meta.checkpoint_size - 1) /
+                meta.checkpoint_size;
+        }
+
+        auto merged_result =
+            trace::index::schemas::dft::merged_statistics(snapshot, *file);
+        if (!merged_result) return merged_result.error();
+        const auto& merged = *merged_result;
+        if (merged) {
+            meta.valid_events = merged->stats.total_events;
+            if (merged->chunk_count > 0) {
+                meta.checkpoint_count = merged->chunk_count;
+            }
+        } else {
+            meta.valid_events = meta.line_count;
+        }
+
+        meta.size_per_line =
+            (meta.valid_events > 0)
+                ? meta.size_mb / static_cast<double>(meta.valid_events)
+                : 0.0;
+        meta.success = true;
+        results.push_back(std::move(meta));
+    }
+
+    return results;
+}
+
+static coro::CoroTask<
+    dstd::Result<dstd::Vector<MetadataCollectorUtilityOutput>>>
+process_index_group_info(dstd::SharedPtr<dstd::String> index_path,
+                         dstd::SharedPtr<dstd::Vector<ResolvedFile>> entries) {
+    co_return process_index_group_info_sync(std::move(*index_path),
+                                            std::move(*entries));
+}
+
+// The file's manifest: each extension built for it, and whether it is usable.
+static void print_extensions(const MetadataCollectorUtilityOutput& info,
+                             const trace::index::Snapshot& snapshot) {
+    using dftracer::utils::trace::index::store::ALL_EXTENSIONS;
+    using dftracer::utils::trace::index::store::extension_name;
+    const auto file = snapshot.file(fileio::get_logical_path(info.file_path));
+    if (!file) return;
+    auto schema = trace::index::schema(snapshot, *file);
+    if (!schema) {
+        std::printf("  Extensions: unreadable (%s)\n", schema.error().c_str());
+        return;
+    }
+    auto plugins = trace::index::plugins(snapshot, *file);
+    if (!plugins) {
+        std::printf("  Extensions: unreadable (%s)\n", plugins.error().c_str());
+        return;
+    }
+    if (*schema) std::printf("  Schema: %s\n", (*schema)->c_str());
+    std::printf("  Extensions:");
+    for (auto ext : ALL_EXTENSIONS) {
+        const auto name = extension_name(ext);
+        if (trace::index::extension_current(snapshot, *file, ext)) {
+            std::printf(" %.*s", static_cast<int>(name.size()), name.data());
+            continue;
+        }
+        // An extension built at another format version reads as absent.
+        const auto state = snapshot.extension(*file, ext, 0);
+        if (state == trace::index::Freshness::Missing) continue;
+        const char* note = state == trace::index::Freshness::Failed
+                               ? " (failed)"
+                               : " (outdated)";
+        std::printf(" %.*s%s", static_cast<int>(name.size()), name.data(),
+                    note);
+    }
+    // No plugin is loaded here, so a plugin extension's currency is
+    // unknown.
+    for (const auto& plugin : *plugins)
+        std::printf(" %s (plugin%s)", plugin.name.c_str(),
+                    plugin.ready ? "" : ", failed");
+    std::printf("\n");
+}
+
+static void print_file_info(const MetadataCollectorUtilityOutput& info,
+                            const trace::index::Snapshot& snapshot,
+                            bool detailed) {
+    std::printf("========================================\n");
+    std::printf("File: %s\n", info.file_path.c_str());
+    std::printf("========================================\n");
+
+    if (!info.success) {
+        std::printf("  Status: ERROR - %s\n", info.error_message.c_str());
+        std::printf("\n");
+        return;
+    }
+
+    std::printf("Basic Information:\n");
+    std::printf("  Format: %s\n", common::get_format_name(info.format));
+    std::printf("  Status: %s\n", "OK");
+
+    std::printf("\nFile Size:\n");
+    if (info.compressed_size > 0) {
+        std::printf("  Compressed:   %12s (%llu bytes)\n",
+                    format_size(info.compressed_size).c_str(),
+                    (unsigned long long)info.compressed_size);
+    }
+    std::printf("  Uncompressed: %12s (%llu bytes)\n",
+                format_size(info.uncompressed_size).c_str(),
+                (unsigned long long)info.uncompressed_size);
+
+    if (info.compressed_size > 0 && info.uncompressed_size > 0 &&
+        info.compressed_size != info.uncompressed_size) {
+        double ratio =
+            100.0 * (1.0 - static_cast<double>(info.compressed_size) /
+                               static_cast<double>(info.uncompressed_size));
+        std::printf("  Savings:      %.2f%% reduction\n", ratio);
+    }
+
+    std::printf("\nContent:\n");
+    std::printf("  Total Lines: %llu\n", (unsigned long long)info.line_count);
+    std::printf("  Valid Events: %zu\n", info.valid_events);
+
+    if (info.has_index && info.index_valid) {
+        std::printf("\nIndex Information:\n");
+        std::printf("  Index Store: %s\n", info.index_path.c_str());
+        std::printf("  Checkpoint Size: %s\n",
+                    format_size(info.checkpoint_size).c_str());
+        std::printf("  Checkpoints: %zu\n", info.checkpoint_count);
+        print_extensions(info, snapshot);
+    }
+
+    if (detailed) {
+        std::printf("\nDetailed Statistics:\n");
+        std::printf("  Start Line: %zu\n", info.start_line);
+        std::printf("  End Line: %zu\n", info.end_line);
+        std::printf("  Size (MB): %.6f\n", info.size_mb);
+        std::printf("  MB per Event: %.8f\n", info.size_per_line);
+
+        if (info.checkpoint_count > 0 && info.line_count > 0) {
+            auto lines_per_ckpt = info.line_count / info.checkpoint_count;
+            std::printf("\nRandom Access Performance:\n");
+            std::printf("  Worst-case lines to scan: %llu (1 checkpoint)\n",
+                        (unsigned long long)lines_per_ckpt);
+            std::printf("  Avg lines to scan: %llu (0.5 checkpoint)\n",
+                        (unsigned long long)(lines_per_ckpt / 2));
+        }
+    }
+
+    std::printf("\n");
+}
+
+static coro::CoroTask<dstd::Result<void>> auto_index_and_resolve(
+    dstd::Vector<FileWorkItem>& files_needing_index,
+    const dstd::String& index_dir, std::size_t checkpoint_size,
+    std::size_t executor_threads,
+    dstd::HashMap<dstd::String, dstd::Vector<ResolvedFile>>& indexed_groups) {
+    auto index_path = internal::determine_index_path(
+        files_needing_index.front().file_path, index_dir);
+    dftracer::utils::trace::index::release_root(index_path);
+
+    {
+        auto batch_config = dstd::make_shared<IndexBuildBatchConfig>();
+        batch_config->file_paths.reserve(files_needing_index.size());
+        for (const auto& item : files_needing_index) {
+            batch_config->file_paths.push_back(item.file_path);
+        }
+        batch_config->index_dir = index_dir;
+        batch_config->checkpoint_size = checkpoint_size;
+        batch_config->parallelism = executor_threads;
+
+        auto batch_result =
+            co_await BatchBuilder::process(std::move(batch_config));
+
+        for (const auto& result : batch_result.results) {
+            if (!result.success && !result.error_message.empty()) {
+                DFTRACER_UTILS_LOG_ERROR("Auto-indexing failed for {}: {}",
+                                         result.file_path,
+                                         result.error_message);
+            }
+        }
+    }
+
+    dstd::Vector<dstd::String> newly_indexed;
+    newly_indexed.reserve(files_needing_index.size());
+    for (const auto& item : files_needing_index) {
+        newly_indexed.push_back(item.file_path);
+    }
+
+    Resolver resolver;
+    ResolverInput refresh_input;
+    refresh_input.files = std::move(newly_indexed);
+    refresh_input.index_dir = index_dir;
+    refresh_input.require_checkpoints = true;
+
+    auto refreshed = co_await resolver(refresh_input);
+    if (!refreshed) co_return refreshed.error();
+    auto& refresh_result = *refreshed;
+
+    if (!refresh_result.cached.empty()) {
+        indexed_groups[refresh_result.index_path] =
+            std::move(refresh_result.cached);
+    }
+    co_return dstd::Result<void>{};
+}
+
+static coro::CoroTask<int> run_info(const InfoArgParse* cli) {
+    const dstd::String directory(cli->inputs.directory);
+    const auto report = cli->report;
+    const auto force_rebuild = cli->indexing.force;
+    const auto checkpoint_size = cli->indexing.checkpoint_size;
+    const dstd::String index_dir(cli->indexing.index_dir);
+    const auto executor_threads = cli->runtime_args.executor_threads;
+    const bool summary_mode = (report != "detailed");
+
+    common::Timer stages_storage("dftracer_info");
+    common::Timer* stages =
+        cli->runtime_args.time_profiling ? &stages_storage : nullptr;
+    common::Timer overall(true);
+
+    dstd::Vector<dstd::String> files;
+    dstd::Vector<dstd::String> cli_files;
+    for (const auto file : cli->inputs.files) cli_files.emplace_back(file);
+    dstd::Vector<FileWorkItem> files_needing_index;
+    dstd::HashMap<dstd::String, dstd::Vector<ResolvedFile>> indexed_groups;
+
+    {
+        common::ScopedTimer _t(stages, "collect_and_classify");
+
+        if (!directory.empty()) {
+            if (!common::input_exists(directory)) {
+                DFTRACER_UTILS_LOG_ERROR("Directory does not exist: {}",
+                                         directory);
+                co_return 1;
+            }
+
+            auto fresh = co_await ensure_index_fresh(directory, "", index_dir,
+                                                     force_rebuild);
+            if (!fresh) co_return cli::report_error(fresh.error());
+
+            auto trusted_index_path =
+                internal::determine_index_path(directory, index_dir);
+            bool has_store = false;
+            if (!force_rebuild) {
+                auto store_exists = dstd::fs::exists(
+                    dstd::PathView(dftracer::utils::trace::index::store_dir(
+                        trusted_index_path)));
+                if (!store_exists.has_value())
+                    co_return cli::report_error(store_exists.error());
+                has_store = *store_exists;
+            }
+            if (has_store) {
+                if (summary_mode) {
+                    common::ScopedTimer rt(stages, "root_summary_read");
+                    auto root_loaded =
+                        co_await load_root_info_summary(trusted_index_path);
+                    if (!root_loaded)
+                        co_return cli::report_error(root_loaded.error());
+                    auto root_result = std::move(*root_loaded);
+
+                    if (stages) stages->print_stages();
+
+                    std::printf("==========================================\n");
+                    std::printf("DFTracer File Info Summary\n");
+                    std::printf("==========================================\n");
+                    std::printf("  Total Files:        %zu\n",
+                                root_result->file_count);
+                    std::printf("  Successful:         %zu\n",
+                                root_result->file_count);
+                    std::printf("  Failed:             0\n");
+                    std::printf("  Total Lines:        %llu\n",
+                                (unsigned long long)root_result->total_lines);
+                    std::printf("  Valid Events:       %llu\n",
+                                (unsigned long long)root_result->total_events);
+                    std::printf(
+                        "  Total Uncompressed: %s (%llu bytes)\n",
+                        format_size(root_result->total_uncompressed).c_str(),
+                        (unsigned long long)root_result->total_uncompressed);
+                    if (root_result->total_events > 0) {
+                        std::printf(
+                            "  Avg Bytes/Event:    %.2f bytes\n",
+                            static_cast<double>(
+                                root_result->total_uncompressed) /
+                                static_cast<double>(root_result->total_events));
+                    }
+                    std::printf("  Processing Time:    %.2f ms\n",
+                                static_cast<double>(overall.elapsed()) / 1e6);
+                    std::printf("==========================================\n");
+                    co_return 0;
+                }
+
+                {
+                    common::ScopedTimer lr(stages, "load_registry");
+                    auto cached =
+                        load_cached_files(trusted_index_path, files,
+                                          indexed_groups[trusted_index_path]);
+                    if (!cached) co_return cli::report_error(cached.error());
+                }
+            } else {
+                common::ScopedTimer ds(stages, "scan_and_resolve");
+                Resolver resolver;
+                auto input = dstd::make_unique<ResolverInput>();
+                input->directory = directory;
+                input->index_dir = index_dir;
+                auto resolved = co_await resolver(*input);
+                if (!resolved) co_return cli::report_error(resolved.error());
+                auto& result = *resolved;
+                files = std::move(result.all_files);
+                if (!result.cached.empty()) {
+                    indexed_groups[result.index_path] =
+                        std::move(result.cached);
+                }
+                files_needing_index = std::move(result.needs_checkpoint);
+            }
+        } else {
+            common::ScopedTimer rs(stages, "resolve_index_state");
+            auto fresh = co_await ensure_indexes_fresh("", cli_files, index_dir,
+                                                       force_rebuild);
+            if (!fresh) co_return cli::report_error(fresh.error());
+            Resolver resolver;
+            auto input = dstd::make_unique<ResolverInput>();
+            input->files = cli_files;
+            input->index_dir = index_dir;
+            auto resolved = co_await resolver(*input);
+            if (!resolved) co_return cli::report_error(resolved.error());
+            auto& result = *resolved;
+            files = std::move(result.all_files);
+            if (!result.cached.empty()) {
+                indexed_groups[result.index_path] = std::move(result.cached);
+            }
+            files_needing_index = std::move(result.needs_checkpoint);
+        }
+    }
+
+    if (files.empty()) {
+        DFTRACER_UTILS_LOG_ERROR("{}", "No files found. Use --help for usage.");
+        co_return 1;
+    }
+
+    dstd::Vector<MetadataCollectorUtilityOutput> all_results;
+    std::mutex results_mutex;
+    dstd::Optional<dstd::Error> group_error;
+
+    if (!indexed_groups.empty()) {
+        common::ScopedTimer _t(stages, "index_batch_read");
+        co_await coro::with_scope(
+            [&](coro::Scope& scope) -> coro::CoroTask<void> {
+                auto* all_results_ptr = &all_results;
+                auto* mutex_ptr = &results_mutex;
+                auto* error_ptr = &group_error;
+                for (auto& [ip, group] : indexed_groups) {
+                    auto idx_path_ptr = dstd::make_shared<dstd::String>(ip);
+                    auto entries_ptr =
+                        dstd::make_shared<dstd::Vector<ResolvedFile>>(
+                            std::move(group));
+                    scope.spawn([idx_path_ptr, entries_ptr, all_results_ptr,
+                                 mutex_ptr,
+                                 error_ptr]() mutable -> coro::CoroTask<void> {
+                        auto infos = co_await process_index_group_info(
+                            std::move(idx_path_ptr), std::move(entries_ptr));
+                        std::lock_guard<std::mutex> lock(*mutex_ptr);
+                        if (!infos) {
+                            if (!*error_ptr) *error_ptr = infos.error();
+                            co_return;
+                        }
+                        for (auto& info : *infos) {
+                            all_results_ptr->push_back(std::move(info));
+                        }
+                    });
+                }
+                co_return;
+            });
+        if (group_error) co_return cli::report_error(*group_error);
+    }
+
+    if (!files_needing_index.empty()) {
+        common::ScopedTimer _t(stages, "auto_index_and_build");
+        auto indexed = co_await auto_index_and_resolve(
+            files_needing_index, index_dir, checkpoint_size, executor_threads,
+            indexed_groups);
+        if (!indexed) co_return cli::report_error(indexed.error());
+
+        if (!indexed_groups.empty()) {
+            common::ScopedTimer t2(stages, "newly_indexed_batch_read");
+            co_await coro::with_scope([&](coro::Scope& scope)
+                                          -> coro::CoroTask<void> {
+                auto* all_results_ptr = &all_results;
+                auto* mutex_ptr = &results_mutex;
+                auto* error_ptr = &group_error;
+                for (auto& [ip, group] : indexed_groups) {
+                    auto idx_path_ptr = dstd::make_shared<dstd::String>(ip);
+                    auto entries_ptr =
+                        dstd::make_shared<dstd::Vector<ResolvedFile>>(
+                            std::move(group));
+                    scope.spawn([idx_path_ptr, entries_ptr, all_results_ptr,
+                                 mutex_ptr,
+                                 error_ptr]() mutable -> coro::CoroTask<void> {
+                        auto infos = co_await process_index_group_info(
+                            std::move(idx_path_ptr), std::move(entries_ptr));
+                        std::lock_guard<std::mutex> lock(*mutex_ptr);
+                        if (!infos) {
+                            if (!*error_ptr) *error_ptr = infos.error();
+                            co_return;
+                        }
+                        for (auto& info : *infos) {
+                            all_results_ptr->push_back(std::move(info));
+                        }
+                    });
+                }
+                co_return;
+            });
+            if (group_error) co_return cli::report_error(*group_error);
+        }
+    }
+
+    if (stages) stages->print_stages();
+    if (summary_mode) {
+        std::uint64_t total_uncompressed = 0;
+        std::uint64_t total_lines = 0;
+        std::uint64_t total_events = 0;
+        std::size_t ok = 0;
+        std::size_t bad = 0;
+
+        for (const auto& r : all_results) {
+            if (r.success) {
+                total_uncompressed += r.uncompressed_size;
+                total_lines += r.line_count;
+                total_events += r.valid_events;
+                ok++;
+            } else {
+                bad++;
+            }
+        }
+
+        std::printf("==========================================\n");
+        std::printf("DFTracer File Info Summary\n");
+        std::printf("==========================================\n");
+        std::printf("  Total Files:        %zu\n", files.size());
+        std::printf("  Successful:         %zu\n", ok);
+        std::printf("  Failed:             %zu\n", bad);
+        std::printf("  Total Lines:        %llu\n",
+                    (unsigned long long)total_lines);
+        std::printf("  Valid Events:       %llu\n",
+                    (unsigned long long)total_events);
+        std::printf("  Total Uncompressed: %s (%llu bytes)\n",
+                    format_size(total_uncompressed).c_str(),
+                    (unsigned long long)total_uncompressed);
+
+        if (total_events > 0) {
+            std::printf("  Avg Bytes/Event:    %.2f bytes\n",
+                        static_cast<double>(total_uncompressed) /
+                            static_cast<double>(total_events));
+        }
+
+        std::printf("  Processing Time:    %.2f ms\n",
+                    static_cast<double>(overall.elapsed()) / 1e6);
+        std::printf("==========================================\n");
+
+        co_return (bad == 0) ? 0 : 1;
+    }
+
+    dstd::HashMap<dstd::String, trace::index::Snapshot> snapshots;
+    for (const auto& r : all_results) {
+        auto it = snapshots.find(r.index_path);
+        if (it == snapshots.end()) {
+            auto opened = trace::index::plan::open_snapshot(r.index_path);
+            if (!opened) co_return cli::report_error(opened.error());
+            it = snapshots.emplace(r.index_path, std::move(*opened)).first;
+        }
+        print_file_info(r, it->second, !summary_mode);
+    }
+
+    if (files.size() > 1) {
+        std::uint64_t total_uncompressed = 0;
+        std::uint64_t total_lines = 0;
+        std::size_t ok = 0;
+
+        for (const auto& r : all_results) {
+            if (r.success) {
+                ok++;
+                total_uncompressed += r.uncompressed_size;
+                total_lines += r.line_count;
+            }
+        }
+
+        std::printf("==========================================\n");
+        std::printf("Summary\n");
+        std::printf("==========================================\n");
+        std::printf("Total Files: %zu\n", files.size());
+        std::printf("Successful: %zu\n", ok);
+        std::printf("Failed: %zu\n", files.size() - ok);
+        std::printf("Total Lines: %llu\n", (unsigned long long)total_lines);
+        std::printf("Total Uncompressed: %s\n",
+                    format_size(total_uncompressed).c_str());
+        std::printf("Processing Time: %.2f ms\n",
+                    static_cast<double>(overall.elapsed()) / 1e6);
+    }
+
+    co_return 0;
+}
+
+int main(int argc, char** argv) {
+    return cli::cli_main<InfoArgParse>(
+        argc, argv, "dftracer_info",
+        "Display metadata and index information for DFTracer compressed files "
+        "using composable utilities",
+        [](InfoArgParse& cli) {
+            return cli::exit_code_of(
+                cli::run_on_pool("DFTracer Info", cli.runtime_args,
+                                 [&cli](coro::Scope&) -> coro::CoroTask<int> {
+                                     co_return co_await run_info(&cli);
+                                 }));
+        });
+}

@@ -5,25 +5,25 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/detail/coro.h>
+#include <dftracer/utils/domains/server/http_request.h>
+#include <dftracer/utils/domains/server/http_response.h>
+#include <dftracer/utils/domains/server/router.h>
+#include <dftracer/utils/domains/server/trace_index.h>
+#include <dftracer/utils/domains/server/viz_api.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/errc.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/server/http_request.h>
-#include <dftracer/utils/server/http_response.h>
-#include <dftracer/utils/server/router.h>
-#include <dftracer/utils/server/trace_index.h>
-#include <dftracer/utils/server/viz_api.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
 #include <testing_utilities.h>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::server;
+using namespace dftracer::utils::domains::server;
 
 namespace {
 
@@ -42,7 +42,7 @@ dstd::UniquePtr<Served> serve(const dstd::String& name) {
                    dstd::to_string(1000 + i * 10) +
                    R"(,"dur":100,"ph":"X","args":{"ret":4096}})" + "\n";
     content += "]\n";
-    utilities::fileio::compress::GzipMemberCompressor comp;
+    fileio::compress::GzipMemberCompressor comp;
     auto member = comp.compress_member(content.data(), content.size());
     REQUIRE(member.has_value());
     {

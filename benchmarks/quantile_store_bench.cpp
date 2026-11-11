@@ -17,7 +17,7 @@
 #include <dftracer/utils/dataframe/sketch.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/schemas/dft/agg/quantile_store.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/quantile_store.h>
 
 #include <chrono>
 #include <cmath>
@@ -31,7 +31,7 @@ using namespace dftracer::utils;
 namespace {
 
 using dftracer::utils::dstd::Vector;
-using dftracer::utils::index::schemas::dft::agg::QuantileStore;
+using dftracer::utils::trace::index::schemas::dft::agg::QuantileStore;
 
 constexpr std::size_t VALUES = 1000000;
 constexpr std::size_t BATCH = 4096;

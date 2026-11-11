@@ -8,11 +8,11 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/build/batch_builder.h>
-#include <dftracer/utils/index/event_cost.h>
-#include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
-#include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/build/batch_builder.h>
+#include <dftracer/utils/trace/index/event_cost.h>
+#include <dftracer/utils/trace/index/extensions/scalable_bloom_filter.h>
+#include <dftracer/utils/trace/index/schemas/dft/chunk_statistics.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
@@ -26,7 +26,7 @@
 #include <utility>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::index;
+using namespace dftracer::utils::trace::index;
 
 namespace {
 
@@ -75,14 +75,15 @@ dstd::String write_trace(const dstd::String& dir) {
 
 void build_one(const dstd::String& file, const dstd::String& index_dir) {
     Runtime rt(4);
-    index::build::IndexBuildBatchResult result;
+    trace::index::build::IndexBuildBatchResult result;
     auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-        auto config = dstd::make_shared<index::build::IndexBuildBatchConfig>();
+        auto config =
+            dstd::make_shared<trace::index::build::IndexBuildBatchConfig>();
         config->file_paths = {dstd::String(dstd::StringView(file))};
         config->index_dir = index_dir;
         config->parallelism = 4;
-        result =
-            co_await index::build::BatchBuilder::process(std::move(config));
+        result = co_await trace::index::build::BatchBuilder::process(
+            std::move(config));
     });
     dftu_utils_test::ok(rt.submit(std::move(task), "event-cost").wait());
     rt.shutdown();
@@ -132,7 +133,7 @@ TEST_SUITE("IndexEventCost") {
     }
 
     TEST_CASE("statistics found by slot equal statistics found by string") {
-        using Stats = index::schemas::dft::ChunkStatistics;
+        using Stats = trace::index::schemas::dft::ChunkStatistics;
         constexpr const char* NAMES[] = {"read", "write", "open", "close",
                                          "seek", "stat",  "sync"};
         constexpr const char* CATS[] = {"POSIX", "STDIO", "APP"};
@@ -202,7 +203,7 @@ TEST_SUITE("IndexEventCost") {
 }
 
 TEST_CASE("stored duration sums keep 17 significant digits") {
-    index::schemas::dft::ChunkStatistics stats;
+    trace::index::schemas::dft::ChunkStatistics stats;
     stats.name_duration_sums["read"] = 0.1;
     CHECK(stats.name_duration_sums_json() == R"({"read":0.10000000000000001})");
 }

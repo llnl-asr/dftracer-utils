@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_config.h>
 #include <doctest/doctest.h>
 
-using namespace dftracer::utils::index::schemas::dft::agg;
+using namespace dftracer::utils::trace::index::schemas::dft::agg;
 
 TEST_SUITE("AggregationConfig") {
     TEST_CASE("AggregationConfig - Default values") {

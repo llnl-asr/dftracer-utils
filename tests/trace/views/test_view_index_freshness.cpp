@@ -6,9 +6,9 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/build/resolve_and_build.h>
-#include <dftracer/utils/index/build/resolver.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
+#include <dftracer/utils/trace/index/build/resolve_and_build.h>
+#include <dftracer/utils/trace/index/build/resolver.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_config.h>
 #include <task_result.h>
 #include <testing_utilities.h>
 #include <trace/views/test_view_common.h>
@@ -62,37 +62,36 @@ void rewrite_events(const dstd::String& gz, const char* cat, int n,
 }
 
 coro::CoroTask<void> build_tier(dstd::String gz, dstd::String index_dir = "") {
-    dftracer::utils::index::build::ResolveAndBuildInput in;
+    dftracer::utils::trace::index::build::ResolveAndBuildInput in;
     in.files.push_back(dstd::String(dstd::StringView(gz)));
     in.index_dir = std::move(index_dir);
     in.require_checkpoints = true;
     co_await coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-        dftu_utils_test::ok(
-            co_await dftracer::utils::index::build::resolve_and_build_index(
-                std::move(in)));
+        dftu_utils_test::ok(co_await dftracer::utils::trace::index::build::
+                                resolve_and_build_index(std::move(in)));
     });
 }
 
 coro::CoroTask<void> build_files(dstd::Vector<dstd::String> files) {
-    dftracer::utils::index::build::ResolveAndBuildInput in;
+    dftracer::utils::trace::index::build::ResolveAndBuildInput in;
     for (const auto& file : files) in.files.emplace_back(file);
     in.require_checkpoints = true;
     co_await coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-        dftu_utils_test::ok(
-            co_await dftracer::utils::index::build::resolve_and_build_index(
-                std::move(in)));
+        dftu_utils_test::ok(co_await dftracer::utils::trace::index::build::
+                                resolve_and_build_index(std::move(in)));
     });
 }
 
-coro::CoroTask<dftracer::utils::index::build::ResolverResult> resolve_files(
-    dstd::Vector<dstd::String> files) {
-    dftracer::utils::index::build::ResolverInput in;
+coro::CoroTask<dftracer::utils::trace::index::build::ResolverResult>
+resolve_files(dstd::Vector<dstd::String> files) {
+    dftracer::utils::trace::index::build::ResolverInput in;
     for (const auto& file : files) in.files.emplace_back(file);
     in.require_checkpoints = true;
-    dftracer::utils::index::build::ResolverResult result;
+    dftracer::utils::trace::index::build::ResolverResult result;
     co_await coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
         result = dftu_utils_test::ok(
-            co_await dftracer::utils::index::build::Resolver{}(scope, in));
+            co_await dftracer::utils::trace::index::build::Resolver{}(scope,
+                                                                      in));
     });
     co_return result;
 }
@@ -167,8 +166,8 @@ TEST_SUITE("ViewIndexFreshness") {
         const auto before = dstd::fs::mtime_ns(gz).value();
         REQUIRE(
             dstd::fs::set_mtime_ns(gz, before + 10'000'000'000ULL).has_value());
-        const auto want = static_cast<std::uint64_t>(
-            index::store::internal::get_file_modification_time(gz));
+        const auto want =
+            static_cast<std::uint64_t>(fileio::get_file_modification_time(gz));
 
         CHECK(rows(dir_view(env.dir()), R"(cat == "A")") == MEMBER_EVENTS);
         const auto snapshot = dftu_utils_test::index_snapshot(
@@ -202,9 +201,9 @@ TEST_SUITE("ViewIndexFreshness") {
 
         const auto snapshot = dftu_utils_test::index_snapshot(idx);
         const auto other = dftu_utils_test::require_indexed_file(snapshot, f2);
-        CHECK(other.stat().mtime ==
-              static_cast<std::uint64_t>(
-                  index::store::internal::get_file_modification_time(f2)));
+        CHECK(
+            other.stat().mtime ==
+            static_cast<std::uint64_t>(fileio::get_file_modification_time(f2)));
         CHECK(rows(dir_view(d2, root), R"(cat == "C")") == MEMBER_EVENTS);
         CHECK(count_by(by_cat(dir_view(d2, root)), "c") == MEMBER_EVENTS);
     }

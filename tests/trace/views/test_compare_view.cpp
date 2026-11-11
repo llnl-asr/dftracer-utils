@@ -2,7 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/trace/comparator/compare_view.h>
+#include <dftracer/utils/trace/views/compare_view.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
 #include <trace/views/test_view_common.h>
@@ -52,7 +52,7 @@ TEST_SUITE("CompareView") {
             "compare",
             coro::with_scope(
                 [&](coro::Scope&) -> dftracer::utils::coro::CoroTask<void> {
-                    auto view = comparator::CompareView::of(
+                    auto view = trace::views::CompareView::of(
                                     View::from_file(dstd::String(base_gz),
                                                     dstd::String(base_idx)),
                                     View::from_file(dstd::String(var_gz),

@@ -44,8 +44,8 @@ dstd::Set<dstd::String> lazy_def_names() {
     return names;
 }
 
-// Registered by utilities/host_ops.cpp outside the .def tables (I/O ops the
-// columnar engine itself has no business depending on, per
+// Registered by domains/plugins/host_ops.cpp outside the .def tables (I/O ops
+// the columnar engine itself has no business depending on, per
 // exported_series_ops.def's own header comment). Shrinks only if one of
 // these moves into the .def; grows only with a matching host_ops.cpp change.
 const dstd::Set<dstd::String>& runtime_registered_series_ops() {
@@ -57,7 +57,7 @@ const dstd::Set<dstd::String>& runtime_registered_series_ops() {
     return names;
 }
 
-// Registered by utilities/arrow/frame_ops.cpp: the Arrow-layer
+// Registered by trace/arrow/frame_ops.cpp: the Arrow-layer
 // relational kernels, which live above the dataframe library and so cannot be
 // .def rows. Grows only with a matching frame_ops.cpp change.
 const dstd::Set<dstd::String>& runtime_registered_frame_ops() {

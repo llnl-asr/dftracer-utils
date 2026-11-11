@@ -6,20 +6,20 @@
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
-#include <dftracer/utils/utilities/fileio/lines/sources/async_indexed_file_line_generator.h>
-#include <dftracer/utils/utilities/reader/internal/reader_factory.h>
+#include <dftracer/utils/trace/index/gzip/checkpoint_indexer_factory.h>
+#include <dftracer/utils/trace/reader/async_indexed_file_line_generator.h>
+#include <dftracer/utils/trace/reader/internal/reader_factory.h>
 #include <doctest/doctest.h>
 #include <generator_ok.h>
 #include <task_result.h>
 #include <testing_utilities.h>
 
-using namespace dftracer::utils::utilities::fileio::lines::sources;
-using namespace dftracer::utils::utilities::fileio::lines;
+using namespace dftracer::utils::trace::reader;
+using namespace dftracer::utils::fileio::lines;
 using namespace dftracer::utils;
 using namespace dftracer::utils::coro;
-using namespace dftracer::utils::index::gzip;
-using namespace dftracer::utils::utilities::reader::internal;
+using namespace dftracer::utils::trace::index::gzip;
+using namespace dftracer::utils::trace::reader::internal;
 using namespace dftu_utils_test;
 
 // The first item of a generator of Results.
@@ -70,9 +70,10 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             REQUIRE(indexer != nullptr);
             dftu_utils_test::build_indexer(*indexer);
 
-            auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
-                              .with_line_range(1, 10);
+            auto config =
+                dftracer::utils::trace::reader::IndexedFileLineIteratorConfig()
+                    .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
+                    .with_line_range(1, 10);
 
             auto gen =
                 dftu_utils_test::ok_items(async_indexed_file_lines(config));
@@ -93,9 +94,10 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             REQUIRE(indexer != nullptr);
             dftu_utils_test::build_indexer(*indexer);
 
-            auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
-                              .with_line_range(5, 10);
+            auto config =
+                dftracer::utils::trace::reader::IndexedFileLineIteratorConfig()
+                    .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
+                    .with_line_range(5, 10);
 
             auto gen =
                 dftu_utils_test::ok_items(async_indexed_file_lines(config));
@@ -116,9 +118,10 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             REQUIRE(indexer != nullptr);
             dftu_utils_test::build_indexer(*indexer);
 
-            auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
-                              .with_line_range(7, 7);
+            auto config =
+                dftracer::utils::trace::reader::IndexedFileLineIteratorConfig()
+                    .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
+                    .with_line_range(7, 7);
 
             auto gen =
                 dftu_utils_test::ok_items(async_indexed_file_lines(config));
@@ -141,9 +144,10 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             dftu_utils_test::build_indexer(*indexer);
 
             // end=0 should auto-detect total lines
-            auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
-                              .with_line_range(10, 0);
+            auto config =
+                dftracer::utils::trace::reader::IndexedFileLineIteratorConfig()
+                    .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
+                    .with_line_range(10, 0);
 
             auto gen =
                 dftu_utils_test::ok_items(async_indexed_file_lines(config));
@@ -170,10 +174,11 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
                 ReaderFactory::create(gz_path, dstd::fmt<"{}.idx">(gz_path)));
             REQUIRE(reader != nullptr);
 
-            auto config = IndexedFileLineIteratorConfig()
-                              .with_reader(reader)
-                              .with_line_range(2, 4)
-                              .with_buffer_size(4096);
+            auto config =
+                dftracer::utils::trace::reader::IndexedFileLineIteratorConfig()
+                    .with_reader(reader)
+                    .with_line_range(2, 4)
+                    .with_buffer_size(4096);
 
             auto gen =
                 dftu_utils_test::ok_items(async_indexed_file_lines(config));
@@ -196,9 +201,10 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             REQUIRE(indexer != nullptr);
             dftu_utils_test::build_indexer(*indexer);
 
-            auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
-                              .with_byte_range(0, 200);
+            auto config =
+                dftracer::utils::trace::reader::IndexedFileLineIteratorConfig()
+                    .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
+                    .with_byte_range(0, 200);
 
             auto gen =
                 dftu_utils_test::ok_items(async_indexed_file_lines(config));
@@ -219,9 +225,10 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             REQUIRE(indexer != nullptr);
             dftu_utils_test::build_indexer(*indexer);
 
-            auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
-                              .with_line_range(3, 7);
+            auto config =
+                dftracer::utils::trace::reader::IndexedFileLineIteratorConfig()
+                    .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
+                    .with_line_range(3, 7);
 
             auto gen =
                 dftu_utils_test::ok_items(async_indexed_file_lines(config));
@@ -240,7 +247,8 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
     TEST_CASE("Error Handling") {
         SUBCASE("Null reader is an error item") {
             auto config =
-                IndexedFileLineIteratorConfig().with_line_range(1, 10);
+                dftracer::utils::trace::reader::IndexedFileLineIteratorConfig()
+                    .with_line_range(1, 10);
 
             auto task = first_item(async_indexed_file_lines(config));
 
@@ -250,8 +258,9 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
         }
 
         SUBCASE("Non-existent file is an error item") {
-            auto config = IndexedFileLineIteratorConfig().with_file(
-                "non_existent.gz", "non_existent.gz.idx");
+            auto config =
+                dftracer::utils::trace::reader::IndexedFileLineIteratorConfig()
+                    .with_file("non_existent.gz", "non_existent.gz.idx");
             REQUIRE(config.error().has_value());
 
             auto task = first_item(async_indexed_file_lines(config));
@@ -272,10 +281,11 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             REQUIRE(indexer != nullptr);
             dftu_utils_test::build_indexer(*indexer);
 
-            auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
-                              .with_line_range(100, 200)
-                              .with_buffer_size(16384);
+            auto config =
+                dftracer::utils::trace::reader::IndexedFileLineIteratorConfig()
+                    .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
+                    .with_line_range(100, 200)
+                    .with_buffer_size(16384);
 
             auto gen =
                 dftu_utils_test::ok_items(async_indexed_file_lines(config));
@@ -300,9 +310,10 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             REQUIRE(indexer != nullptr);
             dftu_utils_test::build_indexer(*indexer);
 
-            auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
-                              .with_line_range(1, 3);
+            auto config =
+                dftracer::utils::trace::reader::IndexedFileLineIteratorConfig()
+                    .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
+                    .with_line_range(1, 3);
 
             auto gen =
                 dftu_utils_test::ok_items(async_indexed_file_lines(config));
@@ -338,9 +349,10 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
             REQUIRE(indexer != nullptr);
             dftu_utils_test::build_indexer(*indexer);
 
-            auto config = IndexedFileLineIteratorConfig()
-                              .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
-                              .with_line_range(1, 5);
+            auto config =
+                dftracer::utils::trace::reader::IndexedFileLineIteratorConfig()
+                    .with_file(gz_path, dstd::fmt<"{}.idx">(gz_path))
+                    .with_line_range(1, 5);
 
             auto gen1 =
                 dftu_utils_test::ok_items(async_indexed_file_lines(config));

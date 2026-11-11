@@ -5,13 +5,13 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/domains/plugins/config.h>
+#include <dftracer/utils/domains/plugins/plugins.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/plugins/config.h>
-#include <dftracer/utils/plugins/plugins.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/indexer.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
@@ -57,8 +57,8 @@ ViewFile make_trace(dftu_utils_test::TestEnvironment& env) {
     return test_plugin_common::index_trace(gz);
 }
 
-plugins::ConfigTree config_of(const dstd::String& json) {
-    auto tree = plugins::ConfigTree::from_json_string(json);
+domains::plugins::ConfigTree config_of(const dstd::String& json) {
+    auto tree = domains::plugins::ConfigTree::from_json_string(json);
     REQUIRE(tree.has_value());
     return std::move(*tree);
 }
@@ -66,7 +66,7 @@ plugins::ConfigTree config_of(const dstd::String& json) {
 }  // namespace
 
 TEST_CASE("a declared reads() narrows on_batch to exactly those columns") {
-    auto set = plugins::Plugins::builder()
+    auto set = domains::plugins::Plugins::builder()
                    .add(READS_PROJECTION_PLUGIN_PATH,
                         config_of(R"({"declare_reads": true})"))
                    .build();
@@ -77,7 +77,7 @@ TEST_CASE("a declared reads() narrows on_batch to exactly those columns") {
     dftu_utils_test::TestEnvironment env(0);
     REQUIRE(env.is_valid());
     View view = View::from_files({make_trace(env)});
-    plugins::PluginRun run =
+    domains::plugins::PluginRun run =
         test_plugin_common::run_set(*set, view, "reads-projection");
 
     CHECK(test_plugin_common::result_text(run, "reads_probe.num_columns") ==
@@ -93,7 +93,7 @@ TEST_CASE("a declared reads() narrows on_batch to exactly those columns") {
 TEST_CASE(
     "no declared reads() materializes every fixed column plus one per arg "
     "key") {
-    auto set = plugins::Plugins::builder()
+    auto set = domains::plugins::Plugins::builder()
                    .add(READS_PROJECTION_PLUGIN_PATH,
                         config_of(R"({"declare_reads": false})"))
                    .build();
@@ -104,7 +104,7 @@ TEST_CASE(
     dftu_utils_test::TestEnvironment env(0);
     REQUIRE(env.is_valid());
     View view = View::from_files({make_trace(env)});
-    plugins::PluginRun run =
+    domains::plugins::PluginRun run =
         test_plugin_common::run_set(*set, view, "reads-projection");
 
     // 7 fixed columns (name, cat, pid, tid, ts, dur, ph) plus 5 distinct arg
@@ -120,7 +120,7 @@ TEST_CASE(
 }
 
 TEST_CASE("a path-decoded file hands the plugin its own columns") {
-    auto set = plugins::Plugins::builder()
+    auto set = domains::plugins::Plugins::builder()
                    .add(READS_PROJECTION_PLUGIN_PATH,
                         config_of(R"({"declare_reads": false})"))
                    .build();
@@ -139,14 +139,14 @@ TEST_CASE("a path-decoded file hands the plugin its own columns") {
     dftu_utils_test::compress_file_to_gzip(plain, gz);
     dstd::fs::remove(plain).discard();
     dftu_utils_test::ok(
-        dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+        dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
                                 {dstd::String(dstd::StringView(gz))}))
             .build());
     View view = View::from_files(
         {ViewFile{dstd::String(gz),
                   dstd::String(dstd::String(
                       trace::internal::determine_index_path(gz, "")))}});
-    plugins::PluginRun run =
+    domains::plugins::PluginRun run =
         test_plugin_common::run_set(*set, view, "reads-projection");
 
     CHECK(test_plugin_common::result_text(run, "reads_probe.columns") == "k,x");
@@ -155,12 +155,12 @@ TEST_CASE("a path-decoded file hands the plugin its own columns") {
 
     // A projection of the View decodes only its paths for the scan; the
     // plugin still reads every field.
-    auto narrowed = plugins::Plugins::builder()
+    auto narrowed = domains::plugins::Plugins::builder()
                         .add(READS_PROJECTION_PLUGIN_PATH,
                              config_of(R"({"declare_reads": false})"))
                         .build();
     REQUIRE(narrowed.has_value());
-    plugins::PluginRun projected = test_plugin_common::run_set(
+    domains::plugins::PluginRun projected = test_plugin_common::run_set(
         *narrowed,
         View::from_files(
             {ViewFile{dstd::String(gz),

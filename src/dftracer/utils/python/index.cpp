@@ -5,10 +5,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/index.h>
-#include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
-#include <dftracer/utils/index/store/root_layout.h>
+#include <dftracer/utils/fileio/file_helpers.h>
 #include <dftracer/utils/python/index.h>
 #include <dftracer/utils/python/py_agg_config.h>
 #include <dftracer/utils/python/py_errors.h>
@@ -16,6 +13,9 @@
 #include <dftracer/utils/python/py_method.h>
 #include <dftracer/utils/python/py_runtime_mixin.h>
 #include <dftracer/utils/python/py_type_helpers.h>
+#include <dftracer/utils/trace/index/index.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/agg_store.h>
+#include <dftracer/utils/trace/index/store/root_layout.h>
 
 #include <cstdint>
 
@@ -32,9 +32,9 @@ struct StaleCheck {
 // Stat-only: mtime and size are the only signals O(1) to read, so a same-size
 // edit with a restored mtime is invisible here.
 StaleCheck stale_check(
-    const index::Index &index,
+    const trace::index::Index &index,
     const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> &paths) {
-    const index::Snapshot snapshot =
+    const trace::index::Snapshot snapshot =
         dftracer::utils::python::py_unwrap(index.snapshot());
 
     StaleCheck result;
@@ -42,26 +42,26 @@ StaleCheck stale_check(
     listed.reserve(paths.size());
     for (const dftracer::utils::dstd::String &path : paths) {
         const dftracer::utils::dstd::String logical =
-            index::store::internal::get_logical_path(path);
+            fileio::get_logical_path(path);
         listed.insert(dftracer::utils::dstd::String(logical));
         dftracer::utils::common::InputFileStat st;
         if (!dftracer::utils::common::stat_input(path, st)) st = {};
-        const index::SourceStat now{static_cast<std::uint64_t>(st.mtime),
-                                    st.size};
+        const trace::index::SourceStat now{static_cast<std::uint64_t>(st.mtime),
+                                           st.size};
         switch (snapshot.freshness(logical, now)) {
-            case index::Freshness::Current:
+            case trace::index::Freshness::Current:
                 break;
-            case index::Freshness::Missing:
+            case trace::index::Freshness::Missing:
                 result.added.push_back(path);
                 break;
-            case index::Freshness::Stale:
-            case index::Freshness::Failed:
+            case trace::index::Freshness::Stale:
+            case trace::index::Freshness::Failed:
                 result.changed.push_back(path);
                 break;
         }
     }
 
-    for (const index::FileRef &file :
+    for (const trace::index::FileRef &file :
          dftracer::utils::python::py_unwrap(snapshot.files())) {
         const dftracer::utils::dstd::StringView path = file.path();
         const dftracer::utils::dstd::StringView logical(path.data(),
@@ -73,7 +73,7 @@ StaleCheck stale_check(
 }
 
 void Index_dealloc(IndexObject *self) {
-    dftracer::utils::dstd::UniquePtr<index::Index>(self->index).reset();
+    dftracer::utils::dstd::UniquePtr<trace::index::Index>(self->index).reset();
     Py_TYPE(self)->tp_free((PyObject *)self);
 }
 
@@ -91,12 +91,14 @@ int Index_init(IndexObject *self, PyObject *args, PyObject *kwds) {
                                      const_cast<char **>(kwlist), &index_path))
         return -1;
     try {
-        auto opened = dftracer::utils::python::py_unwrap(
-            index::Index::open(index::normalize_index_root(index_path)));
-        dftracer::utils::dstd::UniquePtr<index::Index>(self->index).reset();
-        self->index =
-            dftracer::utils::dstd::make_unique<index::Index>(std::move(opened))
-                .release();
+        auto opened =
+            dftracer::utils::python::py_unwrap(trace::index::Index::open(
+                trace::index::normalize_index_root(index_path)));
+        dftracer::utils::dstd::UniquePtr<trace::index::Index>(self->index)
+            .reset();
+        self->index = dftracer::utils::dstd::make_unique<trace::index::Index>(
+                          std::move(opened))
+                          .release();
     } catch (const std::exception &e) {
         python::set_typed_py_error(e);
         return -1;
@@ -159,9 +161,9 @@ PyObject *Index_write_agg_config(IndexObject *self, PyObject *args) {
     const auto config = python::agg_config_from_py(config_obj);
     if (!run_blocking([&] {
             dftracer::utils::python::py_unwrap(
-                index::schemas::dft::agg::tier::write_config(
+                trace::index::schemas::dft::agg::tier::write_config(
                     *self->index,
-                    index::schemas::dft::agg::tier::Config{
+                    trace::index::schemas::dft::agg::tier::Config{
                         config.time_interval_us, config.params_hash(),
                         config.group_by_file, config.extra_group_keys}));
         }))

@@ -12,7 +12,7 @@
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <nanoarrow/nanoarrow.h>
 
-using ArrowExportResult = dftracer::utils::utilities::arrow::ArrowExportResult;
+using ArrowExportResult = dftracer::utils::trace::arrow::ArrowExportResult;
 
 static void release_arrow_schema(PyObject *capsule) {
     auto *schema = static_cast<ArrowSchema *>(

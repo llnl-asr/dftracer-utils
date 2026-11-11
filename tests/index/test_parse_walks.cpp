@@ -11,15 +11,15 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/to_chars.h>
-#include <dftracer/utils/index/build/batch_builder.h>
-#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/store.h>
+#include <dftracer/utils/trace/index/build/batch_builder.h>
+#include <dftracer/utils/trace/index/store/root_layout.h>
 #include <dftracer/utils/trace/internal/parse_walks.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/parse_inflated.h>
+#include <dftracer/utils/trace/reader/trace_reader.h>
 #include <dftracer/utils/trace/views/fold_event.h>
-#include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
 #include <generator_ok.h>
@@ -126,19 +126,20 @@ dstd::String write_trace(const dstd::String& dir) {
     return path;
 }
 
-index::build::IndexBuildBatchResult build_one(const dstd::String& file,
-                                              const dstd::String& index_dir,
-                                              std::size_t checkpoint_size = 0) {
+trace::index::build::IndexBuildBatchResult build_one(
+    const dstd::String& file, const dstd::String& index_dir,
+    std::size_t checkpoint_size = 0) {
     Runtime rt(4);
-    index::build::IndexBuildBatchResult result;
+    trace::index::build::IndexBuildBatchResult result;
     auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-        auto config = dstd::make_shared<index::build::IndexBuildBatchConfig>();
+        auto config =
+            dstd::make_shared<trace::index::build::IndexBuildBatchConfig>();
         config->file_paths = {dstd::String(dstd::StringView(file))};
         config->index_dir = index_dir;
         config->parallelism = 4;
         if (checkpoint_size > 0) config->checkpoint_size = checkpoint_size;
-        result =
-            co_await index::build::BatchBuilder::process(std::move(config));
+        result = co_await trace::index::build::BatchBuilder::process(
+            std::move(config));
     });
     dftu_utils_test::ok(rt.submit(std::move(task), "parse-walks").wait());
     rt.shutdown();
@@ -216,7 +217,7 @@ dstd::Map<dstd::String, std::uint64_t> namespace_digests(
 }
 
 coro::CoroTask<std::size_t> count_json(
-    coro::AsyncGenerator<utilities::reader::JsonLine> gen) {
+    coro::AsyncGenerator<trace::reader::JsonLine> gen) {
     std::size_t n = 0;
     while (auto line = co_await gen.next()) ++n;
     co_return n;
@@ -296,8 +297,8 @@ TEST_SUITE("IndexParseWalks") {
         build_one(file, env.dir() + "/idx");
         const dstd::String path =
             trace::internal::determine_index_path(file, env.dir() + "/idx");
-        const auto digests =
-            namespace_digests(index::normalize_index_root(path), env.dir());
+        const auto digests = namespace_digests(
+            trace::index::normalize_index_root(path), env.dir());
         for (const auto& [name, digest] : digests)
             MESSAGE("namespace " << name << " " << digest);
         CHECK(digests.size() == std::size(RECORDED));
@@ -403,11 +404,11 @@ TEST_SUITE("IndexParseWalks") {
                 CHECK(result.results[0].events_processed ==
                       std::size_t{GOOD + 1});
 
-                utilities::reader::TraceReader reader(
+                trace::reader::TraceReader reader(
                     {.file_path = file, .index_dir = env.dir() + "/idx"});
                 REQUIRE(reader.has_index());
                 const auto found = [&](const dstd::String& query) {
-                    utilities::reader::ReadConfig rc;
+                    trace::reader::ReadConfig rc;
                     rc.query = query;
                     return dftu_utils_test::ok(
                         count_json(
@@ -532,11 +533,11 @@ TEST_SUITE("IndexParseWalks") {
         REQUIRE(result.results.size() == 1);
         CHECK(result.results[0].events_processed == tags.size());
 
-        utilities::reader::TraceReader reader(
+        trace::reader::TraceReader reader(
             {.file_path = file, .index_dir = env.dir() + "/idx"});
         REQUIRE(reader.has_index());
         for (const auto& tag : tags) {
-            utilities::reader::ReadConfig rc;
+            trace::reader::ReadConfig rc;
             rc.query = common::str_cat("args.tag == \"", tag, '"');
             INFO(tag);
             CHECK(dftu_utils_test::ok(count_json(dftu_utils_test::ok_items(
@@ -577,11 +578,11 @@ TEST_SUITE("IndexParseWalks") {
         REQUIRE(result.results.size() == 1);
         CHECK(result.results[0].events_processed == std::size_t{GOOD + 3});
 
-        utilities::reader::TraceReader reader(
+        trace::reader::TraceReader reader(
             {.file_path = file, .index_dir = env.dir() + "/idx"});
         REQUIRE(reader.has_index());
         for (const char* tag : {"g0", "g39"}) {
-            utilities::reader::ReadConfig rc;
+            trace::reader::ReadConfig rc;
             rc.query = common::str_cat("args.tag == \"", tag, '"');
             INFO(tag);
             CHECK(dftu_utils_test::ok(count_json(dftu_utils_test::ok_items(

@@ -11,9 +11,9 @@
 
 #include <cstdint>
 
-namespace dftracer::utils::index {
+namespace dftracer::utils::trace::index {
 class Snapshot;
-}  // namespace dftracer::utils::index
+}  // namespace dftracer::utils::trace::index
 
 namespace dftracer::utils::trace::views {
 
@@ -83,7 +83,7 @@ class LiveView {
     struct PinnedFile {
         ViewFile file;
         /// The index snapshot the pin was read from.
-        dstd::SharedPtr<const index::Snapshot> index;
+        dstd::SharedPtr<const trace::index::Snapshot> index;
         std::uint64_t hash = 0;
         bool has_open_line = false;
     };

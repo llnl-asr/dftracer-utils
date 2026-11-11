@@ -5,6 +5,8 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dataframe/query/group_fold.h>
+#include <dftracer/utils/dataframe/query/vectorize.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -12,9 +14,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/fields.h>
-#include <dftracer/utils/duql/group_fold.h>
 #include <dftracer/utils/duql/pipeline.h>
-#include <dftracer/utils/duql/vectorize.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_duql_internal.h>
@@ -86,7 +86,7 @@ dstd::Result<dstd::Optional<dataframe::TypeId>> Applier::term_type(
     return dstd::Optional<dataframe::TypeId>(inferred->id);
 }
 
-dstd::Optional<duql::VectorColumn> Applier::trace_column(
+dstd::Optional<dataframe::query::VectorColumn> Applier::trace_column(
     const duql::TermRef& t) {
     const auto* f = whole_field(t);
     if (!f) return dstd::nullopt;
@@ -372,7 +372,7 @@ Status Applier::trace_group(
             dataframe::expr_col(static_cast<std::int32_t>(*i)),
             dataframe::expr_lit(us_per_time_unit()));
         const auto* field = schema_.field_at(roles_.time);
-        if (field && field->type == index::FieldType::Int)
+        if (field && field->type == trace::index::FieldType::Int)
             in_unit = dataframe::expr_cast(dataframe::TypeId::Int64, in_unit);
         return with_column("time_bucket", in_unit, "time_bucket in time units");
     }
@@ -442,7 +442,7 @@ Status Applier::hop_rows(const duql::PipelineBucket& b) {
         exact ? dataframe::TypeId::Int64 : dataframe::TypeId::Float64;
     const double width = b.width;
     const double origin = b.origin;
-    dstd::Vector<duql::VectorColumn> next = cols_;
+    dstd::Vector<dataframe::query::VectorColumn> next = cols_;
     next.push_back({"__duql_bucket", dataframe::scalar(out_type)});
     const auto windows =
         static_cast<std::size_t>(std::max(1.0, std::ceil(width / step)));
@@ -537,7 +537,7 @@ Status Applier::frame_group(
         keys.push_back(std::move(*column));
     }
     dstd::Vector<dataframe::GroupAgg> specs;
-    dstd::Vector<duql::FoldAgg> fold(g.aggs.size());
+    dstd::Vector<dataframe::query::FoldAgg> fold(g.aggs.size());
     dstd::Vector<dstd::String> by(g.aggs.size());
     bool folded = false;
     for (std::size_t i = 0; i < g.aggs.size(); ++i) {
@@ -614,7 +614,8 @@ Status Applier::frame_group(
             case duql::AggFn::Quantile:
                 spec.op = dataframe::Agg::Pct;
                 spec.param = a.q;
-                if (a.merged) fold[i].op = duql::FoldOp::MergeQuantile;
+                if (a.merged)
+                    fold[i].op = dataframe::query::FoldOp::MergeQuantile;
                 break;
             case duql::AggFn::Histogram:
                 spec.op = dataframe::Agg::Hist;
@@ -626,25 +627,25 @@ Status Applier::frame_group(
                 return refuse<"'{}' needs the trace aggregation">(
                     agg_name(a.fn));
             case duql::AggFn::CountDistinct:
-                fold[i].op = duql::FoldOp::CountDistinct;
+                fold[i].op = dataframe::query::FoldOp::CountDistinct;
                 break;
             case duql::AggFn::Collect:
-                fold[i].op = duql::FoldOp::Collect;
+                fold[i].op = dataframe::query::FoldOp::Collect;
                 break;
             case duql::AggFn::Argmax:
-                fold[i].op = duql::FoldOp::Argmax;
+                fold[i].op = dataframe::query::FoldOp::Argmax;
                 break;
             case duql::AggFn::Argmin:
-                fold[i].op = duql::FoldOp::Argmin;
+                fold[i].op = dataframe::query::FoldOp::Argmin;
                 break;
             case duql::AggFn::Sketch:
-                fold[i].op = duql::FoldOp::Sketch;
+                fold[i].op = dataframe::query::FoldOp::Sketch;
                 break;
             case duql::AggFn::Merge:
-                fold[i].op = duql::FoldOp::Merge;
+                fold[i].op = dataframe::query::FoldOp::Merge;
                 break;
             case duql::AggFn::Plugin:
-                fold[i].op = duql::FoldOp::Plugin;
+                fold[i].op = dataframe::query::FoldOp::Plugin;
                 fold[i].plugin = a.plugin;
                 {
                     auto params = plugin_params(a);
@@ -653,7 +654,7 @@ Status Applier::frame_group(
                 }
                 break;
         }
-        folded = folded || fold[i].op != duql::FoldOp::Engine;
+        folded = folded || fold[i].op != dataframe::query::FoldOp::Engine;
         fold[i].engine = dataframe::to_agg_op(spec.op);
         fold[i].param = spec.param;
         specs.push_back(std::move(spec));
@@ -670,7 +671,7 @@ Status Applier::frame_group(
 void Applier::fold_group(const dstd::Vector<dstd::String>& keys,
                          const dstd::Vector<dataframe::GroupAgg>& specs,
                          const dstd::Vector<dstd::String>& by,
-                         dstd::Vector<duql::FoldAgg> fold) {
+                         dstd::Vector<dataframe::query::FoldAgg> fold) {
     dstd::Vector<dstd::String> read = keys;
     auto at = [&](dstd::StringView name) {
         const auto it = std::find(read.begin(), read.end(), name);
@@ -697,27 +698,27 @@ void Applier::fold_group(const dstd::Vector<dstd::String>& keys,
             f.in < 0 ? dataframe::scalar(dataframe::TypeId::Int64)
                      : type_of(read[static_cast<std::size_t>(f.in)]);
         switch (f.op) {
-            case duql::FoldOp::Engine:
+            case dataframe::query::FoldOp::Engine:
                 f.type = dataframe::agg_output_type(f.engine, t.id);
                 break;
-            case duql::FoldOp::CountDistinct:
+            case dataframe::query::FoldOp::CountDistinct:
                 f.type = dataframe::scalar(dataframe::TypeId::Int64);
                 break;
-            case duql::FoldOp::Collect:
+            case dataframe::query::FoldOp::Collect:
                 f.type = dataframe::list_of(t);
                 break;
-            case duql::FoldOp::Argmax:
-            case duql::FoldOp::Argmin:
+            case dataframe::query::FoldOp::Argmax:
+            case dataframe::query::FoldOp::Argmin:
                 f.type = t;
                 break;
-            case duql::FoldOp::Plugin:
+            case dataframe::query::FoldOp::Plugin:
                 f.type = plugin_type(dstd::String(f.plugin));
                 break;
-            case duql::FoldOp::Sketch:
-            case duql::FoldOp::Merge:
+            case dataframe::query::FoldOp::Sketch:
+            case dataframe::query::FoldOp::Merge:
                 f.type = dataframe::scalar(dataframe::TypeId::String);
                 break;
-            case duql::FoldOp::MergeQuantile:
+            case dataframe::query::FoldOp::MergeQuantile:
                 f.type = dataframe::scalar(dataframe::TypeId::Float64);
                 break;
         }

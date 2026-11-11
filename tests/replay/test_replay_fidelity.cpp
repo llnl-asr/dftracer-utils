@@ -16,13 +16,13 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/domains/workload/replay/replay.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/utilities/replay/replay.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
 #include <testing_utilities.h>
@@ -36,7 +36,7 @@
 #include <thread>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities::replay;
+using namespace dftracer::utils::domains::workload::replay;
 
 namespace {
 

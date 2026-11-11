@@ -257,7 +257,7 @@ class FoldSource final : public dataframe::Source {
     FoldSource(dataframe::LazyFrame inner, dataframe::Schema schema,
                dstd::Vector<dstd::Pair<dstd::String, dataframe::TypeId>> in,
                dstd::Vector<dataframe::DataType> key_types,
-               dstd::Vector<duql::FoldAgg> aggs)
+               dstd::Vector<dataframe::query::FoldAgg> aggs)
         : inner_(std::move(inner)),
           schema_(std::move(schema)),
           in_(std::move(in)),
@@ -313,7 +313,7 @@ class FoldSource final : public dataframe::Source {
 
        private:
         coro::AsyncGenerator<dstd::Result<dataframe::DataFrame>> batches_;
-        duql::GroupFold fold_;
+        dataframe::query::GroupFold fold_;
         dstd::Vector<dstd::Pair<dstd::String, dataframe::TypeId>> in_;
         dstd::Vector<dstd::String> names_;
         dstd::Vector<dstd::String> projection_;
@@ -324,7 +324,7 @@ class FoldSource final : public dataframe::Source {
     dataframe::Schema schema_;
     dstd::Vector<dstd::Pair<dstd::String, dataframe::TypeId>> in_;
     dstd::Vector<dataframe::DataType> key_types_;
-    dstd::Vector<duql::FoldAgg> aggs_;
+    dstd::Vector<dataframe::query::FoldAgg> aggs_;
 };
 
 }  // namespace
@@ -345,7 +345,7 @@ dataframe::LazyFrame fold_source(
     dataframe::LazyFrame inner, dataframe::Schema schema,
     dstd::Vector<dstd::Pair<dstd::String, dataframe::TypeId>> in,
     dstd::Vector<dataframe::DataType> key_types,
-    dstd::Vector<duql::FoldAgg> aggs) {
+    dstd::Vector<dataframe::query::FoldAgg> aggs) {
     return dataframe::LazyFrame::scan(dstd::make_shared<FoldSource>(
         std::move(inner), std::move(schema), std::move(in),
         std::move(key_types), std::move(aggs)));

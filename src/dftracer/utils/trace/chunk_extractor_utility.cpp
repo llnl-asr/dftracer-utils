@@ -5,18 +5,18 @@
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/fileio/chunk_writer.h>
+#include <dftracer/utils/fileio/hash/hasher_utility.h>
+#include <dftracer/utils/fileio/lines/sources/async_streaming_gz_line_generator.h>
 #include <dftracer/utils/json/line.h>
 #include <dftracer/utils/trace/chunk_extractor_utility.h>
-#include <dftracer/utils/utilities/fileio/chunk_writer.h>
-#include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
-#include <dftracer/utils/utilities/hash/hasher_utility.h>
 
 #include <algorithm>
 
 namespace dftracer::utils::trace {
 
-using utilities::fileio::ChunkWriter;
-using utilities::fileio::ChunkWriterConfig;
+using fileio::ChunkWriter;
+using fileio::ChunkWriterConfig;
 
 dstd::StringView event_of_line(dstd::StringView line) {
     const char* trimmed;
@@ -100,14 +100,13 @@ ChunkExtractorUtility::extract_and_write(
     if (!opened) co_return fail(opened.error());
 
     std::size_t content_hash = 0;
-    utilities::hash::HasherUtility hasher;
+    fileio::hash::HasherUtility hasher;
 
     for (std::size_t i = 0; i < input.files.size(); ++i) {
         const auto& file = input.files[i];
-        auto line_gen =
-            utilities::fileio::lines::sources::async_streaming_gz_lines(
-                dstd::String(file), 0, 0, true,
-                i < input.open_files.size() ? input.open_files[i] : nullptr);
+        auto line_gen = fileio::lines::sources::async_streaming_gz_lines(
+            dstd::String(file), 0, 0, true,
+            i < input.open_files.size() ? input.open_files[i] : nullptr);
         for (;;) {
             auto line_opt = co_await line_gen.next();
             if (!line_opt) break;

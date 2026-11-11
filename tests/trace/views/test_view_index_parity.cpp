@@ -11,7 +11,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/trace/index/indexer.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
@@ -173,12 +173,12 @@ struct Fixture {
             dstd::fs::remove(plain).discard();
             gz.push_back(out);
         }
-        index::IndexerOptions o;
+        trace::index::IndexerOptions o;
         o.index_dir = env.dir() + "/idx";
         o.checkpoint_size = MEMBER_BYTES;
         dftu_utils_test::ok(
             dftu_utils_test::ok(
-                index::Indexer::open(dftu_utils_test::dstd_paths(gz), o))
+                trace::index::Indexer::open(dftu_utils_test::dstd_paths(gz), o))
                 .build());
         index_path =
             dstd::String(determine_index_path(gz.front(), o.index_dir));
@@ -553,11 +553,11 @@ TEST_SUITE("ViewIndexParity") {
         const dstd::String gz = plain + ".gz";
         REQUIRE(compress_file_to_gzip(plain, gz));
         dstd::fs::remove(plain).discard();
-        index::IndexerOptions o;
+        trace::index::IndexerOptions o;
         o.index_dir = env.dir() + "/idx";
         dftu_utils_test::ok(
-            dftu_utils_test::ok(
-                index::Indexer::open({dstd::String(dstd::StringView(gz))}, o))
+            dftu_utils_test::ok(trace::index::Indexer::open(
+                                    {dstd::String(dstd::StringView(gz))}, o))
                 .build());
         const dstd::String index =
             dstd::String(determine_index_path(gz, o.index_dir));
@@ -611,13 +611,13 @@ TEST_SUITE("ViewIndexParity") {
             dstd::fs::remove(plain).discard();
             gz.push_back(out);
         }
-        index::IndexerOptions opts;
+        trace::index::IndexerOptions opts;
         opts.index_dir = env.dir() + "/idx";
         opts.aggregation.time_interval_us = INTERVAL_US;
         opts.aggregation.extra_group_keys = {"epoch"};
         dftu_utils_test::ok(
-            dftu_utils_test::ok(
-                index::Indexer::open(dftu_utils_test::dstd_paths(gz), opts))
+            dftu_utils_test::ok(trace::index::Indexer::open(
+                                    dftu_utils_test::dstd_paths(gz), opts))
                 .build());
         const dstd::String index =
             dstd::String(determine_index_path(gz.front(), opts.index_dir));
@@ -734,11 +734,11 @@ TEST_SUITE("ViewIndexParity") {
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
             plain, gz, MEMBER_BYTES));
         dstd::fs::remove(plain).discard();
-        index::IndexerOptions opts;
+        trace::index::IndexerOptions opts;
         opts.index_dir = env.dir() + "/idx";
         opts.checkpoint_size = MEMBER_BYTES;
         dftu_utils_test::ok(
-            dftu_utils_test::ok(index::Indexer::open(
+            dftu_utils_test::ok(trace::index::Indexer::open(
                                     {dstd::String(dstd::StringView(gz))}, opts))
                 .build());
         const dstd::String index =
@@ -782,12 +782,12 @@ TEST_SUITE("ViewIndexParity") {
             dstd::fs::remove(plain).discard();
             gz.push_back(out);
         }
-        index::IndexerOptions opts;
+        trace::index::IndexerOptions opts;
         opts.index_dir = env.dir() + "/idx";
         opts.checkpoint_size = MEMBER_BYTES;
         dftu_utils_test::ok(
-            dftu_utils_test::ok(
-                index::Indexer::open(dftu_utils_test::dstd_paths(gz), opts))
+            dftu_utils_test::ok(trace::index::Indexer::open(
+                                    dftu_utils_test::dstd_paths(gz), opts))
                 .build());
         const dstd::Vector<ViewFile> files{
             {dstd::String(gz[0]),

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <checkpoint_indexer_helpers.h>
-#include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
-#include <dftracer/utils/utilities/reader/internal/gzip_reader.h>
+#include <dftracer/utils/trace/index/gzip/checkpoint_indexer_factory.h>
+#include <dftracer/utils/trace/reader/internal/gzip_reader.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
 #include <testing_utilities.h>
@@ -10,7 +10,7 @@
 #include <utility>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities::reader::internal;
+using namespace dftracer::utils::trace::reader::internal;
 using namespace dftu_utils_test;
 
 TEST_CASE("a GzipReader without an indexer is fatal") {

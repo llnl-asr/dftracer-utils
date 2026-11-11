@@ -8,8 +8,8 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/utilities/arrow/column_builder.h>
-#include <dftracer/utils/utilities/arrow/ipc_writer.h>
+#include <dftracer/utils/trace/arrow/column_builder.h>
+#include <dftracer/utils/trace/arrow/ipc_writer.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
 #include <testing_utilities.h>
@@ -18,7 +18,7 @@
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::coro;
-using namespace dftracer::utils::utilities::arrow;
+using namespace dftracer::utils::trace::arrow;
 
 static dstd::String tmp_path(const char* name) {
     return dftu_utils_test::make_unique_test_path(name).str();

@@ -6,17 +6,17 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/extensions/chunk_dimension_stats.h>
-#include <dftracer/utils/index/extensions/kinds/payloads.h>
-#include <dftracer/utils/index/plan/chunk_pruner.h>
-#include <dftracer/utils/index/plan/prune.h>
+#include <dftracer/utils/trace/index/extensions/chunk_dimension_stats.h>
+#include <dftracer/utils/trace/index/extensions/kinds/payloads.h>
+#include <dftracer/utils/trace/index/plan/chunk_pruner.h>
+#include <dftracer/utils/trace/index/plan/prune.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
 #include <task_result.h>
 #include <testing_utilities.h>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::index;
+using namespace dftracer::utils::trace::index;
 
 namespace {
 
@@ -39,7 +39,7 @@ dstd::String build_index(const dstd::String& dir, const dstd::String& trace) {
     const dstd::Vector<dstd::Vector<dstd::String>> cats = {{"a", "a"},
                                                            {"b", "b"}};
     for (std::uint64_t c = 0; c < 3; ++c) {
-        index::put_gzip_member(
+        trace::index::put_gzip_member(
             w, {c, c * 100, 100, c * 200, 200, c * 2 + 1, c * 2 + 2});
         auto dur = dim("dur", {});
         dur.value_type = "uint";
@@ -59,7 +59,7 @@ dstd::Vector<std::uint64_t> prune(const dstd::String& index,
                                   const dstd::String& text) {
     auto q = duql::Query::from_string(text);
     REQUIRE(q.has_value());
-    index::plan::ChunkPruner pruner;
+    trace::index::plan::ChunkPruner pruner;
     auto out = dftu_utils_test::ok(pruner({index, trace, std::move(*q)}).get());
     REQUIRE(out.success);
     if (out.candidate_checkpoints.empty() && out.file_may_match)
@@ -90,7 +90,7 @@ TEST_SUITE("index kinds") {
         CHECK(c->observed == 7);
         CHECK_FALSE(c->compressed.has_value());
 
-        index::extensions::ScalableBloomFilter bf(16, 0.01);
+        trace::index::extensions::ScalableBloomFilter bf(16, 0.01);
         bf.add("x");
         auto blob = bf.serialize();
         auto b = extensions::kinds::decode_bloom(
@@ -137,7 +137,7 @@ TEST_SUITE("index kinds") {
             // event runs past it.
             const dstd::Pair<int, int> spans[] = {{10, 20}, {10, 100}};
             for (std::uint64_t c = 0; c < 2; ++c) {
-                index::put_gzip_member(
+                trace::index::put_gzip_member(
                     w, {c, c * 100, 100, c * 200, 200, c * 2 + 1, c * 2 + 2});
                 auto te = dim("te", {});
                 te.value_type = "uint";
@@ -148,10 +148,10 @@ TEST_SUITE("index kinds") {
             dftu_utils_test::mark_built(w);
             dftu_utils_test::commit_test_build(w);
         }
-        auto result =
-            index::plan::prune_file({path, trace, nullptr, nullptr,
-                                     dstd::Pair<double, double>{50.0, 0.0}, 2})
-                .get();
+        auto result = trace::index::plan::prune_file(
+                          {path, trace, nullptr, nullptr,
+                           dstd::Pair<double, double>{50.0, 0.0}, 2})
+                          .get();
         REQUIRE(result.has_value());
         CHECK(result->candidates == dstd::Vector<std::uint64_t>{1});
     }
@@ -164,7 +164,7 @@ TEST_SUITE("index kinds") {
         {
             auto idx = dftu_utils_test::open_test_index(path);
             auto w = dftu_utils_test::register_test_file(idx, trace, 1);
-            index::put_gzip_member(w, {0, 0, 100, 0, 200, 1, 2});
+            trace::index::put_gzip_member(w, {0, 0, 100, 0, 200, 1, 2});
             auto dur = dim("dur", {});
             dur.value_type = "uint";
             dur.min_value = "not-a-number";
@@ -175,9 +175,9 @@ TEST_SUITE("index kinds") {
         }
         auto q = duql::Query::from_string("dur > 5");
         REQUIRE(q.has_value());
-        const auto pruned =
-            index::plan::prune_file({path, trace, &*q, nullptr, dstd::nullopt})
-                .get();
+        const auto pruned = trace::index::plan::prune_file(
+                                {path, trace, &*q, nullptr, dstd::nullopt})
+                                .get();
         REQUIRE_FALSE(pruned.has_value());
         CHECK(common::errorcode_of(pruned.error()) ==
               common::ErrorCode::Indexer);
@@ -193,7 +193,7 @@ TEST_SUITE("index kinds") {
 
         auto bad = duql::Query::from_string(R"(ts > "abc")");
         REQUIRE(bad.has_value());
-        const auto refused = index::plan::prune_file(
+        const auto refused = trace::index::plan::prune_file(
                                  {index, trace, &*bad, nullptr, dstd::nullopt})
                                  .get();
         REQUIRE_FALSE(refused.has_value());
@@ -204,7 +204,7 @@ TEST_SUITE("index kinds") {
 
         auto fraction = duql::Query::from_string("ts > 1.5");
         REQUIRE(fraction.has_value());
-        CHECK(index::plan::prune_file(
+        CHECK(trace::index::plan::prune_file(
                   {index, trace, &*fraction, nullptr, dstd::nullopt})
                   .get());
     }

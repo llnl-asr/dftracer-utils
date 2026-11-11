@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/domains/workload/dlio/barrier_simulator.h>
+#include <dftracer/utils/domains/workload/dlio/statistic.h>
+#include <dftracer/utils/domains/workload/dlio/worker_queue.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/utilities/dlio/barrier_simulator.h>
-#include <dftracer/utils/utilities/dlio/statistic.h>
-#include <dftracer/utils/utilities/dlio/worker_queue.h>
 #include <doctest/doctest.h>
 
 #include <cmath>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities::dlio;
+using namespace dftracer::utils::domains::workload::dlio;
 
 namespace {
 

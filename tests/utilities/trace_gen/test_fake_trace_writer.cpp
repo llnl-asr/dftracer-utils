@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/domains/workload/trace_gen/fake_trace_writer.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/utilities/reader/trace_reader.h>
-#include <dftracer/utils/utilities/trace_gen/fake_trace_writer.h>
+#include <dftracer/utils/trace/reader/trace_reader.h>
 #include <doctest/doctest.h>
 #include <generator_ok.h>
 #include <task_result.h>
@@ -14,15 +14,15 @@
 #include <cstdint>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities::reader;
-using namespace dftracer::utils::utilities::trace_gen;
+using namespace dftracer::utils::trace::reader;
+using namespace dftracer::utils::domains::workload::trace_gen;
 using namespace dftracer::utils::coro;
 using namespace dftu_utils_test;
 
 namespace {
 
 CoroTask<dstd::Vector<dstd::String>> collect_lines(
-    AsyncGenerator<dftracer::utils::utilities::fileio::lines::Line> gen) {
+    AsyncGenerator<dftracer::utils::fileio::lines::Line> gen) {
     dstd::Vector<dstd::String> lines;
     while (auto line = co_await gen.next()) {
         lines.emplace_back(line->content);

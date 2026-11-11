@@ -6,11 +6,11 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/domains/plugins/fold_adapter.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/runtime/runtime.h>
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
@@ -100,10 +100,11 @@ TestFrame trace_test_frame(std::uint32_t n) {
 struct HostFixture {
     dstd::StringIntern intern;
     dftu_plugin* plugin;
-    dstd::UniquePtr<plugins::PluginFold> fold;
+    dstd::UniquePtr<domains::plugins::PluginFold> fold;
     HostFixture()
         : plugin(dftracer::utils::plugins::make_plugin<TrivialSlice>(nullptr)),
-          fold(dstd::make_unique<plugins::PluginFold>(plugin, intern)) {}
+          fold(dstd::make_unique<domains::plugins::PluginFold>(plugin,
+                                                               intern)) {}
     ~HostFixture() {
         fold.reset();
         if (plugin && plugin->destroy) plugin->destroy(plugin->self);

@@ -6,9 +6,9 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/build/batch_builder.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
 #include <testing_utilities.h>
@@ -44,16 +44,16 @@ TEST_SUITE("IndexFoldDriver") {
         for (int i = 0; i < 256; ++i)
             files.emplace_back(write_trace(env.dir(), i, 300));
 
-        index::build::IndexBuildBatchResult result;
+        trace::index::build::IndexBuildBatchResult result;
         Runtime rt(8);
         auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
             auto config =
-                dstd::make_shared<index::build::IndexBuildBatchConfig>();
+                dstd::make_shared<trace::index::build::IndexBuildBatchConfig>();
             config->file_paths = files;
             config->index_dir = env.dir() + "/idx";
             config->parallelism = 8;
-            result =
-                co_await index::build::BatchBuilder::process(std::move(config));
+            result = co_await trace::index::build::BatchBuilder::process(
+                std::move(config));
         });
         dftu_utils_test::ok(
             rt.submit(std::move(task), "fold-buffer-pools").wait());

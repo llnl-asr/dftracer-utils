@@ -3,11 +3,11 @@
 #include <checkpoint_indexer_helpers.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
-#include <dftracer/utils/utilities/reader/internal/reader.h>
-#include <dftracer/utils/utilities/reader/internal/reader_factory.h>
-#include <dftracer/utils/utilities/reader/internal/stream.h>
-#include <dftracer/utils/utilities/reader/internal/stream_type.h>
+#include <dftracer/utils/trace/index/gzip/checkpoint_indexer_factory.h>
+#include <dftracer/utils/trace/reader/internal/reader.h>
+#include <dftracer/utils/trace/reader/internal/reader_factory.h>
+#include <dftracer/utils/trace/reader/internal/stream.h>
+#include <dftracer/utils/trace/reader/internal/stream_type.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
 #include <testing_utilities.h>
@@ -15,8 +15,8 @@
 #include <string>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::index::gzip;
-using namespace dftracer::utils::utilities::reader::internal;
+using namespace dftracer::utils::trace::index::gzip;
+using namespace dftracer::utils::trace::reader::internal;
 using namespace dftu_utils_test;
 
 TEST_CASE("C++ Reader Streaming API - BYTES stream" *

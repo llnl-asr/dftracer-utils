@@ -23,7 +23,7 @@ using namespace test_view_common;
 namespace {
 
 dstd::String views_root_of(const dstd::String& gz) {
-    return dstd::String(dftracer::utils::index::views_dir(
+    return dstd::String(dftracer::utils::trace::index::views_dir(
         dstd::String(determine_index_path(gz, ""))));
 }
 
@@ -47,9 +47,10 @@ dstd::Vector<dstd::String> mv_parts(const dstd::String& gz) {
     const dstd::String root = views_root_of(gz);
     for (const auto& e : dftu_utils_test::list_dir(root)) {
         if (e.kind != dstd::fs::FileKind::Directory) continue;
-        collect_parts(dstd::String(dftracer::utils::index::view_parts_dir(
-                          dstd::String(e.path.str()))),
-                      parts);
+        collect_parts(
+            dstd::String(dftracer::utils::trace::index::view_parts_dir(
+                dstd::String(e.path.str()))),
+            parts);
     }
     std::sort(parts.begin(), parts.end());
     return parts;
@@ -78,8 +79,8 @@ dstd::Map<dstd::String, dstd::String> part_stamps(
 // Data files in the store of one index root.
 std::size_t store_files(const dstd::String& root) {
     std::size_t n = 0;
-    for (const auto& e :
-         dftu_utils_test::walk_dir(dftracer::utils::index::store_dir(root)))
+    for (const auto& e : dftu_utils_test::walk_dir(
+             dftracer::utils::trace::index::store_dir(root)))
         if (e.path.view().extension() == ".dfs") ++n;
     return n;
 }
@@ -283,7 +284,8 @@ TEST_SUITE("ViewMV") {
         int r = 0;
         for (const auto& f : both) {
             const dstd::String sub =
-                dstd::String(dftracer::utils::index::view_parts_dir(dir)) +
+                dstd::String(
+                    dftracer::utils::trace::index::view_parts_dir(dir)) +
                 "/shard-" + dstd::to_string(r++);
             REQUIRE(dstd::fs::create_directories(sub).has_value());
             TraceWriteOptions opts;
@@ -299,8 +301,9 @@ TEST_SUITE("ViewMV") {
         dftu_utils_test::ok(full().register_materialized(dstd::String(dir)));
         // The parts of both ranks sit under the one view root.
         dstd::Vector<dstd::String> parts;
-        collect_parts(dstd::String(dftracer::utils::index::view_parts_dir(dir)),
-                      parts);
+        collect_parts(
+            dstd::String(dftracer::utils::trace::index::view_parts_dir(dir)),
+            parts);
         CHECK(parts.size() == 2);
 
         // The full query now reads the two shard parts, not the base.
@@ -310,10 +313,11 @@ TEST_SUITE("ViewMV") {
         CHECK(astats.events_scanned == 60);  // only the shards' read events
         for (int k = 0; k < r; ++k)
             CHECK(dstd::fs::exists(
-                      dftracer::utils::index::store_dir(
+                      dftracer::utils::trace::index::store_dir(
                           dstd::String(determine_index_path(
                               dstd::String(
-                                  dftracer::utils::index::view_parts_dir(dir)) +
+                                  dftracer::utils::trace::index::view_parts_dir(
+                                      dir)) +
                                   "/shard-" + dstd::to_string(k),
                               ""))))
                       .value());

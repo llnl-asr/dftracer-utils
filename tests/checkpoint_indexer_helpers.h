@@ -6,8 +6,8 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/index/gzip/checkpoint_indexer.h>
-#include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
+#include <dftracer/utils/trace/index/gzip/checkpoint_indexer.h>
+#include <dftracer/utils/trace/index/gzip/checkpoint_indexer_factory.h>
 #include <task_result.h>
 
 #include <cstdint>
@@ -17,25 +17,24 @@
 namespace dftu_utils_test {
 
 inline dftracer::utils::dstd::SharedPtr<
-    dftracer::utils::index::gzip::CheckpointIndexer>
+    dftracer::utils::trace::index::gzip::CheckpointIndexer>
 create_indexer(
     dftracer::utils::dstd::CStringView archive_path,
     dftracer::utils::dstd::CStringView index_path = "",
     std::uint64_t checkpoint_size =
         dftracer::utils::common::constants::indexer::DEFAULT_CHECKPOINT_SIZE,
     bool force = false) {
-    return ok(
-        dftracer::utils::index::gzip::CheckpointIndexerFactory::try_create(
-            archive_path, index_path, checkpoint_size, force));
+    return ok(dftracer::utils::trace::index::gzip::CheckpointIndexerFactory::
+                  try_create(archive_path, index_path, checkpoint_size, force));
 }
 
 inline void build_indexer(
-    const dftracer::utils::index::gzip::CheckpointIndexer& indexer) {
+    const dftracer::utils::trace::index::gzip::CheckpointIndexer& indexer) {
     ok(indexer.try_build());
 }
 
 inline dftracer::utils::coro::CoroTask<void> build_indexer_async(
-    const dftracer::utils::index::gzip::CheckpointIndexer& indexer) {
+    const dftracer::utils::trace::index::gzip::CheckpointIndexer& indexer) {
     ok(co_await indexer.try_build_async());
 }
 

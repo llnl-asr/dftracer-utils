@@ -5,8 +5,8 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/extensions/bloom_fold.h>
-#include <dftracer/utils/index/extensions/catalog_fold.h>
+#include <dftracer/utils/trace/index/extensions/bloom_fold.h>
+#include <dftracer/utils/trace/index/extensions/catalog_fold.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
 
@@ -14,16 +14,18 @@
 #include <utility>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::index;
+using namespace dftracer::utils::trace::index;
 
 namespace {
 
 using Leaves = dstd::Vector<dstd::Pair<std::uint32_t, std::uint8_t>>;
 
-constexpr auto INT = static_cast<std::uint8_t>(index::store::PathType::Int);
-constexpr auto STR = static_cast<std::uint8_t>(index::store::PathType::String);
+constexpr auto INT =
+    static_cast<std::uint8_t>(trace::index::store::PathType::Int);
+constexpr auto STR =
+    static_cast<std::uint8_t>(trace::index::store::PathType::String);
 constexpr auto NUL =
-    static_cast<std::uint8_t>(index::store::PathType::NullValue);
+    static_cast<std::uint8_t>(trace::index::store::PathType::NullValue);
 
 struct Fixture {
     dstd::StringIntern intern;
@@ -55,12 +57,12 @@ struct Fixture {
         return out;
     }
 
-    dstd::Map<dstd::String, index::store::PathStat> expected() const {
-        dstd::Map<std::uint32_t, index::store::PathStat> by_id;
+    dstd::Map<dstd::String, trace::index::store::PathStat> expected() const {
+        dstd::Map<std::uint32_t, trace::index::store::PathStat> by_id;
         for (std::size_t s : order)
             for (const auto& [id, tag] : shapes[s])
-                index::extensions::observe_catalog_path(by_id[id], tag);
-        dstd::Map<dstd::String, index::store::PathStat> out;
+                trace::index::extensions::observe_catalog_path(by_id[id], tag);
+        dstd::Map<dstd::String, trace::index::store::PathStat> out;
         for (const auto& [id, stat] : by_id)
             out.emplace(dstd::String(intern.resolve(id)), stat);
         return out;
@@ -80,16 +82,17 @@ void feed(extensions::BloomFold& fold,
         fold.step(trace::views::detail::FoldBatch{events, unit}));
 }
 
-dstd::Map<dstd::String, index::store::PathStat> catalog_of(
+dstd::Map<dstd::String, trace::index::store::PathStat> catalog_of(
     extensions::BloomFold& fold, const dstd::String& file) {
-    dstd::Map<dstd::String, index::store::PathStat> out;
+    dstd::Map<dstd::String, trace::index::store::PathStat> out;
     for (const auto& [path, stat] : fold.file_catalog(file))
         out.emplace(dstd::String(path), stat);
     return out;
 }
 
-void check_same(const dstd::Map<dstd::String, index::store::PathStat>& got,
-                const dstd::Map<dstd::String, index::store::PathStat>& want) {
+void check_same(
+    const dstd::Map<dstd::String, trace::index::store::PathStat>& got,
+    const dstd::Map<dstd::String, trace::index::store::PathStat>& want) {
     REQUIRE(got.size() == want.size());
     for (const auto& [path, stat] : want) {
         CAPTURE(path);

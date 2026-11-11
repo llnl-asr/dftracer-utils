@@ -9,8 +9,8 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/trace/agg_query.h>
+#include <dftracer/utils/trace/index/indexer.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
@@ -56,7 +56,7 @@ struct Fixture {
     TestEnvironment env{200};
     dstd::Vector<dstd::String> gz;
     dstd::String index_path;
-    index::schemas::dft::agg::AggregationConfig aggregation;
+    trace::index::schemas::dft::agg::AggregationConfig aggregation;
 
     // `extras` keeps the string args epoch and step as extra group keys and
     // writes them on the events and counters. `mixed` adds counters named
@@ -111,13 +111,13 @@ struct Fixture {
         }
         aggregation.compute_percentiles = true;
         if (extras) aggregation.extra_group_keys = {"epoch", "step"};
-        index::IndexerOptions o;
+        trace::index::IndexerOptions o;
         o.index_dir = env.dir() + "/idx";
         o.checkpoint_size = MEMBER_BYTES;
         o.aggregation = aggregation;
         dftu_utils_test::ok(
             dftu_utils_test::ok(
-                index::Indexer::open(dftu_utils_test::dstd_paths(gz), o))
+                trace::index::Indexer::open(dftu_utils_test::dstd_paths(gz), o))
                 .build());
         index_path =
             dstd::String(determine_index_path(gz.front(), o.index_dir));

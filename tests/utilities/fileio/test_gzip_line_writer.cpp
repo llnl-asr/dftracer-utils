@@ -15,9 +15,9 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/gzip/gzip_indexer.h>
+#include <dftracer/utils/fileio/gzip_line_writer.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
+#include <dftracer/utils/trace/index/gzip/gzip_indexer.h>
 #include <dirent.h>
 #include <doctest/doctest.h>
 #include <sys/stat.h>
@@ -35,7 +35,7 @@
 #include <thread>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities::fileio;
+using namespace dftracer::utils::fileio;
 
 namespace {
 
@@ -100,23 +100,24 @@ Written write_all(const dstd::String& path, GzipWriterOptions o,
     return w;
 }
 
-dstd::Vector<index::gzip::GzipMemberRecord> index_of(const dstd::String& path) {
+dstd::Vector<trace::index::gzip::GzipMemberRecord> index_of(
+    const dstd::String& path) {
     const dstd::String path_std(path);
-    dstd::Optional<index::gzip::GzipBuildArtifacts> arts;
+    dstd::Optional<trace::index::gzip::GzipBuildArtifacts> arts;
     dftu_utils_test::run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
-        index::gzip::CheckpointIndexer::VisitorList none;
-        auto built = co_await index::gzip::build_gzip_index_artifacts(
+        trace::index::gzip::CheckpointIndexer::VisitorList none;
+        auto built = co_await trace::index::gzip::build_gzip_index_artifacts(
             path_std, 32u << 20, none, &scope);
         if (built) arts = std::move(*built);
     });
     REQUIRE(arts.has_value());
-    return dstd::Vector<index::gzip::GzipMemberRecord>(arts->members.begin(),
-                                                       arts->members.end());
+    return dstd::Vector<trace::index::gzip::GzipMemberRecord>(
+        arts->members.begin(), arts->members.end());
 }
 
 void expect_equal_to_index(
     const dstd::Vector<MemberInfo>& got,
-    const dstd::Vector<index::gzip::GzipMemberRecord>& want,
+    const dstd::Vector<trace::index::gzip::GzipMemberRecord>& want,
     std::uint64_t first_idx) {
     REQUIRE(got.size() == want.size());
     for (std::size_t i = 0; i < got.size(); ++i) {

@@ -5,7 +5,7 @@
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/trace/index/indexer.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
@@ -46,7 +46,7 @@ dstd::String write_ndjson(TestEnvironment& env, const dstd::String& name) {
                                                                16 * 1024));
     dstd::fs::remove(plain).discard();
     dftu_utils_test::ok(
-        dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+        dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
                                 {dstd::String(dstd::StringView(gz))}))
             .build());
     return gz;
@@ -174,7 +174,7 @@ TEST_SUITE("GenericView") {
         const auto gz = write_ndjson(env, "m");
         const auto dft = create_mixed_trace(env, 5, 5);
         dftu_utils_test::ok(
-            dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+            dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
                                     {dstd::String(dstd::StringView(dft))}))
                 .build());
         View v = View::from_files(
@@ -207,7 +207,7 @@ TEST_SUITE("GenericView") {
         const auto gz = write_ndjson(env, "t");
         const auto dft = create_mixed_trace(env, 5, 5);
         dftu_utils_test::ok(
-            dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+            dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
                                     {dstd::String(dstd::StringView(dft))}))
                 .build());
         const View v = View::from_files(
@@ -271,7 +271,7 @@ TEST_SUITE("GenericView") {
         CHECK(rows() == 10);
         dftu_utils_test::ok(
             dftu_utils_test::ok(
-                dftracer::utils::index::Indexer::open(
+                dftracer::utils::trace::index::Indexer::open(
                     {dstd::String(dstd::StringView(dstd::String(dir.str())))}))
                 .build());
         CHECK(rows() == 10);

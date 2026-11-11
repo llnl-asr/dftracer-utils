@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Rename the library `libdftracer_utils_io` to `libdftracer_utils_fileio` and `libdftracer_utils_utilities` to `libdftracer_utils_domains`, with their pkg-config files.
+  A program that links the `dftracer_utils` target needs no change.
+- Move the public index headers from `dftracer/utils/index/` to `dftracer/utils/trace/index/` and their namespace from `dftracer::utils::index` to `dftracer::utils::trace::index`.
+- Move the C++ namespaces of the domain code under `dftracer::utils::domains`, such as `domains::analysis::comparator`, `domains::workload::genesis` and `domains::server`.
 - Link Vectorscan only into the duql library, so the trace library no longer holds a second copy and is about 10 MB smaller on Linux x86-64.
   On Linux the duql library no longer exports the `hs_*` symbols of Vectorscan.
 - Rename the `morsel_rows` parameter of `LazyFrame.collect` and `LazyFrame.stream` to `batch_size` in C++ and Python.

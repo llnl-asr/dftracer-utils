@@ -6,6 +6,7 @@
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/domains/workload/genesis/genesis.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -14,8 +15,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/trace/genesis/genesis.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -156,15 +156,16 @@ inline dftracer::utils::coro::CoroTask<void> genesis_run(
     dftracer::utils::coro::Scope& ctx, dftracer::utils::dstd::String root) {
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> roots{
         std::move(root)};
-    auto found = co_await dftracer::utils::trace::genesis::discover(
+    auto found = co_await dftracer::utils::domains::workload::genesis::discover(
         ctx, std::move(roots));
     if (!found || found->groups.empty()) {
         std::fprintf(stderr, "genesis found no run group\n");
         std::exit(1);
     }
     for (auto& group : found->groups) {
-        auto result = co_await dftracer::utils::trace::genesis::process_group(
-            ctx, std::move(group), GENESIS_SHARE);
+        auto result =
+            co_await dftracer::utils::domains::workload::genesis::process_group(
+                ctx, std::move(group), GENESIS_SHARE);
         std::size_t lines = 0;
         for (auto& run : result.runs) lines += run.lines().size();
         if (!result.skips.empty() || lines == 0) {
@@ -179,7 +180,7 @@ inline void write_gz(const dftracer::utils::dstd::String& path,
     require_ok(dftracer::utils::dstd::fs::create_directories(
                    dftracer::utils::dstd::PathView(path).parent()),
                "create_directories");
-    dftracer::utils::utilities::fileio::compress::GzipMemberCompressor comp(1);
+    dftracer::utils::fileio::compress::GzipMemberCompressor comp(1);
     auto member = comp.compress_member(
         reinterpret_cast<const std::uint8_t*>(content.data()), content.size());
     if (!member) {

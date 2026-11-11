@@ -20,7 +20,7 @@
 #include <exception>
 #include <mutex>
 
-using ArrowExportResult = dftracer::utils::utilities::arrow::ArrowExportResult;
+using ArrowExportResult = dftracer::utils::trace::arrow::ArrowExportResult;
 
 namespace {
 

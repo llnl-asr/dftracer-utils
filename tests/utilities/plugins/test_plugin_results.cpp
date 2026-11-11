@@ -6,6 +6,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/domains/plugins/fold_adapter.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
@@ -13,7 +14,6 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
-#include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/plugins/result_registry.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -47,12 +47,13 @@ struct CountBlobSlice {
 
 struct FoldHolder {
     dftu_plugin* plugin;
-    dstd::UniquePtr<plugins::PluginFold> fold;
+    dstd::UniquePtr<domains::plugins::PluginFold> fold;
     FoldHolder(dftu_plugin* p, dstd::StringIntern& intern,
-               plugins::SharedResultRegistry* reg,
+               domains::plugins::SharedResultRegistry* reg,
                plugins::NamedResultRegistry* named)
         : plugin(p),
-          fold(dstd::make_unique<plugins::PluginFold>(p, intern, reg, named)) {}
+          fold(dstd::make_unique<domains::plugins::PluginFold>(p, intern, reg,
+                                                               named)) {}
     ~FoldHolder() {
         fold.reset();
         if (plugin && plugin->destroy) plugin->destroy(plugin->self);
@@ -70,7 +71,7 @@ dstd::Vector<trace::views::detail::FoldEvent> make_events(std::uint64_t count) {
     return evs;
 }
 
-void finalize_now(plugins::PluginFold& f) {
+void finalize_now(domains::plugins::PluginFold& f) {
     Runtime rt(1);
     dftu_utils_test::ok(
         rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
@@ -96,7 +97,7 @@ void schema_release(ArrowSchema* s) {
 TEST_SUITE("PluginResults") {
     TEST_CASE("a plugin's emitted blob round-trips to the registry verbatim") {
         dstd::StringIntern intern;
-        plugins::SharedResultRegistry reg;
+        domains::plugins::SharedResultRegistry reg;
         plugins::NamedResultRegistry named;
         FoldHolder master(
             dftracer::utils::plugins::make_plugin<CountBlobSlice>(nullptr),
@@ -106,7 +107,7 @@ TEST_SUITE("PluginResults") {
         std::uint64_t total = 0;
         for (std::uint64_t n : counts) {
             auto slice = master.fold->slice();
-            auto* pf = static_cast<plugins::PluginFold*>(slice.get());
+            auto* pf = static_cast<domains::plugins::PluginFold*>(slice.get());
             auto evs = make_events(n);
             trace::views::detail::ScanUnit unit;
             trace::views::detail::FoldBatch fb{

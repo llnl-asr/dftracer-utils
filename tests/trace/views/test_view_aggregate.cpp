@@ -11,11 +11,11 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/cache/rollup_store.h>
-#include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/trace/comparator/compare_view.h>
+#include <dftracer/utils/trace/index/cache/rollup_store.h>
+#include <dftracer/utils/trace/index/indexer.h>
 #include <dftracer/utils/trace/views/aggfold.h>
+#include <dftracer/utils/trace/views/compare_view.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/result_join.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
@@ -143,9 +143,9 @@ dataframe::DataFrame scan_only(const views::detail::scan::ScanPlan& v) {
 // Build the aggregation tier every build makes, so the chunk partials can
 // answer without a scan.
 void build_tier_index(const dstd::String& gz) {
-    dftracer::utils::index::IndexerOptions options;
+    dftracer::utils::trace::index::IndexerOptions options;
     dftu_utils_test::ok(
-        dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+        dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
                                 {dstd::String(dstd::StringView(gz))}, options))
             .build());
 }
@@ -353,7 +353,7 @@ TEST_SUITE("View") {
                 .get());
         auto rj = dftu_utils_test::ok(join_batches(ra, rb, 1, JoinType::Inner));
         auto rc = dftu_utils_test::ok(
-            comparator::CompareView::compare_batches(ra, rb, 1));
+            trace::views::CompareView::compare_batches(ra, rb, 1));
 
         // INNER join keeps only cat=posix (b is posix-only).
         REQUIRE(j->num_rows() == rj.num_rows());
@@ -980,9 +980,10 @@ TEST_SUITE("View") {
         CHECK(canon(run(views::detail::scan::collect_frame(
                   views::detail::scan::materialize(make(), 0, 0)))) == expect);
         {
-            auto db = dftracer::utils::index::cache::open_rollup_db(
-                dftracer::utils::index::rollups_dir(idx),
-                dftracer::utils::index::cache::CacheStore::Mode::ReadOnly);
+            auto db = dftracer::utils::trace::index::cache::open_rollup_db(
+                dftracer::utils::trace::index::rollups_dir(idx),
+                dftracer::utils::trace::index::cache::CacheStore::Mode::
+                    ReadOnly);
             REQUIRE(db);
             CHECK_FALSE(dftu_utils_test::ok(db->usage())
                             .empty());  // the store holds the materialized view
@@ -1038,9 +1039,10 @@ TEST_SUITE("View") {
                 .materialize()
                 .get());  // build-only terminal: materialize the rollup
         {
-            auto db = dftracer::utils::index::cache::open_rollup_db(
-                dftracer::utils::index::rollups_dir(idx),
-                dftracer::utils::index::cache::CacheStore::Mode::ReadOnly);
+            auto db = dftracer::utils::trace::index::cache::open_rollup_db(
+                dftracer::utils::trace::index::rollups_dir(idx),
+                dftracer::utils::trace::index::cache::CacheStore::Mode::
+                    ReadOnly);
             REQUIRE(db);
             CHECK_FALSE(dftu_utils_test::ok(db->usage()).empty());
         }

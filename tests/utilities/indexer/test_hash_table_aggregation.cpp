@@ -5,17 +5,16 @@
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
-#include <dftracer/utils/index/build/resolve_and_build.h>
-#include <dftracer/utils/index/plan/view_resolver.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
+#include <dftracer/utils/trace/index/build/resolve_and_build.h>
+#include <dftracer/utils/trace/index/plan/view_resolver.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_config.h>
 #include <doctest/doctest.h>
 #include <testing_runtime.h>
 #include <testing_utilities.h>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities;
 
 namespace {
 
@@ -62,7 +61,7 @@ TEST_SUITE("hash_table_aggregation") {
         const dstd::String index_dir = dstd::String((dir / "idx").str());
         write_single_member(gz, make_trace_with_fh(50));
 
-        index::build::ResolveAndBuildInput input;
+        trace::index::build::ResolveAndBuildInput input;
         input.directory = dir.str();
         input.index_dir = index_dir;
         input.require_checkpoints = true;
@@ -71,13 +70,14 @@ TEST_SUITE("hash_table_aggregation") {
 
         dstd::String index_path;
         dftu_utils_test::run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
-            auto res = co_await index::build::resolve_and_build_index(input);
+            auto res =
+                co_await trace::index::build::resolve_and_build_index(input);
             if (res) index_path = res->index_path;
             co_return;
         });
         REQUIRE_FALSE(index_path.empty());
 
-        const ::dftracer::utils::index::plan::GroupResolver files(
+        const ::dftracer::utils::trace::index::plan::GroupResolver files(
             {{gz, index_path}}, {{"path", "files", "fhash", "path"}});
         CHECK(files.value("path", "f00d") == "/scratch/data/x.bin");
     }

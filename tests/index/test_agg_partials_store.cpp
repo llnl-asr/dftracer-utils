@@ -12,18 +12,18 @@
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/index.h>
-#include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/plan/prune.h>
-#include <dftracer/utils/index/schemas/dft/agg/agg_partial.h>
-#include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
-#include <dftracer/utils/index/store/layout.h>
-#include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/fileio/file_helpers.h>
 #include <dftracer/utils/store/store.h>
+#include <dftracer/utils/trace/index/index.h>
+#include <dftracer/utils/trace/index/indexer.h>
+#include <dftracer/utils/trace/index/plan/prune.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/agg_partial.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/agg_store.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_config.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_fold.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_intern.h>
+#include <dftracer/utils/trace/index/store/layout.h>
+#include <dftracer/utils/trace/index/tables.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
@@ -42,7 +42,7 @@
 #include <utility>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::index;
+using namespace dftracer::utils::trace::index;
 
 namespace {
 
@@ -120,21 +120,22 @@ struct Stored {
     dstd::Set<std::uint32_t> chunks;
 };
 
-index::Snapshot open_index(const dstd::String& index_path) {
-    return dftu_utils_test::ok(index::plan::open_snapshot(index_path));
+trace::index::Snapshot open_index(const dstd::String& index_path) {
+    return dftu_utils_test::ok(trace::index::plan::open_snapshot(index_path));
 }
 
-index::FileRef file_of(const index::Snapshot& snapshot, dstd::StringView path) {
-    auto file = snapshot.file(index::store::internal::get_logical_path(path));
+trace::index::FileRef file_of(const trace::index::Snapshot& snapshot,
+                              dstd::StringView path) {
+    auto file = snapshot.file(fileio::get_logical_path(path));
     REQUIRE(file.has_value());
     return std::move(*file);
 }
 
 dstd::Result<Stored> try_read_partials(
-    const index::Snapshot& snapshot, const index::FileRef& file,
+    const trace::index::Snapshot& snapshot, const trace::index::FileRef& file,
     const schemas::dft::agg::AggInternTable& dictionary) {
     Stored out;
-    auto walked = index::for_each_agg_partial(
+    auto walked = trace::index::for_each_agg_partial(
         snapshot, file,
         [&](std::uint32_t chunk, std::uint32_t cat, std::uint32_t name,
             std::uint32_t, std::uint32_t, schemas::dft::agg::PartialKind,
@@ -153,8 +154,8 @@ dstd::Result<Stored> try_read_partials(
     return out;
 }
 
-Stored read_partials(const index::Snapshot& snapshot,
-                     const index::FileRef& file,
+Stored read_partials(const trace::index::Snapshot& snapshot,
+                     const trace::index::FileRef& file,
                      const schemas::dft::agg::AggInternTable& dictionary) {
     return dftu_utils_test::ok(try_read_partials(snapshot, file, dictionary));
 }
@@ -197,12 +198,12 @@ dstd::Map<dstd::String, dstd::String> agg_rows(dstd::StringView file,
     const auto snapshot = open_index(index_path);
     const auto stored_file = file_of(snapshot, file);
     auto dictionary = schemas::dft::agg::make_intern_table();
-    dftu_utils_test::ok(index::agg_dictionary(snapshot, *dictionary));
+    dftu_utils_test::ok(trace::index::agg_dictionary(snapshot, *dictionary));
     const auto text = [&](std::uint32_t id) {
         return dstd::String(dictionary->intern.resolve(id));
     };
     dstd::Map<dstd::String, dstd::String> rows;
-    dftu_utils_test::ok(index::for_each_agg_partial(
+    dftu_utils_test::ok(trace::index::for_each_agg_partial(
         snapshot, stored_file,
         [&](std::uint64_t chunk, std::uint32_t cat, std::uint32_t name,
             std::uint32_t host, std::uint32_t extra,
@@ -214,20 +215,21 @@ dstd::Map<dstd::String, dstd::String> agg_rows(dstd::StringView file,
                          dstd::String(bytes.begin(), bytes.end()));
             return true;
         }));
-    dftu_utils_test::ok(index::for_each_agg_file_partial(
+    dftu_utils_test::ok(trace::index::for_each_agg_file_partial(
         snapshot, stored_file,
         [&](std::uint64_t chunk, std::uint32_t file_id,
             schemas::dft::agg::PartialKind kind,
             dstd::Span<const std::uint8_t> bytes) {
-            rows.emplace("f " + dstd::to_string(chunk) + " " +
-                             (file_id == index::store::layout::agg_kind::NO_FILE
-                                  ? dstd::String("-")
-                                  : text(file_id)) +
-                             " " + dstd::to_string(static_cast<int>(kind)),
-                         dstd::String(bytes.begin(), bytes.end()));
+            rows.emplace(
+                "f " + dstd::to_string(chunk) + " " +
+                    (file_id == trace::index::store::layout::agg_kind::NO_FILE
+                         ? dstd::String("-")
+                         : text(file_id)) +
+                    " " + dstd::to_string(static_cast<int>(kind)),
+                dstd::String(bytes.begin(), bytes.end()));
             return true;
         }));
-    dftu_utils_test::ok(index::for_each_agg_chunk_columns(
+    dftu_utils_test::ok(trace::index::for_each_agg_chunk_columns(
         snapshot, stored_file,
         [&](std::uint64_t chunk, const schemas::dft::agg::ChunkColumns& block) {
             dstd::String value;
@@ -299,16 +301,17 @@ TEST_SUITE("AggPartialsStore") {
             trace::internal::determine_index_path(files[0], index_dir));
         const auto snapshot = open_index(index_path);
         auto dictionary = schemas::dft::agg::make_intern_table();
-        dftu_utils_test::ok(index::agg_dictionary(snapshot, *dictionary));
+        dftu_utils_test::ok(
+            trace::index::agg_dictionary(snapshot, *dictionary));
 
         dstd::Map<Key, schemas::dft::agg::AggPartial> all;
         std::size_t stored = 0;
         std::size_t bound = 0;
         for (int n = 0; n < FILES; ++n) {
             const auto stored_file = file_of(snapshot, files[n]);
-            const auto members =
-                dftu_utils_test::ok(index::members(snapshot, stored_file))
-                    .size();
+            const auto members = dftu_utils_test::ok(trace::index::members(
+                                                         snapshot, stored_file))
+                                     .size();
             REQUIRE(members > 1);
 
             const auto file = read_partials(snapshot, stored_file, *dictionary);
@@ -375,11 +378,12 @@ TEST_SUITE("AggPartialsStore") {
         const auto snapshot = open_index(index_path);
         const auto file = file_of(snapshot, gz);
         auto dictionary = schemas::dft::agg::make_intern_table();
-        dftu_utils_test::ok(index::agg_dictionary(snapshot, *dictionary));
+        dftu_utils_test::ok(
+            trace::index::agg_dictionary(snapshot, *dictionary));
         dstd::Map<dstd::String, std::uint64_t> got;
         dstd::Map<dstd::String, std::uint64_t> got_dur;
         dstd::Set<std::uint32_t> chunks;
-        dftu_utils_test::ok(index::for_each_agg_file_partial(
+        dftu_utils_test::ok(trace::index::for_each_agg_file_partial(
             snapshot, file,
             [&](std::uint64_t chunk, std::uint32_t file_id,
                 schemas::dft::agg::PartialKind kind,
@@ -387,7 +391,7 @@ TEST_SUITE("AggPartialsStore") {
                 CHECK(kind == schemas::dft::agg::PartialKind::Event);
                 chunks.insert(static_cast<std::uint32_t>(chunk));
                 const dstd::String name =
-                    file_id == index::store::layout::agg_kind::NO_FILE
+                    file_id == trace::index::store::layout::agg_kind::NO_FILE
                         ? dstd::String()
                         : dstd::String(dictionary->intern.resolve(file_id));
                 auto p = schemas::dft::agg::AggPartial::deserialize(
@@ -417,7 +421,8 @@ TEST_SUITE("AggPartialsStore") {
         {
             const auto snapshot = open_index(index_path);
             auto dictionary = schemas::dft::agg::make_intern_table();
-            dftu_utils_test::ok(index::agg_dictionary(snapshot, *dictionary));
+            dftu_utils_test::ok(
+                trace::index::agg_dictionary(snapshot, *dictionary));
             for (const auto& f : files) {
                 before.push_back(
                     read_partials(snapshot, file_of(snapshot, f), *dictionary)
@@ -429,7 +434,8 @@ TEST_SUITE("AggPartialsStore") {
         // An index of an earlier build: another params hash and no partials.
         // The empty copy of each file replaces its whole tier.
         {
-            auto target = dftu_utils_test::ok(index::Index::open(index_path));
+            auto target =
+                dftu_utils_test::ok(trace::index::Index::open(index_path));
             const auto config =
                 dftu_utils_test::ok(schemas::dft::agg::tier::read_config(
                     dftu_utils_test::ok(target.snapshot())));
@@ -441,9 +447,9 @@ TEST_SUITE("AggPartialsStore") {
 
             const auto snapshot = open_index(index_path);
             dstd::Vector<dstd::String> logical;
-            dstd::Vector<index::SourceStat> stats;
+            dstd::Vector<trace::index::SourceStat> stats;
             for (const auto& f : files) {
-                logical.push_back(index::store::internal::get_logical_path(f));
+                logical.push_back(fileio::get_logical_path(f));
                 stats.push_back(file_of(snapshot, f).stat());
             }
 
@@ -456,7 +462,7 @@ TEST_SUITE("AggPartialsStore") {
                             marked = false;
                             co_return;
                         }
-                        build->finish(index::store::IndexExtension::Agg,
+                        build->finish(trace::index::store::IndexExtension::Agg,
                                       old.params_hash);
                         if (!co_await build->commit()) marked = false;
                     }
@@ -467,7 +473,8 @@ TEST_SUITE("AggPartialsStore") {
         {
             const auto snapshot = open_index(index_path);
             auto dictionary = schemas::dft::agg::make_intern_table();
-            dftu_utils_test::ok(index::agg_dictionary(snapshot, *dictionary));
+            dftu_utils_test::ok(
+                trace::index::agg_dictionary(snapshot, *dictionary));
             for (const auto& f : files)
                 CHECK(read_partials(snapshot, file_of(snapshot, f), *dictionary)
                           .count == 0);
@@ -477,7 +484,7 @@ TEST_SUITE("AggPartialsStore") {
 
         const auto rebuilt = open_index(index_path);
         auto dictionary = schemas::dft::agg::make_intern_table();
-        dftu_utils_test::ok(index::agg_dictionary(rebuilt, *dictionary));
+        dftu_utils_test::ok(trace::index::agg_dictionary(rebuilt, *dictionary));
         for (std::size_t i = 0; i < files.size(); ++i)
             CHECK(
                 read_partials(rebuilt, file_of(rebuilt, files[i]), *dictionary)
@@ -499,7 +506,8 @@ TEST_SUITE("AggPartialsStore") {
         {
             const auto snapshot = open_index(index_path);
             auto dictionary = schemas::dft::agg::make_intern_table();
-            dftu_utils_test::ok(index::agg_dictionary(snapshot, *dictionary));
+            dftu_utils_test::ok(
+                trace::index::agg_dictionary(snapshot, *dictionary));
             for (const auto& f : files) {
                 before.push_back(
                     read_partials(snapshot, file_of(snapshot, f), *dictionary)
@@ -510,33 +518,35 @@ TEST_SUITE("AggPartialsStore") {
         // An index of an earlier build: no config record where it is kept now
         // and a partial whose key tail is the older 12 bytes.
         {
-            auto target = dftu_utils_test::ok(index::Index::open(index_path));
+            auto target =
+                dftu_utils_test::ok(trace::index::Index::open(index_path));
             REQUIRE(default_runtime()
-                        .submit(index::delete_agg_meta(target, "config"))
+                        .submit(trace::index::delete_agg_meta(target, "config"))
                         .get()
                         .has_value());
 
             auto store =
                 dftracer::utils::store::Store::open(index_path + "/store");
             REQUIRE(store.has_value());
-            auto ns =
-                store->ns(index::ext_spec(index::store::IndexExtension::Agg));
+            auto ns = store->ns(trace::index::ext_spec(
+                trace::index::store::IndexExtension::Agg));
             REQUIRE(ns.has_value());
             dstd::String old_key(
-                1, static_cast<char>(index::store::layout::agg_kind::PARTIAL));
+                1, static_cast<char>(
+                       trace::index::store::layout::agg_kind::PARTIAL));
             old_key.append(12, '\0');
             const dstd::String old_value = "old";
             const auto snapshot = open_index(index_path);
             const auto file = file_of(snapshot, files[0]);
-            const auto state = index::extension_state(
-                snapshot, file, index::store::IndexExtension::Agg);
+            const auto state = trace::index::extension_state(
+                snapshot, file, trace::index::store::IndexExtension::Agg);
             REQUIRE(state.has_value());
-            const dstd::Vector<index::SourceStat> sources{file.stat()};
-            dftracer::utils::store::Batch batch = store->batch(
-                *ns,
-                dftracer::utils::store::ScopeKey::file(
-                    index::store::internal::get_logical_path(files[0])),
-                state->params_hash, &sources);
+            const dstd::Vector<trace::index::SourceStat> sources{file.stat()};
+            dftracer::utils::store::Batch batch =
+                store->batch(*ns,
+                             dftracer::utils::store::ScopeKey::file(
+                                 fileio::get_logical_path(files[0])),
+                             state->params_hash, &sources);
             batch.put(dstd::ByteView(old_key), dstd::ByteView(old_value));
             REQUIRE(default_runtime()
                         .submit(store->commit(std::move(batch)))
@@ -549,7 +559,8 @@ TEST_SUITE("AggPartialsStore") {
             CHECK_FALSE(dftu_utils_test::ok(
                 schemas::dft::agg::tier::read_config(snapshot)));
             auto dictionary = schemas::dft::agg::make_intern_table();
-            dftu_utils_test::ok(index::agg_dictionary(snapshot, *dictionary));
+            dftu_utils_test::ok(
+                trace::index::agg_dictionary(snapshot, *dictionary));
             CHECK_FALSE(try_read_partials(snapshot, file_of(snapshot, files[0]),
                                           *dictionary)
                             .has_value());
@@ -561,7 +572,7 @@ TEST_SUITE("AggPartialsStore") {
         CHECK(
             dftu_utils_test::ok(schemas::dft::agg::tier::read_config(rebuilt)));
         auto dictionary = schemas::dft::agg::make_intern_table();
-        dftu_utils_test::ok(index::agg_dictionary(rebuilt, *dictionary));
+        dftu_utils_test::ok(trace::index::agg_dictionary(rebuilt, *dictionary));
         for (std::size_t i = 0; i < files.size(); ++i)
             CHECK(
                 read_partials(rebuilt, file_of(rebuilt, files[i]), *dictionary)
@@ -578,26 +589,27 @@ TEST_SUITE("AggPartialsStore") {
         const auto index_path = dstd::String(
             trace::internal::determine_index_path(files[0], index_dir));
 
-        const auto put_bad_key = [&](index::store::IndexExtension ext,
+        const auto put_bad_key = [&](trace::index::store::IndexExtension ext,
                                      std::uint8_t kind) {
             auto store =
                 dftracer::utils::store::Store::open(index_path + "/store");
             REQUIRE(store.has_value());
-            auto ns = store->ns(index::ext_spec(ext));
+            auto ns = store->ns(trace::index::ext_spec(ext));
             REQUIRE(ns.has_value());
             dstd::String bad_key(1, static_cast<char>(kind));
             bad_key.append(5, '\0');
             const dstd::String value = "x";
             const auto snapshot = open_index(index_path);
             const auto file = file_of(snapshot, files[0]);
-            const auto state = index::extension_state(snapshot, file, ext);
+            const auto state =
+                trace::index::extension_state(snapshot, file, ext);
             REQUIRE(state.has_value());
-            const dstd::Vector<index::SourceStat> sources{file.stat()};
-            dftracer::utils::store::Batch batch = store->batch(
-                *ns,
-                dftracer::utils::store::ScopeKey::file(
-                    index::store::internal::get_logical_path(files[0])),
-                state->params_hash, &sources);
+            const dstd::Vector<trace::index::SourceStat> sources{file.stat()};
+            dftracer::utils::store::Batch batch =
+                store->batch(*ns,
+                             dftracer::utils::store::ScopeKey::file(
+                                 fileio::get_logical_path(files[0])),
+                             state->params_hash, &sources);
             batch.put(dstd::ByteView(bad_key), dstd::ByteView(value));
             REQUIRE(default_runtime()
                         .submit(store->commit(std::move(batch)))
@@ -605,22 +617,22 @@ TEST_SUITE("AggPartialsStore") {
                         .has_value());
             REQUIRE(default_runtime().submit(store->flush()).get().has_value());
         };
-        put_bad_key(index::store::IndexExtension::Members,
-                    index::store::layout::members::MEMBER);
-        put_bad_key(index::store::IndexExtension::Stats,
-                    index::store::layout::stats_kind::CHUNK_STATS);
-        put_bad_key(index::store::IndexExtension::Metadata,
-                    index::store::layout::metadata_kind::CHUNK);
+        put_bad_key(trace::index::store::IndexExtension::Members,
+                    trace::index::store::layout::members::MEMBER);
+        put_bad_key(trace::index::store::IndexExtension::Stats,
+                    trace::index::store::layout::stats_kind::CHUNK_STATS);
+        put_bad_key(trace::index::store::IndexExtension::Metadata,
+                    trace::index::store::layout::metadata_kind::CHUNK);
 
         const auto snapshot = open_index(index_path);
         const auto file = file_of(snapshot, files[0]);
-        const auto members = index::members(snapshot, file);
+        const auto members = trace::index::members(snapshot, file);
         REQUIRE_FALSE(members.has_value());
         CHECK(members.error().is(dstd::Condition::Parse));
-        const auto stats = index::chunk_stats(snapshot, file);
+        const auto stats = trace::index::chunk_stats(snapshot, file);
         REQUIRE_FALSE(stats.has_value());
         CHECK(stats.error().is(dstd::Condition::Parse));
-        const auto meta = index::chunk_meta(snapshot, file);
+        const auto meta = trace::index::chunk_meta(snapshot, file);
         REQUIRE_FALSE(meta.has_value());
         CHECK(meta.error().is(dstd::Condition::Parse));
     }
@@ -683,9 +695,10 @@ TEST_SUITE("AggPartialsStore") {
         const auto snapshot = open_index(index_path);
         const auto stored = file_of(snapshot, file);
         const auto span_count =
-            dftu_utils_test::ok(index::spans(snapshot, stored)).size();
+            dftu_utils_test::ok(trace::index::spans(snapshot, stored)).size();
         auto dictionary = schemas::dft::agg::make_intern_table();
-        dftu_utils_test::ok(index::agg_dictionary(snapshot, *dictionary));
+        dftu_utils_test::ok(
+            trace::index::agg_dictionary(snapshot, *dictionary));
         const auto partials = read_partials(snapshot, stored, *dictionary);
         REQUIRE(!partials.chunks.empty());
         CHECK(*partials.chunks.rbegin() < span_count);
@@ -760,9 +773,10 @@ TEST_SUITE("AggPartialsStore") {
         fresh_process::announce_abort();
         dftu_utils_test::TestEnvironment env(10);
         const dstd::String index_path = dstd::String(env.dir()) + "/idx";
-        auto target = dftu_utils_test::ok(index::Index::open(index_path));
+        auto target =
+            dftu_utils_test::ok(trace::index::Index::open(index_path));
         auto build = dftu_utils_test::ok(
-            target.build("unused.pfw.gz", index::SourceStat{1, 1, 1}));
+            target.build("unused.pfw.gz", trace::index::SourceStat{1, 1, 1}));
         dstd::StringIntern intern;
         schemas::dft::agg::AggregationFold fold(
             intern, schemas::dft::agg::intern_for_index(index_path),

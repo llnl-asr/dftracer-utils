@@ -2,7 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
-#include <dftracer/utils/index/cache/cache_store.h>
+#include <dftracer/utils/trace/index/cache/cache_store.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
 #include <sys/wait.h>
@@ -11,7 +11,7 @@
 #include <cstdlib>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::index;
+using namespace dftracer::utils::trace::index;
 
 namespace {
 

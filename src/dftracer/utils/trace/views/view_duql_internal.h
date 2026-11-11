@@ -5,6 +5,8 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dataframe/query/group_fold.h>
+#include <dftracer/utils/dataframe/query/vectorize.h>
 #include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/function.h>
@@ -15,11 +17,9 @@
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/duql/group_fold.h>
 #include <dftracer/utils/duql/pipeline.h>
-#include <dftracer/utils/duql/vectorize.h>
-#include <dftracer/utils/index/plan/rowsets.h>
-#include <dftracer/utils/index/record_schema.h>
+#include <dftracer/utils/trace/index/plan/rowsets.h>
+#include <dftracer/utils/trace/index/record_schema.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 
@@ -246,7 +246,7 @@ dataframe::LazyFrame fold_source(
     dataframe::LazyFrame inner, dataframe::Schema schema,
     dstd::Vector<dstd::Pair<dstd::String, dataframe::TypeId>> in,
     dstd::Vector<dataframe::DataType> key_types,
-    dstd::Vector<duql::FoldAgg> aggs);
+    dstd::Vector<dataframe::query::FoldAgg> aggs);
 
 // The row sets of a compiled program. A side runs once, the first time a
 // plan that reads it executes; building plans runs none.
@@ -256,10 +256,10 @@ class Sides {
 
     duql::Program program;
     dstd::Vector<dstd::Optional<View>> views;
-    dstd::Vector<dstd::Vector<duql::VectorColumn>> columns;
+    dstd::Vector<dstd::Vector<dataframe::query::VectorColumn>> columns;
     dstd::Vector<dstd::Optional<CacheKey>> keys;
     // The files of each source row set, and whether their indexes hold it.
-    dstd::Vector<dstd::Vector<index::plan::RowSetFile>> files;
+    dstd::Vector<dstd::Vector<trace::index::plan::RowSetFile>> files;
     dstd::Vector<char> stored;
 
     // The rows of side `i`, run the first time. A side that fails runs again
@@ -318,7 +318,7 @@ dstd::Result<dstd::String> cache_state(const dstd::Optional<CacheKey>& key);
 
 struct Built {
     View view;
-    dstd::Vector<duql::VectorColumn> cols;
+    dstd::Vector<dataframe::query::VectorColumn> cols;
 };
 
 // What building a pipeline needs of the View it starts from.
@@ -329,7 +329,7 @@ struct Ctx {
     dstd::Function<View(const View&, dstd::SharedPtr<const detail::BuildStep>)>
         with_step;
     dstd::Function<View(const duql::Input&)> input;
-    dstd::Function<const index::RecordSchema&(const View&)> schema;
+    dstd::Function<const trace::index::RecordSchema&(const View&)> schema;
 };
 
 // `p` as a View over its input: its build step, when it reads lookups, then
@@ -346,17 +346,20 @@ dstd::Result<Built> build(const Ctx& ctx, const duql::Pipeline& p, bool table,
 class Applier {
    public:
     // With `frame`, `v` holds rows with those columns rather than a scan.
-    Applier(View v, const index::RecordSchema& schema, const Ctx& ctx,
+    Applier(View v, const trace::index::RecordSchema& schema, const Ctx& ctx,
             Reads reads, dstd::SharedPtr<const detail::BuildStep> step,
             dstd::Vector<std::size_t> collected, bool main,
-            dstd::Optional<dstd::Vector<duql::VectorColumn>> frame = {});
+            dstd::Optional<dstd::Vector<dataframe::query::VectorColumn>> frame =
+                {});
 
     Status apply(const duql::PipelineStage& stage);
 
     // Ends the scan, so the columns are those the stages give.
     void end_scan(const char* stage) { leave_scan(stage); }
 
-    const dstd::Vector<duql::VectorColumn>& columns() const { return cols_; }
+    const dstd::Vector<dataframe::query::VectorColumn>& columns() const {
+        return cols_;
+    }
     // Drops the fields the scan read only for the stages.
     Status finish_columns();
 
@@ -376,11 +379,11 @@ class Applier {
     dstd::Vector<std::size_t> collected_;
     bool main_;
     View v_;
-    const index::RecordSchema& schema_;
+    const trace::index::RecordSchema& schema_;
     const duql::Roles& roles_;
     const Ctx& ctx_;
     dstd::SharedPtr<const detail::BuildStep> step_;
-    dstd::Vector<duql::VectorColumn> cols_;
+    dstd::Vector<dataframe::query::VectorColumn> cols_;
     bool scan_ = true;
     bool scan_selected_ = false;
     dstd::String blocker_;
@@ -410,7 +413,8 @@ class Applier {
 
     // A field read by the raw scan: a scanned column, or, while the view
     // still reads raw events, any field under the type the index observed.
-    dstd::Optional<duql::VectorColumn> scan_column(const dstd::String& base);
+    dstd::Optional<dataframe::query::VectorColumn> scan_column(
+        const dstd::String& base);
 
     // Whether the index lists field `f`, or a path under it.
     bool indexed(const dstd::String& f);
@@ -457,7 +461,7 @@ class Applier {
     // `next` as the columns, each batch passed through `fn`.
     // Each batch reaches `fn` with the current columns in order: a scan of
     // records gives a batch only the fields its records hold.
-    void map_rows(FrameFn fn, dstd::Vector<duql::VectorColumn> next,
+    void map_rows(FrameFn fn, dstd::Vector<dataframe::query::VectorColumn> next,
                   dstd::String line);
 
     // A hidden column for each quantifier and each lookup in `t`, inner ones
@@ -700,7 +704,7 @@ class Applier {
         dstd::Vector<dstd::String> names;
         dstd::Vector<dstd::String> added;
         dstd::Vector<dstd::Pair<dstd::String, dstd::String>> fills;
-        dstd::Vector<duql::VectorColumn> columns;
+        dstd::Vector<dataframe::query::VectorColumn> columns;
     };
     dstd::Result<SideValues> side_values(
         const duql::PipelineLookup& l, const char* clause,
@@ -731,8 +735,9 @@ class Applier {
         const dataframe::DataType& b);
 
     // `v` with the columns `cols` as `want`: missing ones null, others cast.
-    static View align(View v, const dstd::Vector<duql::VectorColumn>& cols,
-                      const dstd::Vector<duql::VectorColumn>& want);
+    static View align(View v,
+                      const dstd::Vector<dataframe::query::VectorColumn>& cols,
+                      const dstd::Vector<dataframe::query::VectorColumn>& want);
 
     Status stage(const duql::PipelineUnion& u);
 
@@ -745,7 +750,8 @@ class Applier {
         const duql::TermRef& t, const dstd::String& text);
 
     // A whole-field term's column, usable by the trace aggregation.
-    dstd::Optional<duql::VectorColumn> trace_column(const duql::TermRef& t);
+    dstd::Optional<dataframe::query::VectorColumn> trace_column(
+        const duql::TermRef& t);
 
     // The reason the trace aggregation cannot take `g`, empty when it can.
     dstd::Result<dstd::String> trace_refusal(
@@ -782,7 +788,7 @@ class Applier {
     void fold_group(const dstd::Vector<dstd::String>& keys,
                     const dstd::Vector<dataframe::GroupAgg>& specs,
                     const dstd::Vector<dstd::String>& by,
-                    dstd::Vector<duql::FoldAgg> fold);
+                    dstd::Vector<dataframe::query::FoldAgg> fold);
 
     void finish(FrameFn fn, const dstd::String& line,
                 dstd::Optional<dataframe::Schema> schema = dstd::nullopt);

@@ -8,10 +8,10 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/build/batch_builder.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/build/batch_builder.h>
 #include <dftracer/utils/trace/internal/utils.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <testing_utilities.h>
 #include <unistd.h>
 #include <zlib.h>
@@ -82,13 +82,12 @@ bool build_index(const dstd::String& gz, const dstd::String& index_dir,
         [&](dftracer::utils::coro::Scope&)
             -> dftracer::utils::coro::CoroTask<void> {
             auto config = dstd::make_shared<
-                dftracer::utils::index::build::IndexBuildBatchConfig>();
+                dftracer::utils::trace::index::build::IndexBuildBatchConfig>();
             config->file_paths = {dstd::String(dstd::StringView(gz))};
             config->index_dir = index_dir;
             if (checkpoint_size > 0) config->checkpoint_size = checkpoint_size;
-            auto r =
-                co_await dftracer::utils::index::build::BatchBuilder::process(
-                    std::move(config));
+            auto r = co_await dftracer::utils::trace::index::build::
+                BatchBuilder::process(std::move(config));
             ok = (r.indexed + r.skipped) >= 1 && r.failed == 0;
             co_return;
         });
@@ -132,8 +131,8 @@ dstd::String write_stored_gz_trace(const dstd::String& path,
         out.append(content, at, n);
         at += n;
     } while (at < content.size());
-    put32(dftracer::utils::utilities::fileio::compress::gzip_crc32(
-        0, content.data(), content.size()));
+    put32(dftracer::utils::fileio::compress::gzip_crc32(0, content.data(),
+                                                        content.size()));
     put32(static_cast<std::uint32_t>(content.size()));
     dftu_utils_test::FileOut file(path);
     if (!file.write(out.data(), static_cast<std::streamsize>(out.size())))
@@ -179,7 +178,7 @@ bool compress_file_to_gzip_multimember(const dstd::String& input_file,
     dftu_utils_test::FileOut output(output_file);
     if (!output.is_open()) return false;
 
-    utilities::fileio::compress::GzipMemberCompressor comp;
+    fileio::compress::GzipMemberCompressor comp;
     if (!comp.valid()) return false;
 
     // Accumulate whole lines so member boundaries land on newlines, matching

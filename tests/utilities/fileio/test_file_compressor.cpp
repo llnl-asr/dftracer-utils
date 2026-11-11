@@ -9,7 +9,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/utilities/fileio/file_compressor_utility.h>
+#include <dftracer/utils/fileio/file_compressor_utility.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 #include <zlib.h>
@@ -17,7 +17,7 @@
 #include <random>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities::fileio;
+using namespace dftracer::utils::fileio;
 
 static dstd::Path create_test_dir() {
     auto dir =

@@ -4,7 +4,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
 #include <doctest/doctest.h>
 #include <zlib.h>
 
@@ -12,7 +12,6 @@
 #include <cstdint>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities;
 
 namespace {
 

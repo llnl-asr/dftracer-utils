@@ -1,0 +1,63 @@
+// SPDX-License-Identifier: MIT
+#ifndef DFTRACER_UTILS_DOMAINS_ANALYSIS_STATISTICS_STATISTICS_QUERY_UTILITY_H
+#define DFTRACER_UTILS_DOMAINS_ANALYSIS_STATISTICS_STATISTICS_QUERY_UTILITY_H
+
+#include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/domains/analysis/statistics/trace_statistics.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+
+#include <cstdint>
+#include <utility>
+
+namespace dftracer::utils::domains::analysis::statistics {
+
+enum class StatisticsQueryType {
+    Summary,
+    Categories,
+    Names,
+    PidTids,
+    TimeRange,
+    DurationStats,
+    TopNNames,
+    TopNCategories,
+    Detailed
+};
+
+struct StatisticsQueryInput {
+    TraceStatistics stats;
+    StatisticsQueryType query_type = StatisticsQueryType::Summary;
+    std::uint64_t top_n = 10;
+};
+
+struct StatisticsQueryOutput {
+    dstd::Vector<dstd::Pair<dstd::String, std::uint64_t>> results;
+    std::uint64_t total_events = 0;
+
+    std::uint64_t min_timestamp_us = 0;
+    std::uint64_t max_timestamp_us = 0;
+    double time_span_seconds = 0.0;
+
+    std::uint64_t duration_count = 0;
+    double duration_mean_us = 0.0;
+    double duration_stddev_us = 0.0;
+    std::uint64_t duration_min_us = 0;
+    std::uint64_t duration_max_us = 0;
+
+    dstd::String query_type_name;
+
+    dstd::String to_json() const;
+};
+
+/// Derives report rows from a @ref TraceStatistics snapshot. A plain async op
+/// (@ref StatisticsQueryInput -> CoroTask<@ref StatisticsQueryOutput>);
+/// composes and runs anywhere a callable does.
+struct StatisticsQueryUtility {
+    coro::CoroTask<StatisticsQueryOutput> operator()(
+        const StatisticsQueryInput& input) const;
+};
+
+}  // namespace dftracer::utils::domains::analysis::statistics
+
+#endif  // DFTRACER_UTILS_DOMAINS_ANALYSIS_STATISTICS_STATISTICS_QUERY_UTILITY_H

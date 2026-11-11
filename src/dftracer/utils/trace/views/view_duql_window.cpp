@@ -3,14 +3,14 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dataframe/query/overlap.h>
+#include <dftracer/utils/dataframe/query/vectorize.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/duql/overlap.h>
 #include <dftracer/utils/duql/pipeline.h>
-#include <dftracer/utils/duql/vectorize.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view_duql_internal.h>
 #include <dftracer/utils/trace/views/view_plan.h>
@@ -155,7 +155,7 @@ void Applier::partition_aggs(
     const dstd::String& pid) {
     dstd::Vector<dataframe::GroupAgg> specs;
     dstd::Vector<dstd::String> quantiles;
-    dstd::Vector<duql::VectorColumn> next = cols_;
+    dstd::Vector<dataframe::query::VectorColumn> next = cols_;
     dstd::String text;
     for (const auto& [c, in] : calls) {
         dataframe::GroupAgg g{dataframe::Agg::Var, std_str(in),

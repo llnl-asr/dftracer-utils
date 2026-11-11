@@ -4,9 +4,9 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/utilities/arrow/array_view.h>
-#include <dftracer/utils/utilities/arrow/arrow_export.h>
-#include <dftracer/utils/utilities/arrow/column_builder.h>
+#include <dftracer/utils/trace/arrow/array_view.h>
+#include <dftracer/utils/trace/arrow/arrow_export.h>
+#include <dftracer/utils/trace/arrow/column_builder.h>
 #include <doctest/doctest.h>
 #include <nanoarrow/nanoarrow.h>
 #include <task_result.h>
@@ -15,7 +15,7 @@
 
 using namespace dftracer::utils;
 
-using namespace dftracer::utils::utilities::arrow;
+using namespace dftracer::utils::trace::arrow;
 
 static dstd::String child_schema_name(const ArrowExportResult& r, int64_t i) {
     return r.schema()->children[i]->name;

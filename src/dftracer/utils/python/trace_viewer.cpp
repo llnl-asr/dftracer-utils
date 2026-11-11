@@ -5,6 +5,7 @@
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
+#include <dftracer/utils/domains/plugins/plugins.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -18,8 +19,6 @@
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/duql/syntax/parser.h>
 #include <dftracer/utils/duql/syntax/tree.h>
-#include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/plugins/plugins.h>
 #include <dftracer/utils/python/dataframe.h>
 #include <dftracer/utils/python/gzip_sink.h>
 #include <dftracer/utils/python/lazyframe.h>
@@ -35,6 +34,7 @@
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/trace_viewer.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/record_schema.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/time_metric.h>
 #include <dftracer/utils/trace/views/live_view.h>
@@ -1121,8 +1121,7 @@ PyObject* tv_plugins(PyObject* self, PyObject* host) {
         PyErr_SetString(PyExc_TypeError, "plugins() needs a Plugins instance");
         return nullptr;
     }
-    const dftracer::utils::plugins::Plugins* set =
-        python::plugin_host_plugins(host);
+    const domains::plugins::Plugins* set = python::plugin_host_plugins(host);
     if (!set) return nullptr;
     dftracer::utils::plugins::NamedResultRegistry* results =
         python::plugin_host_results(host);
@@ -1135,8 +1134,7 @@ PyObject* tv_plugins(PyObject* self, PyObject* host) {
     });
     trace::views::SessionBranch attach = [set, results,
                                           keep](trace::views::ViewSession& s) {
-        trace::views::Deferred<dftracer::utils::plugins::PluginRun> h =
-            set->attach(s);
+        trace::views::Deferred<domains::plugins::PluginRun> h = set->attach(s);
         return dftracer::utils::dstd::Function<void(const ExportStats&)>(
             [h, results, keep](const ExportStats&) mutable {
                 *results = std::move(h.get().results);

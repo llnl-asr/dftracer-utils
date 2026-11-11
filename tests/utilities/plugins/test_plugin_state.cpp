@@ -7,9 +7,9 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/domains/plugins/fold_adapter.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/memory/budget.h>
-#include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/runtime/runtime.h>
 
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
@@ -217,7 +217,7 @@ dstd::Vector<dstd::Vector<trace::views::detail::FoldEvent>> slices(
     return out;
 }
 
-void finalize_now(plugins::PluginFold& f) {
+void finalize_now(domains::plugins::PluginFold& f) {
     Runtime rt(1);
     dftu_utils_test::ok(
         rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
@@ -235,17 +235,17 @@ struct RunResult {
 };
 
 RunResult run_state(bool spillable, std::uint64_t budget, int n_slices) {
-    plugins::StateRegistry registry{
-        plugins::RegisteredState{STATE_NAME, make_desc(spillable), nullptr}};
+    domains::plugins::StateRegistry registry{domains::plugins::RegisteredState{
+        STATE_NAME, make_desc(spillable), nullptr}};
     dftu_plugin p = state_only_plugin();
     dstd::StringIntern intern;
     plugins::NamedResultRegistry named;
-    plugins::PluginFold master(&p, intern, nullptr, &named, "state_test",
-                               budget, &registry);
+    domains::plugins::PluginFold master(&p, intern, nullptr, &named,
+                                        "state_test", budget, &registry);
     for (const dstd::Vector<trace::views::detail::FoldEvent>& evs :
          slices(intern, n_slices)) {
         auto slice = master.slice();
-        auto* pf = static_cast<plugins::PluginFold*>(slice.get());
+        auto* pf = static_cast<domains::plugins::PluginFold*>(slice.get());
         trace::views::detail::ScanUnit unit{};
         for (std::size_t at = 0; at < evs.size(); at += BATCH) {
             const std::size_t n = std::min<std::size_t>(BATCH, evs.size() - at);
@@ -337,12 +337,12 @@ SliceRun run_slice(bool reclaimable, std::uint64_t budget, int n_slices) {
     dftu_plugin p = growing_plugin(reclaimable);
     dstd::StringIntern intern;
     plugins::NamedResultRegistry named;
-    plugins::PluginFold master(&p, intern, nullptr, &named, "slice_test",
-                               budget, nullptr);
+    domains::plugins::PluginFold master(&p, intern, nullptr, &named,
+                                        "slice_test", budget, nullptr);
     for (const dstd::Vector<trace::views::detail::FoldEvent>& evs :
          slices(intern, n_slices)) {
         auto slice = master.slice();
-        auto* pf = static_cast<plugins::PluginFold*>(slice.get());
+        auto* pf = static_cast<domains::plugins::PluginFold*>(slice.get());
         trace::views::detail::ScanUnit unit{};
         for (std::size_t at = 0; at < evs.size(); at += BATCH) {
             const std::size_t n = std::min<std::size_t>(BATCH, evs.size() - at);

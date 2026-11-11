@@ -22,25 +22,10 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/evaluator.h>
-#include <dftracer/utils/index/build/batch_builder.h>
-#include <dftracer/utils/index/build/chunk_indexer.h>
-#include <dftracer/utils/index/build/file_admission.h>
-#include <dftracer/utils/index/build/file_group.h>
-#include <dftracer/utils/index/build/index_fold_driver.h>
-#include <dftracer/utils/index/cache/mv_store.h>
-#include <dftracer/utils/index/cache/rollup_store.h>
-#include <dftracer/utils/index/extensions/bloom_fold.h>
-#include <dftracer/utils/index/extensions/kinds/time_bounds.h>
-#include <dftracer/utils/index/extensions/rowset_fold.h>
-#include <dftracer/utils/index/gzip/checkpoint_indexer.h>
-#include <dftracer/utils/index/gzip/gzip_indexer.h>
-#include <dftracer/utils/index/index.h>
-#include <dftracer/utils/index/plan/prune.h>
-#include <dftracer/utils/index/plan/view_resolver.h>
-#include <dftracer/utils/index/source.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
-#include <dftracer/utils/index/store/root_layout.h>
-#include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/fileio/file_helpers.h>
+#include <dftracer/utils/fileio/gzip_line_writer.h>
+#include <dftracer/utils/fileio/parallel/merge.h>
+#include <dftracer/utils/fileio/parallel/parallel_writer.h>
 #include <dftracer/utils/json/canonical.h>
 #include <dftracer/utils/json/dom_form.h>
 #include <dftracer/utils/json/json_escape.h>
@@ -50,6 +35,24 @@
 #include <dftracer/utils/json/value_access.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/build/batch_builder.h>
+#include <dftracer/utils/trace/index/build/chunk_indexer.h>
+#include <dftracer/utils/trace/index/build/file_admission.h>
+#include <dftracer/utils/trace/index/build/file_group.h>
+#include <dftracer/utils/trace/index/build/index_fold_driver.h>
+#include <dftracer/utils/trace/index/cache/mv_store.h>
+#include <dftracer/utils/trace/index/cache/rollup_store.h>
+#include <dftracer/utils/trace/index/extensions/bloom_fold.h>
+#include <dftracer/utils/trace/index/extensions/kinds/time_bounds.h>
+#include <dftracer/utils/trace/index/extensions/rowset_fold.h>
+#include <dftracer/utils/trace/index/gzip/checkpoint_indexer.h>
+#include <dftracer/utils/trace/index/gzip/gzip_indexer.h>
+#include <dftracer/utils/trace/index/index.h>
+#include <dftracer/utils/trace/index/plan/prune.h>
+#include <dftracer/utils/trace/index/plan/view_resolver.h>
+#include <dftracer/utils/trace/index/source.h>
+#include <dftracer/utils/trace/index/store/root_layout.h>
+#include <dftracer/utils/trace/index/tables.h>
 #include <dftracer/utils/trace/internal/index_root.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/containment_fold.h>
@@ -70,9 +73,6 @@
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <dftracer/utils/trace/views/view_scanner_utility.h>
 #include <dftracer/utils/trace/views/view_system_collect.h>
-#include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
-#include <dftracer/utils/utilities/fileio/parallel/merge.h>
-#include <dftracer/utils/utilities/fileio/parallel/parallel_writer.h>
 #include <fcntl.h>
 #include <simdjson.h>
 #include <sys/stat.h>
@@ -106,7 +106,7 @@ static bool all_files_fresh(const ViewPlan& plan) {
         if (f.index_path.empty()) return false;
         if (checked && *checked == f.index_path) continue;
         if (common::input_exists(
-                dftracer::utils::index::store_of(f.index_path)))
+                dftracer::utils::trace::index::store_of(f.index_path)))
             return false;
         checked = &f.index_path;
     }
@@ -121,7 +121,7 @@ bool export_bootstrap_eligible(const ViewPlan& plan) {
     // The pass writes every line, or every line but the metadata records.
     const dstd::String& data = plan_record_schema(plan).data;
     if (!plan.all_records && !data.empty() &&
-        data != dftracer::utils::index::NO_METADATA)
+        data != dftracer::utils::trace::index::NO_METADATA)
         return false;
     return all_files_fresh(plan);
 }
@@ -167,7 +167,7 @@ bool collect_bootstrap_eligible(const ViewPlan& plan) {
     // effective_query adds.
     const dstd::String& data = plan_record_schema(plan).data;
     if (!plan.all_records && !data.empty() &&
-        data != dftracer::utils::index::NO_METADATA)
+        data != dftracer::utils::trace::index::NO_METADATA)
         return false;
     // A partial source (chunk-stats fast path) answers only from an existing
     // index, so it contributes nothing once all_files_fresh holds - no need to
@@ -185,15 +185,16 @@ namespace {
 // The descriptor is the one open_bootstrap_source hashed.
 coro::CoroTask<void> build_bootstrap_artifacts(
     coro::Scope& scope, dstd::String file,
-    dftracer::utils::index::gzip::CheckpointIndexer::VisitorList visitors,
-    dftracer::utils::index::gzip::GzipBuildArtifacts* arts, bool* ok,
+    dftracer::utils::trace::index::gzip::CheckpointIndexer::VisitorList
+        visitors,
+    dftracer::utils::trace::index::gzip::GzipBuildArtifacts* arts, bool* ok,
     std::size_t ways, dstd::SharedPtr<dstd::File> source) {
     const int fd = source->native_handle();
     if (fd < 0) co_return;
-    auto built =
-        co_await dftracer::utils::index::gzip::build_gzip_index_artifacts(
+    auto built = co_await dftracer::utils::trace::index::gzip::
+        build_gzip_index_artifacts(
             fd, file,
-            dftracer::utils::index::gzip::CheckpointIndexer::
+            dftracer::utils::trace::index::gzip::CheckpointIndexer::
                 DEFAULT_CHECKPOINT_SIZE,
             visitors, &scope, nullptr, ways);
     if (built) {
@@ -226,8 +227,7 @@ BootstrapSource open_bootstrap_source(dstd::StringView file,
     if (!size) return out;
     out.fd = std::move(shared);
     out.size = *size;
-    out.hash = dftracer::utils::index::store::internal::calculate_file_hash(
-        *out.fd, out.size);
+    out.hash = fileio::calculate_file_hash(*out.fd, out.size);
     out.ok = true;
     return out;
 }
@@ -235,9 +235,9 @@ BootstrapSource open_bootstrap_source(dstd::StringView file,
 struct BootstrapRoot {
     dstd::String index_path;
     dstd::Vector<std::size_t> members;
-    dstd::Optional<dftracer::utils::index::Index> index;
+    dstd::Optional<dftracer::utils::trace::index::Index> index;
     /// The index before this bootstrap; empty when it could not be read.
-    dstd::Optional<dftracer::utils::index::Snapshot> before;
+    dstd::Optional<dftracer::utils::trace::index::Snapshot> before;
     dstd::String index_error;
 };
 
@@ -278,8 +278,8 @@ coro::CoroTask<void> open_bootstrap_stores(const ViewPlan& plan,
         auto store = dstd::make_unique<BootstrapRoot>();
         store->index_path = index_path;
         store->members.assign(members.begin(), members.end());
-        auto opened = dftracer::utils::index::Index::open(
-            dftracer::utils::index::normalize_index_root(index_path));
+        auto opened = dftracer::utils::trace::index::Index::open(
+            dftracer::utils::trace::index::normalize_index_root(index_path));
         if (opened) {
             store->index.emplace(std::move(*opened));
             auto taken = store->index->snapshot();
@@ -294,7 +294,7 @@ coro::CoroTask<void> open_bootstrap_stores(const ViewPlan& plan,
 // spills writes its runs into the file it parses. `failure` is set when the
 // index cannot hold it.
 struct BootstrapBuild {
-    dstd::Optional<dftracer::utils::index::FileBuild> build;
+    dstd::Optional<dftracer::utils::trace::index::FileBuild> build;
     dstd::String failure;
     bool fresh = false;
 };
@@ -307,10 +307,10 @@ BootstrapBuild open_bootstrap_build(BootstrapRoot& root, dstd::StringView file,
         out.failure = root.index_error;
         return out;
     }
-    const dstd::String logical = index::store::internal::get_logical_path(file);
+    const dstd::String logical = fileio::get_logical_path(file);
     out.fresh = root.before && !root.before->file(logical).has_value();
     auto started = root.index->build(
-        logical, index::SourceStat{mtime, source.size, source.hash});
+        logical, trace::index::SourceStat{mtime, source.size, source.hash});
     if (started)
         out.build.emplace(std::move(*started));
     else
@@ -320,21 +320,23 @@ BootstrapBuild open_bootstrap_build(BootstrapRoot& root, dstd::StringView file,
 
 // Puts the file's index, the tier its runs staged included, into its build.
 dstd::Result<void> fill_bootstrap_file(
-    dftracer::utils::index::FileBuild& build,
-    const dftracer::utils::index::gzip::GzipBuildArtifacts& arts,
-    const dftracer::utils::index::RecordSchema& schema,
-    dftracer::utils::index::extensions::BloomFold& bloom,
-    dftracer::utils::index::extensions::RowSetFold& rowsets, bool fresh) {
-    index::gzip::persist_gzip_index_artifacts(build, arts);
+    dftracer::utils::trace::index::FileBuild& build,
+    const dftracer::utils::trace::index::gzip::GzipBuildArtifacts& arts,
+    const dftracer::utils::trace::index::RecordSchema& schema,
+    dftracer::utils::trace::index::extensions::BloomFold& bloom,
+    dftracer::utils::trace::index::extensions::RowSetFold& rowsets,
+    bool fresh) {
+    trace::index::gzip::persist_gzip_index_artifacts(build, arts);
     // The new members renumber the chunks the old copies describe. A fresh
     // file has none, so it skips the check, which costs a store snapshot per
     // file, and the record per namespace that hides older copies.
     if (fresh)
         build.keep_older_copies();
     else
-        index::clear_chunk_copies(build);
-    index::put_profile(build, schema.id);
-    build.finish(index::store::IndexExtension::Profile, schema.params_hash());
+        trace::index::clear_chunk_copies(build);
+    trace::index::put_profile(build, schema.id);
+    build.finish(trace::index::store::IndexExtension::Profile,
+                 schema.params_hash());
     auto bloom_written = bloom.write(build);
     if (!bloom_written) return bloom_written.error();
     return rowsets.write(build);
@@ -344,7 +346,7 @@ dstd::Result<void> fill_bootstrap_file(
 // the export, so a failed index write is logged and the export stays whole.
 // Returns false when a file did not publish.
 coro::CoroTask<bool> commit_bootstrap(
-    dftracer::utils::index::build::FileGroup& group) {
+    dftracer::utils::trace::index::build::FileGroup& group) {
     auto result = co_await group.commit();
     for (const auto& failure : result.failures)
         DFTRACER_UTILS_LOG_ERROR("bootstrap index write failed for {}: {}",
@@ -356,7 +358,8 @@ coro::CoroTask<bool> commit_bootstrap(
 // export sink, without the metadata records when `drop_metadata`. Carries the
 // partial last line across on_chunk calls so an event straddling an inflate
 // boundary is written whole.
-class SinkWriterVisitor : public dftracer::utils::index::build::IndexVisitor {
+class SinkWriterVisitor
+    : public dftracer::utils::trace::index::build::IndexVisitor {
    public:
     SinkWriterVisitor(ExportSink& sink, bool drop_metadata)
         : sink_(&sink), drop_metadata_(drop_metadata) {}
@@ -419,7 +422,7 @@ coro::CoroTask<bool> try_export_bootstrap(const ViewPlan& plan,
     for (std::size_t r = 0; r < stores.roots.size(); ++r)
         slot_of.emplace(stores.roots[r]->index_path, r);
 
-    dstd::Vector<dftracer::utils::index::build::FileGroup> pending(
+    dstd::Vector<dftracer::utils::trace::index::build::FileGroup> pending(
         stores.roots.size());
     for (std::size_t i = 0; i < plan.files.size(); ++i) {
         const auto& f = plan.files[i];
@@ -433,17 +436,17 @@ coro::CoroTask<bool> try_export_bootstrap(const ViewPlan& plan,
         auto started = open_bootstrap_build(
             root, f.file_path,
             static_cast<std::uint64_t>(
-                dftracer::utils::index::store::internal::
-                    get_file_modification_time(f.file_path)),
+                fileio::get_file_modification_time(f.file_path)),
             source);
         dftracer::utils::dstd::StringIntern intern;
         const auto& schema = plan_record_schema(plan);
-        dftracer::utils::index::extensions::BloomFold bloom(
-            intern, dftracer::utils::index::build::for_schema({}, schema));
-        dftracer::utils::index::extensions::RowSetFold rowsets(
-            intern, dftracer::utils::index::indexed_rowsets(schema));
+        dftracer::utils::trace::index::extensions::BloomFold bloom(
+            intern,
+            dftracer::utils::trace::index::build::for_schema({}, schema));
+        dftracer::utils::trace::index::extensions::RowSetFold rowsets(
+            intern, dftracer::utils::trace::index::indexed_rowsets(schema));
         std::array<Fold*, 2> folds{&bloom, &rowsets};
-        dftracer::utils::index::build::IndexFoldDriver driver(
+        dftracer::utils::trace::index::build::IndexFoldDriver driver(
             intern, folds, dstd::String(dstd::StringView(f.file_path)),
             dstd::String(dstd::StringView(f.index_path)));
         driver.set_record_schema(schema);
@@ -452,9 +455,9 @@ coro::CoroTask<bool> try_export_bootstrap(const ViewPlan& plan,
                                            !schema.data.empty() &&
                                            !plan_by_path(plan));
 
-        index::gzip::GzipBuildArtifacts arts;
+        trace::index::gzip::GzipBuildArtifacts arts;
         bool ok = false;
-        index::gzip::CheckpointIndexer::VisitorList visitors;
+        trace::index::gzip::CheckpointIndexer::VisitorList visitors;
         visitors.emplace_back(driver);
         visitors.emplace_back(writer);
         co_await coro::with_scope([&](coro::Scope& scope) {
@@ -479,10 +482,9 @@ coro::CoroTask<bool> try_export_bootstrap(const ViewPlan& plan,
                                      f.file_path, filled.error().message());
             continue;
         }
-        const dstd::String staging = co_await pending[slot].add(
-            std::move(*started.build), 0,
-            dftracer::utils::index::store::internal::get_logical_path(
-                f.file_path));
+        const dstd::String staging =
+            co_await pending[slot].add(std::move(*started.build), 0,
+                                       fileio::get_logical_path(f.file_path));
         if (!staging.empty()) {
             DFTRACER_UTILS_LOG_ERROR("bootstrap index write failed for {}: {}",
                                      f.file_path, staging);
@@ -507,7 +509,8 @@ dstd::Result<ViewPlan> redirect_reads(const ViewPlan& plan,
     if (auto resolved = resolve_record_schema(plan); !resolved)
         return resolved.error();
     ViewPlan eff = plan;
-    if (auto mv = dftracer::utils::index::cache::find_subsuming_view(plan)) {
+    if (auto mv =
+            dftracer::utils::trace::index::cache::find_subsuming_view(plan)) {
         eff.files = std::move(*mv);
         if (redirected) *redirected = true;
     }
@@ -595,21 +598,21 @@ coro::CoroTask<dstd::Result<ExportStats>> run_export_trace(
 
     const std::size_t baseline = std::max<std::size_t>(1, opts.worker_count);
     const auto sizing =
-        utilities::fileio::parallel::make_writer_for_path(
+        fileio::parallel::make_writer_for_path(
             {dstd::String(opts.output_path), baseline,
              opts.member_size ? opts.member_size : DEFAULT_FLUSH_BYTES,
              BUFFER_HEADROOM_BYTES, opts.compress})
             .sizing;
     const std::size_t worker_count = sizing.worker_count;
 
-    utilities::fileio::GzipWriterOptions wopts;
+    fileio::GzipWriterOptions wopts;
     wopts.member_size = sizing.flush_threshold;
     wopts.level = opts.level;
     wopts.workers = worker_count;
     wopts.compress = opts.compress;
     wopts.ordered = false;
     wopts.memory_budget = plan.memory_budget;
-    auto opened = co_await utilities::fileio::GzipLineWriter::open(
+    auto opened = co_await fileio::GzipLineWriter::open(
         dstd::String(opts.output_path), std::move(wopts));
     if (!opened) {
         co_return common::make_error<"export_trace failed writing {}">(
@@ -745,19 +748,19 @@ struct BootstrapRun {
     dstd::Vector<BootstrapBlock> blocks;
     // The merged state of each block's files, in file order.
     dstd::Vector<dataframe::AggStatePtr> states;
-    dftracer::utils::index::build::FileAdmission* admission = nullptr;
+    dftracer::utils::trace::index::build::FileAdmission* admission = nullptr;
     bool keep_state;
     dstd::Optional<AggQuery> rule_query;
     std::atomic<std::size_t> next_block{0};
     std::atomic<bool> failed{false};
     // Shared by every file's fold driver, so a file starts with the capacity
     // the files before it grew.
-    dftracer::utils::index::build::FoldBufferPool buffers;
+    dftracer::utils::trace::index::build::FoldBufferPool buffers;
 };
 
 coro::CoroTask<dstd::Result<BootstrapFile>> bootstrap_file(
     BootstrapRun* run, ViewFile f, BootstrapRoot* root,
-    dftracer::utils::index::build::FileGroup* group) {
+    dftracer::utils::trace::index::build::FileGroup* group) {
     const ViewPlan* plan = run->plan;
     BootstrapFile out;
     std::uint64_t compressed = 0;
@@ -775,7 +778,7 @@ coro::CoroTask<dstd::Result<BootstrapFile>> bootstrap_file(
         }
     }
     const std::uint64_t plaintext =
-        dftracer::utils::index::build::FileAdmission::plaintext_estimate(
+        dftracer::utils::trace::index::build::FileAdmission::plaintext_estimate(
             f.uncompressed_size, compressed);
     auto admitted = co_await run->admission->admit(plaintext);
     if (!admitted) co_return admitted.error();
@@ -800,8 +803,7 @@ coro::CoroTask<dstd::Result<BootstrapFile>> bootstrap_file(
     auto started = open_bootstrap_build(
         *root, f.file_path,
         static_cast<std::uint64_t>(
-            dftracer::utils::index::store::internal::get_file_modification_time(
-                f.file_path)),
+            fileio::get_file_modification_time(f.file_path)),
         source);
     if (!started.build) {
         DFTRACER_UTILS_LOG_ERROR("bootstrap index write failed for {}: {}",
@@ -823,14 +825,14 @@ coro::CoroTask<dstd::Result<BootstrapFile>> bootstrap_file(
     }
     Fold* agg = rule_agg ? static_cast<Fold*>(rule_agg.get())
                          : static_cast<Fold*>(frame_agg.get());
-    dftracer::utils::index::extensions::BloomFold bloom(
-        intern, dftracer::utils::index::build::for_schema({}, schema));
-    dftracer::utils::index::extensions::RowSetFold rowsets(
-        intern, dftracer::utils::index::indexed_rowsets(schema));
+    dftracer::utils::trace::index::extensions::BloomFold bloom(
+        intern, dftracer::utils::trace::index::build::for_schema({}, schema));
+    dftracer::utils::trace::index::extensions::RowSetFold rowsets(
+        intern, dftracer::utils::trace::index::indexed_rowsets(schema));
     if (ticket.elastic_bytes() != memory::NO_SPILL_BUDGET)
         bloom.enable_spill(ticket.elastic_bytes(), *started.build);
     std::array<Fold*, 3> folds{agg, &bloom, &rowsets};
-    dftracer::utils::index::build::IndexFoldDriver driver(
+    dftracer::utils::trace::index::build::IndexFoldDriver driver(
         intern, folds, dstd::String(dstd::StringView(f.file_path)),
         dstd::String(dstd::StringView(f.index_path)),
         extra_capture_fields(*plan));
@@ -838,9 +840,9 @@ coro::CoroTask<dstd::Result<BootstrapFile>> bootstrap_file(
     driver.share_buffers(run->buffers);
     driver.set_parse_gate(run->admission->gate());
 
-    index::gzip::GzipBuildArtifacts arts;
+    trace::index::gzip::GzipBuildArtifacts arts;
     bool built = false;
-    index::gzip::CheckpointIndexer::VisitorList visitors;
+    trace::index::gzip::CheckpointIndexer::VisitorList visitors;
     visitors.emplace_back(driver);
     co_await coro::with_scope([&](coro::Scope& scope) {
         return build_bootstrap_artifacts(
@@ -861,8 +863,7 @@ coro::CoroTask<dstd::Result<BootstrapFile>> bootstrap_file(
         co_return out;
     }
     const dstd::String failure = co_await group->add(
-        std::move(*started.build), 0,
-        dftracer::utils::index::store::internal::get_logical_path(f.file_path));
+        std::move(*started.build), 0, fileio::get_logical_path(f.file_path));
     if (!failure.empty()) {
         DFTRACER_UTILS_LOG_ERROR("bootstrap index write failed for {}: {}",
                                  f.file_path, failure);
@@ -890,7 +891,7 @@ coro::CoroTask<dstd::Result<bool>> bootstrap_worker(BootstrapRun* run) {
         if (b >= run->blocks.size()) break;
         const BootstrapBlock block = run->blocks[b];
         auto& merged = run->states[b];
-        dftracer::utils::index::build::FileGroup group;
+        dftracer::utils::trace::index::build::FileGroup group;
         // The files finished before a failure still publish.
         dstd::Optional<dstd::Error> error;
         bool stop = false;
@@ -984,7 +985,7 @@ coro::CoroTask<dstd::Result<bool>> try_collect_bootstrap(
         costs.reserve(store->members.size());
         for (std::size_t i : store->members)
             costs.push_back(plan.files[i].uncompressed_size);
-        const auto starts = dftracer::utils::index::build::cut_blocks(
+        const auto starts = dftracer::utils::trace::index::build::cut_blocks(
             store->members.size(), costs, workers);
         for (std::size_t b = 0; b + 1 < starts.size(); ++b)
             run.blocks.push_back({store.get(), starts[b], starts[b + 1]});
@@ -996,12 +997,13 @@ coro::CoroTask<dstd::Result<bool>> try_collect_bootstrap(
         plan.memory_budget == memory::NO_SPILL_BUDGET
             ? memory::NO_SPILL_BUDGET
             : memory::resolve_spill_budget(plan.memory_budget);
-    const auto sinks = dftracer::utils::index::build::FileAdmission::plan_sinks(
-        budget, workers,
-        dftracer::utils::index::build::g_max_sink_bytes.load(
-            std::memory_order_relaxed));
+    const auto sinks =
+        dftracer::utils::trace::index::build::FileAdmission::plan_sinks(
+            budget, workers,
+            dftracer::utils::trace::index::build::g_max_sink_bytes.load(
+                std::memory_order_relaxed));
     const std::size_t active = std::min(at_once, sinks.workers);
-    dftracer::utils::index::build::FileAdmission admission(
+    dftracer::utils::trace::index::build::FileAdmission admission(
         budget, sinks.workers,
         budget == memory::NO_SPILL_BUDGET ? 0 : sinks.sink_bytes * active,
         plan.files.size());
@@ -1053,7 +1055,9 @@ coro::CoroTask<dstd::Result<bool>> try_collect_bootstrap(
 class ViewDirLock {
    public:
     explicit ViewDirLock(dstd::File file) noexcept : file_(std::move(file)) {}
-    ~ViewDirLock() { dftracer::utils::index::cache::unlock_view_dir(file_); }
+    ~ViewDirLock() {
+        dftracer::utils::trace::index::cache::unlock_view_dir(file_);
+    }
     ViewDirLock(const ViewDirLock&) = delete;
     ViewDirLock& operator=(const ViewDirLock&) = delete;
 
@@ -1074,23 +1078,25 @@ coro::CoroTask<dstd::Result<ExportStats>> run_materialize(
     // later subsuming query reads it instead of rescanning the base.
     if (plan.group_by.empty() && plan.agg.empty() &&
         !plan.auto_numeric_metrics) {
-        if (dftracer::utils::index::cache::view_is_fresh(plan))
+        if (dftracer::utils::trace::index::cache::view_is_fresh(plan))
             co_return ExportStats{};  // already built
         const dstd::String dir =
-            dftracer::utils::index::cache::materialize_view_dir(plan);
+            dftracer::utils::trace::index::cache::materialize_view_dir(plan);
         if (dir.empty()) co_return ExportStats{};
         // Single-flight: one builder per view root. A loser skips - the winner
         // produces the MV. Re-check freshness under the lock in case the winner
         // just finished.
-        dstd::File lock = dftracer::utils::index::cache::lock_view_dir(dir);
+        dstd::File lock =
+            dftracer::utils::trace::index::cache::lock_view_dir(dir);
         if (!lock.is_open()) co_return ExportStats{};
         ViewDirLock lock_guard(std::move(lock));
-        if (dftracer::utils::index::cache::view_is_fresh(plan))
+        if (dftracer::utils::trace::index::cache::view_is_fresh(plan))
             co_return ExportStats{};
         constexpr std::uint64_t DEFAULT_PART_SIZE = 128ull * 1024 * 1024;
         TraceWriteOptions opts;
         opts.output_path = dstd::String(
-            (dstd::PathView(dftracer::utils::index::view_parts_dir(dir)) /
+            (dstd::PathView(
+                 dftracer::utils::trace::index::view_parts_dir(dir)) /
              "part.pfw.gz")
                 .str());
         opts.index_path = dir;
@@ -1103,20 +1109,23 @@ coro::CoroTask<dstd::Result<ExportStats>> run_materialize(
             plan.mv_part_size ? plan.mv_part_size : DEFAULT_PART_SIZE;
         auto exported = co_await run_export_trace_indexed(plan, opts, progress);
         if (!exported) co_return exported.error();
-        dftracer::utils::index::cache::register_view(dir, plan);
+        dftracer::utils::trace::index::cache::register_view(dir, plan);
         co_return *exported;
     }
 
     const dstd::String rdir =
-        dftracer::utils::index::cache::rollup_cache_path(plan);
+        dftracer::utils::trace::index::cache::rollup_cache_path(plan);
     // Idempotent prewarm: skip if this view is already materialized.
     if (!rdir.empty() &&
-        dftracer::utils::index::cache::CacheStore::exists(rdir)) {
-        auto db = dftracer::utils::index::cache::open_rollup_db(
-            rdir, dftracer::utils::index::cache::CacheStore::Mode::ReadOnly);
+        dftracer::utils::trace::index::cache::CacheStore::exists(rdir)) {
+        auto db = dftracer::utils::trace::index::cache::open_rollup_db(
+            rdir,
+            dftracer::utils::trace::index::cache::CacheStore::Mode::ReadOnly);
         if (db) {
-            const auto exists = dftracer::utils::index::cache::rollup_exists(
-                *db, dftracer::utils::index::cache::plan_signature(plan));
+            const auto exists =
+                dftracer::utils::trace::index::cache::rollup_exists(
+                    *db,
+                    dftracer::utils::trace::index::cache::plan_signature(plan));
             if (!exists.has_value())
                 DFTRACER_UTILS_LOG_WARN("rollup check skipped: {}",
                                         exists.error().message());
@@ -1134,13 +1143,15 @@ coro::CoroTask<dstd::Result<ExportStats>> run_materialize(
         state = std::move(*built);
     }
     if (!rdir.empty()) {
-        auto db = dftracer::utils::index::cache::open_rollup_db(
-            rdir, dftracer::utils::index::cache::CacheStore::Mode::ReadWrite);
+        auto db = dftracer::utils::trace::index::cache::open_rollup_db(
+            rdir,
+            dftracer::utils::trace::index::cache::CacheStore::Mode::ReadWrite);
         if (db) {
             const auto persisted =
-                dftracer::utils::index::cache::persist_rollup(
-                    *db, dftracer::utils::index::cache::plan_signature(plan),
-                    dftracer::utils::index::cache::rest_signature(plan),
+                dftracer::utils::trace::index::cache::persist_rollup(
+                    *db,
+                    dftracer::utils::trace::index::cache::plan_signature(plan),
+                    dftracer::utils::trace::index::cache::rest_signature(plan),
                     plan.time_bucket_us, plan.group_by, *state);
             if (!persisted)
                 DFTRACER_UTILS_LOG_WARN("rollup materialize skipped: {}",
@@ -1156,20 +1167,21 @@ coro::CoroTask<dstd::Result<ExportStats>> run_materialize(
 // answers.
 dstd::Optional<dataframe::DataFrame> try_serve_rollup(const ViewPlan& plan) {
     const dstd::String rdir =
-        dftracer::utils::index::cache::rollup_cache_path(plan);
+        dftracer::utils::trace::index::cache::rollup_cache_path(plan);
     if (rdir.empty() ||
-        !dftracer::utils::index::cache::CacheStore::exists(rdir))
+        !dftracer::utils::trace::index::cache::CacheStore::exists(rdir))
         return dstd::nullopt;
     // A materialize() query opens ReadWrite so a miss reuses the handle to
     // persist below (avoids a RO-then-RW conflict).
     const auto mode =
         plan.materialize
-            ? dftracer::utils::index::cache::CacheStore::Mode::ReadWrite
-            : dftracer::utils::index::cache::CacheStore::Mode::ReadOnly;
-    auto db = dftracer::utils::index::cache::open_rollup_db(rdir, mode);
+            ? dftracer::utils::trace::index::cache::CacheStore::Mode::ReadWrite
+            : dftracer::utils::trace::index::cache::CacheStore::Mode::ReadOnly;
+    auto db = dftracer::utils::trace::index::cache::open_rollup_db(rdir, mode);
     if (db) {
         auto found =
-            dftracer::utils::index::cache::find_subsuming_rollup(*db, plan);
+            dftracer::utils::trace::index::cache::find_subsuming_rollup(*db,
+                                                                        plan);
         if (found) return std::move(*found);
         // A locked/unreadable rollup just falls through to a normal compute;
         // never fail the query over the cache.
@@ -1203,8 +1215,8 @@ ViewPlan resolve_bucket_origin(const ViewPlan& plan) {
     if (!plan.bucket_origin_min || plan.time_bucket_us == 0) return plan;
     std::uint64_t global_min = std::numeric_limits<std::uint64_t>::max();
     const bool by_path = plan_by_path(plan);
-    const index::Roles& roles = plan_record_schema(plan).roles;
-    dstd::Map<dstd::String, index::Snapshot> snapshots;
+    const trace::index::Roles& roles = plan_record_schema(plan).roles;
+    dstd::Map<dstd::String, trace::index::Snapshot> snapshots;
     // The least time of one file; a file whose index cannot be read is left
     // out, and the origin falls back to 0 if none resolve.
     auto file_minimum = [&](const ViewFile& f) -> dstd::Result<void> {
@@ -1214,17 +1226,15 @@ ViewPlan resolve_bucket_origin(const ViewPlan& plan) {
             if (!taken) return taken.error();
             at = snapshots.emplace(f.index_path, std::move(*taken)).first;
         }
-        const index::Snapshot& snapshot = at->second;
-        const auto file = snapshot.file(
-            dftracer::utils::index::store::internal::get_logical_path(
-                f.file_path));
+        const trace::index::Snapshot& snapshot = at->second;
+        const auto file = snapshot.file(fileio::get_logical_path(f.file_path));
         if (!file) return {};
         const bool is_past =
             f.pinned_c_end > 0 &&
             (f.pinned_uc_begin > 0 || file->stat().size != f.pinned_c_end);
-        dstd::Vector<index::gzip::ChunkSpan> spans;
+        dstd::Vector<trace::index::gzip::ChunkSpan> spans;
         if (is_past) {
-            auto listed = index::spans(snapshot, *file);
+            auto listed = trace::index::spans(snapshot, *file);
             if (!listed) return listed.error();
             spans = std::move(*listed);
         }
@@ -1235,7 +1245,7 @@ ViewPlan resolve_bucket_origin(const ViewPlan& plan) {
                                     f.pinned_uc_begin);
         };
         if (by_path) {
-            auto ranges = index::extensions::kinds::chunk_value_ranges(
+            auto ranges = trace::index::extensions::kinds::chunk_value_ranges(
                 snapshot, *file, roles.time);
             if (!ranges) return ranges.error();
             dstd::Optional<double> lowest;
@@ -1248,12 +1258,12 @@ ViewPlan resolve_bucket_origin(const ViewPlan& plan) {
                 global_min = std::min(
                     global_min,
                     static_cast<std::uint64_t>(std::llround(
-                        *lowest * index::micros_per(roles.time_unit))));
+                        *lowest * trace::index::micros_per(roles.time_unit))));
             return {};
         }
         if (is_past) {
-            auto bounds =
-                index::extensions::kinds::chunk_time_bounds(snapshot, *file);
+            auto bounds = trace::index::extensions::kinds::chunk_time_bounds(
+                snapshot, *file);
             if (!bounds) return bounds.error();
             for (const auto& [chunk, range] : *bounds)
                 if (is_in_view(chunk))
@@ -1261,7 +1271,7 @@ ViewPlan resolve_bucket_origin(const ViewPlan& plan) {
             return {};
         }
         const auto b =
-            dftracer::utils::index::extensions::kinds::file_time_bounds(
+            dftracer::utils::trace::index::extensions::kinds::file_time_bounds(
                 snapshot, *file);
         if (!b) return b.error();
         if (b->valid && b->min_timestamp_us < global_min)
@@ -1270,7 +1280,7 @@ ViewPlan resolve_bucket_origin(const ViewPlan& plan) {
     };
     for (const auto& f : plan.files) {
         if (f.index_path.empty() ||
-            !common::input_exists(index::store_of(f.index_path)))
+            !common::input_exists(trace::index::store_of(f.index_path)))
             continue;
         file_minimum(f).discard();
     }
@@ -1805,19 +1815,21 @@ coro::CoroTask<dstd::Result<void>> run_materialize_partials(
         co_return resolved.error();
     ensure_schema(plan);
     const dstd::String rdir =
-        dftracer::utils::index::cache::rollup_cache_path(plan);
+        dftracer::utils::trace::index::cache::rollup_cache_path(plan);
     if (rdir.empty()) co_return dstd::Result<void>{};
     auto decoded = decode_partials(partials);
     if (!decoded) co_return decoded.error();
     dataframe::AggStatePtr state = std::move(*decoded);
     if (!state) co_return dstd::Result<void>{};
-    auto db = dftracer::utils::index::cache::open_rollup_db(
-        rdir, dftracer::utils::index::cache::CacheStore::Mode::ReadWrite);
+    auto db = dftracer::utils::trace::index::cache::open_rollup_db(
+        rdir,
+        dftracer::utils::trace::index::cache::CacheStore::Mode::ReadWrite);
     if (db) {
-        const auto persisted = dftracer::utils::index::cache::persist_rollup(
-            *db, dftracer::utils::index::cache::plan_signature(plan),
-            dftracer::utils::index::cache::rest_signature(plan),
-            plan.time_bucket_us, plan.group_by, *state);
+        const auto persisted =
+            dftracer::utils::trace::index::cache::persist_rollup(
+                *db, dftracer::utils::trace::index::cache::plan_signature(plan),
+                dftracer::utils::trace::index::cache::rest_signature(plan),
+                plan.time_bucket_us, plan.group_by, *state);
         if (!persisted)
             DFTRACER_UTILS_LOG_WARN("rollup materialize (partials) skipped: {}",
                                     persisted.error().message());
@@ -1979,7 +1991,7 @@ void add_materialize_branch(ViewSessionState& state,
     };
     h.finalize = [plan]() -> dstd::Result<void> {
         const dstd::String rdir =
-            dftracer::utils::index::cache::rollup_cache_path(*plan);
+            dftracer::utils::trace::index::cache::rollup_cache_path(*plan);
         if (rdir.empty()) return {};
         dataframe::AggStatePtr state_out;
         const auto ran = dftracer::utils::default_runtime().block_on(
@@ -1991,13 +2003,15 @@ void add_materialize_branch(ViewSessionState& state,
                             co_return dstd::Result<void>{};
                         }()));
         if (!ran || !state_out) return {};
-        auto db = dftracer::utils::index::cache::open_rollup_db(
-            rdir, dftracer::utils::index::cache::CacheStore::Mode::ReadWrite);
+        auto db = dftracer::utils::trace::index::cache::open_rollup_db(
+            rdir,
+            dftracer::utils::trace::index::cache::CacheStore::Mode::ReadWrite);
         if (db) {
             const auto persisted =
-                dftracer::utils::index::cache::persist_rollup(
-                    *db, dftracer::utils::index::cache::plan_signature(*plan),
-                    dftracer::utils::index::cache::rest_signature(*plan),
+                dftracer::utils::trace::index::cache::persist_rollup(
+                    *db,
+                    dftracer::utils::trace::index::cache::plan_signature(*plan),
+                    dftracer::utils::trace::index::cache::rest_signature(*plan),
                     plan->time_bucket_us, plan->group_by, *state_out);
             if (!persisted)
                 DFTRACER_UTILS_LOG_WARN("fused rollup materialize skipped: {}",
@@ -2232,7 +2246,8 @@ coro::CoroTask<dstd::Result<ExportStats>> run_session(
     }
     if (auto resolved = resolve_record_schema(plan); !resolved)
         co_return resolved.error();
-    if (auto mv = dftracer::utils::index::cache::find_subsuming_view(plan))
+    if (auto mv =
+            dftracer::utils::trace::index::cache::find_subsuming_view(plan))
         scan_plan.files = std::move(*mv);
     auto made = make_vdef(scan_plan, /*for_aggregation=*/true);
     if (!made) co_return made.error();

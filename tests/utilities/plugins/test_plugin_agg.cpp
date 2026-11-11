@@ -5,8 +5,8 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/domains/plugins/fold_adapter.h>
 #include <dftracer/utils/dstd/string_intern.h>
-#include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/runtime/runtime.h>
 
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
@@ -116,7 +116,7 @@ dftu_plugin make_agg_plugin() {
     return p;
 }
 
-void finalize_now(plugins::PluginFold& f) {
+void finalize_now(domains::plugins::PluginFold& f) {
     Runtime rt(1);
     dftu_utils_test::ok(
         rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
@@ -277,11 +277,11 @@ dftu_plugin make_columns_plugin(
 }
 
 void run_slices(
-    plugins::PluginFold& master,
+    domains::plugins::PluginFold& master,
     const dstd::Vector<dstd::Vector<trace::views::detail::FoldEvent>>& slices) {
     for (const auto& evs : slices) {
         auto slice = master.slice();
-        auto* pf = static_cast<plugins::PluginFold*>(slice.get());
+        auto* pf = static_cast<domains::plugins::PluginFold*>(slice.get());
         trace::views::detail::ScanUnit unit{};
         dftu_utils_test::ok(pf->step(trace::views::detail::FoldBatch{
             dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}}));
@@ -375,7 +375,7 @@ TEST_CASE("DFTU_SVC_AGG: cross-batch grouped aggregation, engine-backed") {
     dstd::StringIntern intern;
     dftu_plugin p = make_agg_plugin();
     plugins::NamedResultRegistry named;
-    plugins::PluginFold master(&p, intern, nullptr, &named);
+    domains::plugins::PluginFold master(&p, intern, nullptr, &named);
 
     // Two slices (two workers), each one batch, merged into the master.
     dstd::Vector<dstd::Vector<trace::views::detail::FoldEvent>> slices = {
@@ -385,7 +385,7 @@ TEST_CASE("DFTU_SVC_AGG: cross-batch grouped aggregation, engine-backed") {
     };
     for (const auto& evs : slices) {
         auto slice = master.slice();
-        auto* pf = static_cast<plugins::PluginFold*>(slice.get());
+        auto* pf = static_cast<domains::plugins::PluginFold*>(slice.get());
         trace::views::detail::ScanUnit unit{};
         dftu_utils_test::ok(pf->step(trace::views::detail::FoldBatch{
             dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}}));
@@ -516,7 +516,7 @@ TEST_CASE(
     dstd::StringIntern intern;
     dftu_plugin p = make_agg_factory_plugin();
     plugins::NamedResultRegistry named;
-    plugins::PluginFold master(&p, intern, nullptr, &named);
+    domains::plugins::PluginFold master(&p, intern, nullptr, &named);
 
     dstd::Vector<dstd::Vector<trace::views::detail::FoldEvent>> slices = {
         {evt(intern, "POSIX", "read", 10), evt(intern, "POSIX", "write", 20),
@@ -525,7 +525,7 @@ TEST_CASE(
     };
     for (const auto& evs : slices) {
         auto slice = master.slice();
-        auto* pf = static_cast<plugins::PluginFold*>(slice.get());
+        auto* pf = static_cast<domains::plugins::PluginFold*>(slice.get());
         trace::views::detail::ScanUnit unit{};
         dftu_utils_test::ok(pf->step(trace::views::detail::FoldBatch{
             dstd::Span<const trace::views::detail::FoldEvent>(evs), unit, {}}));
@@ -572,7 +572,7 @@ TEST_CASE("DFTU_SVC_AGG: several key columns and several aggregates") {
     dstd::StringIntern intern;
     dftu_plugin p = make_columns_plugin(multi_key_columns);
     plugins::NamedResultRegistry named;
-    plugins::PluginFold master(&p, intern, nullptr, &named);
+    domains::plugins::PluginFold master(&p, intern, nullptr, &named);
     run_slices(master, sample_slices(intern));
     finalize_now(master);
 
@@ -633,7 +633,7 @@ TEST_CASE("DFTU_SVC_AGG: a zero-key accumulator is one whole-scan row") {
     dstd::StringIntern intern;
     dftu_plugin p = make_columns_plugin(scalar_columns);
     plugins::NamedResultRegistry named;
-    plugins::PluginFold master(&p, intern, nullptr, &named);
+    domains::plugins::PluginFold master(&p, intern, nullptr, &named);
     run_slices(master, sample_slices(intern));
     finalize_now(master);
 
@@ -666,7 +666,7 @@ TEST_CASE("DFTU_SVC_AGG: the appended op codes reduce across merged slices") {
     dstd::StringIntern intern;
     dftu_plugin p = make_columns_plugin(appended_ops_columns);
     plugins::NamedResultRegistry named;
-    plugins::PluginFold master(&p, intern, nullptr, &named);
+    domains::plugins::PluginFold master(&p, intern, nullptr, &named);
     run_slices(master, sample_slices(intern));
     finalize_now(master);
 
@@ -797,13 +797,13 @@ TEST_CASE("DFTU_SVC_AGG: the appended op codes reduce across merged slices") {
 
 TEST_CASE("DFTU_SVC_AGG: agg_result reads another plugin's merged result") {
     dstd::StringIntern intern;
-    plugins::SharedResultRegistry shared;
+    domains::plugins::SharedResultRegistry shared;
     plugins::NamedResultRegistry named;
 
     dftu_plugin producer = make_columns_plugin(scalar_columns);
     dftu_plugin consumer = make_columns_plugin(no_columns, read_other_agg);
-    plugins::PluginFold prod(&producer, intern, &shared, &named);
-    plugins::PluginFold cons(&consumer, intern, &shared, &named);
+    domains::plugins::PluginFold prod(&producer, intern, &shared, &named);
+    domains::plugins::PluginFold cons(&consumer, intern, &shared, &named);
 
     g_seen_rows = -1;
     g_seen_sum = -1.0;

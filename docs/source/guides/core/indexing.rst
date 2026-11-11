@@ -113,14 +113,14 @@ without worrying about redundant work.
       a genuinely unindexed file - see :ref:`indexing-first-touch` below. For
       an explicit build (warming the index ahead of serving traffic, or
       refreshing one that already exists), use ``Indexer``
-      (``dftracer/utils/index/indexer.h``), the same path the Python
+      (``dftracer/utils/trace/index/indexer.h``), the same path the Python
       ``Indexer`` drives:
 
       .. code-block:: cpp
 
-         #include <dftracer/utils/index/indexer.h>
+         #include <dftracer/utils/trace/index/indexer.h>
 
-         using namespace dftracer::utils::index;
+         using namespace dftracer::utils::trace::index;
 
          IndexerOptions options;
          // Args fields indexed by name, besides the automatic ones.

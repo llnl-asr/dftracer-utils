@@ -20,19 +20,19 @@
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/build/resolve_and_build.h>
-#include <dftracer/utils/index/cache/mv_store.h>
-#include <dftracer/utils/index/extensions/catalog_fold.h>
-#include <dftracer/utils/index/plan/prune.h>
-#include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/index/source.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
-#include <dftracer/utils/index/store/root_layout.h>
-#include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/fileio/file_helpers.h>
 #include <dftracer/utils/json/parser.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/build/resolve_and_build.h>
+#include <dftracer/utils/trace/index/cache/mv_store.h>
+#include <dftracer/utils/trace/index/extensions/catalog_fold.h>
+#include <dftracer/utils/trace/index/plan/prune.h>
+#include <dftracer/utils/trace/index/record_schema.h>
+#include <dftracer/utils/trace/index/source.h>
+#include <dftracer/utils/trace/index/store/root_layout.h>
+#include <dftracer/utils/trace/index/tables.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/time_metric_event.h>
 #include <dftracer/utils/trace/views/containment_fold.h>
@@ -69,11 +69,11 @@ bool has_pin(const ViewPlan& plan) {
     return false;
 }
 
-dstd::Result<index::Snapshot> snapshot_of(const ViewPlan& plan,
-                                          dstd::StringView index_path) {
+dstd::Result<trace::index::Snapshot> snapshot_of(const ViewPlan& plan,
+                                                 dstd::StringView index_path) {
     for (const auto& [path, snapshot] : plan.index_snapshots)
         if (path == index_path) return *snapshot;
-    return index::plan::open_snapshot(index_path);
+    return trace::index::plan::open_snapshot(index_path);
 }
 
 dstd::Result<bool> is_past_pin(const ViewPlan& plan) {
@@ -82,8 +82,7 @@ dstd::Result<bool> is_past_pin(const ViewPlan& plan) {
         if (f.pinned_uc_begin > 0) return true;
         const auto snapshot = snapshot_of(plan, f.index_path);
         if (!snapshot) return snapshot.error();
-        const auto file = snapshot->file(
-            index::store::internal::get_logical_path(f.file_path));
+        const auto file = snapshot->file(fileio::get_logical_path(f.file_path));
         if (file && file->stat().size != f.pinned_c_end) return true;
     }
     return false;
@@ -116,10 +115,11 @@ void strip_redundant_time_bucket(detail::ViewPlan& p) {
 }
 // Whether `schema`'s source indexes row set `rowset` with columns `key` and
 // `value`.
-bool has_rowset(const dftracer::utils::index::RecordSchema& schema,
+bool has_rowset(const dftracer::utils::trace::index::RecordSchema& schema,
                 dstd::StringView rowset, dstd::StringView key,
                 dstd::StringView value) {
-    for (const auto& r : dftracer::utils::index::indexed_rowsets(schema)) {
+    for (const auto& r :
+         dftracer::utils::trace::index::indexed_rowsets(schema)) {
         if (r.name != rowset) continue;
         auto has = [&](dstd::StringView c) {
             return std::any_of(r.columns.begin(), r.columns.end(),
@@ -211,11 +211,12 @@ ScanPlan failed_plan(const ScanPlan& plan, dstd::Error error) {
 
 namespace {
 
-using Snapshots = dstd::HashMap<dstd::String, dftracer::utils::index::Snapshot>;
+using Snapshots =
+    dstd::HashMap<dstd::String, dftracer::utils::trace::index::Snapshot>;
 
 struct FileIndex {
-    const dftracer::utils::index::Snapshot* snapshot = nullptr;
-    dstd::Optional<dftracer::utils::index::FileRef> file;
+    const dftracer::utils::trace::index::Snapshot* snapshot = nullptr;
+    dstd::Optional<dftracer::utils::trace::index::FileRef> file;
 };
 
 // One snapshot per index root. A root with no store opens empty and holds no
@@ -226,13 +227,12 @@ dstd::Result<FileIndex> find_file_index(const ViewPlan* plan,
     auto at = snapshots.find(f.index_path);
     if (at == snapshots.end()) {
         auto opened = plan ? snapshot_of(*plan, f.index_path)
-                           : index::plan::open_snapshot(f.index_path);
+                           : trace::index::plan::open_snapshot(f.index_path);
         if (!opened) return opened.error();
         at = snapshots.emplace(f.index_path, std::move(*opened)).first;
     }
-    return FileIndex{
-        &at->second,
-        at->second.file(index::store::internal::get_logical_path(f.file_path))};
+    return FileIndex{&at->second,
+                     at->second.file(fileio::get_logical_path(f.file_path))};
 }
 
 struct ConfirmedFiles {
@@ -290,8 +290,7 @@ dstd::Result<void> ensure_indexes_fresh(const dstd::Vector<ViewFile>& files) {
             dftracer::utils::common::InputFileStat file_stat;
             if (!dftracer::utils::common::stat_input(f.file_path, file_stat))
                 continue;
-            const dstd::String logical =
-                index::store::internal::get_logical_path(f.file_path);
+            const dstd::String logical = fileio::get_logical_path(f.file_path);
             dstd::String key(logical.data(), logical.size());
             key += '\n';
             key += dstd::to_string(static_cast<long long>(file_stat.mtime_ns));
@@ -306,7 +305,7 @@ dstd::Result<void> ensure_indexes_fresh(const dstd::Vector<ViewFile>& files) {
             if (missing_roots.contains(dstd::StringView(f.index_path)))
                 continue;
             if (!snapshots.contains(f.index_path) &&
-                !common::input_exists(index::store_of(f.index_path))) {
+                !common::input_exists(trace::index::store_of(f.index_path))) {
                 missing_roots.insert(dstd::String(f.index_path));
                 continue;
             }
@@ -316,7 +315,7 @@ dstd::Result<void> ensure_indexes_fresh(const dstd::Vector<ViewFile>& files) {
             dstd::String schema;
             if (found.file) {
                 const auto described =
-                    index::file_metadata(*found.snapshot, *found.file);
+                    trace::index::file_metadata(*found.snapshot, *found.file);
                 if (!described) return described.error();
                 const auto& meta = *described;
                 const std::uint64_t recorded = meta ? meta->checkpoint_size : 0;
@@ -326,16 +325,19 @@ dstd::Result<void> ensure_indexes_fresh(const dstd::Vector<ViewFile>& files) {
                 if (same_ckpt &&
                     found.snapshot->freshness(
                         logical,
-                        index::SourceStat{
+                        trace::index::SourceStat{
                             static_cast<std::uint64_t>(file_stat.mtime),
-                            file_stat.size}) == index::Freshness::Current) {
+                            file_stat.size}) ==
+                        trace::index::Freshness::Current) {
                     confirmed.push_back(std::move(key));
                     continue;
                 }
-                const auto named = index::schema(*found.snapshot, *found.file);
+                const auto named =
+                    trace::index::schema(*found.snapshot, *found.file);
                 if (!named) return named.error();
                 if (const auto& recorded_schema = *named) {
-                    const auto registered = index::get_schema(*recorded_schema);
+                    const auto registered =
+                        trace::index::get_schema(*recorded_schema);
                     if (!registered) return registered.error();
                     schema.assign(recorded_schema->data(),
                                   recorded_schema->size());
@@ -347,18 +349,18 @@ dstd::Result<void> ensure_indexes_fresh(const dstd::Vector<ViewFile>& files) {
         for (auto& k : confirmed) confirmed_files().keys().insert(std::move(k));
     }
     for (auto& [group, pending] : groups) {
-        index::build::ResolveAndBuildInput in;
+        trace::index::build::ResolveAndBuildInput in;
         in.index_dir = group.root;
         in.checkpoint_size = group.checkpoint_size;
         in.schema = group.schema;
         in.require_checkpoints = true;
         for (const auto& p : pending)
             in.files.emplace_back(dstd::StringView(p.file));
-        auto built = default_runtime().block_on(
-            coro::named("view_index_freshness",
-                        index::build::resolve_and_build_index(std::move(in))));
+        auto built = default_runtime().block_on(coro::named(
+            "view_index_freshness",
+            trace::index::build::resolve_and_build_index(std::move(in))));
         if (!built) return built.error();
-        const index::build::ResolverResult& result = *built;
+        const trace::index::build::ResolverResult& result = *built;
         if (!result.failures.empty())
             return common::make_error<
                 "index of {} is stale and its rebuild failed: {}">(
@@ -461,14 +463,15 @@ dstd::Result<dstd::Vector<TraceConfig>> config(const ScanPlan& plan) {
 namespace {
 
 using ColTypeMap = dftracer::utils::dstd::StringViewMap<
-    dftracer::utils::index::store::ColumnType>;
+    dftracer::utils::trace::index::store::ColumnType>;
 
 void fold_col_map(ColTypeMap& into, const ColTypeMap& from) {
     for (const auto& [name, t] : from) {
         auto [pos, inserted] = into.emplace(name, t);
         if (!inserted)
-            pos->second = dftracer::utils::index::store::merge_column_type(
-                pos->second, t);
+            pos->second =
+                dftracer::utils::trace::index::store::merge_column_type(
+                    pos->second, t);
     }
 }
 
@@ -481,8 +484,8 @@ dstd::Result<ColTypeMap> harvest_path_types(const ViewPlan& plan) {
         const auto found = find_file_index(&plan, snapshots, f);
         if (!found) return found.error();
         if (!found->file) continue;
-        auto types = dftracer::utils::index::file_column_types(*found->snapshot,
-                                                               *found->file);
+        auto types = dftracer::utils::trace::index::file_column_types(
+            *found->snapshot, *found->file);
         if (!types) return types.error();
         ColTypeMap one;
         for (auto& [path, t] : *types)
@@ -510,16 +513,19 @@ dstd::Result<ColTypeMap> harvest_column_types(const ViewPlan& plan) {
             pos = roots.end() - 1;
         }
         root_files[static_cast<std::size_t>(pos - roots.begin())].push_back(
-            dftracer::utils::index::store::internal::get_logical_path(
-                f.file_path));
+            fileio::get_logical_path(f.file_path));
     }
 
     ColTypeMap merged;
     // Base axis fields are always present and not harvested as columns.
-    merged.emplace("pid", dftracer::utils::index::store::ColumnType::Int64);
-    merged.emplace("tid", dftracer::utils::index::store::ColumnType::Int64);
-    merged.emplace("ts", dftracer::utils::index::store::ColumnType::Int64);
-    merged.emplace("dur", dftracer::utils::index::store::ColumnType::Int64);
+    merged.emplace("pid",
+                   dftracer::utils::trace::index::store::ColumnType::Int64);
+    merged.emplace("tid",
+                   dftracer::utils::trace::index::store::ColumnType::Int64);
+    merged.emplace("ts",
+                   dftracer::utils::trace::index::store::ColumnType::Int64);
+    merged.emplace("dur",
+                   dftracer::utils::trace::index::store::ColumnType::Int64);
 
     if (!roots.empty()) {
         const auto n = static_cast<std::int64_t>(roots.size());
@@ -544,7 +550,8 @@ dstd::Result<ColTypeMap> harvest_column_types(const ViewPlan& plan) {
                          root_files[static_cast<std::size_t>(i)]) {
                         const auto file = snapshot->file(logical);
                         if (!file) continue;
-                        auto types = index::file_column_types(*snapshot, *file);
+                        auto types =
+                            trace::index::file_column_types(*snapshot, *file);
                         if (!types) {
                             fail(types.error());
                             return local;
@@ -557,8 +564,9 @@ dstd::Result<ColTypeMap> harvest_column_types(const ViewPlan& plan) {
                             auto [at, fresh] =
                                 one.emplace(dstd::String(name), t);
                             if (!fresh)
-                                at->second = index::store::merge_column_type(
-                                    at->second, t);
+                                at->second =
+                                    trace::index::store::merge_column_type(
+                                        at->second, t);
                         }
                         fold_col_map(local, one);
                     }
@@ -578,23 +586,23 @@ dstd::Result<ColTypeMap> harvest_column_types(const ViewPlan& plan) {
 
 // Declared fields override the observed types of their paths and are columns
 // even before an index has seen them; an ISO-8601 time is its microseconds.
-void overlay_declared(ColTypeMap& m,
-                      const dftracer::utils::index::RecordSchema& schema) {
-    using CT = index::store::ColumnType;
+void overlay_declared(
+    ColTypeMap& m, const dftracer::utils::trace::index::RecordSchema& schema) {
+    using CT = trace::index::store::ColumnType;
     for (const auto& f : schema.fields) {
         CT t = CT::String;
         switch (f.type) {
-            case index::FieldType::Bool:
-            case index::FieldType::Int:
+            case trace::index::FieldType::Bool:
+            case trace::index::FieldType::Int:
                 t = CT::Int64;
                 break;
-            case index::FieldType::Float:
+            case trace::index::FieldType::Float:
                 t = CT::Float64;
                 break;
-            case index::FieldType::String:
-                t = f.role == index::Role::Time ? CT::Int64 : CT::String;
+            case trace::index::FieldType::String:
+                t = f.role == trace::index::Role::Time ? CT::Int64 : CT::String;
                 break;
-            case index::FieldType::Json:
+            case trace::index::FieldType::Json:
                 t = CT::Json;
                 break;
         }
@@ -626,8 +634,8 @@ dstd::Result<dstd::Vector<dstd::String>> columns(const ScanPlan& plan) {
 
 namespace {
 
-const char* path_type_name(dftracer::utils::index::store::PathType t) {
-    using PT = dftracer::utils::index::store::PathType;
+const char* path_type_name(dftracer::utils::trace::index::store::PathType t) {
+    using PT = dftracer::utils::trace::index::store::PathType;
     switch (t) {
         case PT::NullValue:
             return "null";
@@ -661,9 +669,9 @@ dstd::Result<dstd::Optional<dstd::String>> file_without_catalog(
             return dstd::Optional<dstd::String>(f.file_path);
         const auto found = find_file_index(plan.get(), snapshots, f);
         if (!found) return found.error();
-        if (!found->file || !dftracer::utils::index::extension_state(
+        if (!found->file || !dftracer::utils::trace::index::extension_state(
                                 *found->snapshot, *found->file,
-                                index::store::IndexExtension::Catalog))
+                                trace::index::store::IndexExtension::Catalog))
             return dstd::Optional<dstd::String>(f.file_path);
     }
     return dstd::Optional<dstd::String>();
@@ -683,7 +691,7 @@ dstd::SharedPtr<detail::ViewPlan> catalog_scan_plan(const ScanPlan& plan) {
     return only;
 }
 
-bool is_file_past_pin(const ViewFile& f, const index::FileRef& file) {
+bool is_file_past_pin(const ViewFile& f, const trace::index::FileRef& file) {
     return f.pinned_c_end > 0 &&
            (f.pinned_uc_begin > 0 || file.stat().size != f.pinned_c_end);
 }
@@ -699,9 +707,9 @@ dstd::Result<void> ensure_catalog(const ScanPlan& plan) {
         const auto found = find_file_index(plan.get(), snapshots, f);
         if (!found) return found.error();
         if (found->file && is_file_past_pin(f, *found->file)) continue;
-        if (!found->file || !dftracer::utils::index::extension_current(
+        if (!found->file || !dftracer::utils::trace::index::extension_current(
                                 *found->snapshot, *found->file,
-                                index::store::IndexExtension::Catalog))
+                                trace::index::store::IndexExtension::Catalog))
             only->files.push_back(f);
     }
     snapshots.clear();
@@ -725,7 +733,7 @@ dstd::Result<dstd::Vector<SchemaLeaf>> schema_tree(const ScanPlan& plan) {
 dstd::Result<dstd::Vector<SchemaLeaf>> catalog_tree(const ScanPlan& plan) {
     if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
         return resolved.error();
-    dstd::HashMap<dstd::String, index::store::PathStat> merged;
+    dstd::HashMap<dstd::String, trace::index::store::PathStat> merged;
     Snapshots snapshots;
     auto past_pin = catalog_scan_plan(plan);
     for (const auto& f : plan->files) {
@@ -737,16 +745,16 @@ dstd::Result<dstd::Vector<SchemaLeaf>> catalog_tree(const ScanPlan& plan) {
             past_pin->files.push_back(f);
             continue;
         }
-        auto cataloged =
-            dftracer::utils::index::catalog(*found->snapshot, *found->file);
+        auto cataloged = dftracer::utils::trace::index::catalog(
+            *found->snapshot, *found->file);
         if (!cataloged) return cataloged.error();
         for (auto& [path, stat] : *cataloged)
-            index::extensions::add_path_stat(merged, path, stat);
+            trace::index::extensions::add_path_stat(merged, path, stat);
     }
     if (!past_pin->files.empty()) {
         // The stored catalog also counts the rows after the pin.
         dftracer::utils::dstd::StringIntern intern;
-        index::extensions::CatalogFold fold(intern, 0, false);
+        trace::index::extensions::CatalogFold fold(intern, 0, false);
         const dstd::Vector<detail::Fold*> folds{&fold};
         auto ran = default_runtime().block_on(
             coro::named("view_scan_catalog",
@@ -756,15 +764,16 @@ dstd::Result<dstd::Vector<SchemaLeaf>> catalog_tree(const ScanPlan& plan) {
                         }()));
         if (!ran) return ran.error();
         for (const auto& [path, stat] : fold.paths())
-            index::extensions::add_path_stat(merged, path, stat);
+            trace::index::extensions::add_path_stat(merged, path, stat);
     }
     dstd::Map<dstd::String, SchemaLeaf> leaves;
     for (auto& [path, stat] : merged)
-        if (stat.type != index::store::PathType::Object &&
-            stat.type != index::store::PathType::Array)
+        if (stat.type != trace::index::store::PathType::Object &&
+            stat.type != trace::index::store::PathType::Array)
             leaves[path] =
                 SchemaLeaf{path, path_type_name(stat.type), stat.count, {}, {}};
-    const index::RecordSchema& schema = detail::plan_record_schema(*plan);
+    const trace::index::RecordSchema& schema =
+        detail::plan_record_schema(*plan);
     for (const auto& f : schema.fields) {
         auto [pos, inserted] =
             leaves.try_emplace(dstd::String(f.path.data(), f.path.size()));
@@ -773,14 +782,15 @@ dstd::Result<dstd::Vector<SchemaLeaf>> catalog_tree(const ScanPlan& plan) {
             leaf.path = f.path;
             const dstd::String below = f.path + ".";
             const bool has_leaves =
-                f.type == index::FieldType::Json &&
+                f.type == trace::index::FieldType::Json &&
                 std::any_of(merged.begin(), merged.end(), [&](const auto& kv) {
                     return kv.first.starts_with(below);
                 });
             if (!has_leaves) leaf.count = 0;
         }
         leaf.field = f.name;
-        leaf.declared_type = dstd::String(index::field_type_name(f.type));
+        leaf.declared_type =
+            dstd::String(trace::index::field_type_name(f.type));
     }
     dstd::Vector<SchemaLeaf> out;
     out.reserve(leaves.size());
@@ -796,7 +806,8 @@ dstd::Result<dstd::Vector<ColumnInfo>> schema(const ScanPlan& plan) {
     for (auto& [name, t] : *harvested)
         out.push_back(ColumnInfo{
             dstd::String(name),
-            dstd::String(dftracer::utils::index::store::column_type_name(t))});
+            dstd::String(
+                dftracer::utils::trace::index::store::column_type_name(t))});
     std::sort(out.begin(), out.end(),
               [](const ColumnInfo& a, const ColumnInfo& b) {
                   return a.name < b.name;
@@ -806,7 +817,7 @@ dstd::Result<dstd::Vector<ColumnInfo>> schema(const ScanPlan& plan) {
 
 dstd::Result<dstd::SharedPtr<const detail::JsonColumns>> json_columns(
     const detail::ViewPlan& plan) {
-    using CT = dftracer::utils::index::store::ColumnType;
+    using CT = dftracer::utils::trace::index::store::ColumnType;
     if (auto resolved = detail::resolve_record_schema(plan); !resolved)
         return resolved.error();
     const bool by_path = detail::plan_by_path(plan);
@@ -821,7 +832,8 @@ dstd::Result<dstd::SharedPtr<const detail::JsonColumns>> json_columns(
         if (t != CT::Json) continue;
         const auto* field = schema.field_at(name);
         const bool text =
-            field && field->type == dftracer::utils::index::FieldType::Json;
+            field &&
+            field->type == dftracer::utils::trace::index::FieldType::Json;
         // A dftracer catalog names args bare, so a top-level field of the
         // same name merges in; only the args column is JSON.
         if (by_path)
@@ -837,7 +849,7 @@ dstd::Result<dstd::SharedPtr<const detail::JsonColumns>> json_columns(
 
 dstd::Result<dstd::HashMap<dstd::String, dataframe::DataType>> column_types(
     const ScanPlan& plan) {
-    using CT = dftracer::utils::index::store::ColumnType;
+    using CT = dftracer::utils::trace::index::store::ColumnType;
     auto harvested = harvest_plan_types(plan);
     if (!harvested) return harvested.error();
     dstd::HashMap<dstd::String, dataframe::DataType> out;
@@ -1179,13 +1191,13 @@ ScanPlan timed(const ScanPlan& plan) {
 }
 
 ScanPlan record_schema(const ScanPlan& plan, const dstd::String& id) {
-    const auto found = dftracer::utils::index::get_schema(id);
+    const auto found = dftracer::utils::trace::index::get_schema(id);
     if (!found) return failed_plan(plan, found.error());
     const auto& p = **found;
     auto next = clone(plan);
     // Registered record_schemas live until the process exits.
     next->record_schema =
-        dstd::SharedPtr<const dftracer::utils::index::RecordSchema>(
+        dstd::SharedPtr<const dftracer::utils::trace::index::RecordSchema>(
             dstd::SharedPtr<void>(), &p);
     next->record_schema_error.reset();
     next->schema.reset();
@@ -1405,7 +1417,7 @@ dstd::Result<dstd::String> materialize_dir(const ScanPlan& plan) {
     if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
         return resolved.error();
     const dstd::String dir =
-        dftracer::utils::index::cache::materialize_view_dir(*plan);
+        dftracer::utils::trace::index::cache::materialize_view_dir(*plan);
     return dstd::String(dir.data(), dir.size());
 }
 
@@ -1413,7 +1425,7 @@ dstd::Result<void> register_materialized(const ScanPlan& plan,
                                          const dstd::String& dir) {
     if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
         return resolved.error();
-    dftracer::utils::index::cache::register_view(dir, *plan);
+    dftracer::utils::trace::index::cache::register_view(dir, *plan);
     return {};
 }
 
@@ -1421,7 +1433,8 @@ dstd::Result<dstd::Vector<dstd::String>> mv_source(const ScanPlan& plan) {
     if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
         return resolved.error();
     dstd::Vector<dstd::String> out;
-    if (auto mv = dftracer::utils::index::cache::find_subsuming_view(*plan))
+    if (auto mv =
+            dftracer::utils::trace::index::cache::find_subsuming_view(*plan))
         for (const auto& f : *mv) out.push_back(f.file_path);
     return out;
 }

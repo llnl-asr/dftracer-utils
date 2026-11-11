@@ -8,12 +8,12 @@
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/plan/prune.h>
-#include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
-#include <dftracer/utils/index/tables.h>
-#include <dftracer/utils/utilities/reader/trace_reader.h>
+#include <dftracer/utils/fileio/file_helpers.h>
+#include <dftracer/utils/trace/index/indexer.h>
+#include <dftracer/utils/trace/index/plan/prune.h>
+#include <dftracer/utils/trace/index/record_schema.h>
+#include <dftracer/utils/trace/index/tables.h>
+#include <dftracer/utils/trace/reader/trace_reader.h>
 #include <doctest/doctest.h>
 #include <generator_ok.h>
 #include <refused_lines.h>
@@ -23,7 +23,7 @@
 #include <algorithm>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::index;
+using namespace dftracer::utils::trace::index;
 
 namespace {
 
@@ -53,10 +53,10 @@ dstd::String write_ndjson(const dstd::String& dir, int records) {
 std::size_t count_rows(const dstd::String& trace, const dstd::String& index_dir,
                        const dstd::String& query, bool skip_pruning) {
     auto run = [&]() -> coro::CoroTask<std::size_t> {
-        utilities::reader::TraceReader reader(
+        trace::reader::TraceReader reader(
             {.file_path = dstd::String(trace),
              .index_dir = dstd::String(index_dir)});
-        utilities::reader::ReadConfig cfg;
+        trace::reader::ReadConfig cfg;
         cfg.query = query;
         cfg.skip_pruning = skip_pruning;
         auto gen = dftu_utils_test::ok_items(reader.read_json(cfg));
@@ -67,9 +67,9 @@ std::size_t count_rows(const dstd::String& trace, const dstd::String& index_dir,
     return dftu_utils_test::ok(run().get());
 }
 
-index::IndexerOptions options(const dstd::String& dir,
-                              dstd::String schema = "") {
-    index::IndexerOptions o;
+trace::index::IndexerOptions options(const dstd::String& dir,
+                                     dstd::String schema = "") {
+    trace::index::IndexerOptions o;
     o.index_dir = dir;
     o.schema = std::move(schema);
     return o;
@@ -81,9 +81,9 @@ TEST_SUITE("Schemas") {
     TEST_CASE("the built-in hashes are the ones existing indexes hold") {
         // A change here marks every existing index stale. dftracer's covers
         // its source, whose row sets an older index does not hold.
-        CHECK(dftu_utils_test::ok_ref(index::get_schema("dftracer"))
+        CHECK(dftu_utils_test::ok_ref(trace::index::get_schema("dftracer"))
                   .params_hash() == 3999216331681324496ULL);
-        CHECK(dftu_utils_test::ok_ref(index::get_schema("generic"))
+        CHECK(dftu_utils_test::ok_ref(trace::index::get_schema("generic"))
                   .params_hash() == 7825305221053757732ULL);
     }
 
@@ -99,13 +99,13 @@ TEST_SUITE("Schemas") {
         CHECK(dftu_utils_test::ok_ref(detect_schema(plain)).id == "generic");
         CHECK(dftu_utils_test::ok_ref(detect_schema(mixed)).id == "generic");
         CHECK(dftu_utils_test::ok_ref(detect_schema({})).id == "generic");
-        CHECK(dftu_utils_test::ok_ref(index::get_schema("generic"))
+        CHECK(dftu_utils_test::ok_ref(trace::index::get_schema("generic"))
                   .require.empty());
-        CHECK(dftu_utils_test::ok_ref(index::get_schema("dftracer"))
+        CHECK(dftu_utils_test::ok_ref(trace::index::get_schema("dftracer"))
                   .params_hash() !=
-              dftu_utils_test::ok_ref(index::get_schema("generic"))
+              dftu_utils_test::ok_ref(trace::index::get_schema("generic"))
                   .params_hash());
-        dftu_utils_test::expect_error(index::get_schema("nope"),
+        dftu_utils_test::expect_error(trace::index::get_schema("nope"),
                                       common::ErrorCode::InvalidArgument);
     }
 
@@ -121,11 +121,11 @@ TEST_SUITE("Schemas") {
 
     TEST_CASE("a file's schema is detected from its first lines") {
         dftu_utils_test::TestEnvironment env(10);
-        CHECK(dftu_utils_test::ok_ref(
-                  index::detect_file_schema(env.create_dft_test_gzip_file(50)))
+        CHECK(dftu_utils_test::ok_ref(trace::index::detect_file_schema(
+                                          env.create_dft_test_gzip_file(50)))
                   .id == "dftracer");
         CHECK(dftu_utils_test::ok_ref(
-                  index::detect_file_schema(write_ndjson(env.dir(), 50)))
+                  trace::index::detect_file_schema(write_ndjson(env.dir(), 50)))
                   .id == "generic");
     }
 
@@ -133,7 +133,7 @@ TEST_SUITE("Schemas") {
         dftu_utils_test::TestEnvironment env(10);
         const auto trace = write_ndjson(env.dir(), 4000);
         const auto dir = env.dir() + "/idx";
-        auto ix = dftu_utils_test::ok(index::Indexer::open(
+        auto ix = dftu_utils_test::ok(trace::index::Indexer::open(
             {dstd::String(dstd::StringView(trace))}, options(dir)));
         CHECK(dftu_utils_test::ok(ix.build()).indexed == 1);
         const auto files = dftu_utils_test::ok(ix.files());
@@ -142,21 +142,20 @@ TEST_SUITE("Schemas") {
 
         {
             const auto snapshot = dftu_utils_test::ok(
-                index::plan::open_snapshot(files[0].index_path));
-            const auto file =
-                snapshot.file(index::store::internal::get_logical_path(trace));
+                trace::index::plan::open_snapshot(files[0].index_path));
+            const auto file = snapshot.file(fileio::get_logical_path(trace));
             REQUIRE(file.has_value());
-            dstd::Map<dstd::String, index::store::PathStat> cat;
+            dstd::Map<dstd::String, trace::index::store::PathStat> cat;
             for (auto& [p, st] :
-                 dftu_utils_test::ok(index::catalog(snapshot, *file)))
+                 dftu_utils_test::ok(trace::index::catalog(snapshot, *file)))
                 cat.emplace(dstd::String(p.data(), p.size()), st);
             for (const char* p :
                  {"op", "host", "lat", "io.off", "hosts.0", "hosts.1", "ok"})
                 CHECK_MESSAGE(cat.count(p), p);
             CHECK(cat.at("op").count == 4000);
-            CHECK(cat.at("ok").type == index::store::PathType::Bool);
-            const auto blooms = dftu_utils_test::ok(index::paths(
-                snapshot, *file, index::store::IndexExtension::Bloom));
+            CHECK(cat.at("ok").type == trace::index::store::PathType::Bool);
+            const auto blooms = dftu_utils_test::ok(trace::index::paths(
+                snapshot, *file, trace::index::store::IndexExtension::Bloom));
             const auto has = [&](const char* name) {
                 return std::any_of(
                     blooms.begin(), blooms.end(), [&](const auto& b) {
@@ -167,7 +166,7 @@ TEST_SUITE("Schemas") {
             CHECK(!has("cat"));
             // Records without a metadata phase: every chunk counts none.
             const auto meta =
-                dftu_utils_test::ok(index::chunk_meta(snapshot, *file));
+                dftu_utils_test::ok(trace::index::chunk_meta(snapshot, *file));
             REQUIRE(meta.has_value());
             CHECK(!meta->empty());
             for (const auto& [chunk, m] : *meta) CHECK(m.records == 0);
@@ -192,17 +191,17 @@ TEST_SUITE("Schemas") {
         const auto dir = env.dir() + "/idx";
         dftu_utils_test::ok(
             dftu_utils_test::ok(
-                index::Indexer::open({dstd::String(dstd::StringView(trace))},
-                                     options(dir)))
+                trace::index::Indexer::open(
+                    {dstd::String(dstd::StringView(trace))}, options(dir)))
                 .build());
         CHECK(
             dftu_utils_test::ok(
                 dftu_utils_test::ok(
-                    index::Indexer::open(
+                    trace::index::Indexer::open(
                         {dstd::String(dstd::StringView(trace))}, options(dir)))
                     .files())[0]
                 .schema == "dftracer");
-        auto forced = dftu_utils_test::ok(index::Indexer::open(
+        auto forced = dftu_utils_test::ok(trace::index::Indexer::open(
             {dstd::String(dstd::StringView(trace))}, options(dir, "generic")));
         CHECK(dftu_utils_test::ok(forced.status()).needs_work.size() == 1);
         CHECK(dftu_utils_test::ok(forced.build()).indexed == 1);
@@ -211,13 +210,13 @@ TEST_SUITE("Schemas") {
         CHECK(
             dftu_utils_test::ok(
                 dftu_utils_test::ok(
-                    index::Indexer::open(
+                    trace::index::Indexer::open(
                         {dstd::String(dstd::StringView(trace))}, options(dir)))
                     .status())
                 .needs_work.empty());
         dftu_utils_test::expect_error(
-            index::Indexer::open({dstd::String(dstd::StringView(trace))},
-                                 options(dir, "nope")),
+            trace::index::Indexer::open({dstd::String(dstd::StringView(trace))},
+                                        options(dir, "nope")),
             common::ErrorCode::InvalidArgument);
     }
 }

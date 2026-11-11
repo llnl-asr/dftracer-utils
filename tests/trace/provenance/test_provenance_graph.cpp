@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/trace/provenance/provenance_graph.h>
+#include <dftracer/utils/domains/analysis/provenance/provenance_graph.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
 
-using namespace dftracer::utils::trace::provenance;
+using namespace dftracer::utils::domains::analysis::provenance;
 
 TEST_CASE("a constant query that parses gives its query") {
     const auto query = constant_query("cat == \"POSIX\"");

@@ -5,20 +5,20 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/build/index_fold_driver.h>
-#include <dftracer/utils/index/extensions/bloom_fold.h>
-#include <dftracer/utils/index/extensions/rowset_fold.h>
-#include <dftracer/utils/index/gzip/checkpoint_indexer.h>
-#include <dftracer/utils/index/gzip/gzip_indexer.h>
-#include <dftracer/utils/index/index.h>
-#include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/index/source.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
-#include <dftracer/utils/index/store/layout.h>
-#include <dftracer/utils/index/store/root_layout.h>
-#include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/fileio/file_helpers.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/build/index_fold_driver.h>
+#include <dftracer/utils/trace/index/extensions/bloom_fold.h>
+#include <dftracer/utils/trace/index/extensions/rowset_fold.h>
+#include <dftracer/utils/trace/index/gzip/checkpoint_indexer.h>
+#include <dftracer/utils/trace/index/gzip/gzip_indexer.h>
+#include <dftracer/utils/trace/index/index.h>
+#include <dftracer/utils/trace/index/record_schema.h>
+#include <dftracer/utils/trace/index/source.h>
+#include <dftracer/utils/trace/index/store/layout.h>
+#include <dftracer/utils/trace/index/store/root_layout.h>
+#include <dftracer/utils/trace/index/tables.h>
 #include <dftracer/utils/trace/views/aggfold.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
@@ -44,8 +44,8 @@ using namespace dftu_utils_test;
 using namespace test_view_common;
 
 using namespace dftracer::utils::trace::views::detail;
-using namespace dftracer::utils::index::build;
-using namespace dftracer::utils::index::extensions;
+using namespace dftracer::utils::trace::index::build;
+using namespace dftracer::utils::trace::index::extensions;
 
 namespace {
 
@@ -143,23 +143,26 @@ TEST_SUITE("RawGzipFuse") {
         BloomFold bloom(intern);
         RowSetFold dict(
             intern,
-            dftracer::utils::index::indexed_rowsets(dftu_utils_test::ok_ref(
-                dftracer::utils::index::get_schema("dftracer"))));
+            dftracer::utils::trace::index::indexed_rowsets(
+                dftu_utils_test::ok_ref(
+                    dftracer::utils::trace::index::get_schema("dftracer"))));
         std::array<Fold*, 3> folds{&agg, &bloom, &dict};
         IndexFoldDriver driver(intern, folds,
                                dstd::String(dstd::StringView(gz)),
                                dstd::String(dstd::StringView(idx)));
 
-        index::gzip::GzipBuildArtifacts arts;
+        trace::index::gzip::GzipBuildArtifacts arts;
         dftu_utils_test::run_coro(
             [&](coro::Scope& scope) -> dftracer::utils::coro::CoroTask<void> {
-                dftracer::utils::index::gzip::CheckpointIndexer::VisitorList vl;
+                dftracer::utils::trace::index::gzip::CheckpointIndexer::
+                    VisitorList vl;
                 vl.emplace_back(driver);
-                auto a = co_await index::gzip::build_gzip_index_artifacts(
-                    gz,
-                    dftracer::utils::index::gzip::CheckpointIndexer::
-                        DEFAULT_CHECKPOINT_SIZE,
-                    vl, &scope);
+                auto a =
+                    co_await trace::index::gzip::build_gzip_index_artifacts(
+                        gz,
+                        dftracer::utils::trace::index::gzip::CheckpointIndexer::
+                            DEFAULT_CHECKPOINT_SIZE,
+                        vl, &scope);
                 REQUIRE(a.has_value());
                 arts = std::move(*a);
                 co_return;
@@ -169,25 +172,20 @@ TEST_SUITE("RawGzipFuse") {
 
         // Persist the index this one pass produced.
         {
-            auto logical =
-                dftracer::utils::index::store::internal::get_logical_path(gz);
-            const auto hash =
-                dftracer::utils::index::store::internal::calculate_file_hash(
-                    gz);
+            auto logical = fileio::get_logical_path(gz);
+            const auto hash = fileio::calculate_file_hash(gz);
             const auto mtime = static_cast<std::uint64_t>(
-                dftracer::utils::index::store::internal::
-                    get_file_modification_time(gz));
-            const auto bytes =
-                dftracer::utils::index::store::internal::file_size_bytes(gz);
-            auto index = dftracer::utils::index::Index::open(
-                dftracer::utils::index::normalize_index_root(idx));
+                fileio::get_file_modification_time(gz));
+            const auto bytes = fileio::file_size_bytes(gz);
+            auto index = dftracer::utils::trace::index::Index::open(
+                dftracer::utils::trace::index::normalize_index_root(idx));
             REQUIRE(index);
             auto build = index->build(
                 logical,
-                dftracer::utils::index::SourceStat{mtime, bytes, hash});
+                dftracer::utils::trace::index::SourceStat{mtime, bytes, hash});
             REQUIRE(build);
-            dftracer::utils::index::gzip::persist_gzip_index_artifacts(*build,
-                                                                       arts);
+            dftracer::utils::trace::index::gzip::persist_gzip_index_artifacts(
+                *build, arts);
             dftu_utils_test::ok(bloom.write(*build));
             dftu_utils_test::ok(dict.write(*build));
             REQUIRE(build->commit().get());
@@ -208,8 +206,8 @@ TEST_SUITE("RawGzipFuse") {
         CHECK(dftu_utils_test::pruning_tier_current(snapshot, rfile));
         CHECK(!arts.members.empty());
         CHECK(dftu_utils_test::bloom_chunks(snapshot, rfile, "name") > 0);
-        CHECK(dftu_utils_test::index_take(
-                  dftracer::utils::index::rowset(snapshot, rfile, "files"))
+        CHECK(dftu_utils_test::index_take(dftracer::utils::trace::index::rowset(
+                                              snapshot, rfile, "files"))
                   .has_value());
     }
 
@@ -555,15 +553,16 @@ dstd::Vector<dstd::String> record_index_pass(const dstd::String& gz,
     std::array<Fold*, 1> folds{&rec};
     IndexFoldDriver driver(intern, folds, dstd::String(dstd::StringView(gz)),
                            dstd::String(dstd::StringView(idx)));
-    dftracer::utils::index::build::ParseGate gate(nullptr, workers);
+    dftracer::utils::trace::index::build::ParseGate gate(nullptr, workers);
     if (workers > 1) driver.set_parse_gate(gate);
     dftu_utils_test::run_coro(
         [&](coro::Scope& scope) -> dftracer::utils::coro::CoroTask<void> {
-            dftracer::utils::index::gzip::CheckpointIndexer::VisitorList vl;
+            dftracer::utils::trace::index::gzip::CheckpointIndexer::VisitorList
+                vl;
             vl.emplace_back(driver);
-            auto a = co_await index::gzip::build_gzip_index_artifacts(
+            auto a = co_await trace::index::gzip::build_gzip_index_artifacts(
                 gz,
-                dftracer::utils::index::gzip::CheckpointIndexer::
+                dftracer::utils::trace::index::gzip::CheckpointIndexer::
                     DEFAULT_CHECKPOINT_SIZE,
                 vl, &scope);
             REQUIRE(a.has_value());
@@ -620,23 +619,25 @@ TEST_CASE("a fold whose step fails ends the index pass with its error") {
     REQUIRE(env.is_valid());
     const dstd::String gz = write_multi_member(env.dir());
     dstd::StringIntern intern;
-    dftracer::utils::index::extensions::BloomFold bloom(intern);
+    dftracer::utils::trace::index::extensions::BloomFold bloom(intern);
     FailingFold failing;
     std::array<Fold*, 2> folds{&bloom, &failing};
     IndexFoldDriver driver(intern, folds, dstd::String(dstd::StringView(gz)),
                            dstd::String(dstd::StringView(env.dir() + "/idx")));
-    dftracer::utils::index::build::ParseGate gate(nullptr, 8);
+    dftracer::utils::trace::index::build::ParseGate gate(nullptr, 8);
     driver.set_parse_gate(gate);
     bool failed = false;
     dftu_utils_test::run_coro(
         [&](coro::Scope& scope) -> dftracer::utils::coro::CoroTask<void> {
-            dftracer::utils::index::gzip::CheckpointIndexer::VisitorList vl;
+            dftracer::utils::trace::index::gzip::CheckpointIndexer::VisitorList
+                vl;
             vl.emplace_back(driver);
-            auto built = co_await index::gzip::build_gzip_index_artifacts(
-                gz,
-                dftracer::utils::index::gzip::CheckpointIndexer::
-                    DEFAULT_CHECKPOINT_SIZE,
-                vl, &scope);
+            auto built =
+                co_await trace::index::gzip::build_gzip_index_artifacts(
+                    gz,
+                    dftracer::utils::trace::index::gzip::CheckpointIndexer::
+                        DEFAULT_CHECKPOINT_SIZE,
+                    vl, &scope);
             failed =
                 !built.has_value() && built.error().message() == "bad batch";
         },

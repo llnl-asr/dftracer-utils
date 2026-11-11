@@ -8,14 +8,14 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
-#include <dftracer/utils/index/extensions/kinds/payloads.h>
-#include <dftracer/utils/index/index.h>
-#include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/plan/chunk_pruner.h>
-#include <dftracer/utils/index/plan/prune.h>
-#include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
-#include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/fileio/file_helpers.h>
+#include <dftracer/utils/trace/index/extensions/kinds/payloads.h>
+#include <dftracer/utils/trace/index/index.h>
+#include <dftracer/utils/trace/index/indexer.h>
+#include <dftracer/utils/trace/index/plan/chunk_pruner.h>
+#include <dftracer/utils/trace/index/plan/prune.h>
+#include <dftracer/utils/trace/index/record_schema.h>
+#include <dftracer/utils/trace/index/tables.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
 #include <dftracer/utils/trace/views/view_agg_partials.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
@@ -63,13 +63,13 @@ dstd::String write_indexed(TestEnvironment& env, const dstd::String& name,
                            dstd::StringView schema = "",
                            std::uint64_t tier_interval_us = 0) {
     const dstd::String gz = write_gz(env, name, lines, member_bytes);
-    index::IndexerOptions o;
+    trace::index::IndexerOptions o;
     o.checkpoint_size = member_bytes;
     o.schema = schema;
     if (tier_interval_us > 0) o.aggregation.time_interval_us = tier_interval_us;
     dftu_utils_test::ok(
-        dftu_utils_test::ok(
-            index::Indexer::open({dstd::String(dstd::StringView(gz))}, o))
+        dftu_utils_test::ok(trace::index::Indexer::open(
+                                {dstd::String(dstd::StringView(gz))}, o))
             .build());
     return gz;
 }
@@ -188,8 +188,8 @@ std::int64_t count_of(const View& v, const dstd::String& query) {
 
 // 400 records of a path schema with every role: size i, op read or write,
 // hosts h0-h1, threads t0-t3.
-const index::RecordSchema& path_roles() {
-    return dftu_utils_test::ok_ref(index::register_schema(R"(
+const trace::index::RecordSchema& path_roles() {
+    return dftu_utils_test::ok_ref(trace::index::register_schema(R"(
 id: path_roles
 fields:
   start: {type: int, role: time}
@@ -199,7 +199,7 @@ fields:
   op: {type: string, role: name}
   size: {type: int}
 )",
-                                                          "test"));
+                                                                 "test"));
 }
 
 dstd::Vector<dstd::String> path_role_lines() {
@@ -229,10 +229,10 @@ bool bloom_has(const dstd::String& idx, const dstd::String& gz,
                dstd::StringView dim, dstd::StringView value) {
     const auto snapshot = dftu_utils_test::index_snapshot(idx);
     const auto file = dftu_utils_test::require_indexed_file(snapshot, gz);
-    const auto bytes = dftu_utils_test::index_take(index::path_file(
-        snapshot, file, index::store::IndexExtension::Bloom, dim));
+    const auto bytes = dftu_utils_test::index_take(trace::index::path_file(
+        snapshot, file, trace::index::store::IndexExtension::Bloom, dim));
     if (!bytes) return false;
-    const auto bloom = index::extensions::kinds::decode_bloom(
+    const auto bloom = trace::index::extensions::kinds::decode_bloom(
         dstd::StringView(bytes->data(), bytes->size()));
     return bloom && bloom->possibly_contains(value);
 }
@@ -243,7 +243,7 @@ dstd::Pair<dstd::String, bool> index_state(const dstd::String& gz,
     const auto snapshot = dftu_utils_test::index_snapshot(idx);
     const auto file = dftu_utils_test::require_indexed_file(snapshot, gz);
     const auto schema =
-        dftu_utils_test::index_take(index::schema(snapshot, file));
+        dftu_utils_test::index_take(trace::index::schema(snapshot, file));
     return {schema ? dstd::String(schema->data(), schema->size()) : "",
             dftu_utils_test::pruning_tier_current(snapshot, file)};
 }
@@ -288,8 +288,9 @@ dstd::Map<dstd::String, dstd::Pair<double, std::int64_t>> flame_paths(
 
 TEST_SUITE("Schemaless") {
     TEST_CASE("a user schema with dftracer's roles gives the same call tree") {
-        dftu_utils_test::ok_ref(index::register_schema(DFT_ROLES, "test"));
-        dftu_utils_test::ok_ref(index::register_schema(R"(
+        dftu_utils_test::ok_ref(
+            trace::index::register_schema(DFT_ROLES, "test"));
+        dftu_utils_test::ok_ref(trace::index::register_schema(R"(
 id: secs_roles
 fields:
   start: {type: float, role: time, unit: s}
@@ -298,7 +299,7 @@ fields:
   thread: {type: string, role: lane}
   op: {type: string, role: name}
 )",
-                                                       "test"));
+                                                              "test"));
         TestEnvironment env(10);
         const auto dft = nested_calls(dft_line);
         const dstd::String a = write_indexed(env, "dft", dft, 1024);
@@ -438,7 +439,7 @@ fields:
     }
 
     TEST_CASE("a stored row set keeps declared types like the scan") {
-        dftu_utils_test::ok_ref(index::register_schema(R"(
+        dftu_utils_test::ok_ref(trace::index::register_schema(R"(
 id: typed_rows
 fields:
   n: {type: int}
@@ -446,7 +447,7 @@ fields:
 source: |
   items = where n > 0 | select n, meta
 )",
-                                                       "test"));
+                                                              "test"));
         TestEnvironment env(10);
         const dstd::String plain = env.dir() + "/t.ndjson";
         {
@@ -456,10 +457,10 @@ source: |
         }
         const dstd::String gz = plain + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, gz));
-        index::IndexerOptions o;
+        trace::index::IndexerOptions o;
         o.schema = "typed_rows";
-        auto indexer = dftu_utils_test::ok(
-            index::Indexer::open({dstd::String(dstd::StringView(gz))}, o));
+        auto indexer = dftu_utils_test::ok(trace::index::Indexer::open(
+            {dstd::String(dstd::StringView(gz))}, o));
         dftu_utils_test::ok(indexer.build());
         const dataframe::DataFrame stored =
             dftu_utils_test::ok(indexer.rowset("items"));
@@ -470,14 +471,14 @@ source: |
     }
 
     TEST_CASE("declared types convert values; the rest read as null") {
-        dftu_utils_test::ok_ref(index::register_schema(R"(
+        dftu_utils_test::ok_ref(trace::index::register_schema(R"(
 id: coerce
 fields:
   at: {type: string, role: time}
   n: {type: int}
   label: {type: string}
 )",
-                                                       "test"));
+                                                              "test"));
         TestEnvironment env(10);
         const dstd::String gz = write_indexed(
             env, "coerce",
@@ -511,14 +512,14 @@ fields:
     TEST_CASE(
         "digit text stays text in a string field and parses in a number "
         "field") {
-        dftu_utils_test::ok_ref(index::register_schema(R"(
+        dftu_utils_test::ok_ref(trace::index::register_schema(R"(
 id: digits
 fields:
   at: {type: string, role: time}
   x: {type: float}
   label: {type: string}
 )",
-                                                       "test"));
+                                                              "test"));
         TestEnvironment env(10);
         const dstd::String gz = write_indexed(
             env, "digits",
@@ -540,7 +541,7 @@ fields:
     }
 
     TEST_CASE("bad lines and unconverted values are counted, not lost") {
-        dftu_utils_test::ok_ref(index::register_schema(
+        dftu_utils_test::ok_ref(trace::index::register_schema(
             "id: counted\nfields:\n  n: {type: int}\n", "test"));
         TestEnvironment env(10);
         dstd::String deep;
@@ -575,14 +576,14 @@ fields:
     }
 
     TEST_CASE("buckets and time ranges count in the time role's unit") {
-        dftu_utils_test::ok_ref(index::register_schema(R"(
+        dftu_utils_test::ok_ref(trace::index::register_schema(R"(
 id: seconds_log
 fields:
   t: {type: float, role: time, unit: s}
   d: {type: float, role: duration, unit: s}
   k: {type: string}
 )",
-                                                       "test"));
+                                                              "test"));
         TestEnvironment env(10);
         dstd::Vector<dstd::String> lines;
         for (int i = 0; i < 300; ++i)
@@ -705,21 +706,23 @@ fields:
                 .record_schema("generic");
         CHECK(count_of(v, "where name == \"b0150\"") == 1);
         CHECK(count_of(v, "where name in [\"a0001\", \"c0999\"]") == 2);
-        const auto snapshot = index::plan::open_snapshot(
+        const auto snapshot = trace::index::plan::open_snapshot(
             dstd::String(determine_index_path(gz, "")));
         REQUIRE(snapshot.has_value());
-        const auto plan = dftu_utils_test::ok(index::plan::explain_file_chunks(
-            *snapshot, dstd::String(dstd::StringView(gz)),
-            dftu_utils_test::ok(
-                duql::Query::from_string("name == \"b0150\""))));
+        const auto plan =
+            dftu_utils_test::ok(trace::index::plan::explain_file_chunks(
+                *snapshot, dstd::String(dstd::StringView(gz)),
+                dftu_utils_test::ok(
+                    duql::Query::from_string("name == \"b0150\""))));
         REQUIRE(plan.total_chunks > 3);
         CHECK(plan.read.size() < plan.total_chunks / 2);
     }
 
     TEST_CASE(
         "the aggregation tier answers a path schema's roles like the scan") {
-        dftu_utils_test::ok_ref(index::register_schema(DFT_ROLES, "test"));
-        dftu_utils_test::ok_ref(index::register_schema(R"(
+        dftu_utils_test::ok_ref(
+            trace::index::register_schema(DFT_ROLES, "test"));
+        dftu_utils_test::ok_ref(trace::index::register_schema(R"(
 id: loose_roles
 fields:
   ts: {type: int, role: time}
@@ -728,7 +731,7 @@ fields:
   tid: {type: int, role: lane}
   name: {type: string, role: name}
 )",
-                                                       "test"));
+                                                              "test"));
         // The tier answers a plan over every file of its index, so each file
         // gets its own directory.
         TestEnvironment ea(10), eb(10), ec(10);
@@ -821,7 +824,7 @@ fields:
     }
 
     TEST_CASE("file and rank keys relabel through a path schema's row sets") {
-        dftu_utils_test::ok_ref(index::register_schema(R"(
+        dftu_utils_test::ok_ref(trace::index::register_schema(R"(
 id: ranked_io
 fields:
   ts: {type: int, role: time}
@@ -833,15 +836,15 @@ source: |
   files = where kind == "file" | select fhash, path | distinct;
   ranks = where kind == "rank" | select pid, rank | distinct
 )",
-                                                       "test"));
-        dftu_utils_test::ok_ref(index::register_schema(R"(
+                                                              "test"));
+        dftu_utils_test::ok_ref(trace::index::register_schema(R"(
 id: unranked_io
 fields:
   ts: {type: int, role: time}
   pid: {type: int, role: entity}
   op: {type: string, role: name}
 )",
-                                                       "test"));
+                                                              "test"));
         TestEnvironment env(10);
         dstd::Vector<dstd::String> lines{
             R"({"kind":"file","fhash":"f1","path":"/data/a.bin"})",
@@ -903,7 +906,7 @@ fields:
     }
 
     TEST_CASE("an indexed export of path records reads back as their schema") {
-        const index::RecordSchema& schema = path_roles();
+        const trace::index::RecordSchema& schema = path_roles();
         TestEnvironment env(10);
         const dstd::String src =
             write_indexed(env, "src", path_role_lines(), 1024, schema.id);
@@ -1084,7 +1087,7 @@ fields:
     }
 
     TEST_CASE("a path-schema file with no index is indexed on first touch") {
-        const index::RecordSchema& schema = path_roles();
+        const trace::index::RecordSchema& schema = path_roles();
         TestEnvironment env(10);
         const auto lines = path_role_lines();
         const dstd::String ref =
@@ -1143,7 +1146,7 @@ fields:
     }
 
     TEST_CASE("counters of path records take the lane from its role") {
-        const index::RecordSchema& schema = path_roles();
+        const trace::index::RecordSchema& schema = path_roles();
         TestEnvironment env(10);
         const dstd::String gz =
             write_indexed(env, "ctr", path_role_lines(), 1024, schema.id);
@@ -1158,10 +1161,10 @@ fields:
         const auto lines = sink.lines();
         REQUIRE(lines.size() == 4);
         for (int t = 0; t < 4; ++t) {
-            const dstd::String pid =
-                dstd::to_string(index::entity_id("h" + dstd::to_string(t % 2)));
-            const dstd::String tid =
-                dstd::to_string(index::entity_id("t" + dstd::to_string(t)));
+            const dstd::String pid = dstd::to_string(
+                trace::index::entity_id("h" + dstd::to_string(t % 2)));
+            const dstd::String tid = dstd::to_string(
+                trace::index::entity_id("t" + dstd::to_string(t)));
             CHECK(count_containing(
                       lines, "\"pid\":" + pid + ",\"tid\":" + tid + ",") == 1);
         }
@@ -1356,7 +1359,8 @@ fields:
     TEST_CASE(
         "a batched path call tree keeps lines with a huge number or a bad "
         "escape") {
-        dftu_utils_test::ok_ref(index::register_schema(DFT_ROLES, "test"));
+        dftu_utils_test::ok_ref(
+            trace::index::register_schema(DFT_ROLES, "test"));
         TestEnvironment env(10);
         const dstd::Vector<dstd::String> lines = {
             R"({"name":"a","cat":"P","pid":1,"tid":1,"ts":100,"dur":50,"x":1e400,"y":123456789012345678901234567890})",
@@ -1380,7 +1384,7 @@ fields:
     }
 
     TEST_CASE("sessions of a path schema equal the dftracer sessions") {
-        dftu_utils_test::ok_ref(index::register_schema(R"(
+        dftu_utils_test::ok_ref(trace::index::register_schema(R"(
 id: secs_sessions
 fields:
   start: {type: float, role: time, unit: s}
@@ -1388,7 +1392,7 @@ fields:
   host: {type: string, role: entity}
   thread: {type: string, role: lane}
 )",
-                                                       "test"));
+                                                              "test"));
         TestEnvironment env(10);
         dstd::Vector<dstd::String> dft;
         dstd::Vector<dstd::String> secs;

@@ -2,7 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/to_chars.h>
-#include <dftracer/utils/index/extensions/bloom_filter.h>
+#include <dftracer/utils/trace/index/extensions/bloom_filter.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
 #include <task_result.h>
@@ -11,7 +11,7 @@
 
 using namespace dftracer::utils;
 
-using namespace dftracer::utils::index::extensions;
+using namespace dftracer::utils::trace::index::extensions;
 
 TEST_SUITE("BloomFilter") {
     TEST_CASE("BloomFilter - Add and query") {

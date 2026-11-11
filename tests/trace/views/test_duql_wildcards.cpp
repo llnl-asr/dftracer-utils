@@ -5,7 +5,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/trace/index/indexer.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
@@ -50,7 +50,7 @@ dstd::String write_counters(TestEnvironment& env, const dstd::String& dir = "",
     dstd::fs::remove(plain).discard();
     if (build)
         dftu_utils_test::ok(
-            dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+            dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
                                     {dstd::String(dstd::StringView(gz))}))
                 .build());
     return gz;
@@ -273,7 +273,7 @@ TEST_SUITE("DuqlWildcards") {
             if (build)
                 dftu_utils_test::ok(
                     dftu_utils_test::ok(
-                        dftracer::utils::index::Indexer::open(
+                        dftracer::utils::trace::index::Indexer::open(
                             {dstd::String(dstd::StringView(gz))}))
                         .build());
             return view_of(gz);

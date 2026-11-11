@@ -3,8 +3,8 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/record_schema.h>
+#include <dftracer/utils/trace/index/indexer.h>
+#include <dftracer/utils/trace/index/record_schema.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
@@ -57,14 +57,14 @@ dstd::String write_log(TestEnvironment& env) {
                                                                16 * 1024));
     dstd::fs::remove(plain).discard();
     dftu_utils_test::ok(
-        dftu_utils_test::ok(dftracer::utils::index::Indexer::open(
+        dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
                                 {dstd::String(dstd::StringView(gz))}))
             .build());
     return gz;
 }
 
 void register_log_schema() {
-    dftu_utils_test::ok_ref(dftracer::utils::index::register_schema(
+    dftu_utils_test::ok_ref(dftracer::utils::trace::index::register_schema(
         "id: sv_log\n"
         "fields:\n"
         "  op: {type: string}\n"

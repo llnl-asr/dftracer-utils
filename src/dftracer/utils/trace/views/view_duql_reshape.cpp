@@ -6,6 +6,7 @@
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dataframe/query/vectorize.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -14,7 +15,6 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/fields.h>
 #include <dftracer/utils/duql/pipeline.h>
-#include <dftracer/utils/duql/vectorize.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view_duql_internal.h>
 
@@ -123,7 +123,7 @@ Status Applier::stage(const duql::PipelinePlugin& p) {
         if (!out) return out.error();
         type = dataframe::scalar(out->columns[0].type());
     }
-    dstd::Vector<duql::VectorColumn> next = cols_;
+    dstd::Vector<dataframe::query::VectorColumn> next = cols_;
     next[at].type = type;
     map_rows(
         [name = p.arg.name, op, second, a, b, str = p.str](
@@ -283,7 +283,7 @@ Status Applier::stage(const duql::PipelineExpand& e) {
         return n == dstd::String(e.name) || n == dstd::String(e.index) ||
                (is_struct && n.starts_with(e.name + "."));
     };
-    dstd::Vector<duql::VectorColumn> next;
+    dstd::Vector<dataframe::query::VectorColumn> next;
     dstd::Vector<bool> drop;
     auto element_columns = [&] {
         if (is_struct)
@@ -432,8 +432,8 @@ Status Applier::stage(const duql::PipelinePivot& p) {
                             : dstd::String(" (columns after the scan)")));
     if (auto done = stage(g); !done) return done;
     dstd::Vector<dstd::String> aggs;
-    dstd::Vector<duql::VectorColumn> next(cols_.begin(),
-                                          cols_.begin() + n_keys);
+    dstd::Vector<dataframe::query::VectorColumn> next(cols_.begin(),
+                                                      cols_.begin() + n_keys);
     for (std::size_t a = 0; a < p.aggs.size(); ++a) {
         aggs.push_back(dstd::String(p.aggs[a].name));
         for (const auto& v : fixed)
@@ -454,7 +454,8 @@ Status Applier::stage(const duql::PipelinePivot& p) {
         },
         dstd::fmt<"spread __duql_pivot into {}">(joined(aggs)),
         std::move(schema));
-    cols_ = p.fixed ? std::move(next) : dstd::Vector<duql::VectorColumn>{};
+    cols_ = p.fixed ? std::move(next)
+                    : dstd::Vector<dataframe::query::VectorColumn>{};
     duql::PipelineRename labels;
     for (std::size_t i = 0; i < p.labels.size() && i < fixed.size(); ++i) {
         if (p.labels[i].empty()) continue;
@@ -589,7 +590,7 @@ Status Applier::stage(const duql::PipelineUnpivot& u) {
         values.push_back(name);
     }
     dstd::Vector<std::size_t> ids;
-    dstd::Vector<duql::VectorColumn> next;
+    dstd::Vector<dataframe::query::VectorColumn> next;
     for (std::size_t j = 0; j < cols_.size(); ++j) {
         const bool listed = std::find(at.begin(), at.end(), j) != at.end() ||
                             cols_[j].name.starts_with("__duql_value_");

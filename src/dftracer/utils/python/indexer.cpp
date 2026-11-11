@@ -3,11 +3,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/index/build/batch_builder.h>
-#include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
-#include <dftracer/utils/index/index.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
-#include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/fileio/file_helpers.h>
 #include <dftracer/utils/python/indexer.h>
 #include <dftracer/utils/python/py_errors.h>
 #include <dftracer/utils/python/py_method.h>
@@ -16,6 +12,10 @@
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/build/batch_builder.h>
+#include <dftracer/utils/trace/index/gzip/checkpoint_indexer_factory.h>
+#include <dftracer/utils/trace/index/index.h>
+#include <dftracer/utils/trace/index/tables.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <structmember.h>
 
@@ -24,7 +24,8 @@
 static void CheckpointIndexer_dealloc(CheckpointIndexerObject *self) {
     if (self->handle) {
         dftracer::utils::dstd::UniquePtr<dftracer::utils::dstd::SharedPtr<
-            dftracer::utils::index::gzip::CheckpointIndexer>>(self->handle)
+            dftracer::utils::trace::index::gzip::CheckpointIndexer>>(
+            self->handle)
             .reset();
         self->handle = NULL;
     }
@@ -38,7 +39,8 @@ static void CheckpointIndexer_release_handle(CheckpointIndexerObject *self) {
     if (self->handle) {
         // Releasing the handle drops this wrapper's native indexer state only.
         dftracer::utils::dstd::UniquePtr<dftracer::utils::dstd::SharedPtr<
-            dftracer::utils::index::gzip::CheckpointIndexer>>(self->handle)
+            dftracer::utils::trace::index::gzip::CheckpointIndexer>>(
+            self->handle)
             .reset();
         self->handle = NULL;
     }
@@ -126,8 +128,8 @@ static int CheckpointIndexer_init(CheckpointIndexerObject *self, PyObject *args,
         return -1;
     }
 
-    auto created =
-        dftracer::utils::index::gzip::CheckpointIndexerFactory::try_create(
+    auto created = dftracer::utils::trace::index::gzip::
+        CheckpointIndexerFactory::try_create(
             gz_path, index_path_str, checkpoint_size, force_rebuild != 0);
     if (!created) {
         PyErr_SetString(PyExc_RuntimeError, created.error().c_str());
@@ -140,7 +142,7 @@ static int CheckpointIndexer_init(CheckpointIndexerObject *self, PyObject *args,
     }
     self->handle =
         dftracer::utils::dstd::make_unique<dftracer::utils::dstd::SharedPtr<
-            dftracer::utils::index::gzip::CheckpointIndexer>>(
+            dftracer::utils::trace::index::gzip::CheckpointIndexer>>(
             std::move(indexer))
             .release();
 
@@ -166,7 +168,7 @@ static PyObject *CheckpointIndexer_build(CheckpointIndexerObject *self,
     // only.
     if (self->build_bloom) {
         using namespace dftracer::utils;
-        using namespace dftracer::utils::index::build;
+        using namespace dftracer::utils::trace::index::build;
 
         const char *gz = as_utf8(self->gz_path);
         const char *idx = as_utf8(self->index_path);
@@ -295,18 +297,17 @@ static PyObject *CheckpointIndexer_has_bloom(CheckpointIndexerObject *self,
         Py_RETURN_FALSE;
     }
     try {
-        auto opened = dftracer::utils::index::Index::open(idx);
+        auto opened = dftracer::utils::trace::index::Index::open(idx);
         if (opened) {
             auto snapshot = opened->snapshot();
             if (snapshot) {
                 const dftracer::utils::dstd::String logical =
-                    dftracer::utils::index::store::internal::get_logical_path(
-                        gz);
+                    dftracer::utils::fileio::get_logical_path(gz);
                 const auto file = snapshot->file(logical);
-                if (file &&
-                    dftracer::utils::index::extension_current(
-                        *snapshot, *file,
-                        dftracer::utils::index::store::IndexExtension::Stats)) {
+                if (file && dftracer::utils::trace::index::extension_current(
+                                *snapshot, *file,
+                                dftracer::utils::trace::index::store::
+                                    IndexExtension::Stats)) {
                     Py_RETURN_TRUE;
                 }
             }

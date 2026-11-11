@@ -6,8 +6,8 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/json/record_parser.h>
+#include <dftracer/utils/trace/index/record_schema.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <simdjson.h>
 #include <task_result.h>
@@ -550,10 +550,10 @@ inline const char* const PATH_LINES[] = {
 
 /// Declared fields and roles for the typed path readers. `schema` registers it
 /// once.
-inline const dftracer::utils::index::RecordSchema& path_schema() {
-    static const dftracer::utils::index::RecordSchema& schema =
+inline const dftracer::utils::trace::index::RecordSchema& path_schema() {
+    static const dftracer::utils::trace::index::RecordSchema& schema =
         dftu_utils_test::ok_ref(
-            dftracer::utils::index::register_schema(R"(
+            dftracer::utils::trace::index::register_schema(R"(
 id: fold_shapes_path
 fields:
   ts: {type: int, role: time, unit: us}
@@ -578,7 +578,7 @@ fields:
 index:
   never_index: [secret, io.len, args.d]
 )",
-                                                    "test"));
+                                                           "test"));
     return schema;
 }
 
@@ -764,7 +764,8 @@ inline bool read_dom_path(
     simdjson::dom::element root;
     if (parser.parse(padded).get(root)) return false;
     const auto* schema = o.typed ? &path_schema() : nullptr;
-    dftracer::utils::dstd::Vector<const dftracer::utils::index::FieldSpec*>
+    dftracer::utils::dstd::Vector<
+        const dftracer::utils::trace::index::FieldSpec*>
         fields;
     for (const String& path : o.paths)
         fields.push_back(schema ? schema->field_at(path) : nullptr);

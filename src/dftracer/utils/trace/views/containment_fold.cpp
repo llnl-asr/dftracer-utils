@@ -28,7 +28,7 @@ namespace {
 FieldRef classify(dftracer::utils::dstd::StringIntern& intern,
                   const dstd::String& f, bool& needs_args,
                   dstd::Vector<dstd::String>& nested,
-                  const dftracer::utils::index::Roles* roles) {
+                  const dftracer::utils::trace::index::Roles* roles) {
     // A role's slot name reads the role; an undeclared one reads the field.
     if (roles) {
         auto role = [&](dstd::StringView path, const char* slot) {
@@ -162,10 +162,11 @@ ContainmentSpec make_containment_spec(
     const dstd::Vector<dstd::String>& partition,
     const dstd::String& start_field, const dstd::String& dur_field,
     const dstd::String& name_field, const dstd::Vector<dstd::String>& group,
-    const dftracer::utils::index::RecordSchema* path_schema,
+    const dftracer::utils::trace::index::RecordSchema* path_schema,
     double time_scale) {
     ContainmentSpec s;
-    const index::Roles* roles = path_schema ? &path_schema->roles : nullptr;
+    const trace::index::Roles* roles =
+        path_schema ? &path_schema->roles : nullptr;
     for (const dstd::String& f : partition)
         s.lane_fields.push_back(
             classify(intern, f, s.needs_args, s.nested_captures, roles));
@@ -182,11 +183,11 @@ ContainmentSpec make_containment_spec(
     s.out = {time_scale, time_scale, false};
     if (roles) {
         if (s.start_ref.kind == FieldRef::Kind::Ts)
-            s.out.ts /= index::micros_per(roles->time_unit);
+            s.out.ts /= trace::index::micros_per(roles->time_unit);
         if (s.dur_ref.kind == FieldRef::Kind::Dur)
-            s.out.dur /= index::micros_per(roles->duration_unit);
-        s.out.floating = roles->time_unit != index::TimeUnit::Us ||
-                         roles->duration_unit != index::TimeUnit::Us;
+            s.out.dur /= trace::index::micros_per(roles->duration_unit);
+        s.out.floating = roles->time_unit != trace::index::TimeUnit::Us ||
+                         roles->duration_unit != trace::index::TimeUnit::Us;
     }
     return s;
 }
@@ -216,7 +217,7 @@ ContainmentFold::ContainmentFold(
     dstd::Vector<dstd::String> partition, dstd::String start_field,
     dstd::String dur_field, dstd::String name_field, double time_scale,
     dstd::Vector<dstd::String> group,
-    const dftracer::utils::index::RecordSchema* path_schema)
+    const dftracer::utils::trace::index::RecordSchema* path_schema)
     : intern_(&intern),
       spec_(make_containment_spec(intern, partition, start_field, dur_field,
                                   name_field, group, path_schema, time_scale)) {

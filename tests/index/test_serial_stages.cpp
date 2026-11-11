@@ -10,11 +10,11 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/build/batch_builder.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/fileio/file_helpers.h>
 #include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/runtime/fs/fs_probes.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/build/batch_builder.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_executor.h>
@@ -232,18 +232,20 @@ TEST_SUITE("SerialStages") {
             if (!file) continue;
             ++marked;
             INFO("file " << f);
-            CHECK(dftracer::utils::index::extension_current(
-                snapshot, *file, index::store::IndexExtension::Members));
+            CHECK(dftracer::utils::trace::index::extension_current(
+                snapshot, *file, trace::index::store::IndexExtension::Members));
             const auto meta = dftu_utils_test::index_take(
-                dftracer::utils::index::file_metadata(snapshot, *file));
+                dftracer::utils::trace::index::file_metadata(snapshot, *file));
             REQUIRE(meta.has_value());
             CHECK(meta->line_count > 0);
-            CHECK_FALSE(dftu_utils_test::index_take(
-                            dftracer::utils::index::members(snapshot, *file))
-                            .empty());
+            CHECK_FALSE(
+                dftu_utils_test::index_take(
+                    dftracer::utils::trace::index::members(snapshot, *file))
+                    .empty());
             CHECK(dftu_utils_test::pruning_tier_current(snapshot, *file));
-            CHECK(dftracer::utils::index::extension_state(
-                      snapshot, *file, index::store::IndexExtension::Profile)
+            CHECK(dftracer::utils::trace::index::extension_state(
+                      snapshot, *file,
+                      trace::index::store::IndexExtension::Profile)
                       .has_value());
         }
         MESSAGE("marked " << marked << " of " << files.size());

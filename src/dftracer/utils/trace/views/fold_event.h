@@ -12,10 +12,10 @@
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/variant.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/json/value.h>
 #include <dftracer/utils/trace/event.h>
+#include <dftracer/utils/trace/index/record_schema.h>
 #include <simdjson.h>
 
 #include <algorithm>
@@ -299,9 +299,9 @@ struct FoldEvent {
     ArenaVec<SpecialValue> specials;
 
     /// Every scalar or null leaf of the record, arbitrarily nested, as
-    /// (interned exact path id -> index::store::PathType): "args.io.off",
-    /// "args.hosts.1", a top-level "type". Filled only when the scan captures
-    /// schema (the index build); empty otherwise.
+    /// (interned exact path id -> trace::index::store::PathType):
+    /// "args.io.off", "args.hosts.1", a top-level "type". Filled only when the
+    /// scan captures schema (the index build); empty otherwise.
     using SchemaLeaf = dstd::Pair<std::uint32_t, std::uint8_t>;
     ArenaVec<SchemaLeaf> schema_leaves;
 };
@@ -606,8 +606,8 @@ struct DecodeHints {
     /// The path being walked by decode_record, reused so a record's walk
     /// allocates no path string.
     dstd::String path;
-    const dftracer::utils::index::RecordSchema* schema = nullptr;
-    dstd::Vector<const dftracer::utils::index::FieldSpec*> fields;
+    const dftracer::utils::trace::index::RecordSchema* schema = nullptr;
+    dstd::Vector<const dftracer::utils::trace::index::FieldSpec*> fields;
     dstd::Vector<std::uint8_t> known;
     /// The catalog path id ("args." + key) of each argument key id, by index
     /// below FIELD_CACHE_IDS and by map above.
@@ -686,9 +686,9 @@ void decode_record_into(
     FoldEvent& ev, simdjson::dom::element root,
     dftracer::utils::dstd::StringIntern& intern, bool capture_schema = true,
     const dstd::Vector<dstd::String>* paths = nullptr,
-    const dftracer::utils::index::RecordSchema* record_schema = nullptr,
-    const dstd::Vector<const dftracer::utils::index::FieldSpec*>* path_fields =
-        nullptr,
+    const dftracer::utils::trace::index::RecordSchema* record_schema = nullptr,
+    const dstd::Vector<const dftracer::utils::trace::index::FieldSpec*>*
+        path_fields = nullptr,
     std::size_t max_children = 0, DecodeHints* hints = nullptr,
     bool skip_never_indexed = false);
 
@@ -708,9 +708,9 @@ void decode_record_into(
     FoldEvent& ev, json::Value& record,
     dftracer::utils::dstd::StringIntern& intern, bool capture_schema = true,
     const dstd::Vector<dstd::String>* paths = nullptr,
-    const dftracer::utils::index::RecordSchema* record_schema = nullptr,
-    const dstd::Vector<const dftracer::utils::index::FieldSpec*>* path_fields =
-        nullptr,
+    const dftracer::utils::trace::index::RecordSchema* record_schema = nullptr,
+    const dstd::Vector<const dftracer::utils::trace::index::FieldSpec*>*
+        path_fields = nullptr,
     std::size_t max_children = 0, DecodeHints* hints = nullptr,
     bool skip_never_indexed = false,
     dftracer::utils::dstd::InternCache* cache = nullptr);

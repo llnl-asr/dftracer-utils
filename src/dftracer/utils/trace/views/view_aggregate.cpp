@@ -7,7 +7,7 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/plan/view_resolver.h>
+#include <dftracer/utils/trace/index/plan/view_resolver.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_scan.h>
@@ -84,7 +84,7 @@ constexpr dstd::StringView RANK = "rank";
 
 }  // namespace
 
-dstd::Optional<dftracer::utils::index::plan::GroupResolver::Column>
+dstd::Optional<dftracer::utils::trace::index::plan::GroupResolver::Column>
 resolver_column(GroupKey::Kind kind) {
     switch (kind) {
         case GroupKey::Kind::FilePath:
@@ -99,14 +99,15 @@ resolver_column(GroupKey::Kind kind) {
     }
 }
 
-const dftracer::utils::index::plan::GroupResolver* ensure_resolver(
+const dftracer::utils::trace::index::plan::GroupResolver* ensure_resolver(
     const ViewPlan& plan) {
     if (plan.resolver) return plan.resolver.get();
-    dstd::Vector<dftracer::utils::index::plan::GroupResolver::Column> columns;
+    dstd::Vector<dftracer::utils::trace::index::plan::GroupResolver::Column>
+        columns;
     for (const auto& gk : plan.group_by)
         if (auto c = resolver_column(gk.kind)) columns.push_back(std::move(*c));
     if (columns.empty()) return nullptr;
-    dstd::Vector<dftracer::utils::index::plan::RowSetFile> files;
+    dstd::Vector<dftracer::utils::trace::index::plan::RowSetFile> files;
     for (const auto& f : plan.files) {
         dstd::String index{dstd::StringView(f.index_path)};
         if (index.empty())
@@ -115,14 +116,14 @@ const dftracer::utils::index::plan::GroupResolver* ensure_resolver(
             {dstd::String(dstd::StringView(f.file_path)), std::move(index)});
     }
     plan.resolver =
-        dstd::make_shared<dftracer::utils::index::plan::GroupResolver>(files,
-                                                                       columns);
+        dstd::make_shared<dftracer::utils::trace::index::plan::GroupResolver>(
+            files, columns);
     return plan.resolver.get();
 }
 
 dstd::String resolve_group_value(
-    const dftracer::utils::index::plan::GroupResolver& r, const GroupKey& gk,
-    const dstd::String& hash) {
+    const dftracer::utils::trace::index::plan::GroupResolver& r,
+    const GroupKey& gk, const dstd::String& hash) {
     const GroupKey::Kind kind = gk.kind;
     auto text = [](const dstd::String& v) {
         return dstd::String(v.data(), v.size());

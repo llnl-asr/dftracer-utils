@@ -5,9 +5,9 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/fileio/gzip_line_writer.h>
 #include <dftracer/utils/python/py_error_exception.h>
 #include <dftracer/utils/trace/views/view.h>
-#include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 
 #include <cstddef>
 #include <utility>
@@ -20,12 +20,12 @@ namespace dftracer::utils::python {
 class GzipSink : public trace::views::ExportSink {
    public:
     GzipSink(dstd::StringView path, int level) {
-        utilities::fileio::GzipWriterOptions opts;
+        fileio::GzipWriterOptions opts;
         opts.member_size = 4 * 1024 * 1024;
         opts.level = level;
         writer_.emplace(dftracer::utils::python::py_unwrap(
-            utilities::fileio::GzipLineWriterBlocking::open(dstd::String(path),
-                                                            std::move(opts))));
+            fileio::GzipLineWriterBlocking::open(dstd::String(path),
+                                                 std::move(opts))));
     }
     // Without close(), an export that failed part way still removes its
     // output, and that error is already the one reported.
@@ -55,7 +55,7 @@ class GzipSink : public trace::views::ExportSink {
     }
 
    private:
-    dstd::Optional<utilities::fileio::GzipLineWriterBlocking> writer_;
+    dstd::Optional<fileio::GzipLineWriterBlocking> writer_;
     dstd::String tail_;
 };
 

@@ -17,7 +17,7 @@
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/cache/rollup_store.h>
+#include <dftracer/utils/trace/index/cache/rollup_store.h>
 #include <dftracer/utils/trace/views/aggfold.h>
 #include <dftracer/utils/trace/views/batch_bridge.h>
 #include <dftracer/utils/trace/views/fold.h>
@@ -299,7 +299,7 @@ bool key_is_nullable(const GroupKey& gk) {
 // same FileName-from-FilePath basename derivation).
 dataframe::Series resolve_key_column(
     const dataframe::Series& hashes,
-    const dftracer::utils::index::plan::GroupResolver& resolver,
+    const dftracer::utils::trace::index::plan::GroupResolver& resolver,
     const GroupKey& gk) {
     const std::int64_t n = hashes.length();
     const bool nullable = key_is_nullable(gk) && hashes.null_count() > 0;
@@ -348,7 +348,7 @@ dstd::String cell_to_key_string(const dataframe::Series& col, std::int64_t r) {
 // the rest keep their rendered value.
 dstd::String transform_key_base(
     const GroupKey& gk, dstd::String raw,
-    const dftracer::utils::index::plan::GroupResolver* resolver) {
+    const dftracer::utils::trace::index::plan::GroupResolver* resolver) {
     if (key_is_resolved(gk.kind))
         return resolver ? resolve_group_value(*resolver, gk, raw) : raw;
     if (gk.kind == GroupKey::Kind::Cat)
@@ -509,7 +509,7 @@ dstd::Result<dataframe::DataFrame> finalize_engine_frame(
             needs_resolver ||
             (key_is_resolved(plan.group_by[j].kind) && !key_transformed[j]);
     if (needs_resolver) {
-        const dftracer::utils::index::plan::GroupResolver* resolver =
+        const dftracer::utils::trace::index::plan::GroupResolver* resolver =
             ensure_resolver(plan);
         for (std::size_t j = 0; j < ng; ++j) {
             if (!key_is_resolved(plan.group_by[j].kind) || key_transformed[j])
@@ -897,7 +897,7 @@ static double cell_as_double(const dataframe::Series& c, std::int64_t r) {
 static void append_transform_columns(
     dataframe::DataFrame& frame,
     const dstd::Vector<AggInputSpec::Transform>& transforms,
-    const dftracer::utils::index::plan::GroupResolver* resolver) {
+    const dftracer::utils::trace::index::plan::GroupResolver* resolver) {
     const std::int64_t n = frame.num_rows();
     for (const AggInputSpec::Transform& t : transforms) {
         const dataframe::Series& src = frame.columns[static_cast<std::size_t>(
@@ -932,7 +932,8 @@ class TransformSource final : public dataframe::Source {
    public:
     TransformSource(
         dataframe::LazyFrame inner, dstd::Vector<AggInputSpec::Transform> tfs,
-        dstd::SharedPtr<const dftracer::utils::index::plan::GroupResolver>
+        dstd::SharedPtr<
+            const dftracer::utils::trace::index::plan::GroupResolver>
             resolver)
         : inner_(std::move(inner)),
           tfs_(std::move(tfs)),
@@ -1002,7 +1003,8 @@ class TransformSource final : public dataframe::Source {
         dstd::Vector<std::uint32_t> ids_;
         coro::AsyncGenerator<dstd::Result<dataframe::DataFrame>> batches_;
         dstd::Vector<AggInputSpec::Transform> tfs_;
-        dstd::SharedPtr<const dftracer::utils::index::plan::GroupResolver>
+        dstd::SharedPtr<
+            const dftracer::utils::trace::index::plan::GroupResolver>
             resolver_;
         dstd::Vector<dstd::String> projection_;
         dstd::UniquePtr<dataframe::Cursor> rows_;
@@ -1011,7 +1013,7 @@ class TransformSource final : public dataframe::Source {
     dataframe::LazyFrame inner_;
     dstd::Vector<AggInputSpec::Transform> tfs_;
     // Shared, so the plan can run after the ViewPlan that built it is gone.
-    dstd::SharedPtr<const dftracer::utils::index::plan::GroupResolver>
+    dstd::SharedPtr<const dftracer::utils::trace::index::plan::GroupResolver>
         resolver_;
     dataframe::Schema schema_;
 };
@@ -1021,7 +1023,7 @@ class TransformSource final : public dataframe::Source {
 dstd::Result<dataframe::DataFrame> build_agg_input_frame(
     const dstd::Vector<FoldEvent>& events,
     const dftracer::utils::dstd::StringIntern& intern, const AggInputSpec& spec,
-    const dftracer::utils::index::plan::GroupResolver* resolver) {
+    const dftracer::utils::trace::index::plan::GroupResolver* resolver) {
     dataframe::DataFrame f =
         events_to_frame(events, intern,
                         ColumnSpec{spec.select, spec.base_time_scale,
@@ -1226,14 +1228,15 @@ namespace {
 // A paginated result is never cached.
 void persist_rollup(const ViewPlan& plan, const dataframe::AggState& state) {
     const dstd::String rdir =
-        dftracer::utils::index::cache::rollup_cache_path(plan);
+        dftracer::utils::trace::index::cache::rollup_cache_path(plan);
     if (rdir.empty()) return;
-    auto db = dftracer::utils::index::cache::open_rollup_db(
-        rdir, dftracer::utils::index::cache::CacheStore::Mode::ReadWrite);
+    auto db = dftracer::utils::trace::index::cache::open_rollup_db(
+        rdir,
+        dftracer::utils::trace::index::cache::CacheStore::Mode::ReadWrite);
     if (!db) return;
-    auto persisted = dftracer::utils::index::cache::persist_rollup(
-        *db, dftracer::utils::index::cache::plan_signature(plan),
-        dftracer::utils::index::cache::rest_signature(plan),
+    auto persisted = dftracer::utils::trace::index::cache::persist_rollup(
+        *db, dftracer::utils::trace::index::cache::plan_signature(plan),
+        dftracer::utils::trace::index::cache::rest_signature(plan),
         plan.time_bucket_us, plan.group_by, state);
     if (!persisted)
         DFTRACER_UTILS_LOG_WARN("rollup materialize skipped: {}",

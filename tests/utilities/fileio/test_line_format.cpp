@@ -7,8 +7,8 @@
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
-#include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
-#include <dftracer/utils/utilities/fileio/json_line_format.h>
+#include <dftracer/utils/fileio/gzip_line_writer.h>
+#include <dftracer/utils/fileio/json_line_format.h>
 #include <doctest/doctest.h>
 #include <testing_runtime.h>
 #include <testing_utilities.h>
@@ -18,7 +18,7 @@
 #include <limits>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities::fileio;
+using namespace dftracer::utils::fileio;
 
 namespace {
 

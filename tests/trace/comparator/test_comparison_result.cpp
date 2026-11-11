@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/domains/analysis/comparator/comparison_aggregation.h>
+#include <dftracer/utils/domains/analysis/comparator/comparison_collapse.h>
+#include <dftracer/utils/domains/analysis/comparator/comparison_result.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/agg_query.h>
-#include <dftracer/utils/trace/comparator/comparison_aggregation.h>
-#include <dftracer/utils/trace/comparator/comparison_collapse.h>
-#include <dftracer/utils/trace/comparator/comparison_result.h>
 #include <doctest/doctest.h>
 
 #include <algorithm>
@@ -14,7 +14,7 @@
 
 using namespace dftracer::utils;
 
-using namespace dftracer::utils::trace::comparator;
+using namespace dftracer::utils::domains::analysis::comparator;
 using namespace dftracer::utils::trace;
 
 // `m2` holds the central second moment, sum((x - mean)^2), about the running
@@ -309,7 +309,7 @@ TEST_SUITE("ComparisonFilter") {
         AggKey key;
         key.cat = merged.strings().get_or_insert("posix");
         key.name = merged.strings().get_or_insert("read");
-        index::schemas::dft::agg::AggPartial p;
+        trace::index::schemas::dft::agg::AggPartial p;
         for (uint64_t v : {10, 20, 30, 40, 50}) {
             ++p.count;
             p.duration.add(v);
@@ -331,7 +331,7 @@ TEST_SUITE("ComparisonFilter") {
             AggKey key;
             key.cat = merged.strings().get_or_insert("posix");
             key.name = merged.strings().get_or_insert(name);
-            index::schemas::dft::agg::AggPartial p;
+            trace::index::schemas::dft::agg::AggPartial p;
             p.count = 1;
             p.ts = ts;
             p.te = te;
@@ -342,15 +342,17 @@ TEST_SUITE("ComparisonFilter") {
         };
         // Thread 3 of pid 2 and pid 1 are two threads; pid 2 touches file 8
         // twice, across both names, which is one pair.
-        row("read", 90, 400, 310, [](index::schemas::dft::agg::AggPartial& p) {
-            p.observe(1, 1, 7);
-            p.observe(1, 2, 7);
-            p.observe(2, 3, 8);
-        });
-        row("write", 95, 96, 1, [](index::schemas::dft::agg::AggPartial& p) {
-            p.observe(2, 3, 8);
-            p.observe(2, 3, 0);
-        });
+        row("read", 90, 400, 310,
+            [](trace::index::schemas::dft::agg::AggPartial& p) {
+                p.observe(1, 1, 7);
+                p.observe(1, 2, 7);
+                p.observe(2, 3, 8);
+            });
+        row("write", 95, 96, 1,
+            [](trace::index::schemas::dft::agg::AggPartial& p) {
+                p.observe(2, 3, 8);
+                p.observe(2, 3, 0);
+            });
         auto meta = extract_metadata(merged, ComparisonFilter{}, 9);
         CHECK(meta.process_count == 2);
         CHECK(meta.thread_count == 3);

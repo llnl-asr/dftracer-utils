@@ -11,15 +11,15 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/tuple.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/index.h>
-#include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/plan/prune.h>
-#include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
-#include <dftracer/utils/index/schemas/dft/agg/chunk_columns.h>
-#include <dftracer/utils/index/schemas/dft/agg/system_metrics.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
-#include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/fileio/file_helpers.h>
+#include <dftracer/utils/trace/index/index.h>
+#include <dftracer/utils/trace/index/indexer.h>
+#include <dftracer/utils/trace/index/plan/prune.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/agg_store.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_config.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/chunk_columns.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/system_metrics.h>
+#include <dftracer/utils/trace/index/tables.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -34,7 +34,7 @@
 #include <tuple>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::index;
+using namespace dftracer::utils::trace::index;
 
 namespace {
 
@@ -229,11 +229,10 @@ Blocks blocks_of(const dstd::String& gz, const dstd::String& idx) {
     const auto index_path =
         dstd::String(trace::internal::determine_index_path(gz, idx));
     const auto snapshot =
-        dftu_utils_test::ok(index::plan::open_snapshot(index_path));
-    const auto file =
-        snapshot.file(index::store::internal::get_logical_path(gz));
+        dftu_utils_test::ok(trace::index::plan::open_snapshot(index_path));
+    const auto file = snapshot.file(fileio::get_logical_path(gz));
     REQUIRE(file.has_value());
-    dftu_utils_test::ok(index::for_each_agg_chunk_columns(
+    dftu_utils_test::ok(trace::index::for_each_agg_chunk_columns(
         snapshot, *file,
         [&](std::uint64_t, const schemas::dft::agg::ChunkColumns& block) {
             ++out.total;

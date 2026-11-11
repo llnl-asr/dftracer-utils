@@ -143,9 +143,9 @@ dftracer/utils/duql/error.h
 dftracer/utils/duql/query.h
 dftracer/utils/duql/types.h
 dftracer/utils/duql/value_map.h
-dftracer/utils/index/abi.h
-dftracer/utils/index/indexer.h
-dftracer/utils/index/schemas/dft/agg/aggregation_config.h
+dftracer/utils/trace/index/abi.h
+dftracer/utils/trace/index/indexer.h
+dftracer/utils/trace/index/schemas/dft/agg/aggregation_config.h
 dftracer/utils/json/value.h
 dftracer/utils/memory/allocator.h
 dftracer/utils/memory/config.h

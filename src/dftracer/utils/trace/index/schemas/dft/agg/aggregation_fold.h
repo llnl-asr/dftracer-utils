@@ -1,0 +1,343 @@
+// SPDX-License-Identifier: MIT
+#ifndef DFTRACER_UTILS_TRACE_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_FOLD_H
+#define DFTRACER_UTILS_TRACE_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_FOLD_H
+
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/test_probes.h>
+#include <dftracer/utils/dstd/error.h>
+#include <dftracer/utils/dstd/hash/splitmix64.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/ptr_hash.h>
+#include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/trace/event.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/agg_partial.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/agg_partial_update.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_config.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_core.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_intern.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/chunk_columns.h>
+#include <dftracer/utils/trace/views/fold.h>
+#include <dftracer/utils/trace/views/fold_event.h>
+
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <variant>
+
+namespace dftracer::utils::trace::index {
+class FileBuild;
+}
+
+namespace dftracer::utils::trace::index::schemas::dft::agg {
+
+/// The closed rows a fold that writes through holds before its first run. For
+/// tests.
+inline std::atomic<std::uint64_t> g_agg_run_bytes{
+    common::constants::file_admission::MIN_SPILL_RUN_BYTES};
+#if DFTRACER_UTILS_TEST_PROBES
+/// Runs staged so far by folds that write through. For tests.
+inline std::atomic<std::uint64_t> g_agg_runs_staged{0};
+#endif
+
+/// The aggregation core's Accessor over an owned FoldEvent. hhash and fhash
+/// come from the POD's dedicated fields, not from `args`. The metric arg values
+/// clamp like ArgsValueProxy::get<uint64>.
+class PodAccessor {
+   public:
+    PodAccessor(const trace::views::detail::FoldEvent& ev,
+                const dftracer::utils::dstd::StringIntern& intern,
+                const MetricArgIds& metric_ids)
+        : ev_(ev), intern_(intern), metric_ids_(metric_ids) {}
+
+    bool has_phase() const { return ev_.phase != trace::RecordPhase::Unknown; }
+    bool is_metadata() const {
+        return ev_.phase == trace::RecordPhase::Metadata;
+    }
+    bool is_counter() const { return ev_.phase == trace::RecordPhase::Counter; }
+    bool is_aggregated() const {
+        return ev_.phase == trace::RecordPhase::Aggregated;
+    }
+    bool is_profile() const { return is_counter() && cat() != "sys"; }
+    bool is_system() const { return is_counter() && cat() == "sys"; }
+    dstd::StringView name() const { return resolve(ev_.name_id); }
+    dstd::StringView cat() const { return resolve(ev_.cat_id); }
+    std::uint64_t pid() const { return ev_.pid; }
+    std::uint64_t tid() const { return ev_.tid; }
+    std::uint64_t ts() const { return ev_.ts; }
+    std::uint64_t dur() const { return ev_.dur; }
+    bool has_dur() const { return ev_.has_dur; }
+
+    dstd::StringView arg_string(dstd::StringView k) const {
+        if (k == "hhash") return resolve(ev_.hhash_id);
+        if (k == "fhash") return resolve(ev_.fhash_id);
+        const auto* v = find(k);
+        if (v)
+            if (const auto* id = std::get_if<std::uint32_t>(v))
+                return resolve(*id);
+        return {};
+    }
+
+    void metric_args(MetricArgs& m) const {
+        for (const auto& [kid, val] : ev_.args) {
+            for (std::size_t i = 0; i < METRIC_ARG_COUNT; ++i) {
+                if (metric_ids_.ids[i] != kid) continue;
+                m.add(static_cast<MetricArg>(i), as_uint(val));
+                break;
+            }
+        }
+    }
+
+   private:
+    static constexpr std::uint32_t NO_ID =
+        dftracer::utils::dstd::StringIntern::NO_ID;
+
+    using ArgValue = trace::views::detail::FoldEvent::ArgValue;
+
+    static std::uint64_t as_uint(const ArgValue& v) {
+        if (const auto* d = std::get_if<double>(&v)) return clamp_uint(*d);
+        if (const auto* i = std::get_if<std::int64_t>(&v))
+            return *i < 0 ? 0 : static_cast<std::uint64_t>(*i);
+        if (const auto* u = std::get_if<std::uint64_t>(&v)) return *u;
+        return 0;
+    }
+    const ArgValue* find(dstd::StringView key) const {
+        if (ev_.args.empty()) return nullptr;
+        const std::uint32_t id = intern_.find(key);
+        if (id == NO_ID) return nullptr;
+        for (const auto& [kid, v] : ev_.args)
+            if (kid == id) return &v;
+        return nullptr;
+    }
+    dstd::StringView resolve(std::uint32_t id) const {
+        return id == NO_ID ? dstd::StringView{} : intern_.resolve(id);
+    }
+    // Reproduce ArgsValueProxy::get<uint64_t> applied to a double.
+    static std::uint64_t clamp_uint(double d) {
+        if (d >= 0 &&
+            d <= static_cast<double>(std::numeric_limits<std::uint64_t>::max()))
+            return static_cast<std::uint64_t>(d);
+        return 0;
+    }
+
+    const trace::views::detail::FoldEvent& ev_;
+    const dftracer::utils::dstd::StringIntern& intern_;
+    const MetricArgIds& metric_ids_;
+};
+
+/// Builds the chunk partials, column blocks and dictionary entries of a file as
+/// a fold on the fused scan. `build_intern` resolves the ids of the events.
+/// `agg_intern` is the per-index table whose ids the partial keys embed. The
+/// time-bound outputs are returned out-of-band.
+class AggregationFold : public trace::views::detail::Fold {
+   public:
+    AggregationFold(dftracer::utils::dstd::StringIntern& build_intern,
+                    trace::index::schemas::dft::agg::AggInternPtr agg_intern,
+                    trace::index::schemas::dft::agg::AggregationConfig config)
+        : build_intern_(&build_intern),
+          metric_ids_(build_intern),
+          agg_intern_(std::move(agg_intern)),
+          config_(std::move(config)) {}
+
+    bool accepts(const trace::views::detail::ScanShape&) const override {
+        return true;
+    }
+    bool needs_args() const override { return true; }
+
+    dstd::UniquePtr<trace::views::detail::Fold> slice() const override {
+        auto made = dstd::make_unique<AggregationFold>(*build_intern_,
+                                                       agg_intern_, config_);
+        made->has_file_ = has_file_;
+        return made;
+    }
+
+    dstd::Result<void> step(
+        const trace::views::detail::FoldBatch& batch) override {
+        if (error_) return {};
+        for (const auto& ev : batch.events) {
+            PodAccessor acc(ev, *build_intern_, metric_ids_);
+            if (!partial_holds(acc)) continue;
+            trace::index::schemas::dft::agg::aggregate_event(acc, state_,
+                                                             config_);
+            if (has_file_) {
+                if (batch.unit.checkpoint_idx != chunk_) {
+                    close_chunk();
+                    chunk_ = batch.unit.checkpoint_idx;
+                }
+                add_to_partial(ev, acc);
+                if (acc.is_system()) add_to_columns(ev);
+            }
+        }
+        return {};
+    }
+
+    void seal_unit(const trace::views::detail::ScanUnit&) override {}
+    void drop_unit(const trace::views::detail::ScanUnit&) override {}
+    dstd::Result<void> merge(trace::views::detail::Fold& other) override;
+
+    coro::CoroTask<bool> finalize(
+        const trace::views::detail::CoverageSet&) override {
+        co_return false;
+    }
+
+    /// Emits the partials, the column blocks and the referenced dictionary
+    /// entries into `build`. A column block holds only the system counter rows
+    /// (phase Counter, category sys) of its chunk, and a chunk with none has no
+    /// block. Finishes the Agg extension. The commit replaces the file's copy
+    /// of it. Ends the process on a fold with no file. Returns the error a
+    /// string id collision left.
+    dstd::Result<void> write(trace::index::FileBuild& build);
+
+    /// Lets the fold put its closed rows into `build` once they pass a run's
+    /// size, so a large file does not hold them all until write(), which must
+    /// be given the same `build`. Marks the fold as one that writes a file's
+    /// data.
+    void write_through(trace::index::FileBuild& build);
+    /// Whether rows wait in the build for drain().
+    bool drain_due() const { return drain_due_; }
+    /// Puts the rows that wait and stages them, so their memory goes, waiting
+    /// for the task that writes the build now. Rows left waiting go with
+    /// write().
+    coro::CoroTask<void> drain();
+
+    std::uint64_t min_time_bucket() const { return state_.min_time_bucket; }
+    std::uint64_t max_time_bucket() const { return state_.max_time_bucket; }
+    std::size_t events_processed() const { return state_.events_processed; }
+
+   private:
+    static constexpr std::uint32_t NO_ID =
+        dftracer::utils::dstd::StringIntern::NO_ID;
+
+    struct SlotKey {
+        std::uint32_t cat;
+        std::uint32_t name;
+        std::uint32_t host;
+        std::uint32_t extra;
+        PartialKind kind;
+
+        bool operator==(const SlotKey&) const = default;
+    };
+
+    struct SlotKeyHash {
+        using is_avalanching = void;
+        std::size_t operator()(const SlotKey& k) const noexcept {
+            using dftracer::utils::dstd::hash::splitmix64;
+            return static_cast<std::size_t>(splitmix64(
+                splitmix64(splitmix64((std::uint64_t{k.cat} << 32) | k.name) ^
+                           ((std::uint64_t{k.host} << 32) | k.extra)) ^
+                static_cast<std::uint64_t>(k.kind)));
+        }
+    };
+
+    struct ThreadBin {
+        std::uint64_t pid;
+        std::uint64_t tid;
+        std::uint32_t at;
+    };
+
+    /// A slot is reused by every chunk and holds nothing until `used`.
+    struct Slot {
+        AggPartial partial;
+        dftracer::utils::dstd::Vector<ThreadBin> threads;
+        SlotKey key;
+        std::uint32_t last_thread = 0;
+        bool used = false;
+
+        Slot(double accuracy, SlotKey k) : partial(accuracy), key(k) {}
+    };
+
+    /// The stored value, layout header included, in a buffer of exactly its
+    /// size.
+    struct Closed {
+        dftracer::utils::dstd::Vector<std::uint8_t> value;
+        std::uint64_t chunk;
+        SlotKey key;
+    };
+
+    struct ClosedColumns {
+        dftracer::utils::dstd::Vector<std::uint8_t> value;
+        std::uint64_t chunk;
+    };
+
+    void add_to_partial(const trace::views::detail::FoldEvent& ev,
+                        const PodAccessor& acc);
+    void add_to_file_partial(const trace::views::detail::FoldEvent& ev,
+                             const PodAccessor& acc, PartialKind kind);
+    void fold_into_slot(Slot& slot, const PodAccessor& acc);
+    /// Writes the slot's row into `into` and empties the slot.
+    void close_slot(Slot& slot, dstd::Vector<Closed>& into);
+    void add_to_columns(const trace::views::detail::FoldEvent& ev);
+    TimeBin& bin_of(Slot& slot, std::uint64_t pid, std::uint64_t tid,
+                    std::uint64_t bin);
+    /// The id of `text` in the aggregation table. A deterministic id collision
+    /// is kept in `error_`, which write() reports, and gives NO_ID.
+    std::uint32_t agg_id(dstd::StringView text);
+    /// Cached by `build_id`.
+    std::uint32_t root_id(dstd::Vector<std::uint32_t>& cache,
+                          std::uint32_t build_id, bool lower);
+    void close_chunk();
+    void close_columns();
+    /// Puts the closed rows into `build` and frees them.
+    void put_closed(trace::index::FileBuild& build);
+    void release_closed();
+    void finish_rows(trace::index::FileBuild& build);
+
+    dftracer::utils::dstd::StringIntern* build_intern_;
+    trace::index::schemas::dft::agg::MetricArgIds metric_ids_;
+    trace::index::schemas::dft::agg::AggInternPtr agg_intern_;
+    trace::index::schemas::dft::agg::AggregationConfig config_;
+    /// The fold writes a file's data, so it emits rows. A fold that is only
+    /// merged into one does not.
+    bool has_file_ = false;
+    trace::index::schemas::dft::agg::AggState state_;
+
+    std::uint64_t chunk_ = UINT64_MAX;
+    dftracer::utils::dstd::Vector<Slot> slots_;
+    dftracer::utils::dstd::HashMap<SlotKey, std::uint32_t, SlotKeyHash>
+        slot_of_;
+    std::uint32_t last_slot_ = NO_ID;
+    /// The per-file slots: key.cat is the file id, the rest of the key is
+    /// unused.
+    dftracer::utils::dstd::Vector<Slot> file_slots_;
+    dftracer::utils::dstd::HashMap<SlotKey, std::uint32_t, SlotKeyHash>
+        file_slot_of_;
+    std::uint32_t last_file_slot_ = NO_ID;
+    std::uint32_t last_file_ = NO_ID;
+    PartialKind last_file_kind_ = PartialKind::Event;
+    std::uint32_t last_cat_ = NO_ID;
+    std::uint32_t last_name_ = NO_ID;
+    std::uint32_t last_host_ = NO_ID;
+    PartialKind last_kind_ = PartialKind::Event;
+    std::uint32_t empty_id_ = NO_ID;
+    dstd::String extra_buf_;
+    dftracer::utils::dstd::Vector<std::uint32_t> cat_ids_;
+    dftracer::utils::dstd::Vector<std::uint32_t> name_ids_;
+    dftracer::utils::dstd::Vector<std::uint32_t> host_ids_;
+    dftracer::utils::dstd::Vector<std::uint32_t> fhash_ids_;
+    dftracer::utils::dstd::Vector<std::uint32_t> path_ids_;
+    /// The column block keeps the category case. The partials use `cat_ids_`.
+    dftracer::utils::dstd::Vector<std::uint32_t> cat_text_ids_;
+    dftracer::utils::dstd::Vector<std::uint8_t> scratch_;
+    dftracer::utils::dstd::Vector<Closed> closed_;
+    dftracer::utils::dstd::Vector<Closed> closed_files_;
+    trace::index::schemas::dft::agg::ChunkColumnBuilder columns_;
+    dftracer::utils::dstd::Vector<ClosedColumns> closed_columns_;
+    /// Duplicates included. Cleared once written.
+    dftracer::utils::dstd::Vector<std::uint32_t> referenced_;
+    std::uint64_t closed_bytes_ = 0;
+    trace::index::FileBuild* through_ = nullptr;
+    bool drain_due_ = false;
+    std::size_t through_runs_ = 0;
+    /// The first failure to give a string an id. The rows are not valid.
+    dstd::Optional<dstd::Error> error_;
+};
+
+}  // namespace dftracer::utils::trace::index::schemas::dft::agg
+
+#endif  // DFTRACER_UTILS_TRACE_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_FOLD_H

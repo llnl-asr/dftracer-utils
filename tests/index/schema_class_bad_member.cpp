@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-// Must not compile: a schema class member that is not an index::Field.
+// Must not compile: a schema class member that is not an trace::index::Field.
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/schema_class.h>
+#include <dftracer/utils/trace/index/schema_class.h>
 
 using namespace dftracer::utils;
 
@@ -13,5 +13,5 @@ struct BadMember {
 
 int main() {
     return static_cast<int>(
-        dftracer::utils::index::schema_spec<BadMember>().fields.size());
+        dftracer::utils::trace::index::schema_spec<BadMember>().fields.size());
 }

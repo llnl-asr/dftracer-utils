@@ -2,7 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/utilities/arrow/column_builder.h>
+#include <dftracer/utils/trace/arrow/column_builder.h>
 #include <doctest/doctest.h>
 #include <nanoarrow/nanoarrow.h>
 #include <task_result.h>
@@ -10,8 +10,8 @@
 #include <dftracer/utils/python/schema_reconcile.cpp>
 
 using namespace dftracer::utils;
-using utilities::arrow::ColumnType;
-using utilities::arrow::RecordBatchBuilder;
+using trace::arrow::ColumnType;
+using trace::arrow::RecordBatchBuilder;
 
 namespace {
 

@@ -5,12 +5,12 @@
 #include <dftracer/utils/dataframe/internal/budget_share.h>
 #include <dftracer/utils/dataframe/internal/errors.h>
 #include <dftracer/utils/dataframe/lazy/common.h>
+#include <dftracer/utils/dataframe/query/vectorize.h>
 #include <dftracer/utils/dstd/hash/partition.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/duql/vectorize.h>
 
 #include <algorithm>
 #include <atomic>
@@ -73,7 +73,7 @@ bool row_key(dstd::String& text, const dstd::Vector<Series>& keys,
              std::int64_t r) {
     text.clear();
     for (const Series& k : keys)
-        if (!duql::append_cell_key(text, k, r)) return false;
+        if (!dataframe::query::append_cell_key(text, k, r)) return false;
     return true;
 }
 
@@ -173,7 +173,7 @@ dstd::Result<void> GraceJoin::split(const DataFrame& rows, bool right_side,
         text.clear();
         bool keyed = true;
         for (const std::size_t k : key)
-            if (!duql::append_cell_key(text, flats[k], r)) {
+            if (!dataframe::query::append_cell_key(text, flats[k], r)) {
                 keyed = false;
                 break;
             }
@@ -379,8 +379,8 @@ coro::CoroTask<dstd::Result<DataFrame>> GraceJoin::lookup_heads(
                 continue;
             const DataFrame& head = frames[h.part];
             for (const std::size_t c : values)
-                if (!duql::same_cell(head.columns[c], h.row, block->columns[c],
-                                     r)) {
+                if (!dataframe::query::same_cell(head.columns[c], h.row,
+                                                 block->columns[c], r)) {
                     conflicts[static_cast<std::size_t>(i)] =
                         static_cast<std::int64_t>(c);
                     break;

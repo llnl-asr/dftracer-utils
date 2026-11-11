@@ -7,21 +7,21 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/duql/lookup.h>
-#include <dftracer/utils/index/plan/prefilter.h>
 #include <dftracer/utils/json/json.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/json/value.h>
 #include <dftracer/utils/json/value_access.h>
 #include <dftracer/utils/json/value_path.h>
+#include <dftracer/utils/trace/index/plan/prefilter.h>
+#include <dftracer/utils/trace/reader/file_process_types.h>
+#include <dftracer/utils/trace/reader/indexed_file_reader_utility.h>
+#include <dftracer/utils/trace/reader/internal/reader_factory.h>
+#include <dftracer/utils/trace/reader/internal/stream_config.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 #include <dftracer/utils/trace/views/view_scanner_utility.h>
-#include <dftracer/utils/utilities/fileio/file_process_types.h>
-#include <dftracer/utils/utilities/fileio/indexed_file_reader_utility.h>
-#include <dftracer/utils/utilities/reader/internal/reader_factory.h>
-#include <dftracer/utils/utilities/reader/internal/stream_config.h>
 #include <simdjson.h>
 
 #include <cstring>
@@ -51,8 +51,8 @@ bool in_role_window(simdjson::dom::element root, const ViewDefinition& view) {
     if (t.is_number()) {
         ts = t.get<double>() * view.time_factor;
     } else if (t.is_string()) {
-        const auto us =
-            dftracer::utils::index::iso8601_micros(t.get<dstd::StringView>());
+        const auto us = dftracer::utils::trace::index::iso8601_micros(
+            t.get<dstd::StringView>());
         if (!us) return false;
         ts = static_cast<double>(*us);
     } else {
@@ -145,7 +145,8 @@ bool in_role_window(json::Value& root, const ViewDefinition& view) {
                 case json::Value::Type::String: {
                     const auto text = t.as_string();
                     const auto us =
-                        text ? dftracer::utils::index::iso8601_micros(*text)
+                        text ? dftracer::utils::trace::index::iso8601_micros(
+                                   *text)
                              : dstd::nullopt;
                     if (!us) return false;
                     ts = static_cast<double>(*us);
@@ -461,29 +462,29 @@ ViewScannerUtility::operator()(const ViewScannerInput& input) {
 
     // Metadata lines bypass the query, so only a scan returning none may drop
     // lines unparsed.
-    dstd::Optional<index::plan::Prefilter> prefilter;
+    dstd::Optional<trace::index::plan::Prefilter> prefilter;
     if (use_query && input.view.prefilter && !input.view.include_metadata)
         prefilter.emplace(*query);
-    dstd::Optional<index::plan::Prefilter::Gate> gate;
+    dstd::Optional<trace::index::plan::Prefilter::Gate> gate;
     if (prefilter && !prefilter->empty()) gate.emplace(*prefilter);
 
     auto reader_input =
-        utilities::fileio::IndexedReadInput::from_file(input.file_path)
+        trace::reader::IndexedReadInput::from_file(input.file_path)
             .with_index(input.index_path);
     if (input.checkpoint_size > 0) {
         reader_input.with_checkpoint_size(input.checkpoint_size);
     }
-    dstd::SharedPtr<utilities::reader::internal::Reader> reader;
+    dstd::SharedPtr<trace::reader::internal::Reader> reader;
     if (input.indexer) {
         auto made =
-            utilities::reader::internal::ReaderFactory::create(input.indexer);
+            trace::reader::internal::ReaderFactory::create(input.indexer);
         if (!made) {
             co_yield dstd::Result<ViewScannerBatch>(made.error());
             co_return;
         }
         reader = std::move(*made);
     } else {
-        utilities::fileio::IndexedFileReaderUtility reader_utility;
+        trace::reader::IndexedFileReaderUtility reader_utility;
         auto made = co_await reader_utility(reader_input);
         if (!made) {
             co_yield dstd::Result<ViewScannerBatch>(made.error());
@@ -500,10 +501,9 @@ ViewScannerUtility::operator()(const ViewScannerInput& input) {
     // and skips the resulting empty leading line, so nothing is dropped or
     // doubled.
     auto opened = reader->stream(
-        utilities::reader::internal::StreamConfig()
-            .stream_type(
-                utilities::reader::internal::StreamType::MultiLinesBytes)
-            .range_type(utilities::reader::internal::RangeType::ByteRange)
+        trace::reader::internal::StreamConfig()
+            .stream_type(trace::reader::internal::StreamType::MultiLinesBytes)
+            .range_type(trace::reader::internal::RangeType::ByteRange)
             .buffer_size(input.batch_size)
             .extend_to_line_boundary(true)
             .from(input.start_byte)
@@ -634,13 +634,13 @@ ViewScannerUtility::operator()(const ViewScannerInput& input) {
 
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/utilities/arrow/column_builder.h>
+#include <dftracer/utils/trace/arrow/column_builder.h>
 
 namespace dftracer::utils::trace::views {
 
-using utilities::arrow::ArrowExportResult;
-using utilities::arrow::ColumnType;
-using utilities::arrow::RecordBatchBuilder;
+using trace::arrow::ArrowExportResult;
+using trace::arrow::ColumnType;
+using trace::arrow::RecordBatchBuilder;
 
 dstd::Result<ArrowExportResult> ViewScannerBatch::to_arrow() const {
     RecordBatchBuilder builder;

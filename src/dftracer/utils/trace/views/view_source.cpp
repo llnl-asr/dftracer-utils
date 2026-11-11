@@ -24,9 +24,9 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/builder.h>
 #include <dftracer/utils/duql/query.h>
-#include <dftracer/utils/index/index.h>
-#include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/index.h>
+#include <dftracer/utils/trace/index/plan/prune.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
 #include <dftracer/utils/trace/views/stream_row_fold.h>
@@ -531,28 +531,32 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
         if (!built.has_value()) co_return false;
 
         bool any = false;
-        dstd::Map<dstd::String, dftracer::utils::index::Snapshot> snapshots;
+        dstd::Map<dstd::String, dftracer::utils::trace::index::Snapshot>
+            snapshots;
         for (const ViewFile& f : files_) {
             // One snapshot per index for the whole call. A failed open leaves
             // none, and prune_file reports it.
-            const dftracer::utils::index::Snapshot* snapshot = nullptr;
+            const dftracer::utils::trace::index::Snapshot* snapshot = nullptr;
             if (!f.index_path.empty()) {
                 auto at = snapshots.find(f.index_path);
                 if (at == snapshots.end())
-                    if (auto taken = index::plan::open_snapshot(f.index_path))
+                    if (auto taken =
+                            trace::index::plan::open_snapshot(f.index_path))
                         at = snapshots.emplace(f.index_path, std::move(*taken))
                                  .first;
                 if (at != snapshots.end()) snapshot = &at->second;
             }
             // GCC 12 destroys a temporary built inside co_await twice.
-            index::plan::PruneRequest prune_req{
+            trace::index::plan::PruneRequest prune_req{
                 .index_path = dstd::String(dstd::StringView(f.index_path)),
                 .file_path = dstd::String(dstd::StringView(f.file_path)),
                 .query = &built.value(),
                 .snapshot = snapshot,
-                .metadata = metadata_rows_ ? index::plan::MetadataUse::Records
-                                           : index::plan::MetadataUse::None};
-            auto out = co_await index::plan::prune_file(std::move(prune_req));
+                .metadata = metadata_rows_
+                                ? trace::index::plan::MetadataUse::Records
+                                : trace::index::plan::MetadataUse::None};
+            auto out =
+                co_await trace::index::plan::prune_file(std::move(prune_req));
             if (!out->file_may_match) {
                 dyn_prune_->exclude_file(f.file_path);
                 any = true;

@@ -37,7 +37,7 @@ namespace dftracer::utils::dstd {
 class StringIntern;
 }
 
-namespace dftracer::utils::index::extensions {}
+namespace dftracer::utils::trace::index::extensions {}
 
 namespace dftracer::utils::trace::views {
 
@@ -965,8 +965,8 @@ class View : public dataframe::LazyOps<View> {
     /// as in for_each_batch.
     dataframe::LazyFrame branch(SessionBranch attach) const;
     /// branch() for a branch whose result is a Deferred<T>, such as
-    /// plugins::Plugins::attach. The result is read from a slot the plan owns,
-    /// so collect one such result at a time.
+    /// domains::plugins::Plugins::attach. The result is read from a slot the
+    /// plan owns, so collect one such result at a time.
     template <class T>
     dataframe::LazyResult<T> branch(
         dstd::Function<Deferred<T>(ViewSession&)> attach) const {

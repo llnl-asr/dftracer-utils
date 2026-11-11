@@ -6,12 +6,12 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/domains/plugins/config.h>
+#include <dftracer/utils/domains/plugins/plugins.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/plugins/config.h>
-#include <dftracer/utils/plugins/plugins.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
@@ -52,8 +52,9 @@ ViewFile make_trace(dftu_utils_test::TestEnvironment& env) {
 // One worker: the plugin's checks write into a process-global status table
 // that is not synchronized, since every worker would compute the same
 // deterministic value for a given check.
-plugins::PluginRun run_single(const plugins::Plugins& set, const View& view) {
-    plugins::PluginRun out;
+domains::plugins::PluginRun run_single(const domains::plugins::Plugins& set,
+                                       const View& view) {
+    domains::plugins::PluginRun out;
     Runtime rt(1);
     auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
         auto run = co_await set.run(view);
@@ -66,7 +67,7 @@ plugins::PluginRun run_single(const plugins::Plugins& set, const View& view) {
     return out;
 }
 
-int32_t reference_ok(plugins::PluginRun& run) {
+int32_t reference_ok(domains::plugins::PluginRun& run) {
     auto it = run.results.results().find("reference_ok");
     REQUIRE(it != run.results.results().end());
     const auto& bytes = std::get<dstd::Vector<std::byte>>(it->second);
@@ -79,7 +80,7 @@ int32_t reference_ok(plugins::PluginRun& run) {
 // The reference plugin's tier-2 register_state result: dur summed across
 // every event by the plugin's own dur_sum_update/dur_sum_merge, finalized on
 // the merged master fold.
-std::uint64_t reference_dur_sum(plugins::PluginRun& run) {
+std::uint64_t reference_dur_sum(domains::plugins::PluginRun& run) {
     auto it = run.results.results().find("reference_plugin.dur_sum");
     REQUIRE(it != run.results.results().end());
     const auto& bytes = std::get<dstd::Vector<std::byte>>(it->second);
@@ -98,8 +99,8 @@ std::uint64_t expected_dur_sum() {
     return total;
 }
 
-plugins::ConfigTree config_of(const dstd::String& json) {
-    auto tree = plugins::ConfigTree::from_json_string(json);
+domains::plugins::ConfigTree config_of(const dstd::String& json) {
+    auto tree = domains::plugins::ConfigTree::from_json_string(json);
     REQUIRE(tree.has_value());
     return std::move(*tree);
 }
@@ -110,7 +111,7 @@ TEST_CASE("reference_plugin: every service reports OK") {
     dftu_utils_test::TestEnvironment env(0);
     REQUIRE(env.is_valid());
 
-    auto set = plugins::Plugins::builder()
+    auto set = domains::plugins::Plugins::builder()
                    .add(REFERENCE_PLUGIN_PATH,
                         config_of(R"({"workdir": ")" + env.dir() + R"("})"))
                    .build();
@@ -119,7 +120,7 @@ TEST_CASE("reference_plugin: every service reports OK") {
     REQUIRE(set.has_value());
 
     View view = View::from_files({make_trace(env)});
-    plugins::PluginRun run = run_single(*set, view);
+    domains::plugins::PluginRun run = run_single(*set, view);
 
     const dstd::String report =
         test_plugin_common::result_text(run, "reference_report");
@@ -134,7 +135,7 @@ TEST_CASE("reference_plugin: a forced-missing service fails loudly") {
     dftu_utils_test::TestEnvironment env(0);
     REQUIRE(env.is_valid());
 
-    auto set = plugins::Plugins::builder()
+    auto set = domains::plugins::Plugins::builder()
                    .add(REFERENCE_PLUGIN_PATH,
                         config_of(R"({"workdir": ")" + env.dir() +
                                   R"(", "force_missing": "dftu.svc.agg@1"})"))
@@ -144,7 +145,7 @@ TEST_CASE("reference_plugin: a forced-missing service fails loudly") {
     REQUIRE(set.has_value());
 
     View view = View::from_files({make_trace(env)});
-    plugins::PluginRun run = run_single(*set, view);
+    domains::plugins::PluginRun run = run_single(*set, view);
 
     const dstd::String report =
         test_plugin_common::result_text(run, "reference_report");

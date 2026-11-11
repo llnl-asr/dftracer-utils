@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/detail/coro.h>
+#include <dftracer/utils/domains/server/http_request.h>
+#include <dftracer/utils/domains/server/http_response.h>
+#include <dftracer/utils/domains/server/router.h>
+#include <dftracer/utils/domains/server/trace_index.h>
+#include <dftracer/utils/domains/server/viz_api.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/fileio/compress/gzip_rechunker.h>
+#include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/server/http_request.h>
-#include <dftracer/utils/server/http_response.h>
-#include <dftracer/utils/server/router.h>
-#include <dftracer/utils/server/trace_index.h>
-#include <dftracer/utils/server/viz_api.h>
-#include <dftracer/utils/utilities/fileio/compress/gzip_rechunker.h>
-#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
 #include <testing_utilities.h>
@@ -20,7 +20,7 @@
 #include <fstream>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::server;
+using namespace dftracer::utils::domains::server;
 
 namespace {
 
@@ -54,7 +54,7 @@ dstd::String make_trace(int n) {
 
 void write_single_member(const dstd::String& path,
                          const dstd::String& content) {
-    utilities::fileio::compress::GzipMemberCompressor comp;
+    fileio::compress::GzipMemberCompressor comp;
     auto member = comp.compress_member(content.data(), content.size());
     REQUIRE(member.has_value());
     dftu_utils_test::FileOut ofs(path);
@@ -104,11 +104,11 @@ TEST_SUITE("viz_stats_fastpath") {
             Runtime rt(4);
             auto task = coro::with_scope(
                 [&](coro::Scope&) -> coro::CoroTask<dstd::Result<void>> {
-                    auto rechunked = co_await utilities::fileio::compress::
-                        gzip_rechunk_to_members(dstd::String(src),
-                                                dstd::String(gz),
-                                                /*member_size=*/4096,
-                                                /*level=*/6);
+                    auto rechunked =
+                        co_await fileio::compress::gzip_rechunk_to_members(
+                            dstd::String(src), dstd::String(gz),
+                            /*member_size=*/4096,
+                            /*level=*/6);
                     if (!rechunked) co_return rechunked.error();
                     co_return co_await index.initialize();
                 });

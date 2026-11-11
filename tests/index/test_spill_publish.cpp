@@ -9,17 +9,17 @@
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
-#include <dftracer/utils/index/build/aggregation_run.h>
-#include <dftracer/utils/index/build/batch_builder.h>
-#include <dftracer/utils/index/index.h>
-#include <dftracer/utils/index/plan/prune.h>
-#include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
-#include <dftracer/utils/index/store/internal/helpers.h>
-#include <dftracer/utils/index/store/root_layout.h>
-#include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/fileio/file_helpers.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/build/aggregation_run.h>
+#include <dftracer/utils/trace/index/build/batch_builder.h>
+#include <dftracer/utils/trace/index/index.h>
+#include <dftracer/utils/trace/index/plan/prune.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/agg_store.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_fold.h>
+#include <dftracer/utils/trace/index/store/root_layout.h>
+#include <dftracer/utils/trace/index/tables.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
@@ -29,7 +29,7 @@
 #include <thread>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::index;
+using namespace dftracer::utils::trace::index;
 
 namespace {
 
@@ -62,20 +62,23 @@ dstd::String write_trace(const dstd::String& dir, const dstd::String& name,
     return gz;
 }
 
-index::build::IndexBuildBatchResult run_build(
+trace::index::build::IndexBuildBatchResult run_build(
     const dstd::String& file, const dstd::String& index_dir,
     std::uint64_t memory_budget,
-    index::build::IndexBuildBatchConfig::AggFoldFactory agg_fold_factory = {}) {
-    index::build::IndexBuildBatchResult out;
+    trace::index::build::IndexBuildBatchConfig::AggFoldFactory
+        agg_fold_factory = {}) {
+    trace::index::build::IndexBuildBatchResult out;
     Runtime rt(4);
     auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
-        auto config = dstd::make_shared<index::build::IndexBuildBatchConfig>();
+        auto config =
+            dstd::make_shared<trace::index::build::IndexBuildBatchConfig>();
         config->file_paths = {dstd::String(dstd::StringView(file))};
         config->index_dir = index_dir;
         config->parallelism = 2;
         config->memory_budget = memory_budget;
         config->agg_fold_factory = std::move(agg_fold_factory);
-        out = co_await index::build::BatchBuilder::process(std::move(config));
+        out = co_await trace::index::build::BatchBuilder::process(
+            std::move(config));
     });
     dftu_utils_test::ok(
         rt.submit(std::move(task), "test-spill-publish").wait());
@@ -86,7 +89,7 @@ index::build::IndexBuildBatchResult run_build(
 }
 
 dstd::String index_root(const dstd::String& file, const dstd::String& dir) {
-    return dstd::String(index::normalize_index_root(
+    return dstd::String(trace::index::normalize_index_root(
         trace::internal::determine_index_path(file, dir)));
 }
 
@@ -97,8 +100,8 @@ TEST_SUITE("SpillPublish") {
         dftu_utils_test::TestEnvironment env(10);
         const auto file = write_trace(env.dir(), "spill", 12000);
         const auto dir = env.dir() + "/idx";
-        const auto logical = index::store::internal::get_logical_path(file);
-        auto index = index::Index::open(index_root(file, dir));
+        const auto logical = fileio::get_logical_path(file);
+        auto index = trace::index::Index::open(index_root(file, dir));
         REQUIRE(index);
 
         std::atomic<bool> stop{false};
@@ -112,7 +115,7 @@ TEST_SUITE("SpillPublish") {
                     if (found) {
                         visible.fetch_add(1);
                         const auto stats =
-                            index::chunk_stats(*snapshot, *found);
+                            trace::index::chunk_stats(*snapshot, *found);
                         if (!stats || stats->empty()) without_tier.fetch_add(1);
                     }
                 }
@@ -130,7 +133,7 @@ TEST_SUITE("SpillPublish") {
         REQUIRE(snapshot);
         const auto found = snapshot->file(logical);
         REQUIRE(found);
-        const auto stats = index::chunk_stats(*snapshot, *found);
+        const auto stats = trace::index::chunk_stats(*snapshot, *found);
         REQUIRE(stats);
         CHECK_FALSE(stats->empty());
         MESSAGE("polls that saw the file: " << visible.load());
@@ -140,16 +143,16 @@ TEST_SUITE("SpillPublish") {
         dftu_utils_test::TestEnvironment env(10);
         const auto file = write_trace(env.dir(), "through", 12000);
         const auto dir = env.dir() + "/idx";
-        const auto logical = index::store::internal::get_logical_path(file);
+        const auto logical = fileio::get_logical_path(file);
         const auto path =
             dstd::String(trace::internal::determine_index_path(file, dir));
-        auto index = index::Index::open(index_root(file, dir));
+        auto index = trace::index::Index::open(index_root(file, dir));
         REQUIRE(index);
 
         schemas::dft::agg::AggregationConfig config;
         config.time_interval_us = 100'000;
-        auto run =
-            dftu_utils_test::ok(index::build::start_aggregation(path, config));
+        auto run = dftu_utils_test::ok(
+            trace::index::build::start_aggregation(path, config));
         const auto run_bytes = schemas::dft::agg::g_agg_run_bytes.exchange(1);
 #if DFTRACER_UTILS_TEST_PROBES
         const auto staged = schemas::dft::agg::g_agg_runs_staged.load();
@@ -160,13 +163,13 @@ TEST_SUITE("SpillPublish") {
         std::atomic<int> without_rows{0};
         dstd::Thread poller([&] {
             while (!stop.load()) {
-                auto read = index::plan::open_snapshot(path);
+                auto read = trace::index::plan::open_snapshot(path);
                 if (read) {
                     const auto ref = read->file(logical);
                     if (ref) {
                         visible.fetch_add(1);
                         std::size_t rows = 0;
-                        auto scanned = index::for_each_agg_partial(
+                        auto scanned = trace::index::for_each_agg_partial(
                             *read, *ref,
                             [&](std::uint64_t, std::uint32_t, std::uint32_t,
                                 std::uint32_t, std::uint32_t,
@@ -202,16 +205,17 @@ TEST_SUITE("SpillPublish") {
             dftu_utils_test::TestEnvironment env(10);
             const auto file = write_trace(env.dir(), "plugin", 12000);
             const auto dir = env.dir() + "/idx";
-            const auto logical = index::store::internal::get_logical_path(file);
+            const auto logical = fileio::get_logical_path(file);
             REQUIRE(run_build(file, dir, budget).indexed == 1);
 
-            auto index = index::Index::open(index_root(file, dir));
+            auto index = trace::index::Index::open(index_root(file, dir));
             REQUIRE(index);
             {
-                auto stale = index::rebuild(*index, logical);
+                auto stale = trace::index::rebuild(*index, logical);
                 REQUIRE(stale);
-                index::put_plugin(*stale, "stale", 1, 5,
-                                  {{0, dstd::String("x")}}, dstd::nullopt);
+                trace::index::put_plugin(*stale, "stale", 1, 5,
+                                         {{0, dstd::String("x")}},
+                                         dstd::nullopt);
                 REQUIRE(stale->commit().get());
             }
             auto plugin_count = [&] {
@@ -219,7 +223,7 @@ TEST_SUITE("SpillPublish") {
                 REQUIRE(snapshot);
                 const auto found = snapshot->file(logical);
                 REQUIRE(found);
-                const auto copies = index::plugins(*snapshot, *found);
+                const auto copies = trace::index::plugins(*snapshot, *found);
                 REQUIRE(copies);
                 return copies->size();
             };

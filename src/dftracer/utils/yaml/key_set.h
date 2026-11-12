@@ -20,22 +20,25 @@ constexpr std::size_t MAX_DEPTH = 128;
 
 /// A 32-bit hash of a key from its first and last 8 bytes and its length,
 /// which are the whole key up to 16 bytes. `limit` ends the text: a load of 8
-/// bytes stays inside it.
+/// bytes stays inside it. A key under 8 bytes is one word with its length in
+/// the top byte, so one multiply mixes it.
 inline std::uint32_t hash_key(const char* p, std::size_t n, const char* limit) {
     std::uint64_t first = 0;
-    std::uint64_t last = 0;
-    if (n >= 8) {
-        std::memcpy(&first, p, 8);
-        std::memcpy(&last, p + n - 8, 8);
-    } else if (n != 0) {
+    if (n < 8) {
         if (p + 8 <= limit) {
             std::memcpy(&first, p, 8);
             first &= (std::uint64_t{1} << (8 * n)) - 1;
         } else {
             std::memcpy(&first, p, n);
         }
-        last = first;
+        return static_cast<std::uint32_t>(
+            ((first | (static_cast<std::uint64_t>(n) << 56)) *
+             dstd::hash::GOLDEN_RATIO) >>
+            32);
     }
+    std::uint64_t last = 0;
+    std::memcpy(&first, p, 8);
+    std::memcpy(&last, p + n - 8, 8);
     std::uint64_t h = first * dstd::hash::GOLDEN_RATIO;
     h ^= (last + n) * dstd::hash::XXH64_PRIME2;
     h ^= h >> 32;
@@ -74,8 +77,10 @@ class KeySet {
     /// that holds the key, or is the start of the key when it is somewhere
     /// else.
     template <class Same>
-    bool add(Level& level, std::size_t slot, std::uint32_t id,
-             dstd::StringView key, const char* limit, Same&& same) {
+    DFTRACER_UTILS_ALWAYS_INLINE bool add(Level& level, std::size_t slot,
+                                          std::uint32_t id,
+                                          dstd::StringView key,
+                                          const char* limit, Same&& same) {
         const std::uint32_t hash = hash_key(key.data(), key.size(), limit);
         const std::uint32_t index = level.count;
         if (index >= LINEAR_KEY_LIMIT) {

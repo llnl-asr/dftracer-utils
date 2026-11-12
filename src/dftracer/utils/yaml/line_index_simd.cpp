@@ -58,8 +58,8 @@ alignas(16) constexpr std::uint8_t SPECIAL_HI[16] = {
 
 // A 64-bit mask for each byte class of each 64-byte block, built from vector
 // compares: the structure of the first stage of simdjson (as above). The
-// control and high masks are rare, so a block makes them only when one of
-// its bytes is a control byte other than LF, or 0x80 and above.
+// special, control and high masks are rare, so a block makes each only when
+// one of its bytes is of that class.
 void LineMasks(const char* text, std::size_t block_count,
                const MaskArrays& out) {
     const Tag d;
@@ -69,16 +69,25 @@ void LineMasks(const char* text, std::size_t block_count,
     const auto space = hwy::HWY_NAMESPACE::Set(d, ' ');
     const auto colon = hwy::HWY_NAMESPACE::Set(d, ':');
     const auto del = hwy::HWY_NAMESPACE::Set(d, 0x7F);
+    const auto before_del = hwy::HWY_NAMESPACE::Set(d, 0x7E);
     const auto low_nibble = hwy::HWY_NAMESPACE::Set(d, 0x0F);
     const auto lo_table = hwy::HWY_NAMESPACE::LoadDup128(d, SPECIAL_LO);
     const auto hi_table = hwy::HWY_NAMESPACE::LoadDup128(d, SPECIAL_HI);
+    // Not 0 for a byte that sets a line apart from a plain one.
+    const auto special_class = [&](auto v) {
+        return hwy::HWY_NAMESPACE::And(
+            hwy::HWY_NAMESPACE::TableLookupBytes(
+                lo_table, hwy::HWY_NAMESPACE::And(v, low_nibble)),
+            hwy::HWY_NAMESPACE::TableLookupBytes(
+                hi_table, hwy::HWY_NAMESPACE::ShiftRight<4>(v)));
+    };
     const auto* p = reinterpret_cast<const std::uint8_t*>(text);
     for (std::size_t b = 0; b < block_count; ++b) {
         const std::uint8_t* q = p + b * 64;
         std::uint64_t nlm = 0;
         std::uint64_t spm = 0;
         std::uint64_t colm = 0;
-        std::uint64_t spec = 0;
+        auto specials = hwy::HWY_NAMESPACE::Zero(d);
         auto rare = hwy::HWY_NAMESPACE::Zero(d);
         for (std::size_t k = 0; k < 64; k += n) {
             const auto v = hwy::HWY_NAMESPACE::LoadU(d, q + k);
@@ -86,23 +95,26 @@ void LineMasks(const char* text, std::size_t block_count,
             nlm |= Bits(d, is_lf) << k;
             spm |= Bits(d, hwy::HWY_NAMESPACE::Eq(v, space)) << k;
             colm |= Bits(d, hwy::HWY_NAMESPACE::Eq(v, colon)) << k;
-            const auto cls = hwy::HWY_NAMESPACE::And(
-                hwy::HWY_NAMESPACE::TableLookupBytes(
-                    lo_table, hwy::HWY_NAMESPACE::And(v, low_nibble)),
-                hwy::HWY_NAMESPACE::TableLookupBytes(
-                    hi_table, hwy::HWY_NAMESPACE::ShiftRight<4>(v)));
-            spec |= Bits(d, hwy::HWY_NAMESPACE::Ne(cls,
-                                                   hwy::HWY_NAMESPACE::Zero(d)))
-                    << k;
-            // Below ' ' but not LF, DEL, or 0x80 and above.
+            specials = hwy::HWY_NAMESPACE::Or(specials, special_class(v));
+            // Below ' ' but not LF, or DEL and above.
             rare = hwy::HWY_NAMESPACE::Or(
                 rare, hwy::HWY_NAMESPACE::VecFromMask(
                           d, hwy::HWY_NAMESPACE::Or(
                                  hwy::HWY_NAMESPACE::AndNot(
                                      is_lf, hwy::HWY_NAMESPACE::Lt(v, space)),
-                                 hwy::HWY_NAMESPACE::Or(
-                                     hwy::HWY_NAMESPACE::Eq(v, del),
-                                     hwy::HWY_NAMESPACE::Gt(v, del)))));
+                                 hwy::HWY_NAMESPACE::Gt(v, before_del))));
+        }
+        std::uint64_t spec = 0;
+        if (!hwy::HWY_NAMESPACE::AllTrue(
+                d, hwy::HWY_NAMESPACE::Eq(
+                       specials, hwy::HWY_NAMESPACE::Zero(d)))) [[unlikely]] {
+            for (std::size_t k = 0; k < 64; k += n) {
+                const auto v = hwy::HWY_NAMESPACE::LoadU(d, q + k);
+                spec |=
+                    Bits(d, hwy::HWY_NAMESPACE::Ne(special_class(v),
+                                                   hwy::HWY_NAMESPACE::Zero(d)))
+                    << k;
+            }
         }
         const bool has_rare = !hwy::HWY_NAMESPACE::AllFalse(
             d, hwy::HWY_NAMESPACE::MaskFromVec(rare));

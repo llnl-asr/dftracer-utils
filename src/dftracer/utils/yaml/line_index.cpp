@@ -714,8 +714,11 @@ struct PlainLine {
 // arrays. False means the line goes to classify_line, whatever it holds. A
 // line under 64 bytes is one window of each array, so each search is one bit
 // operation.
-inline bool classify_plain(const Batch& b, const char* t, std::uint32_t start,
-                           std::uint32_t end, PlainLine& pl) {
+DFTRACER_UTILS_ALWAYS_INLINE inline bool classify_plain(const Batch& b,
+                                                        const char* t,
+                                                        std::uint32_t start,
+                                                        std::uint32_t end,
+                                                        PlainLine& pl) {
     const std::uint32_t rs = start - b.base;
     const std::uint32_t len = end - start;
     if (len >= 64) [[unlikely]] {
@@ -1598,7 +1601,8 @@ bool Builder::structure(std::uint32_t j, const LineParts& pt) {
 
 // The line ends at `nl_pos`. A plain line in an open block goes the short way;
 // every other line, and every error, goes to process_any_line.
-inline bool Builder::process_line(std::uint32_t start, std::uint32_t nl_pos) {
+DFTRACER_UTILS_ALWAYS_INLINE inline bool Builder::process_line(
+    std::uint32_t start, std::uint32_t nl_pos) {
     if ((static_cast<unsigned>(open_) | static_cast<unsigned>(has_tab_)) != 0 ||
         batch_ == nullptr || start < batch_->base) [[unlikely]]
         return process_any_line(start, nl_pos);
@@ -1632,8 +1636,8 @@ inline bool Builder::process_line(std::uint32_t start, std::uint32_t nl_pos) {
 
 // structure for a line that classify_plain read, in a block that is open: no
 // root, no escape, no nested dash, and a value that is empty or plain.
-inline bool Builder::structure_plain(std::uint32_t j, std::uint32_t line_start,
-                                     const PlainLine& pl) {
+DFTRACER_UTILS_ALWAYS_INLINE inline bool Builder::structure_plain(
+    std::uint32_t j, std::uint32_t line_start, const PlainLine& pl) {
     const std::uint32_t n = pl.indent;
     has_content_ = true;
     cont_active_ = false;
@@ -1681,8 +1685,9 @@ inline bool Builder::structure_plain(std::uint32_t j, std::uint32_t line_start,
 
 // The map of a `- k: v` item, the key and the value of a plain line, whose
 // block starts at column `n`.
-inline bool Builder::plain_key_value(std::uint32_t j, std::uint32_t line_start,
-                                     const PlainLine& pl, std::uint32_t n) {
+DFTRACER_UTILS_ALWAYS_INLINE inline bool Builder::plain_key_value(
+    std::uint32_t j, std::uint32_t line_start, const PlainLine& pl,
+    std::uint32_t n) {
     std::uint32_t limit = n;
     if (pl.kind == LineKind::SeqMap) {
         limit = pl.content - line_start;

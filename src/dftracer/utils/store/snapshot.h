@@ -74,9 +74,6 @@ struct ReadStats {
     std::uint64_t pages_decoded = 0;
     std::uint64_t page_hits = 0;
     std::uint64_t page_reads = 0;
-    /// The windows of READ_RUN_BYTES read whole to warm the operating system
-    /// cache, once a query loads the second extent in one.
-    std::uint64_t windows_warmed = 0;
     /// The files a scope lookup skipped because their scope filter rules the
     /// scope out.
     std::uint64_t files_filtered = 0;
@@ -409,8 +406,6 @@ struct FileData {
     dstd::Vector<dstd::UniquePtr<LazyBlock>> roots;
     std::uint32_t directory_levels = 0;
     ExtentSlots extent_slots;
-    /// Per window of READ_RUN_BYTES of the file, the extents loaded in it.
-    mutable dstd::Vector<std::atomic<std::uint32_t>> windows;
     /// Behind a pointer, so the file data moves.
     dstd::UniquePtr<DictCache> dicts = dstd::make_unique<DictCache>();
 };
@@ -445,12 +440,6 @@ class ReadCounters {
         files_filtered_.fetch_add(1, std::memory_order_relaxed);
     }
 
-    void add_window(const BlockReads& reads) {
-        windows_warmed_.fetch_add(1, std::memory_order_relaxed);
-        read_calls_.fetch_add(reads.calls, std::memory_order_relaxed);
-        bytes_read_.fetch_add(reads.bytes, std::memory_order_relaxed);
-    }
-
     void add_metadata(const BlockReads& reads) {
         metadata_blocks_read_.fetch_add(1, std::memory_order_relaxed);
         read_calls_.fetch_add(reads.calls, std::memory_order_relaxed);
@@ -464,7 +453,6 @@ class ReadCounters {
                          pages_decoded_.load(std::memory_order_relaxed),
                          page_hits_.load(std::memory_order_relaxed),
                          page_reads_.load(std::memory_order_relaxed),
-                         windows_warmed_.load(std::memory_order_relaxed),
                          files_filtered_.load(std::memory_order_relaxed),
                          metadata_blocks_read_.load(std::memory_order_relaxed),
                          read_calls_.load(std::memory_order_relaxed),
@@ -478,7 +466,6 @@ class ReadCounters {
     std::atomic<std::uint64_t> pages_decoded_{0};
     std::atomic<std::uint64_t> page_hits_{0};
     std::atomic<std::uint64_t> page_reads_{0};
-    std::atomic<std::uint64_t> windows_warmed_{0};
     std::atomic<std::uint64_t> files_filtered_{0};
     std::atomic<std::uint64_t> metadata_blocks_read_{0};
     std::atomic<std::uint64_t> read_calls_{0};
@@ -828,7 +815,6 @@ class Snapshot {
     /// Counts one more extent loaded at `offset` of `file`, and reads its
     /// window whole when it is the second of the window, so a dense workload
     /// reads from the operating system cache.
-    void warm_window(const detail::FileData& file, std::uint64_t offset) const;
     /// The raw bytes [offset_in_extent, offset_in_extent + length) of one
     /// extent whose page table is loaded, and a view into `hold`: the pages
     /// they span from the page cache, and those it lacks read from the file in

@@ -414,11 +414,11 @@ dstd::String format_ms(std::uint64_t nanos) {
 dstd::String format_read_stats(const store::engine::ReadStats& reads) {
     return dstd::fmt<
         "commits_read={} extents_read={} pages_decoded={} "
-        "page_hits={} page_reads={} windows_warmed={} files_filtered={} "
+        "page_hits={} page_reads={} files_filtered={} "
         "metadata_blocks_read={} read_calls={} mib_read={}">(
         reads.commits_verified, reads.extents_read, reads.pages_decoded,
-        reads.page_hits, reads.page_reads, reads.windows_warmed,
-        reads.files_filtered, reads.metadata_blocks_read, reads.read_calls,
+        reads.page_hits, reads.page_reads, reads.files_filtered,
+        reads.metadata_blocks_read, reads.read_calls,
         fixed(static_cast<double>(reads.bytes_read) /
                   static_cast<double>(MIB_BYTES),
               1));
@@ -994,8 +994,7 @@ struct Bench {
                       " eighth)"
                     : "none")
             << "; Snapshot::open reads only the metadata, and a query reads"
-               " an extent whole once for its page table, a 16 MiB window"
-               " of the file once it loads a second extent there, and the"
+               " the head of an extent once for its page table and the"
                " pages it needs through a page cache of "
             << (dftracer::utils::common::constants::store::
                     STORE_DEFAULT_PAGE_CACHE_BYTES >>

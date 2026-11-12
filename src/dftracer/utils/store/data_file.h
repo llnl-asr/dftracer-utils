@@ -31,9 +31,6 @@ inline constexpr std::size_t FILE_TRAILER_BYTES = 32;
 /// Every this many sequences a commit record is a checkpoint: it lists every
 /// item so far, with the earlier commits by summary, and a reader starts there.
 inline constexpr std::uint64_t CHECKPOINT_INTERVAL = 64;
-/// The most bytes one read run covers: adjacent extent refs are read together
-/// with one preadv. A longer ref is a run of its own.
-inline constexpr std::size_t READ_RUN_BYTES = std::size_t{16} << 20;
 /// Every extent and page dictionary starts at a multiple of this many bytes
 /// and its stored form is padded to one. Small, because a build seals many
 /// part-full extents; a direct read rounds its own window to the device
@@ -282,12 +279,6 @@ class DataFileReader {
     dstd::Expected<void, dstd::Error> read_range(
         std::uint64_t offset, std::size_t length,
         dstd::RawBuffer<std::uint8_t>& out, BlockReads* reads) const;
-    /// Reads `length` bytes at `offset` in VERIFY_CHUNK_BYTES chunks and keeps
-    /// none, so the operating system caches the range. A range past the end of
-    /// the file stops at the end. Io when a read fails. `reads` counts them.
-    dstd::Expected<void, dstd::Error> warm_range(std::uint64_t offset,
-                                                 std::uint64_t length,
-                                                 BlockReads* reads) const;
     /// Reads one metadata block whole: one pread, then the crc of its bytes.
     /// Parse when the block lies outside the file or its crc fails, Io when
     /// the read itself fails. `reads` counts the call and its bytes.

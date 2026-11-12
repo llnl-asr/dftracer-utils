@@ -19,6 +19,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Read only the parts of the index store that a query needs.
+  A query no longer reads each 16 MiB window of a store file that holds two of its extents, and it reads 4 KiB for the page table of an extent where it read the whole extent.
+  On Lustre, with an index of 14,117 traces (318 MB), a no-op `dftracer_index` reads 20 MB where it read 349 MB, `dftracer_view -q 'take 20'` 15 MB where it read 202 MB and a group-by 105 MB where it read 654 MB, cold and warm, with the same or a shorter run time.
 - Read each gzip trace once when it is indexed.
   The index build no longer scans a file for member headers before it inflates it: each worker takes a range of the file (half the checkpoint size in compressed bytes, at least 4 MiB; `DFTRACER_UTILS_INDEX_RANGE_BYTES` sets it) and finds its first member header in the bytes it reads to inflate.
   A build of 97 DFTracer traces (343 MB) read 803 MB of them before and reads 366 MB now, with the same index.

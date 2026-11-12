@@ -398,7 +398,6 @@ struct OpenDump {
     std::uint64_t indexes_read = 0;
     std::uint64_t metadata_blocks_read = 0;
     std::uint64_t page_reads = 0;
-    std::uint64_t windows_warmed = 0;
 };
 
 OpenDump dump_open(const dftu_utils_test::ScopedTestDir& root,
@@ -425,7 +424,6 @@ OpenDump dump_open(const dftu_utils_test::ScopedTestDir& root,
     dump.indexes_read = snapshot->read_stats().indexes_read;
     dump.metadata_blocks_read = snapshot->read_stats().metadata_blocks_read;
     dump.page_reads = snapshot->read_stats().page_reads;
-    dump.windows_warmed = snapshot->read_stats().windows_warmed;
     auto report = snapshot->check();
     REQUIRE(report.has_value());
     dump.commits = report->commits;
@@ -3060,19 +3058,10 @@ TEST_SUITE("index store snapshot") {
             ScopedDefaultRuntime runtime(1);
             return dump_open(dir, spec, scopes);
         }();
-#if DFTRACER_UTILS_TEST_PROBES
-        const std::uint64_t direct_before = engine::g_direct_reads.load();
-#endif
         const OpenDump eight = [&] {
             ScopedDefaultRuntime runtime(8);
             return dump_open(dir, spec, scopes);
         }();
-        // Direct reads skip the page cache, so they warm no window.
-#if DFTRACER_UTILS_TEST_PROBES
-        const bool direct = engine::g_direct_reads.load() > direct_before;
-#else
-        const bool direct = false;
-#endif
 
         CHECK(one.text == eight.text);
         CHECK(one.files == WRITERS);
@@ -3096,10 +3085,9 @@ TEST_SUITE("index store snapshot") {
         CHECK(eight.indexes_read == 0);
         CHECK(eight.metadata_blocks_read == one.metadata_blocks_read);
         CHECK(eight.metadata_blocks_read >= 2U * WRITERS);
-        CHECK(eight.windows_warmed == (direct ? 0U : WRITERS));
         CHECK(eight.read_calls == eight.extents_read +
                                       eight.metadata_blocks_read +
-                                      eight.page_reads + eight.windows_warmed);
+                                      eight.page_reads);
     }
 
     TEST_CASE("a corrupt extent in a middle run marks only its commit bad") {
@@ -4020,6 +4008,51 @@ TEST_SUITE("index store snapshot") {
         CHECK(both.read_calls == 8);
         CHECK(snapshot->open_stats().commits == 0);
         CHECK(snapshot->open_stats().extents == 0);
+    }
+
+    TEST_CASE("a query reads the page tables and pages it needs, not extents") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_table_reads");
+        const ScopeKey scope = file_scope("/traces/a.pfw");
+        const NamespaceSpec spec = put_spec("dftu.test.put");
+        constexpr int KEYS = 8000;
+        engine::WriterOptions options = small_extents();
+        options.extent_size = 1U << 20U;
+        dstd::String path;
+        {
+            auto writer = make_writer(dir, options);
+            auto id = writer->add_namespace(spec);
+            REQUIRE(id.has_value());
+            std::uint64_t state = 1;
+            for (int half = 0; half < 2; ++half) {
+                Batch entries = writer->batch(*id, scope, 0);
+                for (int k = half * KEYS / 2; k < (half + 1) * KEYS / 2; ++k) {
+                    dstd::String value(256, 'a');
+                    for (char& c : value) {
+                        state = state * 6364136223846793005ULL +
+                                1442695040888963407ULL;
+                        c = static_cast<char>('a' + (state >> 59U));
+                    }
+                    entries.put(view_of(key_of(k)), view_of(value));
+                }
+                REQUIRE(writer->commit(std::move(entries)).has_value());
+                REQUIRE(flush_writer(*writer).has_value());
+            }
+            path = dstd::String(writer->path());
+            REQUIRE(close_writer(*writer).has_value());
+        }
+        const std::uint64_t file_bytes = dstd::fs::file_size(path).value();
+        REQUIRE(file_bytes > (std::uint64_t{1} << 20U));
+
+        auto snapshot = engine::Snapshot::open(dir.str());
+        REQUIRE(snapshot.has_value());
+        for (const int k : {0, KEYS - 1}) {
+            auto found = snapshot->get(spec, scope, view_of(key_of(k)));
+            REQUIRE(found.has_value());
+            REQUIRE(found->has_value());
+        }
+        const store::engine::ReadStats reads = snapshot->read_stats();
+        CHECK(reads.extents_read == 2);
+        CHECK(reads.bytes_read < file_bytes / 4);
     }
 
     TEST_CASE(

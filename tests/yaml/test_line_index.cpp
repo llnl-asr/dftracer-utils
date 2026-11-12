@@ -308,6 +308,38 @@ TEST_CASE("line index: the scalar Highway target builds the same index") {
     check_same_index(best, scalar);
 }
 
+// Lines of each length around the 57 bits that one short window holds and the
+// 64 of a block, as keys, values, items and spaces, at each offset in a block.
+TEST_CASE("line index: lines around the short window read the same way") {
+    for (std::size_t lead = 0; lead < 64; lead += 7) {
+        dstd::String text = "pad: " + dstd::String(lead, 'p') + "\n";
+        for (std::size_t len = 50; len <= 70; ++len) {
+            const std::size_t fill = len - 9;
+            text += "k" + dstd::fmt<"{}">(len) + ": " +
+                    dstd::String(fill - 2, 'v') + "  \n";
+            text += "l" + dstd::fmt<"{}">(len) + ":\n  - " +
+                    dstd::String(fill, 'x') +
+                    "\n  - y: " + dstd::String(fill, 'z') + "\n";
+            text += "q" + dstd::fmt<"{}">(len) + dstd::String(fill, 'w') +
+                    ": 1\n" + dstd::String(len, ' ') + "\n";
+            // A `: ` or a ` #` near the end changes what the line is.
+            text += "s" + dstd::fmt<"{}">(len) + ":\n  - " +
+                    dstd::String(len - 7, 'a') + ": v\n";
+            text += "c" + dstd::fmt<"{}">(len) + ": " +
+                    dstd::String(len - 9, 'b') + " #c\n";
+        }
+        LineIndex plain;
+        REQUIRE(plain.build(text.data(), text.size()) ==
+                yaml::BuildResult::Accepted);
+        yaml::detail::set_slow_lines_for_test(true);
+        LineIndex slow;
+        const auto slow_ok = slow.build(text.data(), text.size());
+        yaml::detail::set_slow_lines_for_test(false);
+        REQUIRE(slow_ok == yaml::BuildResult::Accepted);
+        check_same_index(plain, slow);
+    }
+}
+
 TEST_CASE("line index: the plain-line path and the byte classifier agree") {
     std::size_t built = 0;
     for (std::size_t seed = 1; seed <= 20000; ++seed) {

@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <cstring>
 
 namespace dftracer::utils::yaml {
@@ -22,6 +23,8 @@ constexpr std::uint32_t NONE = 0xFFFFFFFFu;
 constexpr std::size_t BATCH_BLOCKS = 64;
 constexpr std::uint64_t TEXT_SIZE_LIMIT = 0xFFFFFFF0ull;
 constexpr std::uint32_t INDENT_LIMIT = 0xFFFE;
+// classify_plain reads a line shorter than this from one short_window.
+constexpr std::uint32_t SHORT_WINDOW_BITS = 57;
 
 bool is_white(char c) { return c == ' ' || c == '\t'; }
 
@@ -588,6 +591,19 @@ inline std::uint64_t window(const std::uint64_t* a, std::uint32_t pos) {
     return (a[w] >> sh) | ((a[w + 1] << 1) << (63 - sh));
 }
 
+// At least the 57 bits of `a` that start at bit `pos`, from one load where
+// the bytes of a word are in bit order. The array has a zero word after its
+// last block, so the load stays inside it.
+inline std::uint64_t short_window(const std::uint64_t* a, std::uint32_t pos) {
+    if constexpr (std::endian::native == std::endian::little) {
+        std::uint64_t bits = 0;
+        std::memcpy(&bits, reinterpret_cast<const char*>(a) + (pos >> 3), 8);
+        return bits >> (pos & 7);
+    } else {
+        return window(a, pos);
+    }
+}
+
 // The first set bit at or after `pos`, or a position at or past `limit` when
 // there is none before it.
 inline std::uint32_t next_set(const std::uint64_t* a, std::uint32_t limit,
@@ -617,7 +633,7 @@ inline std::uint32_t next_clear(const std::uint64_t* a, std::uint32_t limit,
     return limit;
 }
 
-// classify_plain for a line of 64 bytes or more.
+// classify_plain for a line of SHORT_WINDOW_BITS bytes or more.
 DFTRACER_UTILS_NOINLINE bool classify_plain_long(const Batch& b, const char* t,
                                                  std::uint32_t start,
                                                  std::uint32_t end,
@@ -712,8 +728,8 @@ struct PlainLine {
 // The line `[start, end)` when it holds none of the bytes that set a line
 // apart from a plain one: the same facts as classify_line, read from the bit
 // arrays. False means the line goes to classify_line, whatever it holds. A
-// line under 64 bytes is one window of each array, so each search is one bit
-// operation.
+// line shorter than SHORT_WINDOW_BITS is one window of each array, so each
+// search is one bit operation.
 DFTRACER_UTILS_ALWAYS_INLINE inline bool classify_plain(const Batch& b,
                                                         const char* t,
                                                         std::uint32_t start,
@@ -721,7 +737,7 @@ DFTRACER_UTILS_ALWAYS_INLINE inline bool classify_plain(const Batch& b,
                                                         PlainLine& pl) {
     const std::uint32_t rs = start - b.base;
     const std::uint32_t len = end - start;
-    if (len >= 64) [[unlikely]] {
+    if (len >= SHORT_WINDOW_BITS) [[unlikely]] {
         LineParts pt;
         if (!classify_plain_long(b, t, start, end, pt)) return false;
         pl.indent = pt.indent;
@@ -733,8 +749,8 @@ DFTRACER_UTILS_ALWAYS_INLINE inline bool classify_plain(const Batch& b,
         return true;
     }
     const std::uint64_t in_line = (std::uint64_t{1} << len) - 1;
-    if ((window(b.special, rs) & in_line) != 0) return false;
-    const std::uint64_t solid = ~window(b.space, rs) & in_line;
+    if ((short_window(b.special, rs) & in_line) != 0) return false;
+    const std::uint64_t solid = ~short_window(b.space, rs) & in_line;
     pl.flags = 0;
     if (solid == 0) {
         pl.indent = len;
@@ -768,7 +784,7 @@ DFTRACER_UTILS_ALWAYS_INLINE inline bool classify_plain(const Batch& b,
     const std::uint32_t p = start + rp;
     pl.content = p;
     const std::uint64_t seps =
-        window(b.sep, rs) & in_line & ~((std::uint64_t{1} << rp) - 1);
+        short_window(b.sep, rs) & in_line & ~((std::uint64_t{1} << rp) - 1);
     if (seps == 0) return seq;
     const std::uint32_t rsep = low_bit(seps);
     // t[p] is no ':', so the key holds a byte that is no space.

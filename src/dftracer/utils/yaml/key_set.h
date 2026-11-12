@@ -18,24 +18,30 @@ namespace dftracer::utils::yaml {
 /// The most map levels a block or flow nesting holds.
 constexpr std::size_t MAX_DEPTH = 128;
 
-/// A 32-bit hash of a key from its first and last 8 bytes and its length,
-/// which are the whole key up to 16 bytes. `limit` ends the text: a load of 8
-/// bytes stays inside it. A key under 8 bytes is one word with its length in
-/// the top byte, so one multiply mixes it.
-inline std::uint32_t hash_key(const char* p, std::size_t n, const char* limit) {
-    std::uint64_t first = 0;
-    if (n < 8) {
-        if (p + 8 <= limit) {
-            std::memcpy(&first, p, 8);
-            first &= (std::uint64_t{1} << (8 * n)) - 1;
-        } else {
-            std::memcpy(&first, p, n);
-        }
-        return static_cast<std::uint32_t>(
-            ((first | (static_cast<std::uint64_t>(n) << 56)) *
-             dstd::hash::GOLDEN_RATIO) >>
-            32);
+/// A key of under 8 bytes as one word: its bytes, then its length in the top
+/// byte. Two such keys are the same when their words are. `limit` ends the
+/// text: a load of 8 bytes stays inside it.
+inline std::uint64_t short_key_word(const char* p, std::size_t n,
+                                    const char* limit) {
+    std::uint64_t word = 0;
+    if (p + 8 <= limit) {
+        std::memcpy(&word, p, 8);
+        word &= (std::uint64_t{1} << (8 * n)) - 1;
+    } else {
+        std::memcpy(&word, p, n);
     }
+    return word | (static_cast<std::uint64_t>(n) << 56);
+}
+
+inline std::uint32_t hash_short_word(std::uint64_t word) {
+    return static_cast<std::uint32_t>((word * dstd::hash::GOLDEN_RATIO) >> 32);
+}
+
+/// A 32-bit hash of a key from its first and last 8 bytes and its length,
+/// which are the whole key up to 16 bytes. `limit` is as for short_key_word.
+inline std::uint32_t hash_key(const char* p, std::size_t n, const char* limit) {
+    if (n < 8) return hash_short_word(short_key_word(p, n, limit));
+    std::uint64_t first = 0;
     std::uint64_t last = 0;
     std::memcpy(&first, p, 8);
     std::memcpy(&last, p + n - 8, 8);
@@ -46,24 +52,33 @@ inline std::uint32_t hash_key(const char* p, std::size_t n, const char* limit) {
 }
 
 /// The keys of the open maps of one reader, so that a repeated key is found as
-/// it is added. A map with fewer keys than LINEAR_KEY_LIMIT keeps a 32-bit
-/// hash for each key and a set of bits over them, and looks at the earlier keys
-/// only when the bit of a new key is set; a map with more uses a hash table.
+/// it is added. A map keeps its first SMALL_KEYS keys of under 8 bytes as
+/// words and compares a new one with all of them. Past that, or at the first
+/// longer key, it keeps a 32-bit hash for each key and a set of bits over them,
+/// and looks at the earlier keys only when the bit of a new key is set; a map
+/// with more than LINEAR_KEY_LIMIT keys uses a hash table.
 class KeySet {
    public:
+    static constexpr std::size_t SMALL_KEYS = 8;
+
     /// The state of one open map. `slot` of a call is the depth of the map,
     /// below MAX_DEPTH.
     struct Level {
+        /// While `is_small`: the words of the keys, NO_WORD past `count`.
+        std::uint64_t small[SMALL_KEYS];
         std::uint64_t bloom[4];
+        std::uint32_t small_ids[SMALL_KEYS];
         std::uint32_t base;
         std::uint32_t count;
+        bool is_small;
         bool has_table;
     };
 
     void open(Level& level) {
-        level.bloom[0] = level.bloom[1] = level.bloom[2] = level.bloom[3] = 0;
+        for (auto& word : level.small) word = NO_WORD;
         level.base = static_cast<std::uint32_t>(keys_.size());
         level.count = 0;
+        level.is_small = true;
         level.has_table = false;
     }
 
@@ -81,6 +96,19 @@ class KeySet {
                                           std::uint32_t id,
                                           dstd::StringView key,
                                           const char* limit, Same&& same) {
+        if (level.is_small && key.size() < 8 && level.count < SMALL_KEYS) {
+            const std::uint64_t word =
+                short_key_word(key.data(), key.size(), limit);
+            bool seen = false;
+            for (std::size_t i = 0; i < SMALL_KEYS; ++i)
+                seen |= level.small[i] == word;
+            if (seen) return false;
+            level.small[level.count] = word;
+            level.small_ids[level.count] = id;
+            ++level.count;
+            return true;
+        }
+        if (level.is_small) spill(level);
         const std::uint32_t hash = hash_key(key.data(), key.size(), limit);
         const std::uint32_t index = level.count;
         if (index >= LINEAR_KEY_LIMIT) {
@@ -106,7 +134,23 @@ class KeySet {
    private:
     static constexpr std::size_t LINEAR_KEY_LIMIT = 64;
 
+    /// The word of no key: a short key has its length, below 8, in the top
+    /// byte.
+    static constexpr std::uint64_t NO_WORD = ~std::uint64_t{0};
+
     // Out of line, as each is rare: the hot add stays small enough to inline.
+    // Moves the words of a small map to the hashes and the set of bits.
+    DFTRACER_UTILS_NOINLINE void spill(Level& level) {
+        level.bloom[0] = level.bloom[1] = level.bloom[2] = level.bloom[3] = 0;
+        for (std::uint32_t i = 0; i < level.count; ++i) {
+            const std::uint32_t hash = hash_short_word(level.small[i]);
+            level.bloom[(hash >> 6) & 3] |= std::uint64_t{1} << (hash & 63);
+            keys_.push_back((static_cast<std::uint64_t>(hash) << 32) |
+                            level.small_ids[i]);
+        }
+        level.is_small = false;
+    }
+
     template <class Same>
     DFTRACER_UTILS_NOINLINE bool has_key(const Level& level, std::uint32_t hash,
                                          dstd::StringView key, Same& same) {

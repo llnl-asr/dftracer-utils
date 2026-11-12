@@ -148,6 +148,31 @@ TEST_CASE("yaml: a duplicate key is found in a large map too") {
           "big.yaml:101:1: duplicate key 'key57'");
 }
 
+// A map keeps its first 8 short keys apart from the rest, so a key is
+// repeated on each side of that border, and after a long key.
+TEST_CASE("yaml: a duplicate key is found before and after the 8th key") {
+    for (const int size : {2, 8, 9, 30}) {
+        for (int first = 0; first < size; first += 3) {
+            for (const bool long_key : {false, true}) {
+                CAPTURE(size);
+                CAPTURE(first);
+                CAPTURE(long_key);
+                dstd::String text;
+                if (long_key) text += "a_key_of_twelve: 0\n";
+                for (int i = 0; i < size; ++i)
+                    text += dstd::fmt<"k{}: {}\n">(i, i);
+                REQUIRE(Document::parse(text, "").has_value());
+                text += dstd::fmt<"k{}: again\n">(first);
+                auto doc = Document::parse(text, "d.yaml");
+                REQUIRE_FALSE(doc.has_value());
+                CHECK(dstd::String(doc.error().message()) ==
+                      dstd::fmt<"d.yaml:{}:1: duplicate key 'k{}'">(
+                          size + (long_key ? 2 : 1), first));
+            }
+        }
+    }
+}
+
 TEST_CASE("yaml: distinct keys and the same key in two maps are fine") {
     const Document doc = must_parse(
         "a: 1\nab: 2\nabc: 3\n"
